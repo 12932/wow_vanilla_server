@@ -819,6 +819,41 @@ fn dispels_only(s: &SpellTemplate) -> bool {
         })
 }
 
+/// A cast charm's or possession's refusals (mangos-classic's `CheckCast`
+/// for `SPELL_AURA_MOD_POSSESS` and `SPELL_AURA_MOD_CHARM`, Thistle Tea's
+/// `PlayerPossession.validate`): not at oneself, nor at one charmed or
+/// owned already, nor at one above the level its effect's points name
+/// (Mind Control's rank).
+fn charm_refused(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    level: u32,
+) -> Option<u8> {
+    use wow_world_messages::vanilla::SpellCastResult as R;
+    let i = (0..3).find(|i| {
+        s.effects[*i].effect == 6 && matches!(s.effects[*i].aura, AURA_MOD_POSSESS | AURA_MOD_CHARM)
+    })?;
+    if target == caster {
+        return Some(fail::BAD_TARGETS);
+    }
+    if map
+        .unit_fields(target)
+        .is_some_and(|f| !f.get_guid(UNIT_FIELD_CHARMEDBY).is_zero())
+    {
+        return Some(R::Charmed.as_int());
+    }
+    if map.creature(target).is_some_and(|c| c.owner.is_some()) {
+        return Some(R::CantBeCharmed.as_int());
+    }
+    let caster_level = map.unit_view(caster).map_or(1, |u| u.level);
+    if i64::from(level) > i64::from(super::points(s, i, caster_level)) {
+        return Some(fail::HIGHLEVEL);
+    }
+    None
+}
+
 fn check_target(
     map: &mut Map,
     caster: Guid,
@@ -983,6 +1018,9 @@ fn check_target(
     }
     if s.max_target_level > 0 && u.level > s.max_target_level {
         return Some(fail::HIGHLEVEL);
+    }
+    if !triggered && let Some(e) = charm_refused(map, caster, target, s, u.level) {
+        return Some(e);
     }
     // A spell for the peaceful (Sap, Distract, Duel) refuses another in a
     // fight (mangos-classic's `CheckCast`: `SPELL_ATTR_EX_ONLY_PEACEFUL_TARGETS`

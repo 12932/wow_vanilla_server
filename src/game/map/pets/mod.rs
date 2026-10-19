@@ -795,6 +795,11 @@ pub fn owner_killed(map: &mut Map, owner: Guid, victim: Guid, share: KillShare) 
 
 /// `master` takes control of `unit` (charm or possession).
 pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
+    // No one holds themselves (Thistle Tea's "self possession does not
+    // acquire control").
+    if master == unit {
+        return;
+    }
     if map.players.contains_key(&unit) {
         possess::take(map, master, unit);
         return;

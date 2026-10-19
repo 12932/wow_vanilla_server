@@ -1321,3 +1321,240 @@ async fn a_guardian_recast_toggles_its_own_and_its_death_starts_its_cooldown() {
         .unwrap();
     assert_eq!(counts, (16, 1), "sixteen of one entry, and another's");
 }
+
+/// Thistle Tea's `PlayerPossession`: "possession stops casting and attacks
+/// and grants an empty spell list", "for_possession exposes attack and no
+/// spells", "validate checks the rank's level cap and refuses existing
+/// possession", "self possession does not acquire control", "replacing
+/// controllers preserves the original faction", "release cannot restore
+/// movement while fear remains" and "lethal damage releases control": a
+/// priest's Mind Control is refused at herself and at a player above its
+/// level; taken, it stops the victim's swing, and the priest's bar is
+/// Attack and nothing else, no spells. A second priest's is refused, the
+/// victim held still by the first. Feared as it ends, the victim has no
+/// control back until the fear ends. Held again, killed, the victim is let
+/// go, their own side again (mangos-classic's `CheckCast` for
+/// `SPELL_AURA_MOD_POSSESS`, `InitPossessCreateSpells`,
+/// `UpdateClientControl`).
+#[tokio::test]
+async fn mind_control_is_refused_where_it_should_be_and_holds_a_player_with_attack_alone() {
+    use crate::game::map::auras;
+    use crate::game::tests_pets2::{MIND_CONTROL, bring, control_update, flag_pvp, more};
+    const FEAR: u32 = 990_780;
+    let mut d = more();
+    let none = SpellEffect::default();
+    let mut fear = tests_pets::effect(6, 0, 6);
+    fear.aura = auras::AURA_MOD_FEAR;
+    let mut f = tests_pets::spell(FEAR, "Fear", [fear, none, none]);
+    f.duration_index = 4;
+    d.spells.spells.insert(FEAR, f);
+    // Mind Control of its first rank: humans up to level 32.
+    let mc = d.spells.spells.get_mut(&MIND_CONTROL).unwrap();
+    mc.effects[0].base_points = 31;
+    let realm = crate::game::harness::realm_with(d);
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    let (mut c, gc, _) = enter(&realm, "C", "Other", Race::Undead, Class::Priest).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    learn(&map, gc, &[MIND_CONTROL]);
+    bring(&map, gb, ga, 8.0).await;
+    bring(&map, gc, ga, 3.0).await;
+    a.sees(gb).await;
+    c.sees(gb).await;
+    flag_pvp(&map, vec![ga, gb, gc]);
+    let before = map
+        .query(move |m| m.players[&gb].fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+        .await
+        .unwrap();
+    cast(&a, MIND_CONTROL, Some(ga)).await;
+    assert_eq!(
+        cast_result(&mut a, MIND_CONTROL).await,
+        Some(SpellCastResult::BadTargets.as_int()),
+        "not herself"
+    );
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&gb).unwrap();
+        crate::game::map::stats::set_level(p, &data, 33);
+    })
+    .await;
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert_eq!(
+        cast_result(&mut a, MIND_CONTROL).await,
+        Some(SpellCastResult::Highlevel.as_int()),
+        "not above 32"
+    );
+    let wolf = place(&map, gb, tests_pets::WOLF, 0x70_0040, 3.0).await;
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&gb).unwrap();
+        crate::game::map::stats::set_level(p, &data, 32);
+        crate::game::map::combat::start_attack(m, gb, wolf);
+    })
+    .await;
+    a.clear();
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(!control_update(&mut b, gb).await, "the victim lets go");
+    let bar = a
+        .wait_for("the possess bar", |m| match m {
+            ServerOpcodeMessage::SMSG_PET_SPELLS(s) if s.pet == gb => s.action_bars.clone(),
+            _ => None,
+        })
+        .await;
+    let mut want = [pets::button(0, pets::ACT_PASSIVE); 10];
+    want[0] = pets::button(u32::from(pets::COMMAND_ATTACK), pets::ACT_COMMAND);
+    assert_eq!(bar.action_bars, want, "Attack and nothing else");
+    assert!(bar.spells.is_empty(), "no spells");
+    let swinging = map
+        .query(move |m| m.combat(gb).is_some_and(|c| c.attacking))
+        .await
+        .unwrap();
+    assert!(!swinging, "the victim's swing stopped");
+    cast(&c, MIND_CONTROL, Some(gb)).await;
+    assert_eq!(
+        cast_result(&mut c, MIND_CONTROL).await,
+        Some(SpellCastResult::Charmed.as_int()),
+        "one at a time"
+    );
+    let held = map
+        .query(move |m| m.players[&gb].owned.possessed_by.map(|p| p.master))
+        .await
+        .unwrap();
+    assert_eq!(held, Some(ga), "the first holds");
+    // Feared, then let go: no control back until the fear ends.
+    b.clear();
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let f = data.spells.get(FEAR).unwrap();
+        let _ = auras::apply_spell(m, wolf, gb, f, &[(0, 0)], Default::default());
+        auras::remove_spell(m, gb, MIND_CONTROL, None);
+    })
+    .await;
+    let freed = b
+        .gets(Duration::from_millis(300), |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid == gb && u.allow_movement =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(freed.is_none(), "no control back under the fear");
+    map.call(move |m| auras::remove_spell(m, gb, FEAR, None));
+    assert!(control_update(&mut b, gb).await, "back as the fear ends");
+    // Held again, and killed: let go, their own side.
+    a.clear();
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(control_update(&mut a, gb).await, "held again");
+    let after = map
+        .query(move |m| {
+            crate::game::map::combat::kill(m, wolf, gb);
+            crate::game::map::pets::update(m);
+            let p = &m.players[&gb];
+            (
+                p.owned.possessed_by.is_some(),
+                p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+                m.players[&ga].owned.charm,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(after, (false, before, None), "let go at death");
+}
+
+/// Thistle Tea's `PlayerPossession.sync` "self possession does not
+/// acquire control": a possession's aura a player puts on themselves
+/// holds no one.
+#[tokio::test]
+async fn no_one_possesses_themselves() {
+    use crate::game::map::auras;
+    use crate::game::tests_pets2::{MIND_CONTROL, more};
+    let realm = crate::game::harness::realm_with(more());
+    let (_a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let held = map
+        .query(move |m| {
+            let s = m.realm.data.spells.get(MIND_CONTROL).cloned().unwrap();
+            let _ = auras::apply_spell(m, ga, ga, &s, &[(0, 1)], Default::default());
+            let p = &m.players[&ga];
+            (p.owned.possessed_by.is_some(), p.owned.charm)
+        })
+        .await
+        .unwrap();
+    assert_eq!(held, (false, None));
+}
+
+/// Thistle Tea's `Input.allowed?` "suspends gameplay input while keeping
+/// chat, queries, and acknowledgements available", and
+/// `Companion.possession_guid` "ordinary charms leave the player's own
+/// movement authority intact": a mind-controlled player's own client
+/// starts no swing and no cast, but their words are heard; and a
+/// warlock's enslaved demon is no unit her client may move.
+#[tokio::test]
+async fn a_held_player_plays_nothing_but_talks_and_a_charm_moves_no_one() {
+    use crate::game::tests_pets2::{MIND_CONTROL, bring, control_update, flag_pvp, more};
+    let realm = crate::game::harness::realm_with(more());
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    learn(&map, gb, &[tests_pets::FIREBOLT]);
+    bring(&map, gb, ga, 4.0).await;
+    a.sees(gb).await;
+    b.sees(ga).await;
+    flag_pvp(&map, vec![ga, gb]);
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(!control_update(&mut b, gb).await, "the victim lets go");
+    let wolf = place(&map, gb, tests_pets::WOLF, 0x70_0051, 3.0).await;
+    b.sees(wolf).await;
+    b.clear();
+    b.send(CMSG_ATTACKSWING { guid: wolf }).await;
+    cast(&b, tests_pets::FIREBOLT, Some(ga)).await;
+    b.say("help").await;
+    a.wait_for("the victim's words", |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == "help" => Some(()),
+        _ => None,
+    })
+    .await;
+    let (swinging, casting) = map
+        .query(move |m| {
+            (
+                m.combat(gb).is_some_and(|c| c.attacking),
+                m.caster(gb).is_some_and(|c| c.casting.is_some()),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(!swinging && !casting, "no swing, no cast of their own");
+    let went = b
+        .gets(Duration::from_millis(100), |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_START(s) if s.spell == tests_pets::FIREBOLT => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(went.is_none(), "the cast never started");
+    // An enslaved demon: hers, but her client moves her alone.
+    let (w, gw, wmap) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&wmap, gw, &[ENSLAVE_DEMON]);
+    let demon = place(&wmap, gw, FELHUNTER, 0x70_0050, 5.0).await;
+    cast(&w, ENSLAVE_DEMON, Some(demon)).await;
+    for _ in 0..200 {
+        if wmap
+            .query(move |m| m.players[&gw].owned.charm == Some(demon))
+            .await
+            .unwrap()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    w.send(CMSG_SET_ACTIVE_MOVER { guid: demon }).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mover = wmap
+        .query(move |m| {
+            let p = &m.players[&gw];
+            (p.owned.charm, p.owned.mover)
+        })
+        .await
+        .unwrap();
+    assert_eq!(mover, (Some(demon), None), "enslaved, moving no one");
+}
