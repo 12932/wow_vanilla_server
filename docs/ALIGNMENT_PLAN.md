@@ -806,7 +806,8 @@ config's `gm` table.
 
 **Rate limits:**
 - A token bucket per session: `max_packets_per_sec` sustained (100), three seconds' worth at once. A client that
-  floods is disconnected.
+  floods is disconnected. Its read-only queries have a bucket of their own, `max_queries_per_sec` (1,000), so that
+  walking into a crowd isn't a flood (the 400-bot raid on Stormwind).
 - mangos's chat flood control: ten lines each within a second of the last mute for ten seconds.
 
 **Crashes:** the code review's crashes were in the old core, which is gone. On top of that:

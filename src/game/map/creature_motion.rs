@@ -317,9 +317,8 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
         .as_deref()
         .is_some_and(|s| s.hold.is_some() || s.route.is_some());
     let continuous = hab.fly && (kind == MOVEMENT_RANDOM || kind == MOVEMENT_CYCLIC);
-    let special = continuous
-        || (hab.fly && kind == MOVEMENT_WAYPOINT)
-        || (hab.swims && kind == MOVEMENT_RANDOM);
+    let swimmer = !hab.fly && hab.swims && kind == MOVEMENT_RANDOM;
+    let special = continuous || (hab.fly && kind == MOVEMENT_WAYPOINT) || swimmer;
     if !special || held {
         return false;
     }
@@ -340,6 +339,16 @@ pub fn idle_step(map: &mut Map, key: usize) -> bool {
     };
     if !due {
         return false;
+    }
+    // A swimmer's wander is a swim about water only (Thistle Tea's
+    // `Aquatic.random_point`: its anchor in the water); about dry land it
+    // walks as the rest. (Stormwind's guards can swim: on land they stood
+    // still, after their fights and before.)
+    if swimmer {
+        let center = crate::game::map::event_ai::wander_center(c);
+        if water(map, center).is_none() {
+            return false;
+        }
     }
     let path = plan(map, key, g, kind, hab);
     let Some(path) = path.filter(|p| p.len() >= 2) else {

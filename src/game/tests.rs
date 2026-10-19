@@ -4426,6 +4426,63 @@ mod security {
         assert!(gone, "the flooder is disconnected");
     }
 
+    /// A client walking into a crowd asks after everyone in it at once:
+    /// in the user's raid a bot placed in Stormwind's Trade District sent
+    /// 85 game object, 42 creature and 9 quest giver queries in a tenth of
+    /// a second, and a name query for each of hundreds of raiders, and was
+    /// cut off as a flood. Its queries have a bucket of their own, ten
+    /// times the packets'; a flood of them is still cut off.
+    #[tokio::test]
+    async fn a_crowds_queries_are_no_flood_but_a_flood_of_queries_is() {
+        // 50 packets a second, 150 at once.
+        let realm = players_realm();
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        for i in 0..400 {
+            let sent = match i % 4 {
+                0 => a.try_send(CMSG_NAME_QUERY { guid: ga }).await,
+                1 => a.try_send(CMSG_QUERY_TIME {}).await,
+                2 => {
+                    a.try_send(CMSG_ITEM_NAME_QUERY { item: 25, guid: ga })
+                        .await
+                }
+                _ => a.try_send(MSG_QUERY_NEXT_MAIL_TIME_Client {}).await,
+            };
+            assert!(sent, "query {i} reaches a session that is still there");
+        }
+        for i in 0..100 {
+            a.wait_for(&format!("name {i}"), |m| {
+                matches!(m, ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(_)).then_some(())
+            })
+            .await;
+        }
+        assert!(realm.registry.online(ga).is_some(), "still in the world");
+
+        let realm = {
+            let mut cfg = harness::test_config();
+            cfg.everyone_gm = false;
+            cfg.max_queries_per_sec = 100;
+            let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+            crate::game::Realm::new(cfg, store, startup, Default::default(), None)
+        };
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        for _ in 0..1000 {
+            if !a.try_send(CMSG_NAME_QUERY { guid: ga }).await {
+                break;
+            }
+        }
+        let mut gone = false;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if realm.registry.online(ga).is_none() {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "a flood of queries is cut off");
+    }
+
     #[tokio::test]
     async fn chat_floods_are_muted() {
         let realm = players_realm();

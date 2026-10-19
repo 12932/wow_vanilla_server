@@ -23,7 +23,7 @@ use crate::game::map::guards::{self, Alarm};
 use crate::game::map::spells::mods::Mods;
 use crate::game::map::spells::outcome::{self, Hit};
 use crate::game::map::{Map, MapKey, ai, event_ai};
-use crate::game::tests_p3_combat::{HELPER, START, data, setup_with, spawn, template};
+use crate::game::tests_p3_combat::{HELPER, START, data, faction, setup_with, spawn, template};
 use crate::game::tests_p3_entity::on;
 use crate::game::tests_p3_entity_objects::until;
 
@@ -67,6 +67,10 @@ fn world() -> GameData {
     for entry in [CITY_GUARD, ROYAL_GUARD, IRONFORGE_GUARD] {
         let mut t = template(entry, 7);
         t.flags_extra = 0x400;
+        // They walk and swim, with the swimming animation, as vmangos's
+        // (`inhabit_type` 3, `static_flags1`'s `CAN_SWIM`).
+        t.inhabit_type = 3;
+        t.static_flags1 |= 0x1000_0000;
         d.creature_templates.insert(entry, t);
     }
     let mut j = template(jaina::JAINA, 7);
@@ -297,16 +301,83 @@ async fn a_guard_goes_five_minutes_out_of_combat_or_at_death_and_wanders_meanwhi
         ai::enter_evade(m, g);
         let c = m.creature(g).unwrap();
         assert_eq!(c.movement_type, MOVEMENT_RANDOM);
-        assert_eq!(c.wander_distance, 8.0);
+        assert_eq!(c.wander_distance, 10.0);
         g
     })
     .await;
     until(&map, "it wanders about where it came", move |m| {
         m.creature(g3).is_some_and(|c| match &c.motion {
-            Motion::Moving(w) => !c.evading && dist(w.destination(), c.home) <= 8.0 + 0.01,
+            Motion::Moving(w) => !c.evading && dist(w.destination(), c.home) <= 10.0 + 0.01,
             Motion::Idle { .. } => false,
         })
     })
+    .await;
+}
+
+/// The user, after the raid: "the guards run back to their spawn point
+/// and stand still." A called guard that has fought (run after its foe,
+/// who has died), evaded and come home walks again about where it came,
+/// within `[guards] wander_yards` (10), as a spawn with random movement
+/// does after its evade (mangos's motion master back at its default).
+#[tokio::test]
+async fn a_guard_that_fought_evaded_and_came_home_wanders_again() {
+    let (realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let civ = unit(CIVILIAN);
+    a.sees(civ).await;
+    // Bob watches: a creature no one sees doesn't move.
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.heartbeat(START.0, START.1, START.2).await;
+    let g = on(&map, move |m| {
+        hardy(m, ga);
+        in_town(m, civ, STORMWIND);
+        ai::attacked(m, civ, ga);
+        called(m, CITY_GUARD)[0]
+    })
+    .await;
+    b.sees(g).await;
+    let (wander, home) = on(&map, move |m| {
+        let c = m.creature(g).unwrap();
+        (c.wander_distance, c.home)
+    })
+    .await;
+    assert_eq!(wander, 10.0, "the default");
+    // Alice runs off, 25 yards past where it came, the guard after her;
+    // she dies, and it goes home.
+    let away = if home.x > START.0 { -25.0 } else { 25.0 };
+    a.heartbeat(home.x + away, home.y, home.z).await;
+    until(&map, "it runs after her", move |m| {
+        m.creature(g)
+            .is_some_and(|c| dist(c.position, c.home) > 10.0)
+    })
+    .await;
+    on(&map, move |m| {
+        crate::game::map::death::kill(m, ga);
+        // Nobody left to fight: it gives up, as it would on its next look.
+        if !m.creature(g).unwrap().evading {
+            ai::enter_evade(m, g);
+        }
+    })
+    .await;
+    until(&map, "it is home", move |m| {
+        m.creature(g)
+            .is_some_and(|c| !c.evading && dist(c.position, c.home) < 1.0)
+    })
+    .await;
+    until(
+        &map,
+        "it walks again within 10 yards of where it came",
+        move |m| {
+            m.creature(g).is_some_and(|c| match &c.motion {
+                Motion::Moving(w) => {
+                    !c.evading
+                        && dist(w.destination(), c.home) > 0.1
+                        && dist(w.destination(), c.home) <= 10.0 + 0.01
+                }
+                Motion::Idle { .. } => false,
+            })
+        },
+    )
     .await;
 }
 
@@ -618,6 +689,137 @@ async fn jaina_comes_to_stormwind_at_the_third_threshold_and_goes_home_after() {
     .await;
 }
 
+/// The Alliance's side (Theramore's, Stormwind's): the Horde's enemy.
+const ALLIANCE: u32 = 960_200;
+/// An orc player's faction template.
+const ORCS: u32 = 2;
+
+/// A Horde raider in Stormwind: an orc, brought from the Valley of Trials
+/// to `at` in the Eastern Kingdoms, beyond harm.
+async fn raider(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    name: &str,
+    at: (f32, f32, f32),
+) -> (Client, Guid) {
+    let mut c = Client::connect(realm, name);
+    let g = c.enter(name, Race::Orc, Class::Warrior).await;
+    c.say(&format!(".go xyz {} {} {} 0", at.0, at.1, at.2))
+        .await;
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+    let map = realm.maps.get(realm, MapKey::world(0));
+    on(&map, move |m| hardy(m, g)).await;
+    (c, g)
+}
+
+/// The user's raid: Jaina came to Stormwind "but she just stands still and
+/// doesn't attack anything, even though there are 80 horde in front of
+/// her." Her template takes no one on sight (`flags_extra` 0x2, so
+/// `Reaction::Defensive`), and the raider whose fight called her had died
+/// as she came. In Stormwind she takes on a Horde player within her reach,
+/// and when it dies, the next; at home in Theramore she keeps her no-aggro
+/// (Thrall, beside her there, is left alone).
+#[tokio::test]
+async fn jaina_in_stormwind_takes_on_the_horde_though_the_one_she_came_for_died() {
+    let mut d = world();
+    d.faction_templates.extend([
+        (ALLIANCE, faction(ALLIANCE, 0x1, 0x4)),
+        (ORCS, faction(ORCS, 0x4, 0x1)),
+    ]);
+    // Her real template's flag and reach; the city's people and guards of
+    // her side, and as before taking no one on sight (their reach), so
+    // that only she can take the raiders on.
+    let j = d.creature_templates.get_mut(&jaina::JAINA).unwrap();
+    j.flags_extra |= 0x2;
+    j.detection_range = 20.0;
+    j.faction = ALLIANCE;
+    for e in [CIVILIAN, CITY_GUARD, ROYAL_GUARD] {
+        d.creature_templates.get_mut(&e).unwrap().faction = ALLIANCE;
+    }
+    let (realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    let civ = unit(CIVILIAN);
+    a.sees(civ).await;
+    on(&map, move |m| hardy(m, ga)).await;
+    // At home she lets Thrall be.
+    let (_b, gb, kalimdor) = orc(&realm).await;
+    let start = on(&kalimdor, |m| m.stats.updates).await;
+    until(&kalimdor, "her looks about her at home", move |m| {
+        m.stats.updates > start + 20
+    })
+    .await;
+    let at_home = on(&kalimdor, move |m| {
+        let g = crate::game::map::scripts::creature_of_spawn(m, jaina::SPAWN).unwrap();
+        let c = m.creature(g).unwrap();
+        (
+            crate::game::map::assistance::reaction(m, g),
+            c.combat.attacking && c.combat.victim == gb,
+        )
+    })
+    .await;
+    assert_eq!(
+        at_home,
+        (crate::game::map::assistance::Reaction::Defensive, false),
+        "no aggro at home"
+    );
+    // The raiders: the one whose fight calls her, and two more.
+    let (_h0, foe) = raider(&realm, "Foe", (START.0 - 3.0, START.1, START.2)).await;
+    let (_h1, g1) = raider(&realm, "Grunt", (START.0 - 3.0, START.1 + 2.0, START.2)).await;
+    let (_h2, g2) = raider(&realm, "Peon", (START.0 - 3.0, START.1 - 2.0, START.2)).await;
+    let called = on(&map, move |m| {
+        in_town(m, civ, STORMWIND);
+        // Two Royal Guards from 58: 60, and she is called.
+        set_alarm(m, STORMWIND, 58);
+        ai::attacked(m, civ, foe);
+        // The one she came for dies before she comes.
+        crate::game::map::death::kill(m, foe);
+        place(m)
+    })
+    .await;
+    assert_ne!(called, Place::Home, "she is called");
+    until(&map, "she comes", |m| {
+        matches!(place(m), Place::Away { .. })
+    })
+    .await;
+    let copy = on(&map, |m| match place(m) {
+        Place::Away { copy, .. } => copy,
+        _ => unreachable!(),
+    })
+    .await;
+    let fights = move |m: &Map, g: Guid| {
+        m.creature(copy)
+            .is_some_and(|c| c.combat.attacking && c.combat.victim == g)
+    };
+    until(&map, "she takes on a raider before her", move |m| {
+        fights(m, g1) || fights(m, g2)
+    })
+    .await;
+    let (first, next) = on(&map, move |m| {
+        let first = if fights(m, g1) { g1 } else { g2 };
+        crate::game::map::death::kill(m, first);
+        (first, if first == g1 { g2 } else { g1 })
+    })
+    .await;
+    assert_ne!(first, next);
+    until(&map, "and the next after that one dies", move |m| {
+        fights(m, next)
+    })
+    .await;
+    let home = on(&kalimdor, |m| {
+        crate::game::map::scripts::creature_of_spawn(m, jaina::SPAWN)
+            .map(|g| crate::game::map::assistance::reaction(m, g))
+    })
+    .await;
+    assert_eq!(
+        home,
+        Some(crate::game::map::assistance::Reaction::Defensive),
+        "her home self keeps her no-aggro"
+    );
+}
+
 /// Dead in Stormwind, her corpse lies there, and she is back in Theramore
 /// after her respawn time (a day), to be called by a later raid.
 #[tokio::test]
@@ -797,7 +999,10 @@ async fn on_the_navmesh_a_stormwind_civilian_calls_a_guard_it_can_reach() {
                 .and_then(|p| p.last().copied())
                 .is_some_and(|e| dist(e, p) <= 1.0);
             let victim = m.creature(g).unwrap().combat.victim;
-            out.push((dist(p, at), reached, foes.contains(&victim)));
+            // On the ground's plane, as mangos's `GetRandomPoint` measures
+            // it (the Trade District slopes: in three, 30.4 once).
+            let flat = ((p.x - at.x).powi(2) + (p.y - at.y).powi(2)).sqrt();
+            out.push((flat, reached, foes.contains(&victim)));
         }
         (town, out)
     })
@@ -931,4 +1136,110 @@ fn the_real_data_has_the_guards_and_jaina() {
     let exit = d.area_triggers[&503].teleport.as_ref().unwrap();
     assert_eq!(exit.map, 0);
     assert!((exit.x + 8766.11).abs() < 0.1 && (exit.y - 845.499).abs() < 0.1);
+}
+
+/// On the real navmesh: a called guard whose fight ends where it came (its
+/// foe died beside it there, so its walk home is none) walks again about
+/// that spot within 10 yards, as one that walked home does.
+#[tokio::test]
+#[ignore = "extended"]
+async fn on_the_navmesh_a_guard_that_fought_where_it_came_wanders_again() {
+    let bake = BAKE.as_path();
+    if !bake.join("Azeroth.map").exists() {
+        return;
+    }
+    const TRADE: (f32, f32, f32) = (-8816.0, 660.0, 96.0);
+    let mut d = world();
+    if let Some(s) = d.creature_spawns.get_mut(&0) {
+        for s in s.iter_mut().filter(|s| s.guid == CIVILIAN) {
+            (s.x, s.y, s.z) = TRADE;
+        }
+    }
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, d, None);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    // Alice watches from beside the auction house.
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.say(&format!(".go {} {} {}", TRADE.0 + 10.0, TRADE.1, TRADE.2))
+        .await;
+    a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    let civ = unit(CIVILIAN);
+    a.sees(civ).await;
+    let g = on(&map, move |m| {
+        hardy(m, ga);
+        let ground = m
+            .nav
+            .as_mut()
+            .and_then(|n| n.ground(TRADE.0, TRADE.1, TRADE.2))
+            .expect("Stormwind's ground");
+        let at = Vector3d {
+            x: TRADE.0,
+            y: TRADE.1,
+            z: ground,
+        };
+        m.creature_mut(civ).unwrap().position = at;
+        let t = m.realm.data.creature_template(HELPER).cloned().unwrap();
+        let foe = m.add_creature(
+            crate::game::map::creature::Creature::new(
+                guid::unit(HELPER, 0x80_0100),
+                &t,
+                20,
+                Vector3d {
+                    x: at.x + 3.0,
+                    ..at
+                },
+                0.0,
+            )
+            .with_base(),
+        );
+        ai::attacked(m, civ, foe);
+        let g = called(m, CITY_GUARD)[0];
+        assert_eq!(m.creature(g).unwrap().combat.victim, foe, "it fights");
+        // The fight comes to it: its foe beside the spot it came to, it
+        // standing there as a chase leaves it; its foe dies.
+        let home = m.creature(g).unwrap().home;
+        let c = m.creature_mut(g).unwrap();
+        c.position = home;
+        c.motion = Motion::Idle { until: None };
+        m.creature_mut(foe).unwrap().position = Vector3d {
+            x: home.x + 1.0,
+            ..home
+        };
+        ai::die(m, foe, g);
+        g
+    })
+    .await;
+    a.sees(g).await;
+    until(&map, "its fight over", move |m| {
+        m.creature(g)
+            .is_some_and(|c| !c.combat.attacking && !c.evading)
+    })
+    .await;
+    until(
+        &map,
+        "it walks again within 10 yards of where it came",
+        move |m| {
+            m.creature(g).is_some_and(|c| match &c.motion {
+                Motion::Moving(w) => {
+                    !c.evading
+                        && dist(w.destination(), c.home) > 0.1
+                        && dist(w.destination(), c.home) <= 10.0 + 0.01
+                }
+                Motion::Idle { .. } => false,
+            })
+        },
+    )
+    .await;
 }

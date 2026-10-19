@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .gear, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -230,9 +230,17 @@ fn learn(map: &mut Map, g: Guid, args: &[&str], learn: bool) -> Option<String> {
     }
 }
 
+/// `.character level <n>` and `.character spells`: the selected player,
+/// or the GM, at a level (at full health and mana, as a level gained), or
+/// taught every spell their class's trainers would teach them now.
 fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    if args.first() == Some(&"spells") && args.len() == 1 {
+        let to = player_target(map, g);
+        let n = crate::game::map::npc::learn_class_spells(map, to);
+        return Some(format!("Learned {n} spells."));
+    }
     let (Some(&"level"), Some(level)) = (args.first(), num::<u8>(args.get(1))) else {
-        return Some("Usage: .character level <level>".into());
+        return Some("Usage: .character level <level> | .character spells".into());
     };
     let data = map.realm.data.clone();
     let to = player_target(map, g);
@@ -437,7 +445,8 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 /// shield, a second weapon or an off-hand item), and a ranged weapon or a
 /// wand, with ammunition for one that takes it. The proficiencies and
 /// weapon skills the items need are taught, the skills at their caps, and
-/// Auto Shot and Shoot with a ranged weapon or a wand.
+/// Auto Shot and Shoot with a ranged weapon or a wand. One alive is left
+/// at full health and mana, as the reply says.
 fn gear(map: &mut Map, g: Guid) -> Option<String> {
     use crate::game::map::inventory::{self, Destination, SLOT_MAIN_HAND, SLOT_OFF_HAND};
     use crate::game::store::BAG_PLAYER;
@@ -571,7 +580,33 @@ fn gear(map: &mut Map, g: Guid) -> Option<String> {
     if names.is_empty() {
         return Some("No gear to equip.".into());
     }
-    Some(format!("Equipped {}.", names.join(", ")))
+    // A GM's convenience, not 1.12's: the gear's stamina and intellect
+    // raise their maximum health and mana, and they are left at it, not
+    // where they were (the user's raiders came at half health).
+    let whole = map.players.get_mut(&to).is_some_and(|p| {
+        if p.death != crate::game::map::death::Death::Alive {
+            return false;
+        }
+        let (health, mana) = (
+            p.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+            p.fields.get_u32(UNIT_FIELD_MAXPOWER1),
+        );
+        p.fields.set_u32(UNIT_FIELD_HEALTH, health);
+        p.fields.set_u32(UNIT_FIELD_POWER1, mana);
+        true
+    });
+    if whole {
+        crate::game::map::combat::sync_aura_state(map, to);
+    }
+    Some(format!(
+        "Equipped {}.{}",
+        names.join(", "),
+        if whole {
+            " At full health and mana."
+        } else {
+            ""
+        }
+    ))
 }
 
 /// Four stacks of the best ammunition of `ammo_type` (arrows, bullets) of

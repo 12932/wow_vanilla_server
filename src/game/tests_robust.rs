@@ -993,6 +993,7 @@ async fn gm_commands_with_odd_arguments_never_panic() {
     let realm = {
         let mut config = harness::test_config();
         config.max_packets_per_sec = 1_000_000;
+        config.max_queries_per_sec = 1_000_000;
         let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
         Realm::new(config, store, startup, wolves(), None)
     };
@@ -1522,6 +1523,7 @@ mod chaos {
         // Players or GMs; and a flood is what this is.
         config.everyone_gm = gm;
         config.max_packets_per_sec = 1_000_000;
+        config.max_queries_per_sec = 1_000_000;
         let realm = {
             let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
             Realm::new(config, store, startup, data, None)

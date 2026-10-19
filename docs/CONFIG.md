@@ -112,6 +112,7 @@ Connections: queues, timeouts and limits.
 | `client_idle_timeout_secs` | Seconds a client may send nothing before it is disconnected. Clients ping every 30. | `120` | 10 to 3600, clamped | restart |  |
 | `max_pending_connections` | Connections still in the login or the world handshake, at most. | `1024` | 1 to 1000000, clamped | restart |  |
 | `max_packets_per_sec` | Packets a client may send a second, sustained (three seconds' worth at once); a client that floods is disconnected. | `100` | 10 to 100000, clamped | restart |  |
+| `max_queries_per_sec` | Read-only queries (names, creatures, objects, items, quests, texts, times) a client may send a second, sustained (three seconds' worth at once), apart from the packets: a client walking into a crowd asks after everyone in it at once. One that floods them is disconnected. | `1000` | 10 to 1000000, clamped | restart |  |
 
 ### `[world]`
 
@@ -201,7 +202,7 @@ Town guards, as mangos-classic calls them: a guard each time a creature that cal
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `despawn_secs` | Seconds a called guard stays once out of combat (mangos-classic's 30); it goes at once when it dies. | `300` | 5 to 86400, clamped | live |  |
-| `wander_yards` | Yards a called guard wanders about where it came, out of combat. | `8.0` | 0 to 30, clamped | live |  |
+| `wander_yards` | Yards a called guard wanders about where it came, out of combat, and again once home from a fight. | `10.0` | 0 to 30, clamped | live |  |
 | `alarm_half_life_secs` | Seconds without a call after which a town's alarm halves. | `300` | 10 to 86400, clamped | live |  |
 | `avoidance_from` | Guards in the alarm from which each new guard comes with Avoidance (spell 23198's aura: area spells miss it that many percent more often). | `20` | 1 to 100000, clamped | live |  |
 | `avoidance_step_pct` | Avoidance, in percent, at the threshold and for each further `avoidance_step_guards` guards. | `5` | 0 to 100, clamped | live |  |
