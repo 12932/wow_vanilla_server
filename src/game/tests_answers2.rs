@@ -149,6 +149,76 @@ async fn a_fear_breaks_by_chance_at_a_blow_its_spell_names() {
     assert_eq!(got.1, (true, true, true), "no blow named, it stays");
 }
 
+// ---- #42: an interrupt on a creature immune to silence -------------------
+
+const KICK: u32 = 994_200;
+const FIRE: u32 = 994_201;
+
+fn kick_kit(d: &mut GameData) {
+    use super::tests_p3_cast_kit::{CAST_3S, LASTS_5S};
+    // Immune to silence (mechanic 9, the mask's 256), as 467 of vmangos's
+    // creatures are.
+    d.creature_templates
+        .get_mut(&super::tests_p3_cast_kit::KOBOLD)
+        .unwrap()
+        .mechanic_immune_mask = 1 << 8;
+    let mut kick = bare(KICK, 0);
+    kick.dmg_class = 2;
+    kick.duration_index = LASTS_5S;
+    effect(
+        &mut kick,
+        0,
+        crate::game::data::spells::SpellEffect {
+            effect: 68,
+            target_a: 6,
+            mechanic: 26,
+            ..Default::default()
+        },
+    );
+    let mut fire = bare(FIRE, 2);
+    fire.casting_time_index = CAST_3S;
+    fire.prevention_type = 1;
+    fire.interrupt_flags = 0x8;
+    effect(&mut fire, 0, damage(10));
+    insert(d, [kick, fire]);
+}
+
+/// An interrupt on a creature immune to silence stops its cast and locks
+/// its school out all the same, as mangos-classic's `EffectInterruptCast`
+/// has it: the lockout isn't a silence (the user's #42; Thistle Tea, after
+/// vmangos, spares the creature). wvs did so already; this keeps it.
+#[tokio::test]
+async fn an_interrupt_locks_out_the_school_of_a_creature_immune_to_silence() {
+    let realm = fast_realm(kick_kit);
+    let (_c, rogue, map) = human(&realm, "KICKS", "Kicker", Class::Rogue).await;
+    let got = on(&map, move |m| {
+        ready(m, rogue, 60, &[KICK]);
+        let k = dummy(m, rogue, 60, 3.0);
+        assert!(
+            spells::cast(m, k, FIRE, at(rogue), None),
+            "the creature casts"
+        );
+        let casting_before = casting(m, k);
+        spells::cast_triggered(m, rogue, KICK, Some(k));
+        let after = casting(m, k);
+        let now = m.now;
+        let locked = m.caster(k).is_some_and(|c| {
+            c.school_lockout
+                .iter()
+                .any(|(mask, until)| *until > now && mask & 4 != 0)
+        });
+        let again = spells::cast(m, k, FIRE, at(rogue), None);
+        let silenced = auras::auras(m, k).is_some_and(|a| a.has(auras::AURA_MOD_SILENCE));
+        (casting_before, after, locked, again, silenced)
+    })
+    .await;
+    assert_eq!(got.0, Some(FIRE));
+    assert_eq!(got.1, None, "interrupted");
+    assert!(got.2, "its fire locked out");
+    assert!(!got.3, "and no fire cast meanwhile");
+    assert!(!got.4, "by no silence");
+}
+
 // ---- #30: attack-speed slows multiply ------------------------------------
 
 const SLOW_20: u32 = 993_000;
