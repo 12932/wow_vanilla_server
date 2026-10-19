@@ -198,6 +198,25 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **Left as gaps:** a trap isn't looked at again when its owner's PvP flag or duel changes (until someone moves);
     visibility isn't checked on a turn (mangos doesn't either). 137 rows in the area are still open, mostly the
     real-navmesh pathfinding (38) and positions (20).
+- **6d, combat (0.1.16):** each hand's own skill and hit, and players' caps against players; a warrior in a stance
+  or a rogue in Stealth dual wields and parries (only cat, bear, travel and aquatic forms put weapons away); a
+  fishing pole trains nothing; damage against a creature type added flat to spells, after the percentage on a
+  weapon blow, by the coefficient on other abilities; Deep Wounds bleeds by the hand that crit; kill procs before
+  the death takes the auras (Improved Drain Soul); a killing Shadowburn leaves its shard; the dead open no
+  defensive window. **My calls** (mangos's unless said):
+  - **Deep Wounds** uses the hand that crit (Thistle Tea's; mangos guesses it from the swing timers); the off hand's
+    amount is its damage as it stands, where Thistle Tea halves it again.
+  - **Weapon procs:** a wholly absorbed blow procs, a whole block doesn't; Auto Shot, Aimed Shot, Throw and Shoot
+    proc the ranged weapon; a proc spell on cooldown stops the enchant rolls too (Thistle Tea goes on to them).
+  - **Ghost Wolf** trains weapon skills (its form has no "no weapon" flag); **a fishing pole** still swings at
+    the unarmed skill, as round 4 chose (mangos would use Fishing).
+  - **The spell damage log** carries the damage less the absorb, and god mode logs the blow; Thistle Tea folds the
+    absorb in and logs 0.
+  - **A melee or ranged tick** takes the target's damage-taken flats whole; Thistle Tea scales them.
+  - **You might override:** spell damage "up to" a creature type (aura 180) stays as spell power, as Thistle Tea;
+    mangos adds it flat.
+  - **Left:** a spell's procs run once per damaging effect, where both references run them once per target; 119
+    rows open (fleeing for help, proximity aggro, leashes, pet combat, kill credit, Feign Death and more).
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -281,7 +300,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6a: the player | 69.5% | 99266b6 |
 | 6c: the world's loaders | 70.2% | cd3605e |
 | 6g: the world's systems | 71.0% | 2febcb2 |
+| 6d: combat | 72.0% | fd2fa71 |
 
-**Running now:** round 6 (6d, 6e, 6f, 6h), and `fix/extended1019` for the four tests the 15:38 extended run failed.
+**Running now:** round 6 (6e, 6f, 6h, 6i), and `fix/extended1019` for the four tests the 15:38 extended run failed.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
