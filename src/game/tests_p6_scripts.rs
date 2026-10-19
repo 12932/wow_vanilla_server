@@ -2327,3 +2327,50 @@ pub(super) async fn kit_on(
         timed_cast(c, map, g, id, spell, first, repeat, at_victim.then_some(d)).await;
     }
 }
+
+/// Garr, pulled, binds each of his living Firesworn to him with
+/// Separation Anxiety: the spell is his, cast at each one, and none at
+/// a dead one (Thistle Tea's `Combat.cast_on_creatures`, as Molten Core's
+/// script has it).
+#[tokio::test]
+#[ignore = "extended"]
+async fn garr_casts_on_each_of_his_living_firesworn() {
+    const GARR: u32 = 12057;
+    const FIRESWORN: u32 = 12099;
+    const SEPARATION_ANXIETY: u32 = 23487;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let lair = Vector3d {
+        x: 840.0,
+        y: -812.0,
+        z: -229.6,
+    };
+    let (mut c, me, map) = hero_in(&realm, "Bound", 409, lair, 120.0, &[]).await;
+    let boss = summon_near(&map, GARR, off(lair, 5.0, 0.0)).await;
+    let living_one = summon_near(&map, FIRESWORN, off(lair, 9.0, 2.0)).await;
+    let dead_one = summon_near(&map, FIRESWORN, off(lair, 9.0, -2.0)).await;
+    c.sees(boss).await;
+    c.sees(living_one).await;
+    c.clear();
+    map.query(move |m| {
+        event_ai::update_despawns(m);
+        tough(m, boss);
+        tough(m, living_one);
+        kill(m, me, dead_one);
+        crate::game::map::ai::attacked(m, boss, me);
+    })
+    .await;
+    let casts = casts_by(&mut c, boss, Duration::from_secs(2)).await;
+    let at: Vec<Guid> = casts
+        .iter()
+        .filter(|(s, _)| *s == SEPARATION_ANXIETY)
+        .map(|(_, t)| *t)
+        .collect();
+    assert_eq!(at, [living_one], "his, at the living one only: {casts:?}");
+    assert!(
+        map.query(move |m| has(m, living_one, SEPARATION_ANXIETY))
+            .await
+            .unwrap()
+    );
+}
