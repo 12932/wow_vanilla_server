@@ -114,6 +114,78 @@ async fn one_leaving_a_match_goes_back_where_they_accepted() {
     assert!((facing - 2.0).abs() < 0.01, "{facing}");
 }
 
+const HELM: u32 = 64_520;
+
+/// Thistle Tea's death and combat wear "PvP, controlled pets,
+/// battlegrounds, and exempt spells avoid death penalties", and
+/// `Instances.refresh` "does not start a timer in open worlds or
+/// battlegrounds": dying to a creature in a battleground wears no gear
+/// (no `SMSG_DURABILITY_DAMAGE_DEATH`); and one there in no group gets no
+/// dungeon's grace to leave (`SMSG_RAID_GROUP_ONLY`).
+#[tokio::test]
+async fn a_battleground_spares_gear_at_death_and_starts_no_grace() {
+    use crate::game::fields::ITEM_FIELD_DURABILITY;
+    use crate::game::store::BAG_PLAYER;
+    let mut d = gulch();
+    d.creature_templates.insert(
+        crate::game::tests_p3_combat::BRUTE,
+        crate::game::tests_p3_combat::template(crate::game::tests_p3_combat::BRUTE, 7),
+    );
+    d.items.insert(
+        HELM,
+        crate::game::data::ItemTemplate {
+            entry: HELM,
+            name: "Helm".into(),
+            class: 4,
+            subclass: 1,
+            inventory_type: 1,
+            stackable: 1,
+            max_durability: 10,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Grom", Race::Orc, Class::Warrior).await;
+    let map = both_into(&realm, &mut a, &mut c, Map::WarsongGulch).await;
+    a.clear();
+    let left = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let helm = Guid::new(0x4000_0000_0000_0000 | 964_520);
+        let p = m.players.get_mut(&alice).unwrap();
+        p.items.retain(|i| !(i.bag == BAG_PLAYER && i.slot == 0));
+        p.items.push(crate::game::map::player::Item::new(
+            &data, helm, alice, HELM, BAG_PLAYER, 0, 1,
+        ));
+        let brute = crate::game::tests_p3_combat::spawn(
+            m,
+            alice,
+            crate::game::tests_p3_combat::BRUTE,
+            20,
+            3.0,
+        );
+        crate::game::map::combat::kill(m, brute, alice);
+        let p = &m.players[&alice];
+        let i = p.item_by_guid(helm).unwrap();
+        (p.death, p.items[i].fields.get_u32(ITEM_FIELD_DURABILITY))
+    })
+    .await;
+    assert_ne!(left.0, crate::game::map::death::Death::Alive, "she fell");
+    assert_eq!(left.1, 10, "no wear in a battleground");
+    let told = a
+        .gets(Duration::from_millis(1_500), |m| match m {
+            ServerOpcodeMessage::SMSG_DURABILITY_DAMAGE_DEATH => Some("wear"),
+            ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(_) => Some("grace"),
+            _ => None,
+        })
+        .await;
+    assert_eq!(told, None, "neither wear nor a grace");
+}
+
 /// Thistle Tea's `join` "group admission reads the leader's current aura
 /// before its projection" and "departure cannot requeue before the owner
 /// has exited its battleground": a party's leader who is a deserter keeps
