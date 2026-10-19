@@ -599,13 +599,15 @@ mod tests_p6_wspell_groups;
 #[cfg(test)]
 mod tests_p6_wspell_locations;
 #[cfg(test)]
-mod tests_p7_player;
-#[cfg(test)]
 mod tests_p6_wspell_reception;
 #[cfg(test)]
 mod tests_p6_wspell_requirements;
 #[cfg(test)]
 mod tests_p6_wspell_units;
+#[cfg(test)]
+mod tests_p7_player;
+#[cfg(test)]
+mod tests_p7_player_gm;
 #[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
