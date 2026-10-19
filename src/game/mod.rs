@@ -653,6 +653,20 @@ mod tests_p7_combat_rewards;
 #[cfg(test)]
 mod tests_p7_combat_zone;
 #[cfg(test)]
+mod tests_p7_creature_charm;
+#[cfg(test)]
+mod tests_p7_creature_critters;
+#[cfg(test)]
+mod tests_p7_creature_entry;
+#[cfg(test)]
+mod tests_p7_creature_events;
+#[cfg(test)]
+mod tests_p7_creature_immunity;
+#[cfg(test)]
+mod tests_p7_creature_misc;
+#[cfg(test)]
+mod tests_p7_creature_motion;
+#[cfg(test)]
 mod tests_p7_entity;
 #[cfg(test)]
 mod tests_p7_entity_loot;
