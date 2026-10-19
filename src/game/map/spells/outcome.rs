@@ -1045,6 +1045,13 @@ pub fn healing(
     base: f32,
     l: &Landing,
 ) -> u32 {
+    // A fixed amount takes no bonus or modifier, done or taken, as fixed
+    // damage doesn't (vmangos's custom flag, Thistle Tea's "fixed damage
+    // and healing keep base modifiers but bypass outgoing bonuses").
+    if s.custom(sd::CUSTOM_FIXED_DAMAGE) {
+        let h = base * if l.chain > 0.0 { l.chain } else { 1.0 };
+        return (if l.crit { h * 1.5 } else { h }).max(0.0) as u32;
+    }
     let mut h = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
     h *= if l.chain > 0.0 { l.chain } else { 1.0 };
     if let Some(a) = auras::auras(map, caster)
