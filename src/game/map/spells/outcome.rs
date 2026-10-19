@@ -1220,7 +1220,8 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
         ex |= procs::EX_ABSORB;
     }
     let (done, taken_flag) = proc_flags(s);
-    procs::trigger(
+    // With the spell's other effects on the target, once (`effects::run`).
+    procs::spell_hit(
         map,
         procs::Event {
             actor: caster,

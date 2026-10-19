@@ -159,6 +159,82 @@ impl Drop for Deeper {
     }
 }
 
+thread_local! {
+    /// The spells landing on a target now, innermost last, each with what
+    /// its effects have done so far ([`gather`]).
+    static GATHERED: std::cell::RefCell<Vec<(Guid, Guid, u32, Option<Event>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A spell's effects landing on one target, gathered into one event while
+/// it lives (mangos's `DoAllEffectOnTarget`, Thistle Tea's one weapon hit
+/// a target): the damage of each effect and a harmful aura's landing,
+/// reported through [`spell_hit`], go off together at [`Gathering::finish`].
+/// Dropped unfinished (a panic's unwinding), it goes without a word.
+pub struct Gathering {
+    depth: usize,
+}
+
+/// Start gathering `spell`'s hits from `actor` on `target`.
+pub fn gather(actor: Guid, target: Guid, spell: u32) -> Gathering {
+    GATHERED.with(|g| {
+        let mut g = g.borrow_mut();
+        g.push((actor, target, spell, None));
+        Gathering { depth: g.len() }
+    })
+}
+
+impl Gathering {
+    /// The event of everything gathered, if anything was.
+    pub fn finish(self) -> Option<Event> {
+        let e = GATHERED.with(|g| {
+            let mut g = g.borrow_mut();
+            let e = g.get(self.depth - 1).and_then(|x| x.3);
+            g.truncate(self.depth - 1);
+            e
+        });
+        std::mem::forget(self);
+        e
+    }
+}
+
+impl Drop for Gathering {
+    fn drop(&mut self) {
+        GATHERED.with(|g| g.borrow_mut().truncate(self.depth - 1));
+    }
+}
+
+/// A spell's hit, for its procs: gathered with the rest of its effects on
+/// the target if they are being ([`gather`]), else at once.
+pub fn spell_hit(map: &mut Map, e: Event) {
+    let gathered = e.spell.is_some_and(|spell| {
+        GATHERED.with(|g| {
+            let mut g = g.borrow_mut();
+            let Some(top) = g.last_mut() else {
+                return false;
+            };
+            if (top.0, top.1, top.2) != (e.actor, e.target, spell) {
+                return false;
+            }
+            top.3 = Some(match top.3 {
+                None => e,
+                Some(mut was) => {
+                    was.actor_flags |= e.actor_flags;
+                    was.target_flags |= e.target_flags;
+                    was.ex |= e.ex;
+                    was.damage += e.damage;
+                    was.school |= e.school;
+                    was
+                }
+            });
+            true
+        })
+    });
+    if !gathered {
+        trigger(map, e);
+    }
+}
+
 /// Run the procs of both units for `e`.
 pub fn trigger(map: &mut Map, e: Event) {
     let Some(deeper) = Deeper::enter() else {
