@@ -611,6 +611,8 @@ mod tests_p7_player_gm;
 #[cfg(test)]
 mod tests_p7_player_items;
 #[cfg(test)]
+mod tests_p7_player_pets;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
