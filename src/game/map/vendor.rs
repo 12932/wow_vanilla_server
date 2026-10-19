@@ -415,11 +415,18 @@ pub fn sell(map: &mut Map, player: Guid, npc: Guid, item: Guid, amount: u8) {
         return;
     };
     let it = &p.items[i];
-    // Carried, and a bag only empty.
+    // Carried or worn (mangos's `GetItemByGuid`; the client drags gear off
+    // its paper doll onto the vendor), not the bank's; a bag only empty;
+    // not the item whose loot is open (mangos's `GetLootGuid`), nor while
+    // the client moves another unit (Thistle Tea's remote control).
+    let worn = it.bag == BAG_PLAYER && it.slot < EQUIPMENT_END;
     let full_bag = it.bag == BAG_PLAYER
         && (BAG_START..BAG_END).contains(&it.slot)
         && p.items.iter().any(|x| x.bag == it.slot);
-    if !carried(it) || full_bag {
+    let looted =
+        p.looting == Some(item) || p.misc.item_loot.as_ref().is_some_and(|(x, _)| *x == item);
+    let remote = p.owned.mover.is_some_and(|m| m != player);
+    if !(carried(it) || worn) || full_bag || looted || remote {
         reply(map, SellItemResult::CantSellItem);
         return;
     }
@@ -502,6 +509,12 @@ pub fn sell(map: &mut Map, player: Guid, npc: Guid, item: Guid, amount: u8) {
     );
     p.buyback_next = (slot - BUYBACK_START + 1).min(BUYBACK_END - BUYBACK_START - 1);
     p.refresh_inventory(&data);
+    // A cast under way ends (mangos's `InterruptNonMeleeSpells` at a
+    // sale), and the quests that wanted it count again.
+    if map.caster(player).is_some_and(|c| c.casting.is_some()) {
+        crate::game::map::spells::interrupt(map, player);
+    }
+    crate::game::map::quests::items_changed(map, player, entry);
 }
 
 /// The buyback slot a sale goes to (Thistle Tea's `available_slot`): the
