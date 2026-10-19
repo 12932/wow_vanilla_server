@@ -723,6 +723,7 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
 /// hands.
 pub fn remove(map: &mut Map, g: Guid) {
     let owner = owner_of(map, g);
+    guardian_gone(map, g);
     // Seen through, its master sees through their own eyes again
     // (Thistle Tea's `Companion.suspend` clears the possession).
     if let Some(owner) = owner
@@ -838,9 +839,25 @@ pub fn dismiss(map: &mut Map, pet: Guid) {
     }
 }
 
+/// A player's guardian died or went: the cooldown of the spell that
+/// summoned it, waiting on it, starts now (mangos's `RemoveGuardian` and
+/// `SendCooldownEvent`; Thistle Tea's `Guardians.on_death` and
+/// `dismiss_all`): an engineer's Mechanical Dragonling may be used again
+/// in its item's time. Once, for the first of a cast's to go.
+fn guardian_gone(map: &mut Map, g: Guid) {
+    let Some((owner, spell)) = state(map, g)
+        .filter(|s| s.kind == Kind::Guardian && guid::is_player(s.owner))
+        .map(|s| (s.owner, s.summon_spell))
+    else {
+        return;
+    };
+    crate::game::map::spells::cooldowns::release(map, owner, spell, true);
+}
+
 /// A controlled creature dies: it falls and stays a while.
 pub fn die(map: &mut Map, g: Guid) {
     let now = map.now;
+    guardian_gone(map, g);
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::combat::leave_combat(map, g);
     let spline = map.next_spline_id;

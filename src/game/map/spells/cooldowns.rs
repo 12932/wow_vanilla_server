@@ -60,6 +60,9 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
             && !c.pending_cooldowns.contains(&s.id)
         {
             c.pending_cooldowns.push(s.id);
+            c.pending_times.retain(|p| p.0 != s.id);
+            c.pending_times
+                .push((s.id, recovery, category, category_recovery));
         }
         return;
     }
@@ -161,6 +164,11 @@ pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
         return;
     };
     c.pending_cooldowns.remove(i);
+    let times = c
+        .pending_times
+        .iter()
+        .position(|p| p.0 == spell)
+        .map(|i| c.pending_times.remove(i));
     if !start {
         send_clear(map, target, spell);
         return;
@@ -168,11 +176,27 @@ pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    let recovery =
-        charm_cooldown(map, target, spell).unwrap_or(s.recovery_time.max(s.category_recovery_time));
+    // The times the cast had (an item's own), else the spell's.
+    let (recovery, category, category_recovery) = match times {
+        Some((_, r, c, cr)) => (r, c, cr),
+        None => (
+            charm_cooldown(map, target, spell)
+                .unwrap_or(s.recovery_time.max(s.category_recovery_time)),
+            0,
+            0,
+        ),
+    };
     if let Some(c) = map.caster_mut(target) {
-        c.cooldowns
-            .insert(spell, now + Duration::from_millis(u64::from(recovery)));
+        if recovery > 0 {
+            c.cooldowns
+                .insert(spell, now + Duration::from_millis(u64::from(recovery)));
+        }
+        if category != 0 && category_recovery > 0 {
+            c.category_cooldowns.insert(
+                category,
+                now + Duration::from_millis(u64::from(category_recovery)),
+            );
+        }
     }
     if let Some(p) = map.players.get(&target) {
         p.outbound.send(&SMSG_COOLDOWN_EVENT {

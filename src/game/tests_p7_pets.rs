@@ -1112,3 +1112,212 @@ async fn a_wild_summon_comes_at_its_place_or_ahead_and_dies_after_its_fight() {
     }
     assert!(died, "dead once it is over");
 }
+
+/// Thistle Tea's `Guardians.prepare` "direct casts toggle only matching
+/// guardians" and "creature casters stop adding an entry once sixteen are
+/// active", `Guardians.dismiss_all` "departure activates the retained
+/// item cooldown" and "an old guardian cannot activate a newer cast",
+/// `Guardians.on_death` "lethal damage releases the summoning cast once",
+/// and `SpellEffect.receive` "executes once on its caster with count":
+/// a player's guardian cast again sends those of its entry away and
+/// summons none, her other guardian and her companion kept; a triggered
+/// cast adds to them; one with a time and a category replaces them, three
+/// for a count of three. A guardian whose spell's cooldown waits on it
+/// (an engineer's Mechanical Dragonling) keeps the spell from a second
+/// cast while it lives; its death starts the cooldown, once, its cast's
+/// own time (mangos's `SendCooldownEvent`), and its fellow's going later
+/// starts nothing more. A creature's guardians of one entry stop at
+/// sixteen, but another entry's come.
+#[tokio::test]
+async fn a_guardian_recast_toggles_its_own_and_its_death_starts_its_cooldown() {
+    use crate::game::map::spells::{self, Targets};
+    const A: u32 = 990_770;
+    const B: u32 = 990_771;
+    const C: u32 = 990_772;
+    const CRITTER: u32 = 990_773;
+    const GUARD_A: u32 = 990_774;
+    const GUARD_B: u32 = 990_775;
+    const THREE: u32 = 990_776;
+    const DRAGONLING: u32 = 990_777;
+    const CALL: u32 = 990_778;
+    const CASTER: u32 = 990_779;
+    let mut d = revive_data();
+    for (entry, name) in [
+        (A, "Guardian A"),
+        (B, "Guardian B"),
+        (C, "Dragonling"),
+        (CRITTER, "Critter"),
+        (CASTER, "Caster"),
+    ] {
+        d.creature_templates
+            .insert(entry, tests_pets::template(entry, name, 14, 1));
+    }
+    let none = SpellEffect::default();
+    let guard = |id: u32, entry: u32, count: i32| {
+        let mut e = tests_pets::effect(pets::EFFECT_SUMMON_GUARDIAN, count - 1, 32);
+        e.misc_value = entry as i32;
+        tests_pets::spell(id, "Guardian", [e, none, none])
+    };
+    let mut three = guard(THREE, A, 3);
+    three.duration_index = 4;
+    three.category = 1;
+    let mut dragonling = guard(DRAGONLING, C, 2);
+    dragonling.attributes[0] |= 0x200_0000;
+    dragonling.recovery_time = 60_000;
+    dragonling.duration_index = 4;
+    let mut call = tests_pets::effect(pets::EFFECT_SUMMON_CRITTER, 0, 32);
+    call.misc_value = CRITTER as i32;
+    for s in [
+        guard(GUARD_A, A, 1),
+        guard(GUARD_B, B, 1),
+        three,
+        dragonling,
+        tests_pets::spell(CALL, "Call", [call, none, none]),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let realm = crate::game::harness::realm_with(d);
+    let (mut c, g, map) = enter(&realm, "C", "Tinker", Race::Gnome, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .spells
+                .extend([GUARD_A, GUARD_B, THREE, DRAGONLING, CALL]);
+            let of = |m: &crate::game::map::Map, entry: u32| -> Vec<Guid> {
+                m.players[&g]
+                    .owned
+                    .guardians
+                    .iter()
+                    .copied()
+                    .filter(|x| m.creature(*x).is_some_and(|c| c.entry == entry))
+                    .collect()
+            };
+            let direct = |m: &mut crate::game::map::Map, spell: u32| {
+                spells::cast(m, g, spell, Targets::default(), None);
+            };
+            direct(m, CALL);
+            direct(m, GUARD_A);
+            direct(m, GUARD_B);
+            let first = (of(m, A).len(), of(m, B).len());
+            direct(m, GUARD_A);
+            let toggled = (
+                of(m, A).len(),
+                of(m, B).len(),
+                m.players[&g].owned.critter.is_some(),
+            );
+            spells::cast_triggered(m, g, GUARD_A, Some(g));
+            spells::cast_triggered(m, g, GUARD_A, Some(g));
+            let triggered = of(m, A);
+            direct(m, THREE);
+            let replaced = of(m, A);
+            let timed = replaced
+                .iter()
+                .filter(|x| pets::state(m, **x).is_some_and(|s| s.expires.is_some()))
+                .count();
+            let kept = triggered.iter().filter(|x| replaced.contains(x)).count();
+            (
+                first,
+                toggled,
+                triggered.len(),
+                replaced.len(),
+                timed,
+                kept,
+                of(m, B).len(),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (1, 1), "one of each");
+    assert_eq!(out.1, (0, 1, true), "a recast sends its own away, no other");
+    assert_eq!(out.2, 2, "triggered casts add");
+    assert_eq!(
+        (out.3, out.4, out.5),
+        (3, 3, 0),
+        "a timed one of a category replaces, three"
+    );
+    assert_eq!(out.6, 1, "the other kept");
+    // The Dragonling: its cooldown waits on it.
+    c.clear();
+    let (two, again, pending) = map
+        .query(move |m| {
+            spells::cast(m, g, DRAGONLING, Targets::default(), None);
+            let two: Vec<Guid> = m.players[&g]
+                .owned
+                .guardians
+                .iter()
+                .copied()
+                .filter(|x| m.creature(*x).is_some_and(|c| c.entry == C))
+                .collect();
+            let before = two.len();
+            spells::cast(m, g, DRAGONLING, Targets::default(), None);
+            let after = m.players[&g]
+                .owned
+                .guardians
+                .iter()
+                .filter(|x| m.creature(**x).is_some_and(|c| c.entry == C))
+                .count();
+            let pending = m.caster(g).unwrap().pending_cooldowns.contains(&DRAGONLING);
+            (two, (before, after), pending)
+        })
+        .await
+        .unwrap();
+    assert_eq!(again, (2, 2), "two, and no second cast while they live");
+    assert!(pending, "its cooldown waits");
+    let wolf = two[0];
+    let cooled = map
+        .query(move |m| {
+            crate::game::map::combat::kill(m, g, wolf);
+            let left = m
+                .caster(g)
+                .unwrap()
+                .cooldowns
+                .get(&DRAGONLING)
+                .map(|t| t.duration_since(m.now));
+            let pending = m.caster(g).unwrap().pending_cooldowns.contains(&DRAGONLING);
+            pets::dismiss(m, two[1]);
+            let still = m
+                .caster(g)
+                .unwrap()
+                .cooldowns
+                .get(&DRAGONLING)
+                .map(|t| t.duration_since(m.now));
+            (left, pending, still == left)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        cooled.0,
+        Some(Duration::from_secs(60)),
+        "a minute from its death"
+    );
+    assert!(!cooled.1 && cooled.2, "once, not again with the other");
+    c.wait_for("SMSG_COOLDOWN_EVENT", |m| match m {
+        ServerOpcodeMessage::SMSG_COOLDOWN_EVENT(e) if e.id == DRAGONLING => Some(()),
+        _ => None,
+    })
+    .await;
+    // A creature's guardians: sixteen of an entry.
+    let caster = place(&map, g, CASTER, 0x70_0030, 8.0).await;
+    let counts = map
+        .query(move |m| {
+            for _ in 0..20 {
+                spells::cast_triggered(m, caster, GUARD_A, Some(caster));
+            }
+            spells::cast_triggered(m, caster, GUARD_B, Some(caster));
+            let of = |entry: u32| {
+                m.creatures
+                    .iter()
+                    .filter(|(_, c)| {
+                        c.entry == entry
+                            && c.scripted.as_deref().and_then(|s| s.summoner) == Some(caster)
+                    })
+                    .count()
+            };
+            (of(A), of(B))
+        })
+        .await
+        .unwrap();
+    assert_eq!(counts, (16, 1), "sixteen of one entry, and another's");
+}
