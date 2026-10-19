@@ -342,6 +342,19 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **A passive creature** joins a dungeon-wide pulse (mangos has no passive check).
   - **Left:** 55 rows (damage origin, posture, pet combat, disarm, extra attacks, elemental swings); fleeing with no
     navmesh path runs straight.
+- **7e, the world, round 7 (0.1.26):** a random point (a script's random walk, a summon's or an escort's scatter)
+  stays within its radius (the navmesh's own pick could land 11 yards out of a 2-yard circle); the real navmesh's
+  sight, indoors, zones and paths tested at Thistle Tea's points; Arathi Basin's pickups, a match's countdown home,
+  Alterac's captains' rallies, separate copies for teams matched apart. 7e and 6j both made a kill the tap group's;
+  I kept 6j's (`map::tap`). **My calls:**
+  - **No projection of a player's motion** between packets, and "moving" read from the movement flags (mangos);
+    Thistle Tea projects (`wrong-for-1.12`).
+  - **Quest-giver status is answered, not pushed** (mangos; the 1.12 client asks again on its own).
+  - **An NPC's pet gives no experience** in play (`pets::died`), as 6j found; 7e's ¾ test checks only the formula,
+    so the row stays `wrong-for-1.12`.
+  - **The bake's sea surface** is 0.19 where Thistle Tea's is 0.268 (the test allows 0.1).
+  - **Noticed, not changed:** a script group's members keep pointing at a leader who left (Thistle Tea disbands
+    it); spells' hit chance has a 22% floor (`magic_hit_chance`), not yet checked against mangos.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -436,6 +449,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7b: spells, round 7 | 76.9% | a69e06e |
 | 7c: the loaders, round 7 | merged | 2df117c |
 | 7d: combat, round 7 | 78.5% | 5890d1f |
+| 7e: the world, round 7 | 79.2% | 0c99ac6 |
 
 **Running now:** round 7 (7e the world, 7f creature AI, 7g creature scripts, 7h entities, 7i pets).
 
