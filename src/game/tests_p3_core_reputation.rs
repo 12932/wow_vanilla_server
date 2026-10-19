@@ -184,6 +184,23 @@ async fn standings_stay_in_bounds_turn_to_war_and_keep_hidden() {
     assert_eq!(state(&realm, g, SPILLED).await.0, 3_000);
 }
 
+/// mangos's `SetOneFactionReputation`: a standing risen to Neutral from
+/// below is no longer at war (still at war at Unfriendly); a war chosen at
+/// Neutral stays through a gain.
+#[tokio::test]
+async fn a_standing_risen_to_neutral_ends_its_war() {
+    let (realm, _a, g) = setup().await;
+    modify(&realm, g, HOSTILE, 3_000).await;
+    assert_eq!(
+        state(&realm, g, HOSTILE).await,
+        (-3_000, FLAG_AT_WAR | FLAG_VISIBLE)
+    );
+    modify(&realm, g, HOSTILE, 3_000).await;
+    assert_eq!(state(&realm, g, HOSTILE).await, (0, FLAG_VISIBLE));
+    modify(&realm, g, AT_WAR, 10).await;
+    assert_ne!(state(&realm, g, AT_WAR).await.1 & FLAG_AT_WAR, 0);
+}
+
 /// Thistle Tea's `calculate_gain/5`: a gain raised by a bonus aura and
 /// dithered to a whole, a loss without the bonus, none at a zero rate.
 #[tokio::test]
