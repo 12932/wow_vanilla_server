@@ -113,10 +113,16 @@ async fn an_innkeeper_in_a_dungeon_binds_no_one() {
     let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
     let keeper = on(&map, move |m| spawn(m, ga, INNKEEPER, 20, 3.0)).await;
     a.sees(keeper).await;
+    // Home is where she started (mangos's `_LoadHomeBind`), and stays so.
+    let start = on(&map, move |m| m.players[&ga].row.state.bind).await;
+    assert!(start.is_some(), "a home from the start");
     a.clear();
     a.send(CMSG_BINDER_ACTIVATE { guid: keeper }).await;
     assert_eq!(told_home(&mut a).await, None);
-    assert_eq!(on(&map, move |m| m.players[&ga].row.state.bind).await, None);
+    assert_eq!(
+        on(&map, move |m| m.players[&ga].row.state.bind).await,
+        start
+    );
 }
 
 /// Thistle Tea's "home-target spells resolve to the retained home across

@@ -383,14 +383,16 @@ fn undo_logout(p: &mut crate::game::map::player::Player) {
         p.set_stand_state(STAND_STATE_STAND);
     }
     // A stun or root come since stays (Thistle Tea's `MovementSync`, after
-    // the logout's own goes).
+    // the logout's own goes), and so does death's root (mangos's
+    // `HandleLogoutCancelOpcode` frees only one who `CanFreeMove`).
     use crate::game::map::auras::{AURA_MOD_ROOT, AURA_MOD_STUN};
     let stunned = p.auras.has(AURA_MOD_STUN);
     if !stunned {
         p.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, false);
     }
-    if !stunned && !p.auras.has(AURA_MOD_ROOT) {
+    let lying = matches!(p.death, crate::game::map::death::Death::Dead { .. });
+    if !stunned && !p.auras.has(AURA_MOD_ROOT) && !lying {
         p.outbound
             .send_frame(crate::game::map::movement::root_frame(p.guid, false));
     }

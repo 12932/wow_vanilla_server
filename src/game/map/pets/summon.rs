@@ -775,6 +775,33 @@ pub fn unsummon(map: &mut Map, pet: Guid, keep: bool) {
     remove(map, pet);
 }
 
+/// A pet put away with its reagents given back, as mangos's
+/// `Unsummon(PET_SAVE_REAGENTS)` has it (at a talent reset): a hunter's
+/// waits to be called again, a demon goes and its summoning's reagents
+/// come back to its master (but in a battleground, where it comes back by
+/// itself), a charmed unit is let go.
+pub fn unsummon_refunding(map: &mut Map, pet: Guid) {
+    let Some((kind, owner, spell)) = state(map, pet).map(|s| (s.kind, s.owner, s.summon_spell))
+    else {
+        return;
+    };
+    if matches!(kind, Kind::Charmed | Kind::Possessed) {
+        release(map, owner, pet);
+        return;
+    }
+    unsummon(map, pet, false);
+    if kind != Kind::Demon || map.battleground.is_some() {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let Some(s) = data.spells.get(spell) else {
+        return;
+    };
+    for (item, count) in s.reagents.iter().filter(|(i, n)| *i != 0 && *n > 0) {
+        let _ = crate::game::map::inventory::add_item(map, owner, *item, *count, true);
+    }
+}
+
 /// The master dismisses `pet`: a hunter's goes to wait, a demon goes, a
 /// charmed unit is let go.
 pub fn dismiss(map: &mut Map, pet: Guid) {

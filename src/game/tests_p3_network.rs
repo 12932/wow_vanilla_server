@@ -1220,7 +1220,16 @@ async fn a_guild_master_saves_an_emblem_and_others_are_told_why_not() {
     })
     .await;
     settled(&mut a).await;
-    let vendor = Guid::new(0xF130_0000_0000_002A);
+    // A tabard designer, as mangos's handlers want one within reach.
+    let vendor = on_map(&realm, move |m| {
+        crate::game::tests_p6_player::npc_beside(
+            m,
+            ga,
+            crate::game::map::npc::NPC_FLAG_TABARDDESIGNER,
+            2.0,
+        )
+    })
+    .await;
     a.send(MSG_TABARDVENDOR_ACTIVATE { guid: vendor }).await;
     let opened = a
         .wait_frame("MSG_TABARDVENDOR_ACTIVATE", 0x1F2, |_| true)

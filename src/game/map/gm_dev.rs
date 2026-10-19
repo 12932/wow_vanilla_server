@@ -252,6 +252,7 @@ fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     crate::game::map::stats::set_level(p, &data, level);
     p.fields.set_u32(PLAYER_XP, 0);
     map.realm.registry.set_level(to, level);
+    crate::game::map::misc::reset_if_overbudget(map, to);
     Some(format!("Level {level}."))
 }
 

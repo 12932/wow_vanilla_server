@@ -405,6 +405,10 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     crate::game::map::death::resurrect_with(map, g, health, mana);
 }
 
+/// Evil Twin (the Shadowy Figure's curse): no summons reaches one under
+/// it.
+pub const EVIL_TWIN: u32 = 23_445;
+
 /// Offer `target` (anywhere in the realm) a summons to where `summoner`
 /// stands.
 pub fn offer_summon(map: &Map, summoner: Guid, target: Guid) {
@@ -426,7 +430,9 @@ pub fn offer_summon(map: &Map, summoner: Guid, target: Guid) {
         let Some(p) = m.players.get_mut(&target) else {
             return;
         };
-        if p.death != Death::Alive {
+        // Evil Twin's dummy turns summonses away unheard (mangos's
+        // `EffectSummonPlayer`).
+        if p.death != Death::Alive || p.auras.has_spell(EVIL_TWIN) {
             return;
         }
         p.misc.summon = Some(summon);
@@ -544,9 +550,36 @@ pub fn talent_spells(
                     }
                 }
             }
+            // And what came with the rank (`spell_learn_spell`), as
+            // mangos's `removeSpell` takes its dependents.
+            for d in data.spells.learn_with.get(r).into_iter().flatten() {
+                if p.spells.contains(d) && !out.contains(d) {
+                    out.push(*d);
+                }
+            }
         }
     }
     out
+}
+
+/// A level lowered below what a player's talents took: they are unlearned
+/// and the points given back, as mangos's `UpdateFreeTalentPoints` resets
+/// them (but an administrator's own, left with no point free).
+pub fn reset_if_overbudget(map: &mut Map, g: Guid) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let earned = u32::from(p.level()).saturating_sub(9);
+    let spent = crate::game::map::spells::spent_talent_points(p, &data, None);
+    if spent <= earned || p.gm_level >= crate::accounts::ADMINISTRATOR {
+        return;
+    }
+    let spells = talent_spells(p, &data);
+    forget_spells(map, g, &spells);
+    if let Some(p) = map.players.get_mut(&g) {
+        crate::game::map::spells::refresh_talent_points(p, &data);
+    }
 }
 
 /// Take spells off a player: their auras go, and the client forgets them.
@@ -594,6 +627,11 @@ fn talent_wipe(map: &mut Map, g: Guid, npc: Guid) {
         return;
     }
     forget_spells(map, g, &spells);
+    // The pet goes, a demon's reagents back (mangos's `resetTalents`,
+    // `RemovePet(PET_SAVE_REAGENTS)`).
+    if let Some(pet) = map.players.get(&g).and_then(|p| p.owned.pet) {
+        crate::game::map::pets::unsummon_refunding(map, pet);
+    }
     if let Some(p) = map.players.get_mut(&g) {
         let money = p.money() - cost;
         p.set_money(money);

@@ -64,9 +64,10 @@ pub fn for_level(data: &GameData, s: &SpellTemplate, level: u32) -> Option<u32> 
 /// The rank a player casts at `t`: lower if the one asked for is too high
 /// for them, and none if no rank may go on them.
 pub fn chosen(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<u32> {
-    let Some(target) = t.unit.filter(|u| *u != caster) else {
-        return Some(s.id);
-    };
+    // Cast on oneself (the client names no unit), by one's own level:
+    // mangos's `SpellCastTargets` takes the caster for a self cast, whose
+    // level `SelectAuraRankForLevel` goes by.
+    let target = t.unit.unwrap_or(caster);
     let Some(level) = map.unit_view(target).map(|u| u.level) else {
         return Some(s.id);
     };

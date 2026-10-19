@@ -25,11 +25,13 @@ pub const NPC_FLAG_SPIRITGUIDE: u32 = 0x40;
 pub const NPC_FLAG_INNKEEPER: u32 = 0x80;
 pub const NPC_FLAG_BANKER: u32 = 0x100;
 pub const NPC_FLAG_PETITIONER: u32 = 0x200;
+pub const NPC_FLAG_TABARDDESIGNER: u32 = 0x400;
 pub const NPC_FLAG_BATTLEMASTER: u32 = 0x800;
 pub const NPC_FLAG_AUCTIONEER: u32 = 0x1000;
 
 const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
 const UNIT_FLAG_DISABLE_MOVE: u32 = 0x0000_0004;
+const UNIT_FLAG_NOT_SELECTABLE: u32 = 0x0200_0000;
 /// A flight's speed, in yards a second.
 const TAXI_SPEED: f32 = 32.0;
 /// The text an NPC without its own shows.
@@ -92,12 +94,27 @@ pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
     if p.flight.is_some() || held || crate::game::map::combat::hostile(map, npc, player) {
         return None;
     }
+    // Nor to one unfriendly or worse, either way: a standing of Unfriendly
+    // with its faction (mangos's `CanInteract`, both reactions above
+    // `REP_UNFRIENDLY`).
+    let unfriendly = |a: Guid, b: Guid| {
+        crate::game::map::reputation::reaction_rank(map, a, b)
+            .is_some_and(|r| r <= crate::game::data::misc::RANK_UNFRIENDLY)
+    };
+    if unfriendly(npc, player) || unfriendly(player, npc) {
+        return None;
+    }
     // Not one fighting, nor one charmed (mangos's `CanInteractNow`); a
     // stable master serves hunters alone (`GetNPCIfCanInteractWith`).
     let fighting = map
         .combat(npc)
         .is_some_and(|f| f.attacking && !f.victim.is_zero());
     if fighting || !c.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero() {
+        return None;
+    }
+    // Nor one that can't be selected (mangos's `CanInteract`,
+    // `UNIT_FLAG_UNINTERACTIBLE`).
+    if c.fields.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_NOT_SELECTABLE != 0 {
         return None;
     }
     if flag == crate::game::map::pets::NPC_FLAG_STABLEMASTER && p.row.class != 3 {

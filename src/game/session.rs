@@ -462,6 +462,15 @@ impl Session {
             row.z = spawn.z;
             row.orientation = spawn.orientation;
         }
+        // Home is where they start, until an innkeeper binds them
+        // elsewhere (mangos's `_LoadHomeBind`, from the race's start).
+        row.state.bind = Some(crate::game::store::Bind {
+            map: row.map,
+            zone: row.zone,
+            x: row.x,
+            y: row.y,
+            z: row.z,
+        });
         for (entry, slot, count) in &start.items {
             let item = self.realm.next_item.fetch_add(1, Ordering::Relaxed);
             row.items.push(ItemRow {
@@ -507,8 +516,8 @@ impl Session {
         let counter = guid::counter(g);
         let result = if !guid::is_player(g) || self.realm.registry.online(g).is_some() {
             WorldResult::CharDeleteFailed
-        } else if crate::game::social::guilds::leads_others(&self.realm, counter) {
-            // A guild's leader passes it on first.
+        } else if crate::game::social::guilds::leads(&self.realm, counter) {
+            // A guild's leader passes it on, or disbands it, first.
             WorldResult::CharDeleteFailed
         } else if self.realm.store.delete(&self.account, counter).await {
             self.realm.registry.remove_name(g);

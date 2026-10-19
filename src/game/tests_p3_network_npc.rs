@@ -683,7 +683,8 @@ async fn an_auction_house_opens_sells_takes_bids_and_lists() {
         hello,
         [
             &npc.guid().to_le_bytes()[..],
-            &(AuctionHouse::Alliance.as_int()).to_le_bytes()
+            // Faction 12's, Stormwind's own (mangos's `GetAuctionHouseEntry`).
+            &(AuctionHouse::Stormwind.as_int()).to_le_bytes()
         ]
         .concat()
     );

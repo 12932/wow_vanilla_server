@@ -2428,6 +2428,20 @@ pub fn update(map: &mut Map) {
             }
             continue;
         }
+        // A player's buff too high for its target now, as the cast ends,
+        // fails before it costs (mangos's `CheckCast` again at
+        // `Spell::cast`, `SPELL_FAILED_LOWLEVEL`).
+        let low = casting.targets.unit.filter(|u| *u != g).is_some_and(|t| {
+            casting.item.is_none()
+                && map.players.contains_key(&g)
+                && map
+                    .unit_view(t)
+                    .is_some_and(|u| u.level < aura_rank::minimum_level(&data, s))
+        });
+        if low {
+            launch_failed(map, g, casting.spell, checks::fail::LOWLEVEL);
+            continue;
+        }
         execute(map, g, s, casting.targets, casting.item, false);
     }
     effects::refresh_area_auras(map);
@@ -2525,7 +2539,7 @@ pub fn free_talent_points(p: &crate::game::map::player::Player, data: &GameData)
 }
 
 /// Talent points spent, in all trees or in `tab`.
-fn spent_talent_points(
+pub(crate) fn spent_talent_points(
     p: &crate::game::map::player::Player,
     data: &GameData,
     tab: Option<u32>,

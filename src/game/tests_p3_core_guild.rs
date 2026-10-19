@@ -319,8 +319,24 @@ async fn the_leader_sets_the_emblem_and_the_last_to_leave_ends_it() {
             .await
             .unwrap();
     }
+    // At a tabard designer, as mangos's `HandleSaveGuildEmblemOpcode` has
+    // it.
+    let gf = founder.guid;
+    let vendor = realm
+        .maps
+        .get(&realm, MapKey::world(0))
+        .query(move |m| {
+            crate::game::tests_p6_player::npc_beside(
+                m,
+                gf,
+                crate::game::map::npc::NPC_FLAG_TABARDDESIGNER,
+                2.0,
+            )
+        })
+        .await
+        .unwrap();
     let emblem = MSG_SAVE_GUILD_EMBLEM_Client {
-        vendor: Guid::zero(),
+        vendor,
         emblem_style: 3,
         emblem_color: 4,
         border_style: 5,

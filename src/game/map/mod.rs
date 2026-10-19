@@ -994,8 +994,22 @@ impl Map {
                                 self.add_corpse(corpse);
                             }
                         }
-                        // Died and logged out before releasing: up again.
-                        None => p.row.state.dead = false,
+                        // No body (died and logged out before releasing,
+                        // or it is bones): up again, at half their health
+                        // and mana (mangos's `LoadCorpse`,
+                        // `ResurrectPlayer(0.5)`).
+                        None => {
+                            p.row.state.dead = false;
+                            use crate::game::fields::{
+                                UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH, UNIT_FIELD_MAXPOWER1,
+                                UNIT_FIELD_POWER1,
+                            };
+                            let f = &mut p.fields;
+                            let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+                            f.set_u32(UNIT_FIELD_HEALTH, (max / 2).max(1));
+                            let mana = f.get_u32(UNIT_FIELD_MAXPOWER1);
+                            f.set_u32(UNIT_FIELD_POWER1, mana / 2);
+                        }
                     }
                 }
                 let at = p.position();
