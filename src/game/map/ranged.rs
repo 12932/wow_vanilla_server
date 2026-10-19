@@ -498,9 +498,9 @@ fn resolve(
             vec![SpellMiss {
                 target,
                 miss_info: if immune {
-                    SpellMissInfo::Immune
+                    SpellMiss_SpellMissInfo::Immune
                 } else {
-                    SpellMissInfo::Miss
+                    SpellMiss_SpellMissInfo::Miss
                 },
             }]
         } else {

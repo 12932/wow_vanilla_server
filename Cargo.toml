@@ -1,6 +1,6 @@
 [package]
 name = "wow_vanilla_server"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 default-run = "wow_vanilla_server"
 
@@ -29,10 +29,10 @@ tokio = { version = "1.53.3", features = [
     "rt-multi-thread",
     "signal",
 ] }
-wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["tokio"] }
-wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["sync", "tokio", "vanilla"] }
-wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["extended", "vanilla", "serde"] }
-wow_items = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["vanilla"] }
+wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "27dfce0e5602c413bb0c400a561fd59aba5d82e7", features = ["tokio"] }
+wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "27dfce0e5602c413bb0c400a561fd59aba5d82e7", features = ["sync", "tokio", "vanilla"] }
+wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "27dfce0e5602c413bb0c400a561fd59aba5d82e7", features = ["extended", "vanilla", "serde"] }
+wow_items = { git = "https://github.com/12932/wow_messages", rev = "27dfce0e5602c413bb0c400a561fd59aba5d82e7", features = ["vanilla"] }
 # The revision wow_world_messages pins: its encrypted reads and writes take
 # this wow_srp's header halves, so another would be a second, unlike copy.
 # 1.12 only: no TBC or Wrath headers (and with them no hmac).
@@ -41,10 +41,10 @@ walkdir = "2.5.0"
 
 # The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
 # decoded off the map's thread and handed in (`load_nav_file`).
-rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
+rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "2c1dbc0239e9d18b4a4dc44f1428762a58872c1f" }
 glam = "0.34.1"
 # The navmesh and terrain builds, for the data setup.
-rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
+rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "2c1dbc0239e9d18b4a4dc44f1428762a58872c1f" }
 tracing = "0.1.44"
 # The log's filter is `Targets` (RUST_LOG's `target=level` lists), not
 # `env-filter`, which would bring regex in.
