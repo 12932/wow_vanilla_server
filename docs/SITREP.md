@@ -155,6 +155,32 @@ hours), the crate version bumped with each merge.
   nothing from the packet. The check now stubs it, as it stubs the renderer; the values block's parse is still checked,
   and all six real crash packets still fail it. A test covers a ghost rising before a stranger.
 
+## Round 6: the Thistle Tea alignment, by area
+Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to 6j the rest), merged as they finish.
+- **6a, the player (0.1.12):** tabard designers and charters, auction houses by faction, Evil Twin turning summonses
+  away, a new character's home where it starts, a body-less login up at half health and mana, talents reset when the
+  level is too low.
+- **6b, spells (0.1.11):** a cast checked again as it ends, costs by rank, minimum ranges, threat from crits, ticks
+  and heals, a cast's result before its `SMSG_SPELL_GO`, harmful casts' targets, buff ranks by level.
+- **6c, the world's loaders (0.1.13):** `.tele` by an exact name, a prefix, then a part (mangos's `GetGameTele`);
+  superseded ranks hidden; a creature's channel broken by damage; crowd control broken only by the spells whose
+  immunities cancel it (Blink no longer works while silenced); Shield Bash and Hamstring missed whole when blocked
+  (mangos's `CanBlockAbility`); `.start` casts Stuck (mangos's `HandleStartCommand`); the Threshwackonator (quest
+  2078) follows from its own gossip. **My calls:**
+  - **Stuck** still takes you to where you last stood on the ground, as Thistle Tea does. mangos's `EffectStuck`
+    sends a ghost to its graveyard and uses the Hearthstone if it is ready; tell me if you want mangos's.
+  - **Blink under a stun and a silence at once** is refused (mangos checks the silence after the stun); Thistle Tea
+    allows it. `wrong-for-1.12`.
+  - **Blessing of Protection** on someone with an aura that invulnerability cancels takes the aura off (mangos);
+    Thistle Tea refuses the cast. `wrong-for-1.12`.
+  - **A model's collision height** is `CreatureModelData`'s times the object's scale (mangos); Thistle Tea
+    normalises it by the model's and display's scales. `wrong-for-1.12`.
+  - **A spawn at 0% health** is at full health (mangos); Thistle Tea spawns it dead. No real spawn has 0.
+  - **A creature's channel** stops on damage (mangos's `DealDamage`); Thistle Tea stops those with flag 0x1 when the
+    creature enters a fight.
+  - **Left as gaps:** casting a quest's `SrcSpell` on acceptance (Moonglade's teleport, 5921) and auto-rewarding
+    flag quests (Naxxramas's attunement, 9378) were tried, had no tests, and were dropped.
+
 ## Answered
 - **#10** keep swinging on arrival.
 - **#18** keep moving unusable gear off at login.
@@ -233,7 +259,10 @@ hours), the crate version bumped with each merge.
 | perf2: the whole world awake, round two | merged | its merge |
 | 5d: auras and objective carriers | 66.2% | ce71ae1 |
 | 5e: pets and creature scripts | 67.5% | 145daf9 |
+| 6b: spells | merged | b1deacf |
+| 6a: the player | 69.5% | 99266b6 |
+| 6c: the world's loaders | 70.2% | cd3605e |
 
-**Running now:** nothing. Round 5 is in, and no new stages are started (your pause).
+**Running now:** round 6 (6d to 6g), and `fix/extended1019` for the four tests the 15:38 extended run failed.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
