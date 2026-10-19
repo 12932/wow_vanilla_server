@@ -414,7 +414,8 @@ settings! {
     /// creature that calls the guards takes a victim. A town's alarm
     /// counts the guards called there lately and cools when the calls
     /// stop; as it rises, the guards grow harder to fight, a capital sends
-    /// its elite two at a time, and Jaina Proudmoore comes to her city.
+    /// its elite two at a time, Jaina's city its Elite Guards, and Jaina
+    /// Proudmoore comes to her city with more of them.
     pub struct GuardsConfig in "guards" {
         /// Seconds a called guard stays once out of combat (mangos-classic's
         /// 30); it goes at once when it dies.
@@ -440,6 +441,13 @@ settings! {
         /// Royal Dreadguard, Thunder Bluff's Honor Guard), or two of its
         /// guards where it has none.
         royal_from: u32 = 40, Clamp(1.0, 100_000.0), Live, "";
+        /// Guards in the alarm of Jaina's city whose crossing brings
+        /// `elite_count` Stormwind Elite Guards near the call that crossed
+        /// it, against its attacker: once each time the alarm rises through
+        /// it, not at each call.
+        elite_from: u32 = 50, Clamp(1.0, 100_000.0), Live, "";
+        /// Stormwind Elite Guards the crossing of `elite_from` brings.
+        elite_count: u32 = 2, Clamp(0.0, 20.0), Live, "";
         /// Guards in the alarm of Jaina's city from which she comes, if she
         /// is alive and at home in Theramore.
         jaina_from: u32 = 60, Clamp(1.0, 100_000.0), Live, "";
@@ -449,6 +457,11 @@ settings! {
         /// Seconds Jaina stays once she has no one left to fight and is
         /// out of combat, before she goes home.
         jaina_stays_secs: u64 = 60, Clamp(5.0, 86_400.0), Live, "";
+        /// Stormwind Elite Guards who come with Jaina, around her, walk to
+        /// her side fighting what they meet, guard her, and leave with her.
+        jaina_elites: u32 = 4, Clamp(0.0, 20.0), Live, "";
+        /// Yards from Jaina her Elite Guards come.
+        jaina_elites_yards: f32 = 40.0, Clamp(5.0, 100.0), Live, "";
         /// Seconds Jaina takes to come back to Theramore once she has died
         /// in her city (her spawn's own time, a day).
         jaina_respawn_secs: u64 = 86_400, Clamp(5.0, 2_592_000.0), Live, "";

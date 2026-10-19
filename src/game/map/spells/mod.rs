@@ -1131,6 +1131,12 @@ fn execute(
     }
     if !triggered {
         send_cast_result(map, caster, s.id, None);
+        // A heal cast: an Elite Guard's Charge looks for healers.
+        if heals(s)
+            && let Some(p) = map.players.get_mut(&caster)
+        {
+            p.misc.healed_at = Some(now);
+        }
     }
     if s.channeled() {
         let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
@@ -1925,6 +1931,14 @@ pub fn periodic_damage_of(
         ) as u32;
         leech_heal(map, h.caster, h.spell, gain, true);
     }
+}
+
+/// Whether a spell heals: directly, to the full, or over time.
+pub fn heals(s: &SpellTemplate) -> bool {
+    s.effects.iter().any(|e| {
+        matches!(e.effect, EFFECT_HEAL | EFFECT_HEAL_MAX_HEALTH)
+            || (e.effect != 0 && e.aura == auras::AURA_PERIODIC_HEAL)
+    })
 }
 
 /// Heal `target` by `amount`, as `spell`.

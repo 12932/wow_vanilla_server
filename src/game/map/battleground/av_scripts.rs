@@ -1333,7 +1333,9 @@ pub fn sweep_soon(map: &mut Map) {
 
 // The fighting, as EventAI.
 
-struct Builder<'a> {
+/// Builds EventAI events and their scripts, by ids from a base of its
+/// own (the valley's here, the Elite Guard's in `map/elites.rs`).
+pub(crate) struct Builder<'a> {
     data: &'a mut ScriptData,
     next: u32,
 }
@@ -1352,21 +1354,21 @@ fn step(command: u32, datalong: [u32; 4]) -> ScriptStep {
     }
 }
 
-fn cast(spell: u32) -> ScriptStep {
+pub(crate) fn cast(spell: u32) -> ScriptStep {
     ScriptStep {
         target_type: T_VICTIM,
         ..step(15, [spell, 0, 0, 0])
     }
 }
 
-fn cast_at(spell: u32, target_type: u32) -> ScriptStep {
+pub(crate) fn cast_at(spell: u32, target_type: u32) -> ScriptStep {
     ScriptStep {
         target_type,
         ..step(15, [spell, 0, 0, 0])
     }
 }
 
-fn self_cast(spell: u32, flags: u32) -> ScriptStep {
+pub(crate) fn self_cast(spell: u32, flags: u32) -> ScriptStep {
     ScriptStep {
         data_flags: SF_TARGET_SELF,
         target_type: T_PROVIDED,
@@ -1433,12 +1435,32 @@ fn only_in(phases: &[u32]) -> u32 {
     mask
 }
 
-impl Builder<'_> {
+/// A step that starts generic script `id`, whose delays run (an event's
+/// own steps run at once, theirs aside: Thistle Tea's `timed`).
+fn start_script(id: u32) -> ScriptStep {
+    step(39, [id, 0, 0, 0])
+}
+
+impl<'a> Builder<'a> {
+    /// A builder of events into `data`, their ids counted from `base`.
+    pub(crate) fn new(data: &'a mut ScriptData, base: u32) -> Self {
+        Self { data, next: base }
+    }
+
     fn script(&mut self, steps: Vec<ScriptStep>) -> u32 {
         self.next += 1;
         let id = self.next;
         let steps = steps.into_iter().map(|s| ScriptStep { id, ..s }).collect();
         self.data.ai_scripts.insert(id, steps);
+        id
+    }
+
+    /// A generic script of `steps`, timed by their delays.
+    fn generic(&mut self, steps: Vec<ScriptStep>) -> u32 {
+        self.next += 1;
+        let id = self.next;
+        let steps = steps.into_iter().map(|s| ScriptStep { id, ..s }).collect();
+        self.data.generic.insert(id, steps);
         id
     }
 
@@ -1543,10 +1565,7 @@ pub fn install(data: &mut GameData) {
     for e in scripted_entries() {
         s.ai_events.remove(&e);
     }
-    let mut b = Builder {
-        data: s,
-        next: BASE,
-    };
+    let mut b = Builder::new(s, BASE);
     leaders(&mut b);
     summoners(&mut b);
     // The wing commanders wait as prisoners: some sit.
@@ -1686,28 +1705,72 @@ fn leaders(b: &mut Builder) {
     b.on(GALVANGAR, EVENT_EVADE, 0, vec![say(&[10378])]);
     // The marshals and warmasters.
     for entry in 14762..=14777 {
-        b.within(entry, 8, 25, (12000, 18000), vec![cast(22911)]);
-        b.every(entry, (8000, 8000), (8000, 10000), vec![cast(20684)]);
-        b.every(
-            entry,
-            (4000, 4000),
-            (14000, 20000),
-            vec![self_cast(23511, 0)],
-        );
-        b.every(
-            entry,
-            (12000, 12000),
-            (13000, 15000),
-            vec![
-                self_cast(whirlwind, 0),
-                ScriptStep {
-                    delay_ms: 2000,
-                    ..self_cast(whirlwind, 0)
-                },
-            ],
-        );
-        b.below(entry, 30, Some(120000), vec![self_cast(8599, 0)]);
+        warmaster(b, entry, ChargeAt::Victim, Some(120_000));
     }
+}
+
+/// vmangos's `npc_WarMaster` and its marshals' Charge.
+pub(crate) const CHARGE: u32 = 22911;
+pub(crate) const CLEAVE: u32 = 20684;
+pub(crate) const DEMORALIZING_SHOUT: u32 = 23511;
+pub(crate) const WHIRLWIND: u32 = 13736;
+pub(crate) const ENRAGE: u32 = 8599;
+
+/// Whom a warmaster charges.
+pub(crate) enum ChargeAt {
+    /// Its victim, from 8 to 25 yards, every 12 to 18 s (vmangos's).
+    Victim,
+    /// Whom a script target type picks: looked for when its 12 to 18 s
+    /// are up, and each second until it finds one (a failed cast, or no
+    /// one, tries again).
+    Picked(u32),
+}
+
+/// A marshal's or warmaster's fight (vmangos's `npc_WarMaster`, as
+/// Thistle Tea ports it): Charge, Cleave every 8 to 10 s from 8 s,
+/// Demoralizing Shout every 14 to 20 s from 4 s, Whirlwind twice, two
+/// seconds apart, every 13 to 15 s from 12 s, and Enrage below 30% (once a
+/// fight, or again every `enrage_every` ms); its scripts stop as it
+/// evades.
+pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_every: Option<i32>) {
+    match charge {
+        ChargeAt::Victim => b.within(entry, 8, 25, (12000, 18000), vec![cast(CHARGE)]),
+        ChargeAt::Picked(target_type) => b.event(
+            entry,
+            EVENT_TIMER_IN_COMBAT,
+            [0, 0, 12000, 18000],
+            EF_REPEATABLE | EF_CHECK_RESULT,
+            0,
+            vec![vec![ScriptStep {
+                data_flags: SF_ABORT_ON_FAILURE,
+                ..cast_at(CHARGE, target_type)
+            }]],
+        ),
+    }
+    b.every(entry, (8000, 8000), (8000, 10000), vec![cast(CLEAVE)]);
+    b.every(
+        entry,
+        (4000, 4000),
+        (14000, 20000),
+        vec![self_cast(DEMORALIZING_SHOUT, 0)],
+    );
+    let again = b.generic(vec![ScriptStep {
+        delay_ms: 2000,
+        ..self_cast(WHIRLWIND, 0)
+    }]);
+    b.every(
+        entry,
+        (12000, 12000),
+        (13000, 15000),
+        vec![self_cast(WHIRLWIND, 0), start_script(again)],
+    );
+    b.below(entry, 30, enrage_every, vec![self_cast(ENRAGE, 0)]);
+    b.on(
+        entry,
+        EVENT_EVADE,
+        0,
+        vec![step(crate::game::map::scripts::C_STOP_SCRIPTS, [0; 4])],
+    );
 }
 
 fn summoners(b: &mut Builder) {

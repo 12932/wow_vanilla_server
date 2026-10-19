@@ -275,6 +275,8 @@ fn finish(map: &mut Map, g: Guid, arrived: bool) {
     let alive = map.unit_view(g).is_some_and(|u| u.alive);
     if arrived && alive && map.unit_view(target).is_some_and(|u| u.alive) {
         if guid::is_unit(g) {
+            // A Stormwind Elite Guard keeps to the one it charged.
+            crate::game::map::elites::charged(map, g, target);
             crate::game::map::ai::attacked(map, g, target);
         }
         combat::start_attack(map, g, target);
