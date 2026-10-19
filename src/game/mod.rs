@@ -67,6 +67,8 @@ mod tests_creatures4;
 #[cfg(test)]
 mod tests_dead_body;
 #[cfg(test)]
+mod tests_elites;
+#[cfg(test)]
 mod tests_events;
 #[cfg(test)]
 mod tests_gear;

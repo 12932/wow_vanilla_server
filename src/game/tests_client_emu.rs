@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::*;
@@ -157,11 +158,144 @@ async fn the_packets_wvs_sends_pass_the_client() {
     }
 
     // Every frame everyone saw, of a kind the checker knows, deduplicated.
+    let mut clients = vec![&mut a];
+    clients.extend(crowd.iter_mut().map(|(c, _)| c));
+    let (capture, counts) = capture(clients);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "some update frames were captured"
+    );
+    assert!(
+        counts.get(&0x0DD).copied().unwrap_or(0) > 0,
+        "some movement frames were captured (the flyers)"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
+/// The Stormwind Elite Guard (`map/elites.rs`), new to the world and made
+/// in code: its create (the Royal Guard's look and weapons on an elite of
+/// level 62) and its Charge's run, on the real data, pass the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_elite_guards_packets_pass_the_client() {
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let dir = harness::real_data("db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(&dir));
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    // Her intro's camera over, she sees from where she stands.
+    a.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    // An Elite Guard, held from fighting until she knows it, and a Defias
+    // Thug 20 yards from it.
+    let (elite, thug) = map
+        .query(move |m| {
+            let at = m.players[&ga].position();
+            let near = |dx: f32| wow_world_messages::vanilla::Vector3d { x: at.x + dx, ..at };
+            let elite = crate::game::map::scripts::summon(
+                m,
+                ga,
+                crate::game::map::elites::ELITE_GUARD,
+                near(5.0),
+                0.0,
+                None,
+            )
+            .expect("the Elite Guard");
+            if let Some(s) = crate::game::map::event_ai::scripted_mut(m, elite) {
+                s.passive = true;
+            }
+            let t = m
+                .realm
+                .data
+                .creature_template(DEFIAS_THUG)
+                .cloned()
+                .unwrap();
+            let counter = m.next_creature_counter;
+            m.next_creature_counter += 1;
+            let thug = m.add_creature(
+                crate::game::map::creature::Creature::new(
+                    crate::game::guid::unit(DEFIAS_THUG, counter | 0x80_0000),
+                    &t,
+                    5,
+                    near(25.0),
+                    0.0,
+                )
+                .with_base(),
+            );
+            // It lasts the fight out.
+            if let Some(c) = m.creature_mut(thug) {
+                c.fields
+                    .set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+                c.fields
+                    .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+            }
+            (elite, thug)
+        })
+        .await
+        .unwrap();
+    a.sees(elite).await;
+    a.sees(thug).await;
+    // It takes the thug on: its Charge goes at once.
+    map.query(move |m| {
+        if let Some(s) = crate::game::map::event_ai::scripted_mut(m, elite) {
+            s.passive = false;
+            s.next_tick = None;
+        }
+        crate::game::map::ai::attacked(m, elite, thug);
+        crate::game::map::event_ai::tick(m, elite);
+    })
+    .await
+    .unwrap();
+    // Its Charge, and its run.
+    a.wait_for("its Charge", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.caster == elite && s.spell == CHARGE => Some(()),
+        _ => None,
+    })
+    .await;
+    a.wait_frame("its charge's run", 0x0DD, |b| {
+        b.first().is_some_and(|mask| {
+            let mut v = 0u64;
+            let mut at = 1;
+            for bit in 0..8 {
+                if mask & (1 << bit) != 0 {
+                    v |= u64::from(b.get(at).copied().unwrap_or(0)) << (bit * 8);
+                    at += 1;
+                }
+            }
+            Guid::new(v) == elite
+        })
+    })
+    .await;
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "its create was captured"
+    );
+    assert!(
+        counts.get(&0x0DD).copied().unwrap_or(0) > 0,
+        "its charge's run was captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
+/// A Defias Thug of Northshire, for the Elite Guard to charge, and its
+/// Charge.
+const DEFIAS_THUG: u32 = 38;
+const CHARGE: u32 = 22911;
+
+/// Every frame `clients` received, of a kind the checker knows,
+/// deduplicated, back to back; and how many of each opcode.
+fn capture(clients: Vec<&mut Client>) -> (Vec<u8>, std::collections::BTreeMap<u16, u32>) {
     let mut seen = AHashSet::new();
     let mut capture = Vec::new();
     let mut counts = std::collections::BTreeMap::new();
-    let mut clients = vec![&mut a];
-    clients.extend(crowd.iter_mut().map(|(c, _)| c));
     for c in clients {
         for frame in c.captured() {
             let opcode = u16::from_le_bytes([frame[2], frame[3]]);
@@ -171,19 +305,16 @@ async fn the_packets_wvs_sends_pass_the_client() {
             }
         }
     }
-    assert!(
-        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
-        "some update frames were captured"
-    );
-    assert!(
-        counts.get(&0x0DD).copied().unwrap_or(0) > 0,
-        "some movement frames were captured (the flyers)"
-    );
     eprintln!("captured {} unique frame(s): {counts:?}", seen.len());
+    (capture, counts)
+}
 
+/// Run a capture through the client's own parsers, failing if the client
+/// would.
+fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
     let path = std::env::temp_dir().join(format!("wvs-capture-{}.bin", std::process::id()));
     std::fs::File::create(&path)
-        .and_then(|mut f| f.write_all(&capture))
+        .and_then(|mut f| f.write_all(capture))
         .expect("write the capture");
 
     let out = Command::new("uv")
