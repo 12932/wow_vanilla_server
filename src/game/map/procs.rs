@@ -304,7 +304,13 @@ pub fn outcome_allowed(pe: Option<&ProcEvent>, ex: u32) -> bool {
             (p.ex & EX_CAST_END) == (ex & EX_CAST_END)
                 && (p.ex & EX_TRIGGER_ALWAYS != 0 || p.ex & ex != 0)
         }
-        None => ex & EX_CAST_END == 0 && ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT) != 0,
+        // Not a heal's tick without a rule asking for one (vmangos's
+        // `IsSpellProcEventCanTriggeredBy`: "don't allow proc from periodic
+        // heal if no extra requirement is defined").
+        None => {
+            ex & (EX_CAST_END | EX_PERIODIC_POSITIVE) == 0
+                && ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT) != 0
+        }
     }
 }
 
