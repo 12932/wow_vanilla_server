@@ -547,6 +547,8 @@ mod tests_p6_combat_taken;
 #[cfg(test)]
 mod tests_p6_combat_weapons;
 #[cfg(test)]
+mod tests_p6_entity_effects;
+#[cfg(test)]
 mod tests_p6_loader_items;
 #[cfg(test)]
 mod tests_p6_loader_spells;

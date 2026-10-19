@@ -498,8 +498,8 @@ async fn a_repeatable_quest_is_shared_but_not_past_its_prerequisite_or_a_timer()
 
 // Alterac Valley's captured animals.
 
-const FROSTWOLF: u32 = 10981;
-const WOLF_AURA: u32 = 21827;
+pub(super) const FROSTWOLF: u32 = 10981;
+pub(super) const WOLF_AURA: u32 = 21827;
 
 /// A Frostwolf beside `START`, and its aura.
 fn stables() -> GameData {
@@ -524,12 +524,12 @@ fn stables() -> GameData {
     d
 }
 
-fn wolf() -> Guid {
+pub(super) fn wolf() -> Guid {
     guid::unit(FROSTWOLF, FROSTWOLF)
 }
 
 /// Alice with the Frostwolf captured: its aura on her, from it.
-async fn captured() -> (Arc<Realm>, Client, Guid, MapHandle) {
+pub(super) async fn captured() -> (Arc<Realm>, Client, Guid, MapHandle) {
     let realm = realm_of(stables());
     let (mut a, g, map) = player(&realm, "Alice").await;
     a.sees(wolf()).await;
@@ -549,7 +549,7 @@ async fn captured() -> (Arc<Realm>, Client, Guid, MapHandle) {
 }
 
 /// When the capture's next look is due, from now.
-fn next_look(m: &Map, g: Guid) -> Option<Duration> {
+pub(super) fn next_look(m: &Map, g: Guid) -> Option<Duration> {
     let h = crate::game::map::auras::auras(m, g)?
         .holders
         .iter()
@@ -560,7 +560,7 @@ fn next_look(m: &Map, g: Guid) -> Option<Duration> {
 }
 
 /// The capture's look due now.
-fn look_now(m: &mut Map, g: Guid) {
+pub(super) fn look_now(m: &mut Map, g: Guid) {
     let now = m.now;
     if let Some(a) = crate::game::map::auras::auras_mut(m, g)
         && let Some(h) = a.holders.iter_mut().find(|h| h.spell == WOLF_AURA)
