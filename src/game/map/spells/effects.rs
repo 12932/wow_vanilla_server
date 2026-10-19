@@ -1082,9 +1082,11 @@ fn effect(
                 ));
             }
         }
-        EFFECT_SKILL | EFFECT_SKILL_STEP => {
+        // A step that isn't one teaches nothing (mangos's `EffectLearnSkill`
+        // returns for a negative step; no spell of 1.12 has a zero one).
+        EFFECT_SKILL | EFFECT_SKILL_STEP if amount > 0 => {
             let skill = e.misc_value.max(0) as u32;
-            let step = amount.max(1) as u32;
+            let step = amount as u32;
             if let Some(p) = map.players.get_mut(&target) {
                 crate::game::map::skills::learn_skill(p, skill, step);
             }
