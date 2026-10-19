@@ -683,6 +683,8 @@ mod tests_p7_movement_fear;
 #[cfg(test)]
 mod tests_p7_movement_ground;
 #[cfg(test)]
+mod tests_p7_movement_wire;
+#[cfg(test)]
 mod tests_p7_player;
 #[cfg(test)]
 mod tests_p7_player_bgs;
