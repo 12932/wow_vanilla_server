@@ -829,6 +829,8 @@ mod tests_p8_loader_spells;
 #[cfg(test)]
 mod tests_p8_pets_control;
 #[cfg(test)]
+mod tests_p8_pets_dummy;
+#[cfg(test)]
 mod tests_p8_pets_owner;
 #[cfg(test)]
 mod tests_p8_player_bank;

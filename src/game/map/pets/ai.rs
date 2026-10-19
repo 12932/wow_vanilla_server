@@ -74,7 +74,12 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
     }
     // Its time up, a living summon goes; a corpse lies its own time
     // (Thistle Tea's `Guardian.lifetime`).
-    if expires.is_some_and(|t| t <= now) && !fighting && (alive || kind == Kind::Possessed) {
+    // A Target Dummy falls at its time, in a fight or not.
+    let dies_fighting = crate::game::map::item_scripts::target_dummy(map, g);
+    if expires.is_some_and(|t| t <= now)
+        && (!fighting || dies_fighting)
+        && (alive || kind == Kind::Possessed)
+    {
         // The Explosive Sheep's and the Goblin Bomb's time ends in a blast.
         if crate::game::map::item_scripts::guardian_expired(map, g) {
             return;
@@ -182,6 +187,11 @@ fn act(map: &mut Map, g: Guid, now: Instant) {
     let Some(s) = state(map, g) else {
         return;
     };
+    // A Target Dummy stands where it came and fights no one.
+    if crate::game::map::item_scripts::target_dummy(map, g) {
+        calm(map, g, now);
+        return;
+    }
     let (owner, react, returning) = (s.owner, s.react, s.returning);
     let guardian = s.kind == Kind::Guardian;
     // A victim put under crowd control since its master's last Attack it
@@ -387,7 +397,10 @@ pub fn defend(map: &mut Map, g: Guid, attacker: Guid) {
     let Some(s) = state(map, g) else {
         return;
     };
-    if (s.react == REACT_PASSIVE && s.kind != Kind::Guardian) || s.returning {
+    if (s.react == REACT_PASSIVE && s.kind != Kind::Guardian)
+        || s.returning
+        || crate::game::map::item_scripts::target_dummy(map, g)
+    {
         return;
     }
     if map
