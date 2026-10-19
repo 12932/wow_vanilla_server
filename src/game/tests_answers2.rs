@@ -84,6 +84,151 @@ fn beside(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     }
 }
 
+// ---- #35: a second login takes the character over ----------------------
+
+const KEEPER: u32 = 9350;
+/// A lasting aura from another: not saved, so a fresh login would lose it.
+const LASTING: u32 = 993_500;
+
+fn takeover_data() -> GameData {
+    let mut d = GameData::empty();
+    d.creature_templates.insert(KEEPER, npc(KEEPER, 0));
+    d.creature_spawns.insert(0, vec![beside(935, KEEPER, 3.0)]);
+    let mut s = bare(LASTING, 0);
+    effect(&mut s, 0, aura(auras::AURA_DUMMY, 0, 0, 1));
+    insert(&mut d, [s]);
+    d
+}
+
+/// A second login of the character still in the world takes them over
+/// where they are, as mangos-classic's `HandlePlayerReconnect` hands them
+/// to the new session (the user's #35): the new client gets the world, its
+/// own create and what is about it; the first connection closes; and the
+/// player is the one that was there, unsaved state and all (god mode,
+/// another's lasting aura, money not yet saved), never saved and loaded
+/// afresh. Before, the second login was refused and the first kicked.
+#[tokio::test]
+async fn a_second_login_takes_the_character_over_where_they_are() {
+    let realm = harness::realm_with(takeover_data());
+    let mut a = Client::connect(&realm, "TAKEN");
+    let g = a.enter("Takenover", Race::Human, Class::Warrior).await;
+    let keeper = guid::unit(KEEPER, 935);
+    a.sees(keeper).await;
+    let map = map_of(&realm, g);
+    let old = realm.registry.online(g).expect("online");
+    on(&map, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.misc.god = true;
+        p.set_money(4321);
+        let s = m.realm.data.spells.get(LASTING).cloned().unwrap();
+        auras::apply_spell(m, keeper, g, &s, &[(0, 0)], auras::Context::default())
+            .expect("the aura takes");
+    })
+    .await;
+
+    let mut b = Client::connect(&realm, "TAKEN");
+    b.login(g).await;
+    let coinage = b
+        .wait_for("their own create", |m| {
+            created_player(m, g).and_then(|p| p.player_field_coinage())
+        })
+        .await;
+    assert_eq!(coinage, 4321, "the money as it was, unsaved");
+    b.sees(keeper).await;
+
+    // The first connection goes; the registry has the second.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while a
+        .try_send(CMSG_PING {
+            sequence_id: 1,
+            round_time_in_ms: 0,
+        })
+        .await
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the first connection stays"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let new = realm.registry.online(g).expect("still online");
+    assert!(!Arc::ptr_eq(&old, &new), "the new session's");
+    assert_eq!(realm.registry.online_count(), 1);
+    let kept = on(&map, move |m| {
+        let p = &m.players[&g];
+        (
+            Arc::ptr_eq(&p.online, &new),
+            p.misc.god,
+            p.auras.has_spell(LASTING),
+            p.money(),
+        )
+    })
+    .await;
+    assert_eq!(kept, (true, true, true, 4321), "the player as they were");
+
+    // The new client plays them: a move of its moves them.
+    b.heartbeat(START.0 + 4.0, START.1 + 1.0, START.2).await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let x = on(&map, move |m| m.players[&g].position().x).await;
+        if (x - (START.0 + 4.0)).abs() < 0.01 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the new client's move: {x}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A login of another of the account's characters, while one is in the
+/// world, is refused, and the one in the world goes (saved), so the next
+/// try gets in: as before (mangos refuses a second character too).
+#[tokio::test]
+async fn a_login_of_another_character_on_the_account_kicks_the_first() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "TWO");
+    let first = a.enter("Firstone", Race::Human, Class::Warrior).await;
+    let mut again = Client::connect(&realm, "TWO");
+    again
+        .send(CMSG_CHAR_CREATE {
+            name: "Secondone".to_owned(),
+            race: Race::Human,
+            class: Class::Warrior,
+            gender: Gender::Female,
+            skin_color: 1,
+            face: 1,
+            hair_style: 1,
+            hair_color: 1,
+            facial_hair: 1,
+        })
+        .await;
+    again
+        .wait_for("SMSG_CHAR_CREATE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_CHAR_CREATE(_)).then_some(())
+        })
+        .await;
+    let second = realm
+        .registry
+        .guid_by_name("Secondone")
+        .expect("the second character");
+    again.send(CMSG_PLAYER_LOGIN { guid: second }).await;
+    let result = again
+        .wait_for("SMSG_CHARACTER_LOGIN_FAILED", |m| match m {
+            ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(f) => Some(f.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(result, WorldResult::CharLoginDuplicateCharacter);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while realm.registry.online(first).is_some() {
+        assert!(tokio::time::Instant::now() < deadline, "the first stays");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    again.login(second).await;
+}
+
 /// The player in a create block `m` has for `g`, as anyone sees them.
 fn created_player(m: &ServerOpcodeMessage, g: Guid) -> Option<UpdatePlayer> {
     let objects = match m {

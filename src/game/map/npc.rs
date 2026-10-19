@@ -1340,6 +1340,38 @@ pub fn cancel_flight(map: &mut Map, player: Guid) {
     );
 }
 
+/// A flight under way told again, to a client that has just taken the
+/// player over (mangos's `TaxiFlightResume`): it goes on from where it
+/// is, as a resumed one does. One about to land lands as it would.
+pub fn retell_flight(map: &mut Map, player: Guid) {
+    let now = map.now;
+    let on = map.key.map;
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let Some(f) = &p.flight else {
+        return;
+    };
+    let points: Vec<(f32, f32, f32)> = f
+        .walk
+        .remaining(now)
+        .into_iter()
+        .map(|v| (v.x, v.y, v.z))
+        .collect();
+    if points.is_empty() {
+        return;
+    }
+    let (destination, mount) = (f.destination, f.mount);
+    p.flight = None;
+    p.row.state.flight = Some(crate::game::store::SavedFlight {
+        map: on,
+        points,
+        destination,
+        mount,
+    });
+    resume_flight(map, player);
+}
+
 /// Players in flight move along; one who lands is let go.
 pub fn update_flights(map: &mut Map) {
     let now = map.now;

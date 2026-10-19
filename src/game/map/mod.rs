@@ -145,7 +145,12 @@ impl std::fmt::Display for MapKey {
 pub enum MapEvent {
     Arrive(Box<Arrival>),
     Packet(Guid, ClientOpcodeMessage),
-    Disconnect(Guid),
+    /// A player's client has gone, by the session it went from: one whose
+    /// player another login has taken over since leaves them be.
+    Disconnect(
+        Guid,
+        tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+    ),
     /// Run code on the map: how a service changes something a map owns.
     Call(Box<dyn FnOnce(&mut Map) + Send>),
     /// Save everyone and stop.
@@ -691,7 +696,7 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Transfer(_) => "a transfer",
             },
             MapEvent::Packet(_, m) => packet_name(m),
-            MapEvent::Disconnect(_) => "a disconnect",
+            MapEvent::Disconnect(..) => "a disconnect",
             MapEvent::Call(_) => "a call",
             MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
         };
@@ -909,9 +914,16 @@ impl Map {
                 }
                 self.handle_packet(guid, msg)
             }
-            MapEvent::Disconnect(guid) => {
+            MapEvent::Disconnect(guid, from) => {
                 let _z = crate::zone!("disconnect");
-                self.handle_disconnect(guid)
+                // Taken over by another login since: theirs now.
+                let theirs = self
+                    .players
+                    .get(&guid)
+                    .is_none_or(|p| p.online.session.same_channel(&from));
+                if theirs {
+                    self.handle_disconnect(guid)
+                }
             }
             MapEvent::Call(f) => {
                 let _z = crate::zone!("call");

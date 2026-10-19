@@ -35,6 +35,9 @@ pub enum Control {
     LoggedOut,
     /// Disconnect the client.
     Kick,
+    /// Another login has the player now, where they are: disconnect the
+    /// client, the player staying in the world.
+    TakenOver,
     /// Panic in the session's task, as a bug there would.
     #[cfg(test)]
     Panic,
@@ -298,6 +301,12 @@ impl Session {
                 true
             }
             Control::Kick => false,
+            // The player is another session's now: they stay in the world,
+            // and this connection goes without taking them out of it.
+            Control::TakenOver => {
+                self.state = State::Screen;
+                false
+            }
             #[cfg(test)]
             Control::Panic => panic!("the session's test panic"),
         }
@@ -308,7 +317,7 @@ impl Session {
     fn disconnect(&mut self) {
         match std::mem::replace(&mut self.state, State::Screen) {
             State::InWorld { guid, map } => {
-                if !map.send(MapEvent::Disconnect(guid)) {
+                if !map.send(MapEvent::Disconnect(guid, self.control.clone())) {
                     // Their map is gone, and them with it: off the online
                     // list, so the account can come back.
                     warn!(
@@ -594,8 +603,24 @@ impl Session {
             map.clone(),
         ));
         if let Err(existing) = self.realm.registry.go_online(online.clone()) {
-            // The account is still in the world from another connection:
-            // that one goes, and this client can try again.
+            // The character is still in the world from another connection:
+            // this one takes them over where they are, their state kept,
+            // and the other goes (mangos's `HandlePlayerReconnect`, the
+            // user's #35).
+            if existing.guid == g {
+                let old = existing.clone();
+                let new = online.clone();
+                let taken = existing
+                    .map()
+                    .query(move |m| crate::game::map::login::take_over(m, g, &old, new))
+                    .await;
+                if let Some(Some(map)) = taken {
+                    self.state = State::InWorld { guid: g, map };
+                    return;
+                }
+            }
+            // Another of the account's characters, or one between maps:
+            // that connection goes, and this client can try again.
             if existing.session.send(Control::Kick).is_err() {
                 reap(&self.realm, existing);
             }
@@ -661,11 +686,13 @@ pub fn transfer(
     let guid = player.guid;
     let map = realm.maps.get(realm, to);
     let online = player.online.clone();
+    // Their own session's disconnect, whatever session passed them on.
+    let from = online.session.clone();
     map.send(MapEvent::Arrive(Box::new(Arrival {
         kind: ArrivalKind::Transfer(player),
         online,
     })));
-    map.send(MapEvent::Disconnect(guid));
+    map.send(MapEvent::Disconnect(guid, from));
 }
 
 /// An online entry whose session has gone (a ghost): its player, if their

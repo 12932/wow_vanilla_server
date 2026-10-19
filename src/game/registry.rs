@@ -178,6 +178,19 @@ impl Registry {
         Ok(())
     }
 
+    /// `new` in `old`'s place, the same character from another session: if
+    /// `old` is still the entry.
+    pub fn replace(&self, old: &Arc<Online>, new: Arc<Online>) -> bool {
+        let by_account = self.by_account.read();
+        let mut map = self.online.write();
+        let current = map.get(&old.guid).is_some_and(|o| Arc::ptr_eq(o, old));
+        if !current || new.guid != old.guid || by_account.get(&new.account) != Some(&old.guid) {
+            return false;
+        }
+        map.insert(new.guid, new);
+        true
+    }
+
     pub fn go_offline(&self, guid: Guid) {
         let mut by_account = self.by_account.write();
         if let Some(o) = self.online.write().remove(&guid)

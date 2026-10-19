@@ -236,25 +236,6 @@ async fn a_disconnected_player_is_forgotten_by_everyone() {
 }
 
 #[tokio::test]
-async fn a_second_login_on_the_account_kicks_the_first() {
-    let realm = harness::realm();
-    let mut a = Client::connect(&realm, "A");
-    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
-    let mut again = Client::connect(&realm, "A");
-    again.send(CMSG_PLAYER_LOGIN { guid: g }).await;
-    let result = again
-        .wait_for("SMSG_CHARACTER_LOGIN_FAILED", |m| match m {
-            ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(f) => Some(f.result),
-            _ => None,
-        })
-        .await;
-    assert_eq!(result, WorldResult::CharLoginDuplicateCharacter);
-    // The first is gone from the world; the second gets in.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    again.login(g).await;
-}
-
-#[tokio::test]
 async fn go_teleports_within_a_map_and_to_another() {
     let realm = harness::realm();
     let mut a = Client::connect(&realm, "A");
