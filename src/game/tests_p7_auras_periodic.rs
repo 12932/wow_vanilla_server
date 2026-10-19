@@ -336,3 +336,43 @@ async fn golemaggs_trust_pulses_only_from_his_own_aura_while_he_lives() {
     .await;
     assert_eq!(out, (false, true, false), "(another's, his own, his dead)");
 }
+
+/// Thistle Tea's `WorldBossScript` "leaves players without mana marked":
+/// Mark of Kazzak on a warrior (rage, no mana to drain) drains nothing
+/// and never goes off; the mark stays.
+#[tokio::test]
+async fn mark_of_kazzak_leaves_a_warrior_marked_and_unexploded() {
+    const MARK_OF_KAZZAK: u32 = 21056;
+    const EXPLOSION: u32 = 21058;
+    let mut d = data();
+    let mut mark = spell(
+        MARK_OF_KAZZAK,
+        &[effect(auras::AURA_PERIODIC_MANA_LEECH, 0, 2000, 0)],
+    );
+    mark.effects[0].multiple_value = 1.0;
+    let mut explosion = spell(EXPLOSION, &[]);
+    explosion.effects[0] = SpellEffect {
+        effect: 2,
+        base_points: 49,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    for s in [mark, explosion] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        let health = m.players[&ga].fields.get_u32(UNIT_FIELD_HEALTH);
+        put(m, brute, ga, MARK_OF_KAZZAK, 250, auras::Context::default());
+        pass(m, 2000);
+        pass(m, 2000);
+        (
+            has(m, ga, MARK_OF_KAZZAK),
+            m.players[&ga].fields.get_u32(UNIT_FIELD_HEALTH) == health,
+        )
+    })
+    .await;
+    assert_eq!(out, (true, true), "(still marked, not exploded)");
+}

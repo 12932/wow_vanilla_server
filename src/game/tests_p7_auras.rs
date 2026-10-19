@@ -457,3 +457,43 @@ async fn a_sickness_lasts_through_death_and_release_to_its_own_end() {
 fn has(m: &Map, g: Guid, id: u32) -> bool {
     auras::auras(m, g).is_some_and(|a| a.has_spell(id))
 }
+
+/// Thistle Tea's `ViewpointSync` "transfers a viewpoint between casters
+/// and ignores refreshes": a bind sight from one caster that replaces
+/// another's on the same unit hands the eyes over (the first looks from
+/// itself again, the second from the unit), and one put on again by the
+/// same caster leaves them where they are.
+#[tokio::test]
+async fn a_bind_sight_replaced_by_another_caster_hands_the_eyes_over() {
+    const SIGHT: u32 = 97_430;
+    let mut d = data();
+    d.spells
+        .spells
+        .insert(SIGHT, aura_spell(SIGHT, auras::AURA_BIND_SIGHT, 0, 0));
+    let (realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        let looks = |m: &Map| [ga, gb].map(|g| m.players[&g].fields.get_guid(PLAYER_FARSIGHT));
+        let s = m.realm.data.spells.spells[&SIGHT].clone();
+        let sight = |m: &mut Map, caster: Guid| {
+            auras::apply_spell(m, caster, brute, &s, &[(0, 0)], auras::Context::default())
+                .expect("put on");
+            looks(m)
+        };
+        let first = sight(m, ga);
+        let handed = sight(m, gb);
+        let again = sight(m, gb);
+        let holders = auras::auras(m, brute)
+            .map_or(0, |a| a.holders.iter().filter(|h| h.spell == SIGHT).count());
+        (brute, first, handed, again, holders)
+    })
+    .await;
+    let (brute, first, handed, again, holders) = out;
+    let zero = Guid::zero();
+    assert_eq!(first, [brute, zero]);
+    assert_eq!(handed, [zero, brute], "handed over");
+    assert_eq!(again, [zero, brute], "a refresh leaves them");
+    assert_eq!(holders, 1);
+}
