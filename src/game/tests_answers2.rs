@@ -413,6 +413,150 @@ async fn the_grey_exclamations_gap_is_a_setting() {
     assert_eq!(shown[2], [Grey, Grey, Nothing], "eight");
 }
 
+// ---- #7: locked doors and buttons by hand -------------------------------
+
+const LOCKED_DOOR: u32 = 9700;
+const LOCKED_BUTTON: u32 = 9701;
+const OPEN_DOOR: u32 = 9702;
+const PICKED_DOOR: u32 = 9703;
+const KEY: u32 = 9710;
+const KEY_LOCK: u32 = 9720;
+/// A lock of lockpicking alone: no key opens it.
+const PICK_LOCK: u32 = 9721;
+
+fn door_data() -> GameData {
+    use crate::game::data::crafts::{LOCK_KEY_ITEM, LOCK_KEY_SKILL, LockKey};
+    let mut d = GameData::empty();
+    for (entry, kind, lock) in [
+        (LOCKED_DOOR, 0, KEY_LOCK),
+        (LOCKED_BUTTON, 1, KEY_LOCK),
+        (OPEN_DOOR, 0, 0),
+        (PICKED_DOOR, 0, PICK_LOCK),
+    ] {
+        let mut data = [0u32; 24];
+        data[1] = lock;
+        d.gameobject_templates.insert(
+            entry,
+            GameObjectTemplate {
+                entry,
+                kind,
+                display_id: 1,
+                name: format!("Door {entry}"),
+                size: 1.0,
+                data,
+                ..Default::default()
+            },
+        );
+    }
+    d.crafts.locks.insert(
+        KEY_LOCK,
+        vec![LockKey {
+            kind: LOCK_KEY_ITEM,
+            index: KEY,
+            skill: 0,
+        }],
+    );
+    d.crafts.locks.insert(
+        PICK_LOCK,
+        vec![LockKey {
+            kind: LOCK_KEY_SKILL,
+            index: 1,
+            skill: 25,
+        }],
+    );
+    d.items.insert(
+        KEY,
+        ItemTemplate {
+            entry: KEY,
+            name: "A Key".into(),
+            display_id: 1000,
+            stackable: 1,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    let object = |guid, entry, dy: f32| GameObjectSpawn {
+        guid,
+        entry,
+        map: 0,
+        x: START.0 + 1.0,
+        y: START.1 + dy,
+        z: START.2,
+        state: 1,
+        ..Default::default()
+    };
+    d.gameobject_spawns.insert(
+        0,
+        vec![
+            object(970, LOCKED_DOOR, 0.0),
+            object(971, LOCKED_BUTTON, 0.5),
+            object(972, OPEN_DOOR, -0.5),
+            object(973, PICKED_DOOR, 1.0),
+        ],
+    );
+    d
+}
+
+/// A door or button's state (1 closed, 0 open).
+async fn state_of(map: &MapHandle, o: Guid) -> u32 {
+    on(map, move |m| {
+        m.gameobject(o)
+            .map_or(9, |x| x.fields.get_u32(GAMEOBJECT_STATE))
+    })
+    .await
+}
+
+/// A locked door or button doesn't open by hand without one of its lock's
+/// keys carried, as Thistle Tea's `authorize_use` has it (the user's #7);
+/// with the key it opens as before, as does one never locked, and one a
+/// script unlocked (object action 6). A lock of lockpicking alone opens to
+/// no hand. Before, every one opened by hand.
+#[tokio::test]
+async fn a_locked_door_or_button_opens_by_hand_only_with_its_key() {
+    let realm = harness::realm_with(door_data());
+    let mut a = Client::connect(&realm, "DOORS");
+    let g = a.enter("Doorman", Race::Human, Class::Warrior).await;
+    let map = map_of(&realm, g);
+    let door = guid::game_object(LOCKED_DOOR, 970);
+    let button = guid::game_object(LOCKED_BUTTON, 971);
+    let open = guid::game_object(OPEN_DOOR, 972);
+    let picked = guid::game_object(PICKED_DOOR, 973);
+    for o in [door, button, open, picked] {
+        a.sees(o).await;
+    }
+    // Not a GM's hand, which opens anything.
+    on(&map, move |m| m.players.get_mut(&g).unwrap().gm = false).await;
+    let use_all = async |a: &mut Client| {
+        for o in [door, button, open, picked] {
+            a.send(CMSG_GAMEOBJ_USE { guid: o }).await;
+        }
+        handled(a).await;
+    };
+    use_all(&mut a).await;
+    let mut without = Vec::new();
+    for o in [door, button, open, picked] {
+        without.push(state_of(&map, o).await);
+    }
+    assert_eq!(without, vec![1, 1, 0, 1], "only the one never locked opens");
+    // A door a script unlocked opens by hand; the picked door wants its pick.
+    on(&map, move |m| {
+        objects::activate(m, g, picked, 6);
+        let _ = crate::game::map::inventory::add_item(m, g, KEY, 1, false);
+    })
+    .await;
+    use_all(&mut a).await;
+    let mut with = Vec::new();
+    for o in [door, button, picked] {
+        with.push(state_of(&map, o).await);
+    }
+    assert_eq!(
+        with,
+        vec![0, 0, 0],
+        "the key opens them, the script the other"
+    );
+}
+
 // ---- #10: a talent's trained ranks at a trainer ---------------------------
 
 const WARRIOR_TRAINER: u32 = 9600;

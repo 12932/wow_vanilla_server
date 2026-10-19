@@ -1842,6 +1842,9 @@ impl Map {
     pub fn remove_gameobject(&mut self, guid: Guid) -> Option<GameObject> {
         let key = self.gameobject_by_guid.remove(&guid)?;
         let mut g = self.gameobjects.try_remove(key)?;
+        // A script's lock goes with it: one back again starts as its
+        // template has it.
+        self.objects.lock_overrides.remove(&guid);
         self.grid.remove(guid, g.cell);
         for o in g.observers.drain() {
             if let Some(p) = self.players.get_mut(&o) {
