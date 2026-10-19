@@ -84,6 +84,38 @@ fn beside(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     }
 }
 
+/// The player in a create block `m` has for `g`, as anyone sees them.
+fn created_player(m: &ServerOpcodeMessage, g: Guid) -> Option<UpdatePlayer> {
+    let objects = match m {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+        ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+        _ => return None,
+    };
+    objects.iter().find_map(|o| match &o.update_type {
+        Object_UpdateType::CreateObject {
+            guid3,
+            mask2: UpdateMask::Player(p),
+            ..
+        }
+        | Object_UpdateType::CreateObject2 {
+            guid3,
+            mask2: UpdateMask::Player(p),
+            ..
+        } if *guid3 == g => Some(p.clone()),
+        _ => None,
+    })
+}
+
+/// The player in a values block `m` has for `g`.
+fn updated_player(m: &ServerOpcodeMessage, g: Guid) -> Option<UpdatePlayer> {
+    harness::values(m)
+        .into_iter()
+        .find_map(|(of, mask)| match mask {
+            UpdateMask::Player(p) if of == g => Some(p),
+            _ => None,
+        })
+}
+
 // ---- #43: fears break by chance -----------------------------------------
 
 const FEAR: u32 = 994_300;
@@ -330,6 +362,137 @@ async fn cancelling_stealth_with_vanish_on_takes_both() {
         after,
         ([false, false], false, 0),
         "both gone, the rogue seen"
+    );
+}
+
+// ---- #47: the quest log's slots are the group's ------------------------
+
+const LOGGED_QUEST: u32 = 783;
+
+fn quest_log_data() -> GameData {
+    let mut d = GameData::empty();
+    d.npc.quests.insert(
+        LOGGED_QUEST,
+        Quest {
+            id: LOGGED_QUEST,
+            title: "A Threat Within".into(),
+            min_level: 1,
+            level: 1,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+async fn group(leader: &mut Client, member: &mut Client, name: &str) {
+    leader
+        .send(CMSG_GROUP_INVITE {
+            name: name.to_owned(),
+        })
+        .await;
+    member
+        .wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+    member.send(CMSG_GROUP_ACCEPT {}).await;
+    member
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+            _ => None,
+        })
+        .await;
+}
+
+/// A player's quest log slots' ids are seen by their group alone, and by
+/// them, as mangos-classic's `UF_FLAG_GROUP_ONLY` has them (the user's
+/// #47): a group member's create of them carries the ids and a stranger's
+/// doesn't, and so does a change of them, which the stranger hears of only
+/// as far as the rest of what changed. Before, everyone saw them.
+#[tokio::test]
+async fn the_quest_logs_slots_are_seen_by_the_group_alone() {
+    let realm = harness::realm_with(quest_log_data());
+    let mut a = Client::connect(&realm, "QA");
+    let ga = a.enter("Questa", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "QB");
+    let gb = b.enter("Questb", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "QC");
+    let gc = c.enter("Questc", Race::Human, Class::Warrior).await;
+    a.sees(gb).await;
+    a.sees(gc).await;
+    b.sees(ga).await;
+    c.sees(ga).await;
+    group(&mut a, &mut b, "Questb").await;
+    // Bob and Carol go off, and Alice takes a quest meanwhile.
+    for x in [&b, &c] {
+        x.heartbeat(START.0 + 400.0, START.1, START.2).await;
+    }
+    b.forgets(ga).await;
+    c.forgets(ga).await;
+    let map = map_of(&realm, ga);
+    on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&ga).unwrap();
+        p.journal.log.push(Logged {
+            quest: LOGGED_QUEST,
+            ..Default::default()
+        });
+        quests::refresh_log(p, &data);
+    })
+    .await;
+    a.wait_for("her own slot", |m| {
+        updated_player(m, ga)
+            .and_then(|p| p.player_quest_log_1_1())
+            .filter(|q| *q == LOGGED_QUEST as i32)
+    })
+    .await;
+    // Back: her group's member is told of her with her log, the stranger
+    // without it.
+    for x in [&mut b, &mut c] {
+        x.clear();
+        x.heartbeat(START.0, START.1, START.2).await;
+    }
+    let to_b = b
+        .wait_for("Alice's create", |m| created_player(m, ga))
+        .await;
+    let to_c = c
+        .wait_for("Alice's create", |m| created_player(m, ga))
+        .await;
+    assert_eq!(
+        to_b.player_quest_log_1_1(),
+        Some(LOGGED_QUEST as i32),
+        "the group's"
+    );
+    assert_eq!(to_c.player_quest_log_1_1(), None, "not a stranger's");
+    assert!(to_c.unit_health().is_some(), "who sees the rest");
+    // A change: the slot emptied, and her health, in one update.
+    on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&ga).unwrap();
+        p.journal.log.clear();
+        quests::refresh_log(p, &data);
+        p.fields.set_u32(UNIT_FIELD_HEALTH, 7);
+    })
+    .await;
+    let to_b = b
+        .wait_for("the change", |m| {
+            updated_player(m, ga).filter(|p| p.unit_health() == Some(7))
+        })
+        .await;
+    let to_c = c
+        .wait_for("the change", |m| {
+            updated_player(m, ga).filter(|p| p.unit_health() == Some(7))
+        })
+        .await;
+    assert_eq!(
+        to_b.player_quest_log_1_1(),
+        Some(0),
+        "the group's member's emptied"
+    );
+    assert_eq!(
+        to_c.player_quest_log_1_1(),
+        None,
+        "the stranger's never had it"
     );
 }
 

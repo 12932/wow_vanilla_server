@@ -1569,6 +1569,7 @@ impl Map {
 
     fn flush_values(&mut self) {
         let batches = &mut self.batches;
+        let realm = &self.realm;
         let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
             if p.awaiting_worldport {
@@ -1588,11 +1589,27 @@ impl Map {
             if let Some(block) = update::values_block(p.guid, &p.fields, Visibility::Owner) {
                 batches.entry(p.guid).or_default().push(&block);
             }
-            if !p.observers.is_empty()
-                && let Some(block) = update::values_block(p.guid, &p.fields, Visibility::Public)
-            {
+            if !p.observers.is_empty() {
+                let public = update::values_block(p.guid, &p.fields, Visibility::Public);
+                // A quest log slot's id changed: the group's members get it
+                // too, in a block of their own (mangos's
+                // `UF_FLAG_GROUP_ONLY`).
+                let group = crate::game::fields::group_only_dirty(&p.fields)
+                    .then(|| update::values_block(p.guid, &p.fields, Visibility::Group))
+                    .flatten();
+                let mates = match group {
+                    Some(_) => realm.social.groups.lock().others(p.guid),
+                    None => Vec::new(),
+                };
                 for o in &p.observers {
-                    batches.entry(*o).or_default().push(&block);
+                    let block = if mates.contains(o) {
+                        group.as_ref()
+                    } else {
+                        public.as_ref()
+                    };
+                    if let Some(block) = block {
+                        batches.entry(*o).or_default().push(block);
+                    }
                 }
             }
             p.fields.clear_dirty();
