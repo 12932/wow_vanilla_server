@@ -635,6 +635,8 @@ mod tests_p6_wspell_units;
 #[cfg(test)]
 mod tests_p7_entity;
 #[cfg(test)]
+mod tests_p7_entity_loot;
+#[cfg(test)]
 mod tests_p7_loader_effects;
 #[cfg(test)]
 mod tests_p7_loader_items;
