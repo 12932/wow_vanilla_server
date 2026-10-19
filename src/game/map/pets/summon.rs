@@ -480,6 +480,7 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         } else {
             control::default_bar(&data, &s.spells, &s.autocast, false)
         };
+        control::restore(&data, s);
     }
     apply_level(&data, c, level);
     // Its cooldowns ran on while it was away.

@@ -86,6 +86,31 @@ fn repaint(data: &GameData, s: &mut PetState) {
     }
 }
 
+/// A pet's bar and autocast as its record had them, made good for what it
+/// knows now (mangos's `CharmInfo::LoadPetActionBar` and
+/// `Pet::CleanupActionBar`, Thistle Tea's `PetControls.update`'s
+/// restore): a button of a spell it doesn't know is an empty slot, the
+/// buttons moved about stay where they are, only what it knows and may
+/// cast of its own accord stays on autocast, and each spell button's kind
+/// is as the autocast has it.
+pub fn restore(data: &GameData, s: &mut PetState) {
+    let known = s.spells.clone();
+    s.autocast
+        .retain(|a| known.contains(a) && data.spells.get(*a).is_some_and(autocastable));
+    s.autocast.sort_unstable();
+    s.autocast.dedup();
+    for b in s.bar.iter_mut() {
+        let (action, kind) = unpack(*b);
+        if matches!(kind, ACT_COMMAND | ACT_REACTION) || action == 0 {
+            continue;
+        }
+        if !known.contains(&action) || data.spells.get(action).is_none() {
+            *b = button(0, ACT_DISABLED);
+        }
+    }
+    repaint(data, s);
+}
+
 fn react_state(r: u8) -> PetReactState {
     match r {
         REACT_PASSIVE => PetReactState::Passive,

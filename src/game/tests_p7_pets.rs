@@ -836,3 +836,116 @@ async fn a_companion_comes_beside_its_owner_facing_them() {
     let back = (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
     assert!((facing - back).abs() < 0.01, "facing {facing}, not {back}");
 }
+
+/// Thistle Tea's `PetProgression.gain` "preserves active buffs while
+/// replacing canonical growth inputs": a hunter's pet with five stamina
+/// and forty attack power from buffs levels up; its stats are the new
+/// level's with the buffs on top (fifty health and forty attack power
+/// more than without them), at its whole health, and the buffs still on.
+#[tokio::test]
+async fn a_pet_levelling_keeps_its_buffs_over_the_new_levels_stats() {
+    use crate::game::map::auras;
+    const STAMINA: u32 = 990_740;
+    const MIGHT: u32 = 990_741;
+    let mut d = revive_data();
+    let none = SpellEffect::default();
+    let mut stamina = tests_pets::effect(6, 4, 1);
+    stamina.aura = 29;
+    stamina.misc_value = 2;
+    let mut might = tests_pets::effect(6, 39, 1);
+    might.aura = 99;
+    for (id, e) in [(STAMINA, stamina), (MIGHT, might)] {
+        let mut s = tests_pets::spell(id, "Buff", [e, none, none]);
+        s.duration_index = 4;
+        d.spells.spells.insert(id, s);
+    }
+    let (_realm, mut h, gh, map, pet, _wolf) = tamed_with(d).await;
+    h.sees(pet).await;
+    let out = map
+        .query(move |m| {
+            let data = m.realm.data.clone();
+            for (spell, amount) in [(STAMINA, 5), (MIGHT, 40)] {
+                let s = data.spells.get(spell).cloned().unwrap();
+                let _ = auras::apply_spell(m, gh, pet, &s, &[(0, amount)], Default::default());
+            }
+            let level = |m: &crate::game::map::Map| {
+                let f = &m.creature(pet).unwrap().fields;
+                (
+                    f.get_u32(UNIT_FIELD_LEVEL),
+                    f.get_u32(UNIT_FIELD_HEALTH),
+                    f.get_u32(UNIT_FIELD_MAXHEALTH),
+                    f.get_u32(UNIT_FIELD_ATTACK_POWER) as i32
+                        + f.get_u32(UNIT_FIELD_ATTACK_POWER_MODS) as i32,
+                )
+            };
+            let before = level(m);
+            let need = crate::game::map::pets::testing::pet_xp_to_level(&data, before.0 as u8);
+            crate::game::map::pets::testing::gain_xp(m, pet, need, 20);
+            let buffed = level(m);
+            let kept = [STAMINA, MIGHT].map(|s| auras::auras(m, pet).unwrap().has_spell(s));
+            auras::remove_spell(m, pet, STAMINA, None);
+            auras::remove_spell(m, pet, MIGHT, None);
+            (before, buffed, kept, level(m))
+        })
+        .await
+        .unwrap();
+    let (before, buffed, kept, bare) = out;
+    assert_eq!(buffed.0, before.0 + 1, "a level up");
+    assert_eq!(buffed.1, buffed.2, "at its whole health");
+    assert_eq!(kept, [true, true], "its buffs on");
+    assert_eq!(buffed.2 - bare.2, 50, "five stamina's health");
+    assert_eq!(buffed.3 - bare.3, 40, "forty attack power");
+}
+
+/// Thistle Tea's `PetControls.update` "restores moved buttons and filters
+/// obsolete or ineligible spell settings": a hunter's boar's bar has its
+/// Attack and Stay changed places and Gore moved to the last spell slot, a
+/// spell that no longer is and one it doesn't know on it, and autocast on
+/// for Gore, a passive and the two; dismissed and called back, its bar
+/// keeps what was moved, the two are empty slots, and only Gore is on
+/// autocast (mangos's `LoadPetActionBar` and `CleanupActionBar`).
+#[tokio::test]
+async fn a_pets_bar_comes_back_as_moved_without_what_it_cant_use() {
+    use crate::game::map::pets::{ACT_COMMAND, ACT_DISABLED, ACT_ENABLED, button, unpack};
+    const GONE: u32 = 990_750;
+    const PASSIVE: u32 = 990_751;
+    let mut d = revive_data();
+    let none = SpellEffect::default();
+    let mut passive = tests_pets::spell(PASSIVE, "Passive", [none, none, none]);
+    passive.attributes[0] = 0x40;
+    d.spells.spells.insert(PASSIVE, passive);
+    let (_realm, mut h, gh, map, pet, _wolf) = tamed_with(d).await;
+    h.sees(pet).await;
+    let gore = tests_pets::GORE;
+    let firebolt = tests_pets::FIREBOLT;
+    map.query(move |m| {
+        let s = pets::state_mut(m, pet).unwrap();
+        s.spells.extend([gore, PASSIVE]);
+        s.bar[0] = button(u32::from(pets::COMMAND_STAY), ACT_COMMAND);
+        s.bar[2] = button(u32::from(pets::COMMAND_ATTACK), ACT_COMMAND);
+        s.bar[3] = button(GONE, ACT_ENABLED);
+        s.bar[4] = button(firebolt, ACT_ENABLED);
+        s.bar[6] = button(gore, ACT_ENABLED);
+        s.autocast = vec![gore, PASSIVE, GONE, firebolt];
+        pets::dismiss(m, pet);
+    })
+    .await;
+    learn(&map, gh, &[tests_pets::CALL_PET]);
+    h.clear();
+    cast(&h, tests_pets::CALL_PET, None).await;
+    let back = pet_bar(&mut h).await;
+    assert!(!back.is_zero());
+    let (bar, autocast) = map
+        .query(move |m| {
+            let s = pets::state(m, back).unwrap();
+            (s.bar.map(unpack), s.autocast.clone())
+        })
+        .await
+        .unwrap();
+    assert_eq!(bar[0], (u32::from(pets::COMMAND_STAY), ACT_COMMAND));
+    assert_eq!(bar[2], (u32::from(pets::COMMAND_ATTACK), ACT_COMMAND));
+    assert_eq!(bar[3], (0, ACT_DISABLED), "a spell that no longer is");
+    assert_eq!(bar[4], (0, ACT_DISABLED), "one it doesn't know");
+    assert_eq!(bar[6], (gore, ACT_ENABLED), "Gore where it was put");
+    assert_eq!(autocast, vec![gore], "only Gore on autocast");
+}

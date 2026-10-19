@@ -34,7 +34,7 @@ mod wild;
 pub(crate) use ai::breakable_cc;
 /// A pet sent at a target, or stopped where it is: for scripts.
 pub use ai::{attack as attack_target, stop as stop_where};
-pub use control::{button, handle, learn, send_spells};
+pub use control::{button, handle, learn, send_spells, unpack};
 pub use hunter::{
     NPC_FLAG_STABLEMASTER, TAMER_SPELLS, beast_for, change_loyalty, give_pet, list_stable,
     pet_xp_to_level, untrain_offer,
