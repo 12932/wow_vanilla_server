@@ -617,6 +617,8 @@ mod tests_p7_player_pets;
 #[cfg(test)]
 mod tests_p7_player_social;
 #[cfg(test)]
+mod tests_p7_player_spells;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
