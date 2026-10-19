@@ -76,12 +76,12 @@ fn food_drink_and_well_fed_are_told_by_their_auras_and_flags() {
     assert_eq!(exclusive(&potion, Some(2)), Some(Exclusive::GuardianElixir));
 }
 
-/// Slows: a negative melee haste alone is exclusive, not a positive one
-/// nor one beside another aura; snares aren't (the user's decision, as
-/// mangos-classic stacks them); nor a daze, a potion family's or a slow
-/// with another aura (Thistle Tea's `Slow.category`).
+/// Slows aren't exclusive, as Thistle Tea's `Slow.category` makes them: a
+/// negative melee haste, alone or beside another aura, stacks, as
+/// mangos-classic multiplies them (the user's #30); snares stack too, as
+/// mangos-classic has them (#27); nor are a daze or a potion family's.
 #[test]
-fn only_a_lone_negative_haste_is_exclusive_and_snares_stack() {
+fn slows_arent_exclusive_snares_and_attack_speed_slows_stack() {
     use crate::game::map::auras::{AURA_MOD_DECREASE_SPEED, AURA_MOD_HASTE};
     let with = |e: &[(u32, u32, i32)]| {
         let mut s = bare(990_710, 0);
@@ -97,7 +97,8 @@ fn only_a_lone_negative_haste_is_exclusive_and_snares_stack() {
     };
     assert_eq!(
         exclusive(&with(&[(6, AURA_MOD_HASTE, -11)]), None),
-        Some(Exclusive::NegativeHaste)
+        None,
+        "an attack-speed slow stacks"
     );
     assert_eq!(exclusive(&with(&[(6, AURA_MOD_HASTE, 20)]), None), None);
     assert_eq!(

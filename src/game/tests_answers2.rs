@@ -84,6 +84,50 @@ fn beside(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     }
 }
 
+// ---- #30: attack-speed slows multiply ------------------------------------
+
+const SLOW_20: u32 = 993_000;
+const SLOW_10: u32 = 993_001;
+
+fn slow_kit(d: &mut GameData) {
+    // Lone negative melee hastes, the kind Thistle Tea keeps one of.
+    let slow = |id: u32, amount: i32| {
+        let mut s = bare(id, 0);
+        s.duration_index = LASTS_15S;
+        effect(&mut s, 0, aura(auras::AURA_MOD_HASTE, 0, amount, 6));
+        s
+    };
+    insert(d, [slow(SLOW_20, -20), slow(SLOW_10, -10)]);
+}
+
+/// Two attack-speed slows from two casters both stay and multiply on the
+/// swing, as mangos-classic's `ApplyAttackTimePercentMod` has them (the
+/// user's #30): 2,000 ms × 1.2 × 1.1. Before, the weaker was passed over
+/// and only the stronger counted (Thistle Tea's, after vmangos).
+#[tokio::test]
+async fn attack_speed_slows_from_two_casters_stand_together_and_multiply() {
+    let realm = fast_realm(slow_kit);
+    let (_c, w, map) = human(&realm, "SLOWS", "Slowed", Class::Warrior).await;
+    let got = on(&map, move |m| {
+        ready(m, w, 60, &[]);
+        let (a, b) = (dummy(m, w, 60, 3.0), dummy(m, w, 60, 4.0));
+        let period = |m: &Map| m.players[&w].fields.get_u32(UNIT_FIELD_BASEATTACKTIME);
+        let bare_period = period(m);
+        for (by, id) in [(a, SLOW_20), (b, SLOW_10)] {
+            let s = m.realm.data.spells.get(id).cloned().unwrap();
+            let points = s.effects[0].base_points + 1;
+            let _ = auras::apply_spell(m, by, w, &s, &[(0, points)], auras::Context::default());
+        }
+        crate::game::map::derive::unit(m, w);
+        let on = [SLOW_20, SLOW_10].map(|id| auras::auras(m, w).is_some_and(|x| x.has_spell(id)));
+        (bare_period, on, period(m))
+    })
+    .await;
+    assert_eq!(got.0, 2000);
+    assert_eq!(got.1, [true, true], "both slows on");
+    assert_eq!(got.2, 2640, "and multiplied");
+}
+
 // ---- #41: cancelling Stealth with Vanish on ------------------------------
 
 const STEALTH: u32 = 994_100;

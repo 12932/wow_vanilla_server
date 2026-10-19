@@ -286,25 +286,16 @@ fn speed_factor(amount: i32) -> f32 {
     }
 }
 
-/// The hastes and slows of `kinds`, each a factor on the period: they
-/// multiply, but of the melee slows only the strongest counts, beside any
-/// a passive aura gives (vanilla's slows don't stack, as Thistle Tea's
-/// `AttackSpeed.multiplier` has it).
+/// The hastes and slows of `kinds`, each a factor on the period: they all
+/// multiply, the slows too (mangos-classic's `ApplyAttackTimePercentMod`,
+/// the user's #30; Thistle Tea's `AttackSpeed.multiplier` takes only the
+/// strongest melee slow).
 pub(crate) fn period_multiplier(a: &Auras, kinds: &[u32]) -> f32 {
-    let mut slow = 0;
-    let m = a
-        .effects()
+    a.effects()
         .filter(|(_, x)| kinds.contains(&x.kind))
         .fold(1.0, |m, (h, x)| {
-            let amount = x.amount * h.stacks.max(1) as i32;
-            if x.kind == AURA_MOD_HASTE && amount < 0 && !h.passive {
-                slow = slow.min(amount);
-                m
-            } else {
-                m * speed_factor(amount)
-            }
-        });
-    m * speed_factor(slow)
+            m * speed_factor(x.amount * h.stacks.max(1) as i32)
+        })
 }
 
 /// What a unit's melee hastes and slows make of its swing's period.

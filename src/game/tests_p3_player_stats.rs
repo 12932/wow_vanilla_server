@@ -304,9 +304,8 @@ const AMMO_15: u32 = 961_109;
 const RANGED_25: u32 = 961_110;
 const HASTE_100: u32 = 961_111;
 
-/// A slow beside another aura, as Thunder Clap's is beside its damage: not
-/// one of the slows that replace each other (`Exclusive::NegativeHaste`),
-/// so they stand together and the strongest counts.
+/// A slow beside another aura, as Thunder Clap's is beside its damage:
+/// slows stand together and multiply (mangos-classic's, the user's #30).
 fn slow(id: u32, amount: i32) -> SpellTemplate {
     let mut s = aura(id, AURA_MOD_HASTE, amount, 0, false);
     s.effects[1] = SpellEffect {
@@ -345,8 +344,12 @@ fn periods(m: &Map, g: Guid) -> (u32, u32, u32) {
     )
 }
 
+/// Hastes and slows each a factor on the periods, all multiplied: two
+/// melee slows beside a passive one too, as mangos-classic's
+/// `ApplyAttackTimePercentMod` has them (the user's #30; Thistle Tea's
+/// counts only the strongest).
 #[tokio::test]
-async fn hastes_and_slows_multiply_on_the_periods_but_of_the_melee_slows_only_the_strongest() {
+async fn hastes_and_slows_all_multiply_on_the_periods() {
     let (realm, _a, g) = player(with_hastes(data()), Class::Warrior).await;
     let got = on_map(&realm, move |m| {
         m.players.get_mut(&g).unwrap().spells.push(SPELL_DUAL_WIELD);
@@ -372,7 +375,7 @@ async fn hastes_and_slows_multiply_on_the_periods_but_of_the_melee_slows_only_th
         out.push(periods(m, g));
         take(m, g, HASTE_20);
         take(m, g, HASTE_30);
-        // Of two slows, the stronger, beside the passive one.
+        // Two slows and the passive one multiply: 1.1 × 1.2 × 1.25.
         put(m, g, SLOW_10);
         put(m, g, SLOW_20);
         put(m, g, BARKSKIN);
@@ -418,7 +421,7 @@ async fn hastes_and_slows_multiply_on_the_periods_but_of_the_melee_slows_only_th
             (2500, 1875, 3000),
             (2000, 1500, 3000),
             (1282, 961, 3000),
-            (3000, 2250, 3000),
+            (3300, 2475, 3000),
             (2750, 2062, 3000),
             (2400, 1800, 3600),
             (2000, 1500, 3600),

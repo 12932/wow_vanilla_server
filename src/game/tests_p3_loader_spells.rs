@@ -472,11 +472,11 @@ fn the_real_aura_amounts_load_as_thistle_tea_reads_them() {
 
 /// Thistle Tea's exclusive kinds on the real spells
 /// (`slow_exclusivity_dbc_test.exs`, `consumable_stacking_dbc_test.exs`,
-/// `spell_elixir_test.exs`): a melee speed penalty its own, but a spell
-/// with other auras none, and snares none either (they stack, the user's
-/// call over Thistle Tea's one at a time, as mangos-classic); foods,
-/// drinks, both, and Well Fed; flasks by their `spell_elixir` mask, and no
-/// rule for an ordinary elixir's 0.
+/// `spell_elixir_test.exs`): no slow is exclusive, neither a snare nor a
+/// melee speed penalty (they stack, the user's #27 and #30 over Thistle
+/// Tea's one at a time, as mangos-classic has them); foods, drinks, both,
+/// and Well Fed; flasks by their `spell_elixir` mask, and no rule for an
+/// ordinary elixir's 0.
 #[test]
 #[ignore = "extended"]
 fn the_real_exclusive_kinds_are_thistle_teas() {
@@ -492,8 +492,8 @@ fn the_real_exclusive_kinds_are_thistle_teas() {
         assert!(spell(d, id).attributes[1] & 0x4_0000 != 0, "{id}");
         assert_eq!(exclusive(d, id), None, "{id}");
     }
-    assert_eq!(exclusive(d, 6343), Some(Exclusive::NegativeHaste));
-    for id in [1604, 1098, 22_812] {
+    // Thunder Clap's attack-speed penalty.
+    for id in [6343, 1604, 1098, 22_812] {
         assert_eq!(exclusive(d, id), None, "{id}");
     }
     for (id, kind) in [

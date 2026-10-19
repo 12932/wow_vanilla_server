@@ -1310,11 +1310,12 @@ fn slow_spells(d: &mut crate::game::data::GameData) {
 }
 
 /// Snares stack, as mangos-classic has them: each stays on as long as it
-/// lasts, and the strongest slows. Attack-speed slows don't: a weaker or
-/// shorter one is passed over (Thistle Tea's `Slow`, after vmangos).
+/// lasts, and the strongest slows (the user's #27). Attack-speed slows
+/// stack too, a weaker or shorter one beside a stronger (#30; Thistle
+/// Tea's `Slow`, after vmangos, passes it over).
 #[tokio::test]
 #[ignore = "extended"]
-async fn snares_stack_and_the_strongest_slows_but_attack_speed_slows_dont() {
+async fn snares_and_attack_speed_slows_stack_and_the_strongest_snare_slows() {
     if !have_data() {
         return;
     }
@@ -1362,7 +1363,11 @@ async fn snares_stack_and_the_strongest_slows_but_attack_speed_slows_dont() {
         both.1
     );
     assert_eq!(either_order, both, "whichever came first");
-    assert_eq!(haste, vec![990_905], "the stronger attack-speed slow stays");
+    assert_eq!(
+        haste,
+        vec![990_904, 990_905],
+        "the attack-speed slows stand together"
+    );
     assert_eq!(left.0, vec![990_900], "the other stays");
     assert!(near(left.1, 7.0 * 0.6), "and slows by its -40%: {}", left.1);
     assert_eq!(
