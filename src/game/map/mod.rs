@@ -244,9 +244,9 @@ impl Maps {
         }
         let (tx, rx) = mpsc::unbounded_channel();
         let handle = MapHandle { key, tx };
-        // Read under the lock [`Maps::close`] takes: a map started before
+        // Read under the lock `Maps::close` takes: a map started before
         // the shutdown hears of it, and one asked for after is never
-        // started, but saves who comes to it ([`let_go`]).
+        // started, but saves whoever comes to it (`let_go`).
         if self.is_closed() {
             tokio::spawn(let_go_all(realm.clone(), key, rx));
         } else {

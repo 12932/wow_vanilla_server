@@ -237,10 +237,11 @@ impl Instances {
         changed
     }
 
-    /// `g` is let into `key`: on their way there, and nowhere else.
+    /// `g` is let into `key`: on their way there, and nowhere else. A way
+    /// in that never ended is forgotten too.
     fn heading(&mut self, g: Guid, key: MapKey, now: i64) {
         self.on_the_way.retain(|_, way| {
-            way.retain(|(p, _)| *p != g);
+            way.retain(|(p, at)| *p != g && *at + ON_THE_WAY_SECS > now);
             !way.is_empty()
         });
         self.on_the_way.entry(key).or_default().push((g, now));

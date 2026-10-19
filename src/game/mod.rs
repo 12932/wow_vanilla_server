@@ -1242,9 +1242,9 @@ impl Realm {
         self.shutdown_within(SHUTDOWN_WAIT).await;
     }
 
-    /// [`Realm::shutdown`], waiting at most `limit` for the maps, and as
-    /// long again for the store: a hung map is left behind, and what the
-    /// others saved is still written.
+    /// [`Realm::shutdown`], waiting at most `limit` for the maps and those
+    /// between them, and as long again for the store: a hung map is left
+    /// behind, and what the others saved is still written.
     pub async fn shutdown_within(&self, limit: Duration) {
         let mut waits = Vec::new();
         for map in self.maps.close() {
