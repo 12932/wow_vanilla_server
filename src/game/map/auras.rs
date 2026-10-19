@@ -1745,6 +1745,9 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_FEIGN_DEATH => {
+            // Believed or not, its Auto Shot stops, and its client is told
+            // (mangos's `SetFeignDeath`, `InterruptNonMeleeSpells(true)`).
+            crate::game::map::ranged::cancel(map, target, true);
             // The creatures fighting it may see through it (Thistle Tea's
             // `FeignDeath`): then it only stops attacking.
             if crate::game::map::spells::class_scripts::feign_death_resisted(map, target, h.spell) {

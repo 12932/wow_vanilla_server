@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::spells::{SpellDuration, SpellEffect, SpellTemplate};
@@ -230,6 +231,17 @@ async fn a_feign_death_seen_through_keeps_the_fight_the_list_and_her_auras() {
             for b in &brutes {
                 crate::game::map::ai::attacked(m, *b, ga);
             }
+            // She swings at one and shoots at it.
+            let now = m.now;
+            if let Some(c) = m.combat_mut(ga) {
+                c.attacking = true;
+                c.victim = brutes[0];
+                c.auto_repeat = Some(combat::AutoRepeat {
+                    spell: 75,
+                    target: brutes[0],
+                    next_at: now + Duration::from_secs(2),
+                });
+            }
             put_on(m, ga, FEIGN);
             m.spells.rolls = None;
             (
@@ -239,11 +251,20 @@ async fn a_feign_death_seen_through_keeps_the_fight_the_list_and_her_auras() {
                     .iter()
                     .all(|b| m.creature(*b).unwrap().threat.iter().any(|(t, _)| *t == ga)),
                 posed(m, ga),
+                m.combat(ga).map(|c| (c.attacking, c.auto_repeat.is_some())),
             )
         })
         .await
         .unwrap();
-    assert_eq!(r, (true, true, true, (true, false)));
+    assert_eq!(
+        r,
+        (true, true, true, (true, false), Some((false, false))),
+        "(her aura, her fight, the lists, the pose, her swing and shot stopped)"
+    );
+    a.wait_for("SMSG_CANCEL_AUTO_REPEAT", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_CANCEL_AUTO_REPEAT).then_some(())
+    })
+    .await;
 }
 
 /// mangos's believed Feign Death with a pet fighting (where Thistle Tea

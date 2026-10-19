@@ -284,3 +284,39 @@ async fn a_stealthed_walker_is_noticed_only_where_it_is_seen_and_at_full_reach_o
     assert!(!r.1, "unseen at twenty-five");
     assert!(r.2, "and seen there once out of stealth");
 }
+
+/// Thistle Tea's "selection changes retain the live melee victim": a
+/// player swinging at one creature who selects another goes on swinging at
+/// the first, the second shown as her target.
+#[tokio::test]
+async fn selecting_another_keeps_the_swing_on_its_victim() {
+    let (_realm, a, ga, map) = setup(Class::Warrior).await;
+    let (brute, other) = map
+        .query(move |m| {
+            put(m, ga, off(0.0, 0.0, 0.0));
+            (
+                creature_at(m, ga, BRUTE, off(2.0, 0.0, 0.0)),
+                creature_at(m, ga, BRUTE, off(0.0, 2.0, 0.0)),
+            )
+        })
+        .await
+        .unwrap();
+    a.send(CMSG_ATTACKSWING { guid: brute }).await;
+    a.send(CMSG_SET_SELECTION { target: other }).await;
+    let mut seen = None;
+    for _ in 0..200 {
+        seen = map
+            .query(move |m| {
+                let target = m.players[&ga].fields.get_guid(UNIT_FIELD_TARGET);
+                let c = m.combat(ga).unwrap();
+                (target == other).then_some((c.attacking, c.victim == brute))
+            })
+            .await
+            .unwrap();
+        if seen.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(seen, Some((true, true)), "(swinging, at the first)");
+}
