@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
+use crate::game::conn::Order;
 use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::fields::*;
 use crate::game::map::Map;
@@ -1862,19 +1863,28 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     AURA_WATER_WALK => {
                         p.outbound.send(&SMSG_MOVE_WATER_WALK {
                             guid: target,
-                            counter: p.outbound.next_order(),
+                            counter: p.outbound.order(Order::WaterWalk {
+                                guid: target,
+                                on: true,
+                            }),
                         });
                     }
                     AURA_FEATHER_FALL => {
                         p.outbound.send(&SMSG_MOVE_FEATHER_FALL {
                             guid: target,
-                            counter: p.outbound.next_order(),
+                            counter: p.outbound.order(Order::FeatherFall {
+                                guid: target,
+                                on: true,
+                            }),
                         });
                     }
                     _ => {
                         p.outbound.send(&SMSG_MOVE_SET_HOVER {
                             guid: target,
-                            counter: p.outbound.next_order(),
+                            counter: p.outbound.order(Order::Hover {
+                                guid: target,
+                                on: true,
+                            }),
                         });
                     }
                 }
@@ -2083,7 +2093,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_LAND_WALK {
                     guid: target,
-                    counter: p.outbound.next_order(),
+                    counter: p.outbound.order(Order::WaterWalk {
+                        guid: target,
+                        on: false,
+                    }),
                 });
             }
         }
@@ -2091,7 +2104,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_NORMAL_FALL {
                     guid: target,
-                    counter: p.outbound.next_order(),
+                    counter: p.outbound.order(Order::FeatherFall {
+                        guid: target,
+                        on: false,
+                    }),
                 });
             }
         }
@@ -2099,7 +2115,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_UNSET_HOVER {
                     guid: target,
-                    counter: p.outbound.next_order(),
+                    counter: p.outbound.order(Order::Hover {
+                        guid: target,
+                        on: false,
+                    }),
                 });
             }
         }

@@ -902,7 +902,7 @@ async fn on_the_navmesh_jainas_elite_guards_come_at_reachable_points_and_walk_to
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

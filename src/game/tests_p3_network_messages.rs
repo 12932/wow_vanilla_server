@@ -947,8 +947,8 @@ async fn a_knockback_is_laid_out_as_1_12_has_it() {
 /// Thistle Tea's cmsg_force_move_root_ack_test: a root's acknowledgement
 /// puts the player where the client says, and those who see them are
 /// told with `MSG_MOVE_ROOT`, as mangos's HandleMoveRootAck tells them;
-/// another for the state the client is already in is stale, and nothing;
-/// the unroot's is told with `MSG_MOVE_UNROOT`.
+/// the same order acknowledged again is stale, and nothing; the unroot's
+/// is told with `MSG_MOVE_UNROOT`.
 #[tokio::test]
 async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
     let realm = harness::realm_with(data());
@@ -970,9 +970,22 @@ async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
         fall_time: 0,
     };
     b.clear();
+    // The server's orders, and their counters.
+    let order = |root: bool| {
+        on_map(&realm, move |m| {
+            crate::game::map::movement::root_to(&m.players[&ga].outbound, ga, root)
+        })
+    };
+    let counter = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_ROOT(r) => Some(r.counter),
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(r) => Some(r.counter),
+        _ => None,
+    };
+    order(true).await;
+    let rooted_at = a.wait_for("the root", counter).await;
     let root = || CMSG_FORCE_MOVE_ROOT_ACK {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: rooted_at,
         info: info(MovementInfo_MovementFlags::new_root()),
     };
     a.send(root()).await;
@@ -987,13 +1000,15 @@ async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
     settled(&mut a).await;
     let now = on_map(&realm, move |m| m.players[&ga].position()).await;
     assert_eq!(now.x, there.x, "where the client says");
-    // Again, already rooted: stale.
+    // Again, settled already: stale.
     b.clear();
     a.send(root()).await;
     settled(&mut a).await;
+    order(false).await;
+    let unrooted_at = a.wait_for("the unroot", counter).await;
     a.send(CMSG_FORCE_MOVE_UNROOT_ACK {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: unrooted_at,
         info: info(MovementInfo_MovementFlags::empty()),
     })
     .await;

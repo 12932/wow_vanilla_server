@@ -1476,16 +1476,18 @@ async fn a_slowed_creature_goes_on_slower_and_a_possessed_one_is_told_as_a_playe
         _ => None,
     })
     .await;
-    let forced = b
+    let (forced, counter) = b
         .wait_for("the possessed one's speed, as a player's", |m| match m {
-            ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(s) if s.guid == held => Some(s.speed),
+            ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(s) if s.guid == held => {
+                Some((s.speed, s.move_event))
+            }
             _ => None,
         })
         .await;
     assert!((forced - held_speed).abs() < 0.01);
     b.send(CMSG_FORCE_RUN_SPEED_CHANGE_ACK {
         guid: held,
-        counter: 0,
+        counter,
         info: movement(START.0 + 33.0, 0.0, false),
         new_speed: forced,
     })

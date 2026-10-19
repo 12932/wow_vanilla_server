@@ -210,7 +210,7 @@ async fn a_teleport_ends_a_fall_a_cast_and_a_ride() {
         .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;
@@ -265,7 +265,7 @@ async fn a_teleport_ends_a_fall_a_cast_and_a_ride() {
     // Falling again, casting again: to Kalimdor.
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

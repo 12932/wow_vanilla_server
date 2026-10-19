@@ -250,7 +250,7 @@ async fn go_teleports_within_a_map_and_to_another() {
     assert_eq!((to.x, to.y), (-9000.0, -100.0));
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: a.guid,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;
@@ -658,7 +658,7 @@ mod death {
         assert!((to.x - (-8899.95)).abs() < 0.1, "{to:?}");
         a.send(MSG_MOVE_TELEPORT_ACK_Client {
             guid: ga,
-            movement_counter: 0,
+            movement_counter: a.teleport_order(),
             time: Default::default(),
         })
         .await;
@@ -720,7 +720,7 @@ mod death {
         .await;
         a.send(MSG_MOVE_TELEPORT_ACK_Client {
             guid: ga,
-            movement_counter: 0,
+            movement_counter: a.teleport_order(),
             time: Default::default(),
         })
         .await;
@@ -4004,7 +4004,7 @@ mod warsong {
         .await;
         c.send(MSG_MOVE_TELEPORT_ACK_Client {
             guid: g,
-            movement_counter: 0,
+            movement_counter: c.teleport_order(),
             time: Default::default(),
         })
         .await;

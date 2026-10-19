@@ -1502,7 +1502,7 @@ async fn a_ghost_sees_only_the_creatures_by_its_corpse() {
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

@@ -8,7 +8,7 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
-use crate::game::conn::encode;
+use crate::game::conn::{Order, encode};
 use crate::game::map::player::PendingTeleport;
 use crate::game::map::{Map, grid, visibility};
 
@@ -17,7 +17,7 @@ use crate::game::map::{Map, grid, visibility};
 /// 1.12's GUID is packed (mangos-zero's SetRoot, mangos-classic's and
 /// Thistle Tea's).
 pub fn root_to(to: &crate::game::conn::Outbound, guid: Guid, root: bool) {
-    let counter = to.next_order();
+    let counter = to.order(Order::Root { guid, root });
     let frame = if root {
         encode(&SMSG_FORCE_MOVE_ROOT { guid, counter })
     } else {
@@ -142,6 +142,21 @@ fn finite(info: &MovementInfo) -> bool {
 /// A movement packet from `guid`'s client.
 pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if crate::game::map::pets::move_possessed(map, guid, &info, relay) {
+        return;
+    }
+    moved_self(map, guid, info, relay);
+}
+
+/// The client's movement of its own player, as it says: refused where the
+/// server moves the player, or the client is still bound elsewhere, or the
+/// body lies dead; taken, and told to those who see it, by `relay`.
+pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
+    // Someone else's to move (a possessed player's own client).
+    if map
+        .players
+        .get(&guid)
+        .is_some_and(|p| p.owned.possessed_by.is_some())
+    {
         return;
     }
     // Feared, confused, charmed or charging: the server moves it, not its
@@ -441,7 +456,7 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.fall_from = None;
     p.outbound.send(&MSG_MOVE_TELEPORT_ACK_Server {
         guid,
-        movement_counter: p.outbound.next_order(),
+        movement_counter: p.outbound.order(Order::Teleport { guid }),
         info: p.movement,
     });
     let old_cell = p.cell;
@@ -510,7 +525,6 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
 /// Handle the packets of the movement family other than movement itself.
 pub fn handle(map: &mut Map, guid: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     match msg {
-        ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_) => teleport_ack(map, guid),
         ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK => worldport_ack(map, guid),
         ClientOpcodeMessage::CMSG_MOVE_FALL_RESET(m) => {
             let relay: Relay = |_, _| None;
@@ -524,19 +538,7 @@ pub fn handle(map: &mut Map, guid: Guid, msg: ClientOpcodeMessage) -> Option<Cli
             crate::game::map::pets::not_mover(map, guid, m.old_mover)
         }
         ClientOpcodeMessage::CMSG_MOVE_TIME_SKIPPED(_)
-        | ClientOpcodeMessage::CMSG_MOVE_SPLINE_DONE(_)
-        | ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_WALK_SPEED_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_TURN_RATE_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_MOVE_ROOT_ACK(_)
-        | ClientOpcodeMessage::CMSG_FORCE_MOVE_UNROOT_ACK(_)
-        | ClientOpcodeMessage::CMSG_MOVE_KNOCK_BACK_ACK(_)
-        | ClientOpcodeMessage::CMSG_MOVE_HOVER_ACK(_)
-        | ClientOpcodeMessage::CMSG_MOVE_FEATHER_FALL_ACK(_)
-        | ClientOpcodeMessage::CMSG_MOVE_WATER_WALK_ACK(_) => {}
+        | ClientOpcodeMessage::CMSG_MOVE_SPLINE_DONE(_) => {}
         other => return Some(other),
     }
     None
