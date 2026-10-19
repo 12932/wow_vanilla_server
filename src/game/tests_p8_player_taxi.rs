@@ -210,3 +210,34 @@ async fn debug_taxi_teaches_every_discoverable_node_and_keeps_them() {
     let map = realm.registry.online(ga).unwrap().map();
     assert_eq!(on(&map, known).await, [true, true, false, false], "kept");
 }
+
+/// Thistle Tea's dev_commands_test ".start ... rejects combat and taxi
+/// flight": `.start` is refused in a fight and in flight, as mangos's
+/// `HandleStartCommand` refuses them before it casts Stuck.
+#[tokio::test]
+async fn start_is_refused_in_a_fight_and_in_flight() {
+    let (_realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    on(&map, move |m| {
+        m.players.get_mut(&ga).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            true,
+        );
+    })
+    .await;
+    a.say(".start").await;
+    a.system_message("You are in combat").await;
+    on(&map, move |m| {
+        m.players.get_mut(&ga).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            false,
+        );
+        npc::fly_path(m, ga, PATH);
+    })
+    .await;
+    a.say(".start").await;
+    a.system_message("You are in flight").await;
+    let still = on(&map, move |m| m.players[&ga].flight.is_some()).await;
+    assert!(still, "flying on");
+}

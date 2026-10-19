@@ -1292,6 +1292,9 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             p.caster.category_cooldowns.clear();
             p.caster.gcd_until = None;
             p.caster.other_gcds.clear();
+            // And an interrupt's school lockouts (Thistle Tea's `.debug
+            // cooldowns`).
+            p.caster.school_lockout.clear();
             for id in &spells {
                 p.outbound.send(&SMSG_CLEAR_COOLDOWN {
                     id: *id,
@@ -1419,9 +1422,15 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let Some(have) = crate::game::map::skills::value(p, id) else {
                 return Some(format!("No skill {id}."));
             };
+            // From 1 to its cap, as mangos's `.setskill` takes it; its
+            // stats follow (Defense's dodge and parry).
             let max = crate::game::map::skills::max_value(p, id).unwrap_or(have);
-            crate::game::map::skills::set_value(p, id, value.min(max));
-            Some(format!("Skill {id} at {}.", value.min(max)))
+            if value == 0 || value > max {
+                return Some(format!("Skill {id} goes from 1 to {max}."));
+            }
+            crate::game::map::skills::set_value(p, id, value);
+            p.apply_stats(&data);
+            Some(format!("Skill {id} at {value}."))
         }
         ["spells"] => {
             let to = player_target(map, g);

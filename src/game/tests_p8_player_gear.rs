@@ -534,3 +534,93 @@ async fn debug_durability_takes_a_percent_and_refuses_the_rest() {
         assert_eq!(durability(&map, g, helm).await, 90, "{bad}: nothing worn");
     }
 }
+
+/// Thistle Tea's dev_commands_test ".debug cooldowns clears item, spell,
+/// category, global, and school timers" and ".debug skill sets only known
+/// skills within their cap and refreshes defense fields": the cooldowns,
+/// the categories', the global ones and an interrupt's school lockout all
+/// go, the client told of each spell's, an item's that wasn't learned
+/// too; a skill is set only from 1 to its cap and only one known (as
+/// mangos's `.setskill`), its stats following.
+#[tokio::test]
+async fn debug_cooldowns_and_skill_do_what_they_say_and_no_more() {
+    let realm = harness::realm_with(worn_data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let now = m.now;
+        let c = &mut m.players.get_mut(&g).unwrap().caster;
+        let later = now + Duration::from_secs(60);
+        c.cooldowns.insert(TRINKET_SPELL, later);
+        c.category_cooldowns.insert(1, later);
+        c.gcd_until = Some(later);
+        c.other_gcds.push((7, later));
+        c.school_lockout.push((0x7F, later));
+    })
+    .await
+    .unwrap();
+    a.clear();
+    a.say(".debug cooldowns").await;
+    a.system_message("Cleared 1 cooldowns").await;
+    a.wait_for("SMSG_CLEAR_COOLDOWN", |m| match m {
+        ServerOpcodeMessage::SMSG_CLEAR_COOLDOWN(c) if c.id == TRINKET_SPELL => Some(()),
+        _ => None,
+    })
+    .await;
+    let left = map
+        .query(move |m| {
+            let c = &m.players[&g].caster;
+            (
+                c.cooldowns.len(),
+                c.category_cooldowns.len(),
+                c.gcd_until.is_some(),
+                c.other_gcds.len(),
+                c.school_lockout.len(),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, (0, 0, false, 0, 0));
+    // Defense, at a level's cap of 5 a level.
+    const DEFENSE: u32 = 95;
+    let (max, dodge) = map
+        .query(move |m| {
+            let d = m.realm.data.clone();
+            let p = m.players.get_mut(&g).unwrap();
+            if crate::game::map::skills::value(p, DEFENSE).is_none() {
+                crate::game::map::skills::learn_skill(p, DEFENSE, 1);
+            }
+            crate::game::map::skills::set_value(p, DEFENSE, 1);
+            p.apply_stats(&d);
+            let p = &m.players[&g];
+            (
+                crate::game::map::skills::max_value(p, DEFENSE).unwrap(),
+                p.derived.dodge,
+            )
+        })
+        .await
+        .unwrap();
+    for bad in [format!("{}", max + 1), "0".into()] {
+        a.say(&format!(".debug skill {DEFENSE} {bad}")).await;
+        a.system_message("goes from 1 to").await;
+    }
+    a.say(".debug skill 43 1").await;
+    a.system_message("No skill 43").await;
+    map.query(move |m| {
+        crate::game::map::skills::set_value(m.players.get_mut(&g).unwrap(), DEFENSE, 1)
+    })
+    .await
+    .unwrap();
+    a.say(&format!(".debug skill {DEFENSE} {max}")).await;
+    a.system_message(&format!("Skill {DEFENSE} at {max}")).await;
+    let (value, higher) = map
+        .query(move |m| {
+            let p = &m.players[&g];
+            (crate::game::map::skills::value(p, DEFENSE), p.derived.dodge)
+        })
+        .await
+        .unwrap();
+    assert_eq!(value, Some(max));
+    assert!(higher >= dodge, "the dodge with it: {dodge} to {higher}");
+}
