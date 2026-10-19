@@ -408,6 +408,10 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     crate::game::map::death::resurrect_with(map, g, health, mana);
 }
 
+/// Evil Twin (the Shadowy Figure's curse): no summons reaches one under
+/// it.
+pub const EVIL_TWIN: u32 = 23_445;
+
 /// Offer `target` (anywhere in the realm) a summons to where `summoner`
 /// stands.
 pub fn offer_summon(map: &Map, summoner: Guid, target: Guid) {
@@ -429,7 +433,9 @@ pub fn offer_summon(map: &Map, summoner: Guid, target: Guid) {
         let Some(p) = m.players.get_mut(&target) else {
             return;
         };
-        if p.death != Death::Alive {
+        // Evil Twin's dummy turns summonses away unheard (mangos's
+        // `EffectSummonPlayer`).
+        if p.death != Death::Alive || p.auras.has_spell(EVIL_TWIN) {
             return;
         }
         p.misc.summon = Some(summon);

@@ -31,6 +31,7 @@ pub const NPC_FLAG_AUCTIONEER: u32 = 0x1000;
 
 const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
 const UNIT_FLAG_DISABLE_MOVE: u32 = 0x0000_0004;
+const UNIT_FLAG_NOT_SELECTABLE: u32 = 0x0200_0000;
 /// A flight's speed, in yards a second.
 const TAXI_SPEED: f32 = 32.0;
 /// The text an NPC without its own shows.
@@ -109,6 +110,11 @@ pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
         .combat(npc)
         .is_some_and(|f| f.attacking && !f.victim.is_zero());
     if fighting || !c.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero() {
+        return None;
+    }
+    // Nor one that can't be selected (mangos's `CanInteract`,
+    // `UNIT_FLAG_UNINTERACTIBLE`).
+    if c.fields.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_NOT_SELECTABLE != 0 {
         return None;
     }
     if flag == crate::game::map::pets::NPC_FLAG_STABLEMASTER && p.row.class != 3 {

@@ -1078,3 +1078,742 @@ async fn a_vendor_lists_named_standings_hides_its_own_unmet_and_discounts_the_ho
     .await;
     assert_eq!((money, has), (977, 1), "a tenth off 25, rounded");
 }
+
+/// Thistle Tea's `Summoning.request` "Evil Twin silently blocks incoming
+/// summons until its aura expires": under Evil Twin (23445) no summons is
+/// offered, and none is held to be accepted (mangos's
+/// `EffectSummonPlayer`); without it, the summons is offered.
+#[tokio::test]
+async fn evil_twin_turns_summonses_away_unheard() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let twin = crate::game::map::misc::EVIL_TWIN;
+    a.clear();
+    let held = on(&map, move |m| {
+        crate::game::tests_p3_combat::aura_of(m, ga, twin, 4, 0, 0);
+        crate::game::map::misc::offer_summon(m, gb, ga);
+        m.players[&ga].auras.has_spell(twin)
+    })
+    .await;
+    assert!(held, "under Evil Twin");
+    let offered = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_SUMMON_REQUEST(s) => Some(s.summoner),
+        _ => None,
+    };
+    handled(&mut a).await;
+    assert_eq!(a.gets(NONE_WITHIN, offered).await, None, "unheard");
+    let pending = on(&map, move |m| m.players[&ga].misc.summon.is_some()).await;
+    assert!(!pending, "nothing to accept");
+    on(&map, move |m| {
+        crate::game::map::auras::remove_spell(m, ga, twin, None);
+        crate::game::map::misc::offer_summon(m, gb, ga);
+    })
+    .await;
+    assert_eq!(a.wait_for("the summons", offered).await, gb);
+}
+
+/// The house `a` is told `npc` is of, if it is told at all.
+async fn house(a: &mut Client, npc: Guid) -> Option<u32> {
+    a.clear();
+    a.send(MSG_AUCTION_HELLO_Client { auctioneer: npc }).await;
+    handled(a).await;
+    let f = tokio::time::timeout(
+        Duration::from_millis(50),
+        a.wait_frame("MSG_AUCTION_HELLO", 0x255, |f| {
+            f[..8] == npc.guid().to_le_bytes()
+        }),
+    )
+    .await
+    .ok()?;
+    Some(u32::from_le_bytes(f[8..12].try_into().unwrap()))
+}
+
+/// Thistle Tea's `Auction.house` "opens a nearby live vanilla auctioneer
+/// and resolves its market" and "rejects dead, ghost, remote, unflagged,
+/// and absent auctioneers": an auctioneer of Stormwind's faction (12) is
+/// of house 1, one of Booty Bay's (120) the goblins' 7 (mangos's
+/// `GetAuctionHouseEntry`); none answers the dead or a ghost, from past its
+/// reach, dead, unflagged or not there.
+#[tokio::test]
+async fn an_auctioneer_names_its_house_to_the_living_within_reach() {
+    let mut d = data();
+    for (id, ours) in [(12, 0x1), (120, 0)] {
+        d.faction_templates
+            .insert(id, crate::game::tests_p3_combat::faction(id, ours, 0));
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let npc = on(&map, move |m| {
+        let c = npc_beside(m, ga, crate::game::map::npc::NPC_FLAG_AUCTIONEER, 2.0);
+        m.creature_mut(c)
+            .unwrap()
+            .fields
+            .set_u32(crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE, 12);
+        c
+    })
+    .await;
+    a.sees(npc).await;
+    assert_eq!(house(&mut a, npc).await, Some(1), "Stormwind's");
+    let set = |f: fn(&mut crate::game::map::Map, Guid, Guid)| {
+        let map = map.clone();
+        async move { on(&map, move |m| f(m, ga, npc)).await }
+    };
+    set(|m, _, npc| {
+        m.creature_mut(npc)
+            .unwrap()
+            .fields
+            .set_u32(crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE, 120)
+    })
+    .await;
+    assert_eq!(house(&mut a, npc).await, Some(7), "Booty Bay's");
+    set(|m, ga, npc| {
+        let at = m.players[&ga].position();
+        m.creature_mut(npc).unwrap().position = Vector3d {
+            x: at.x + 7.0,
+            ..at
+        };
+    })
+    .await;
+    assert_eq!(house(&mut a, npc).await, None, "past reach");
+    set(|m, ga, npc| {
+        let at = m.players[&ga].position();
+        m.creature_mut(npc).unwrap().position = Vector3d {
+            x: at.x + 2.0,
+            ..at
+        };
+        m.creature_mut(npc)
+            .unwrap()
+            .fields
+            .set_u32(crate::game::fields::UNIT_NPC_FLAGS, 0);
+    })
+    .await;
+    assert_eq!(house(&mut a, npc).await, None, "unflagged");
+    set(|m, _, npc| {
+        let later = m.now + Duration::from_secs(60);
+        let c = m.creature_mut(npc).unwrap();
+        c.fields.set_u32(
+            crate::game::fields::UNIT_NPC_FLAGS,
+            crate::game::map::npc::NPC_FLAG_AUCTIONEER,
+        );
+        c.life = crate::game::map::creature::Life::Dead {
+            corpse_until: later,
+            respawn_at: later,
+        };
+    })
+    .await;
+    assert_eq!(house(&mut a, npc).await, None, "a dead auctioneer");
+    set(|m, _, npc| m.creature_mut(npc).unwrap().life = crate::game::map::creature::Life::Alive)
+        .await;
+    assert_eq!(house(&mut a, npc).await, Some(7), "alive again");
+    let absent = crate::game::guid::unit(9_400, 0x7F_FFFF);
+    assert_eq!(house(&mut a, absent).await, None, "no one there");
+    set(|m, ga, _| crate::game::map::death::kill(m, ga)).await;
+    assert_eq!(house(&mut a, npc).await, None, "to the dead");
+    set(|m, ga, _| crate::game::map::death::release(m, ga)).await;
+    assert_eq!(house(&mut a, npc).await, None, "to a ghost");
+}
+
+/// Thistle Tea's `Auction.sell` and `bid` "project escrow, owner listings,
+/// buyout, and mail on the owning players": an item put up goes from the
+/// seller's bags (its object forgotten by their client) and the deposit
+/// from their money; it is in their own list; a buyout takes the buyer's
+/// money and mails each side their part.
+#[tokio::test]
+async fn an_item_put_up_leaves_the_bags_lists_as_ones_own_and_a_buyout_mails_both() {
+    use crate::game::tests_p3_core_auction as kit;
+    let realm = harness::realm_with(kit::data());
+    let mut a = kit::player(&realm, "A", "Alice").await;
+    let mut b = kit::player(&realm, "B", "Bob").await;
+    let item = kit::goods(&realm, a.guid).await;
+    let (ga, gb) = (a.guid, b.guid);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (id, started) = kit::sell(&mut a, item, 100, 1_000, 120).await;
+    assert!(kit::ok(&started));
+    a.wait_for("the item's object destroyed", |m| match m {
+        ServerOpcodeMessage::SMSG_DESTROY_OBJECT(d) => (d.guid == item).then_some(()),
+        _ => None,
+    })
+    .await;
+    let (gone, money) = on(&map, move |m| {
+        (
+            m.players[&ga].item_by_guid(item).is_none(),
+            m.players[&ga].money(),
+        )
+    })
+    .await;
+    assert_eq!(
+        (gone, money),
+        (true, 10_000 - 75),
+        "the item, and the deposit"
+    );
+    a.send(CMSG_AUCTION_LIST_OWNER_ITEMS {
+        auctioneer: kit::auctioneer(),
+        list_from: 0,
+    })
+    .await;
+    let mine = a
+        .wait_for("SMSG_AUCTION_OWNER_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(l) => {
+                Some(l.auctions.iter().map(|x| x.id).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(mine, [id]);
+    assert!(kit::ok(&kit::bid(&mut b, id, 1_000).await), "bought out");
+    let money = on(&map, move |m| m.players[&gb].money()).await;
+    assert_eq!(money, 9_000);
+    let mails = |to: Guid| {
+        realm
+            .social
+            .mail
+            .lock()
+            .mails
+            .values()
+            .filter(|m| m.receiver == crate::game::guid::counter(to))
+            .map(|m| (m.money, usize::from(m.item.is_some())))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(mails(gb), [(0, 1)], "the item to the buyer");
+    // The goblins' cut is 15%: 850, and the deposit back.
+    assert_eq!(mails(ga), [(850 + 75, 0)], "the proceeds to the seller");
+}
+
+/// A trigger at the start, sending its player ten yards on, under
+/// condition `CONDITIONED`'s and `UNKNOWN`'s conditions.
+const CONDITIONED: u32 = 9_000;
+const UNKNOWN: u32 = 9_001;
+
+fn trigger_world() -> crate::game::data::GameData {
+    use crate::game::data::scripts::Condition;
+    let mut d = data();
+    for (id, condition, kind) in [(CONDITIONED, 1, 15), (UNKNOWN, 2, 9_999)] {
+        d.area_triggers.insert(
+            id,
+            crate::game::data::AreaTrigger {
+                id,
+                map: 0,
+                x: START.0,
+                y: START.1,
+                z: START.2,
+                radius: 5.0,
+                teleport: Some(crate::game::data::Teleport {
+                    message: "Not you".into(),
+                    map: 0,
+                    x: START.0 + 10.0,
+                    y: START.1,
+                    z: START.2,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        d.scripts.teleport_condition.insert(id, condition);
+        d.scripts.conditions.insert(
+            condition,
+            Condition {
+                entry: condition,
+                kind,
+                values: [10, 1, 0, 0],
+                flags: 0,
+            },
+        );
+    }
+    d
+}
+
+/// Whether `a` stepping into `trigger` is sent on, or told why not.
+async fn stepped(a: &mut Client, trigger: u32) -> Result<(), String> {
+    a.clear();
+    a.send(CMSG_AREATRIGGER {
+        trigger_id: trigger,
+    })
+    .await;
+    a.wait_for("a teleport or a refusal", |m| match m {
+        ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_) => Some(Ok(())),
+        ServerOpcodeMessage::SMSG_AREA_TRIGGER_MESSAGE(t) => Some(Err(t.message.clone())),
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's `AreaTriggers` "accepts or rejects a cached conditioned
+/// teleport" and "rejects an unknown cached condition": a teleport whose
+/// condition (level 10) the player meets sends them on, one short of it
+/// is refused with the trigger's message; a condition of a kind wvs
+/// doesn't know is unmet, refused.
+#[tokio::test]
+async fn a_conditioned_trigger_sends_on_those_who_meet_it_alone() {
+    let realm = players_realm(trigger_world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    on(&map, move |m| crate::game::tests_p3_combat::level(m, ga, 9)).await;
+    assert_eq!(stepped(&mut a, CONDITIONED).await, Err("Not you".into()));
+    on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 10)
+    })
+    .await;
+    assert_eq!(stepped(&mut a, CONDITIONED).await, Ok(()));
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 60)
+    })
+    .await;
+    assert_eq!(stepped(&mut a, UNKNOWN).await, Err("Not you".into()));
+}
+
+/// A buff of spell level 40, its only rank: it goes on no one below 30.
+const HIGH_BUFF: u32 = 96_100;
+
+fn buff_world() -> crate::game::data::GameData {
+    use crate::game::data::spells::SpellRank;
+    let mut d = data();
+    let mut s = crate::game::tests_p3_entity::spell(
+        HIGH_BUFF,
+        &[crate::game::tests_p3_entity::aura_effect(29, 5, 2, 21)],
+    );
+    s.spell_level = 40;
+    s.mana_cost = 10;
+    d.spells.spells.insert(HIGH_BUFF, s);
+    d.spells.ranks.insert(
+        HIGH_BUFF,
+        SpellRank {
+            prev: 0,
+            first: HIGH_BUFF,
+            rank: 1,
+            req: 0,
+        },
+    );
+    d
+}
+
+/// Thistle Tea's `Spellcasting.cast_result` "rejects a target below the
+/// first rank without spending mana": a buff with no rank low enough for
+/// its target is refused LOWLEVEL (0x2B) with nothing spent (mangos's
+/// `SelectAuraRankForLevel` finding none, then `CheckCast`); a target high
+/// enough has it.
+#[tokio::test]
+async fn a_buff_with_no_rank_for_its_target_is_refused_lowlevel_for_nothing() {
+    use crate::game::fields::UNIT_FIELD_POWER1;
+    let realm = harness::realm_with(buff_world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Mage).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let (_b, gb) = crate::game::tests_p3_entity::bob(&realm, ga).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let cast = move |m: &mut crate::game::map::Map| {
+        let p = m.players.get_mut(&ga).unwrap();
+        p.fields.set_u32(UNIT_FIELD_POWER1, 500);
+        crate::game::map::spells::cast(
+            m,
+            ga,
+            HIGH_BUFF,
+            crate::game::map::spells::Targets {
+                unit: Some(gb),
+                ..Default::default()
+            },
+            None,
+        );
+        (
+            m.players[&ga].fields.get_u32(UNIT_FIELD_POWER1),
+            m.players[&gb].auras.has_spell(HIGH_BUFF),
+        )
+    };
+    let after = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 60);
+        crate::game::map::spells::learn(m, ga, HIGH_BUFF);
+        crate::game::tests_p3_combat::level(m, gb, 29);
+        a_clear_cooldowns(m, ga);
+        cast(m)
+    })
+    .await;
+    assert_eq!(after, (500, false), "nothing spent, nothing on");
+    let result = a
+        .wait_frame("SMSG_CAST_RESULT", 0x130, |f| {
+            f[..4] == HIGH_BUFF.to_le_bytes()
+        })
+        .await;
+    assert_eq!(&result[4..], &[2, 0x2B], "LOWLEVEL");
+    let after = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, gb, 30);
+        a_clear_cooldowns(m, ga);
+        cast(m)
+    })
+    .await;
+    assert_eq!(after, (490, true), "at 30, it goes on");
+}
+
+fn a_clear_cooldowns(m: &mut crate::game::map::Map, g: Guid) {
+    if let Some(c) = m.caster_mut(g) {
+        c.cooldowns.clear();
+        c.gcd_until = None;
+    }
+}
+
+/// Thistle Tea's `SpellLoader.aura_rank` "stops at missing or cyclic
+/// ancestors": the rank for a level walks back through the ranks before,
+/// and finds none past a missing one, or round a loop.
+#[test]
+fn a_rank_for_a_level_stops_at_a_missing_or_looping_rank() {
+    use crate::game::data::spells::SpellRank;
+    use crate::game::map::spells::aura_rank::for_level;
+    let mut d = buff_world();
+    let low = HIGH_BUFF + 1;
+    d.spells.ranks.insert(
+        HIGH_BUFF,
+        SpellRank {
+            prev: low,
+            first: low,
+            rank: 2,
+            req: 0,
+        },
+    );
+    let high = d.spells.spells[&HIGH_BUFF].clone();
+    assert_eq!(for_level(&d, &high, 1), None, "rank 1 missing");
+    let mut lower = high.clone();
+    lower.id = low;
+    d.spells.spells.insert(low, lower);
+    d.spells.ranks.insert(
+        low,
+        SpellRank {
+            prev: HIGH_BUFF,
+            first: low,
+            rank: 1,
+            req: 0,
+        },
+    );
+    assert_eq!(for_level(&d, &high, 1), None, "round a loop");
+    assert_eq!(for_level(&d, &high, 30), Some(HIGH_BUFF), "high enough");
+}
+
+/// Thistle Tea's `Spellcasting.cast_result` "self casts select a rank from
+/// the owner's level": a buff cast on oneself is the rank one's own level
+/// may have (mangos's self cast targets the caster, whose level
+/// `SelectAuraRankForLevel` goes by).
+#[tokio::test]
+async fn a_buff_cast_on_oneself_is_the_rank_ones_level_may_have() {
+    use crate::game::data::spells::SpellRank;
+    let mut d = buff_world();
+    let low = HIGH_BUFF + 1;
+    let mut lower = d.spells.spells[&HIGH_BUFF].clone();
+    lower.id = low;
+    lower.spell_level = 1;
+    d.spells.spells.insert(low, lower);
+    for (id, prev, rank) in [(low, 0, 1), (HIGH_BUFF, low, 2)] {
+        d.spells.ranks.insert(
+            id,
+            SpellRank {
+                prev,
+                first: low,
+                rank,
+                req: 0,
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Mage).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let on_her = on(&map, move |m| {
+        crate::game::map::spells::learn(m, ga, HIGH_BUFF);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(crate::game::fields::UNIT_FIELD_POWER1, 500);
+        crate::game::map::spells::cast(m, ga, HIGH_BUFF, Default::default(), None);
+        let p = &m.players[&ga];
+        (p.auras.has_spell(low), p.auras.has_spell(HIGH_BUFF))
+    })
+    .await;
+    assert_eq!(on_her, (true, false), "rank 1, at level 1");
+}
+
+/// Thistle Tea's `Spellcasting.cast_result` "rechecks the selected rank at
+/// launch": a buff begun at a target high enough for it, who is too low
+/// for it as the cast ends, fails LOWLEVEL with nothing spent (mangos's
+/// `CheckCast` again at `Spell::cast`).
+#[tokio::test]
+async fn a_buff_too_high_for_its_target_at_the_casts_end_fails_lowlevel() {
+    use crate::game::fields::UNIT_FIELD_POWER1;
+    let mut d = buff_world();
+    d.spells.cast_times.insert(14, 3_000);
+    d.spells
+        .spells
+        .get_mut(&HIGH_BUFF)
+        .unwrap()
+        .casting_time_index = 14;
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Mage).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let (_b, gb) = crate::game::tests_p3_entity::bob(&realm, ga).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let casting = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 60);
+        crate::game::map::spells::learn(m, ga, HIGH_BUFF);
+        crate::game::tests_p3_combat::level(m, gb, 30);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_POWER1, 500);
+        crate::game::map::spells::cast(
+            m,
+            ga,
+            HIGH_BUFF,
+            crate::game::map::spells::Targets {
+                unit: Some(gb),
+                ..Default::default()
+            },
+            None,
+        );
+        crate::game::tests_p3_combat::level(m, gb, 1);
+        let now = m.now;
+        m.caster_mut(ga)
+            .and_then(|c| c.casting.as_mut())
+            .map(|c| c.ends = now)
+            .is_some()
+    })
+    .await;
+    assert!(casting, "begun");
+    a.clear();
+    let result = a
+        .wait_frame("SMSG_CAST_RESULT", 0x130, |f| {
+            f[..4] == HIGH_BUFF.to_le_bytes()
+        })
+        .await;
+    assert_eq!(&result[4..], &[2, 0x2B], "LOWLEVEL");
+    let after = on(&map, move |m| {
+        (
+            m.players[&ga].fields.get_u32(UNIT_FIELD_POWER1),
+            m.players[&gb].auras.has_spell(HIGH_BUFF),
+        )
+    })
+    .await;
+    assert_eq!(after, (500, false), "nothing spent, nothing on");
+}
+
+/// Thistle Tea's `Training.valid_trainer?` "rejects dead players,
+/// inaccessible NPCs and wrong trainer classes": a trainer shows its list
+/// to none dead; not dead itself, unflagged, fighting or unselectable
+/// (mangos's `CanInteract`, `UNIT_FLAG_UNINTERACTIBLE`); a class trainer
+/// to its class alone (`IsTrainerOf`).
+#[tokio::test]
+async fn a_trainer_teaches_the_living_its_class_and_none_while_it_cant_be_reached() {
+    use crate::game::fields::{UNIT_FIELD_FLAGS, UNIT_NPC_FLAGS};
+    let mut d = data();
+    for (entry, class) in [(9_403, 0), (9_404, 8)] {
+        d.creature_templates.insert(
+            entry,
+            crate::game::data::CreatureTemplate {
+                faction: crate::game::tests_p3_combat::HUMANS,
+                npc_flags: crate::game::map::npc::NPC_FLAG_TRAINER,
+                trainer_class: class,
+                ..crate::game::tests_p3_combat::template(entry, 7)
+            },
+        );
+        d.npc.trainers.insert(
+            entry,
+            vec![crate::game::data::npc::TrainerSpell {
+                spell: 2_275,
+                cost: 10,
+                required_level: 1,
+                ..Default::default()
+            }],
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (trainer, mages) = on(&map, move |m| {
+        (
+            crate::game::tests_p3_combat::spawn(m, ga, 9_403, 20, 2.0),
+            crate::game::tests_p3_combat::spawn(m, ga, 9_404, 20, 2.0),
+        )
+    })
+    .await;
+    a.sees(trainer).await;
+    assert!(trains(&mut a, trainer).await, "a trainer for all");
+    assert!(!trains(&mut a, mages).await, "a mages' trainer");
+    on(&map, move |m| {
+        m.creature_mut(trainer)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, 0x0200_0000, true)
+    })
+    .await;
+    assert!(!trains(&mut a, trainer).await, "unselectable");
+    on(&map, move |m| {
+        let c = m.creature_mut(trainer).unwrap();
+        c.fields.set_flag(UNIT_FIELD_FLAGS, 0x0200_0000, false);
+        c.fields.set_u32(UNIT_NPC_FLAGS, 0);
+    })
+    .await;
+    assert!(!trains(&mut a, trainer).await, "unflagged");
+    on(&map, move |m| {
+        m.creature_mut(trainer)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_NPC_FLAGS, crate::game::map::npc::NPC_FLAG_TRAINER);
+        let brute = crate::game::tests_p3_combat::spawn(m, ga, BRUTE, 20, 4.0);
+        if let Some(c) = m.combat_mut(trainer) {
+            c.victim = brute;
+            c.attacking = true;
+        }
+    })
+    .await;
+    assert!(!trains(&mut a, trainer).await, "fighting");
+    on(&map, move |m| {
+        if let Some(c) = m.combat_mut(trainer) {
+            c.victim = Guid::zero();
+            c.attacking = false;
+        }
+        let later = m.now + Duration::from_secs(60);
+        m.creature_mut(trainer).unwrap().life = crate::game::map::creature::Life::Dead {
+            corpse_until: later,
+            respawn_at: later,
+        };
+    })
+    .await;
+    assert!(!trains(&mut a, trainer).await, "dead");
+    on(&map, move |m| {
+        m.creature_mut(trainer).unwrap().life = crate::game::map::creature::Life::Alive;
+    })
+    .await;
+    assert!(trains(&mut a, trainer).await, "back");
+    on(&map, move |m| crate::game::map::death::kill(m, ga)).await;
+    assert!(!trains(&mut a, trainer).await, "to the dead");
+}
+
+/// Thistle Tea's `HomeBind.complete` "rejects a delayed bind after the
+/// player dies or the innkeeper disappears": the dead are bound by no
+/// innkeeper, nor anyone by one not there (mangos's
+/// `HandleBinderActivateOpcode`, its bind a spell cast at once); the living
+/// at one are.
+#[tokio::test]
+async fn an_innkeeper_binds_the_living_and_none_when_gone() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let inn = on(&map, move |m| {
+        npc_beside(m, ga, crate::game::map::npc::NPC_FLAG_INNKEEPER, 2.0)
+    })
+    .await;
+    a.sees(inn).await;
+    let bound = async |a: &mut Client, npc: Guid| {
+        a.clear();
+        a.send(CMSG_BINDER_ACTIVATE { guid: npc }).await;
+        handled(a).await;
+        a.gets(NONE_WITHIN, |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_PLAYERBOUND(_)).then_some(())
+        })
+        .await
+        .is_some()
+    };
+    on(&map, move |m| crate::game::map::death::kill(m, ga)).await;
+    assert!(!bound(&mut a, inn).await, "the dead");
+    on(&map, move |m| {
+        crate::game::map::death::resurrect_with(m, ga, 100, 0);
+        m.remove_creature(inn);
+    })
+    .await;
+    assert!(!bound(&mut a, inn).await, "the innkeeper gone");
+    let inn = on(&map, move |m| {
+        npc_beside(m, ga, crate::game::map::npc::NPC_FLAG_INNKEEPER, 2.0)
+    })
+    .await;
+    a.sees(inn).await;
+    assert!(bound(&mut a, inn).await, "the living, at one");
+}
+
+/// The reclaim delay `a` is told within [`NONE_WITHIN`], in milliseconds.
+async fn reclaim_delay(a: &mut Client) -> Option<u32> {
+    tokio::time::timeout(
+        NONE_WITHIN,
+        a.wait_frame(
+            "SMSG_CORPSE_RECLAIM_DELAY",
+            crate::game::map::corpses::SMSG_CORPSE_RECLAIM_DELAY,
+            |_| true,
+        ),
+    )
+    .await
+    .ok()
+    .map(|b| u32::from_le_bytes(b[..4].try_into().unwrap()))
+}
+
+/// Thistle Tea's `Corpses.send_reclaim_delay` "projects remaining time on
+/// reconnect without restarting it": a ghost logging back in is told what
+/// is left of the wait since their release, not the wait anew; past it,
+/// nothing; and nothing to the living.
+#[tokio::test]
+async fn a_ghost_back_is_told_the_wait_left_and_none_past_it() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    on(&map, move |m| crate::game::map::death::kill(m, ga)).await;
+    // Released a moment after: a first death's thirty seconds.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    a.clear();
+    a.send(CMSG_REPOP_REQUEST {}).await;
+    let first = reclaim_delay(&mut a).await.expect("told the wait");
+    assert!(first > 29_000 && first <= 30_000, "{first}");
+    let relog = async |a: &mut Client, realm: &std::sync::Arc<crate::game::Realm>| {
+        a.send(CMSG_LOGOUT_REQUEST {}).await;
+        a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+        })
+        .await;
+        a.clear();
+        a.login(ga).await;
+        let _ = realm;
+    };
+    // Ten seconds on (the death and the release ten seconds back):
+    // twenty left.
+    let back = |by: i64| {
+        let realm = realm.clone();
+        async move {
+            let map = realm.registry.online(ga).unwrap().map();
+            on(&map, move |m| {
+                let state = &mut m.players.get_mut(&ga).unwrap().row.state;
+                state.released_at -= by;
+                state.reclaim_until -= by;
+            })
+            .await;
+        }
+    };
+    back(10_000).await;
+    relog(&mut a, &realm).await;
+    let left = reclaim_delay(&mut a).await.expect("told what is left");
+    assert!(left > 19_000 && left <= 20_000, "{left}");
+    back(25_000).await;
+    relog(&mut a, &realm).await;
+    assert_eq!(reclaim_delay(&mut a).await, None, "past it");
+    let map = realm.registry.online(ga).unwrap().map();
+    on(&map, move |m| {
+        crate::game::map::death::resurrect_with(m, ga, 100, 0)
+    })
+    .await;
+    relog(&mut a, &realm).await;
+    assert_eq!(reclaim_delay(&mut a).await, None, "the living");
+}
