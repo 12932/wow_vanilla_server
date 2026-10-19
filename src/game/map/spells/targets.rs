@@ -413,8 +413,23 @@ pub(crate) fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<
     }
 }
 
-/// A chain: the first target, then the nearest (or, for heals, the most
-/// hurt) within a jump of the last, up to the effect's count.
+/// How much health `g` is short of its maximum.
+fn missing_health(map: &Map, g: Guid) -> u32 {
+    map.unit_fields(g).map_or(0, |f| {
+        f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH)
+            .saturating_sub(f.get_u32(crate::game::fields::UNIT_FIELD_HEALTH))
+    })
+}
+
+/// A chain: the first target, then the next within a jump of the last,
+/// up to the effect's count, each once (Thistle Tea's `ChainTargets`,
+/// mangos's `SCHEME_CLOSEST_CHAIN` and `ChainHealingOrder`). A jump goes
+/// only to a living unit of a type the spell names, that the caster sees
+/// through any stealth, in sight of the last unless the spell ignores
+/// sight: for harm, an enemy an area may hit, the nearest; for a heal, a
+/// friend the caster may help who is hurt, the last one's group first,
+/// then the most hurt, then the nearest. A heal may come back to its
+/// caster.
 fn chain(
     map: &Map,
     caster: Guid,
@@ -427,6 +442,7 @@ fn chain(
     let count = m
         .apply(mods::OP_JUMP_TARGETS, s.effects[index].chain_target as f32)
         .max(1.0) as usize;
+    let ignores_sight = s.attr(2, crate::game::data::spells::ATTR_EX2_IGNORE_LOS);
     let mut out = vec![first];
     let mut last = first;
     while out.len() < count {
@@ -436,19 +452,28 @@ fn chain(
         let next = units_around(map, at, CHAIN_JUMP_YARDS, |g| {
             !out.contains(&g)
                 && alive(map, g)
+                && super::checks::unit_type_allowed(map, s, g)
                 && if heal {
-                    !combat::can_attack(map, caster, g) && !combat::hostile(map, caster, g)
+                    !combat::can_attack(map, caster, g)
+                        && !combat::hostile(map, caster, g)
+                        && combat::can_assist(map, caster, g)
+                        && missing_health(map, g) > 0
                 } else {
-                    g != caster && combat::can_attack(map, caster, g)
+                    g != caster && combat::can_attack_in_area(map, caster, g)
                 }
+                && super::stealth::sees(map, caster, g)
+                && (ignores_sight
+                    || map
+                        .position_of(g)
+                        .is_some_and(|p| super::checks::sight(map, at, p)))
         });
+        // Nearest first already; a heal's order over that.
         let pick = if heal {
-            next.into_iter().min_by_key(|g| {
-                map.unit_fields(*g).map_or(u32::MAX, |f| {
-                    let max = f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH).max(1);
-                    f.get_u32(crate::game::fields::UNIT_FIELD_HEALTH) * 1000 / max
-                })
-            })
+            let group = members(map, last, true);
+            next.into_iter()
+                .enumerate()
+                .min_by_key(|(i, g)| (!group.contains(g), u32::MAX - missing_health(map, *g), *i))
+                .map(|(_, g)| g)
         } else {
             next.into_iter().next()
         };

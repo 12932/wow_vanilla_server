@@ -1038,12 +1038,29 @@ fn resolve(
     m: &Mods,
 ) -> Vec<(Guid, [bool; 3])> {
     let mut out: Vec<(Guid, [bool; 3])> = Vec::new();
+    let mut chosen: Vec<(usize, Vec<Guid>)> = Vec::new();
     for index in 0..3 {
         // A persistent area ticks on its own; it lands on no one at the cast.
         if matches!(s.effects[index].effect, 0 | EFFECT_PERSISTENT_AREA_AURA) {
             continue;
         }
-        for g in targets::effect_targets(map, caster, s, index, t, m) {
+        // Effects aimed alike share one choice of their targets, so a
+        // limit picks the same few for each (mangos's `FillTargetMap`
+        // reusing an earlier effect's map, Thistle Tea's one capped
+        // selection).
+        let e = &s.effects[index];
+        let alike = chosen.iter().find(|(j, _)| {
+            let o = &s.effects[*j];
+            e.target_a != 0
+                && (o.target_a, o.target_b, o.radius_index, o.chain_target)
+                    == (e.target_a, e.target_b, e.radius_index, e.chain_target)
+        });
+        let these = match alike {
+            Some((_, v)) => v.clone(),
+            None => targets::effect_targets(map, caster, s, index, t, m),
+        };
+        chosen.push((index, these.clone()));
+        for g in these {
             match out.iter_mut().find(|(x, _)| *x == g) {
                 Some((_, e)) => e[index] = true,
                 None => {
