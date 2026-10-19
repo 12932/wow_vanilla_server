@@ -1021,7 +1021,11 @@ pub fn unstable(map: &mut Map, player: Guid, npc: Guid, number: u32) {
     if pets.current.is_some() {
         return stable_result(map, player, StableResult::ErrStable);
     }
-    let Some(i) = pets.stable.iter().position(|(_, r)| r.number == number) else {
+    // One that can't come out (its creature not in the world's data)
+    // stays in, as mangos's `HandleUnstablePet` checks the template first.
+    let Some(i) = pets.stable.iter().position(|(_, r)| {
+        r.number == number && map.realm.data.creature_template(r.entry).is_some()
+    }) else {
         return stable_result(map, player, StableResult::ErrStable);
     };
     let (_, r) = pets.stable.remove(i);
@@ -1047,7 +1051,12 @@ pub fn swap(map: &mut Map, player: Guid, npc: Guid, number: u32) {
         return;
     };
     let pets = &mut p.row.state.pets;
-    let Some(i) = pets.stable.iter().position(|(_, r)| r.number == number) else {
+    // Nothing moves for one that can't come out (its creature not in the
+    // world's data), as mangos's `HandleStableSwapPet` checks the template
+    // before the pet out goes in.
+    let Some(i) = pets.stable.iter().position(|(_, r)| {
+        r.number == number && map.realm.data.creature_template(r.entry).is_some()
+    }) else {
         return stable_result(map, player, StableResult::ErrStable);
     };
     let Some(current) = pets
