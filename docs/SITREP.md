@@ -42,8 +42,6 @@ Until you answer, wvs keeps what the line says.
 
 **Combat and creatures**
 - **#28 A charm's end:** should it interrupt the freed creature's cast (Thistle Tea), or let it go on (mangos, wvs)?
-- **#42 Interrupts:** should one lock out the school on a creature immune to silence? mangos does, Thistle Tea doesn't.
-- **#43 Fears:** should a fear without the damage-break flag break by chance, as in mangos?
 - **#9 Battleground creatures:** give them back a home guard of 60 yards?
 - **#16 Eranikus:** is evading when he can't reach Remulos right?
 - **#31 A creature-owned totem:** does it outlive its owner (Thistle Tea), or go with it (mangos, wvs)?
@@ -56,10 +54,7 @@ Until you answer, wvs keeps what the line says.
 
 **Spells, auras and talents**
 - **#37 Lower spell ranks:** should lower ranks of rage and energy spells leave the spellbook, as in mangos?
-- **#30 Attack-speed slows:** keep them one at a time (Thistle Tea), or multiply them (mangos-classic)?
 - **#29 Talent reset cost:** fall back to 1 gold after a month (Thistle Tea), or stay at 5 (mangos, wvs)?
-- **#41 Stealth and Vanish:** should cancelling Stealth while Vanish is on remove both?
-- **#46 Fade:** when it ends, give back only what it took (mangos), or its whole amount (Thistle Tea, wvs)?
 - **#48 Druid form attack power:** which is 1.12's? Thistle Tea, mangos and wvs all differ.
 - **#8 Failed openings:** hold back `SMSG_SPELL_GO` for one, as Thistle Tea does?
 - **#57 A passive party aura on its caster** (from 5d): shown on the caster too, as mangos-classic's
@@ -77,15 +72,11 @@ Until you answer, wvs keeps what the line says.
 **Quests, items and the world**
 - **#56 Unlearning a profession** (from 4d): should it drop that profession's quests, as Thistle Tea does? mangos and
   wvs don't.
-- **#21 The grey quest "!":** show it up to 4 levels below (wvs), 7 (mangos), or at any gap (Thistle Tea)?
 - **#23 An untapped creature's soul shard:** give one, as mangos does, or none, as Thistle Tea?
-- **#35 A second login:** kick the first session (wvs), hand over the character (mangos), or refuse (Thistle Tea)?
 - **#36 The Warsong flag:** may a mounted player pick it up? wvs refuses, as Thistle Tea does.
-- **#47 Quest-log slots:** visible to everyone (wvs), the group (mangos), or no one (Thistle Tea)?
 - **#52 `.honor week`:** it loses the rest of the week's honor. When should the week re-rank?
 - **#6 Water:** keep breaking what water breaks by the terrain's liquid too (mangos), or by the swim flag alone
   (Thistle Tea)?
-- **#7 Locked doors and buttons used by hand:** refuse them without the key, as Thistle Tea does?
 - **#12 Gates of Ahn'Qiraj:** add zone 3478 to the Cenarion Favor's zones, as mangos does?
 - **#14 A timed summon of despawn type 0:** wait out its fight (vmangos, wvs), or go at its time (Thistle Tea)?
 - **#15 Script teleport with a player source:** teleport them (vmangos, wvs), or do nothing (Thistle Tea)?
@@ -119,6 +110,11 @@ Until you answer, wvs keeps what the line says.
   wvs's `.gear` drive it (DECISIONS 66).
 - **2026-10-19, dependencies:** every crate at its newest release, and `rayon`, `pprof`, `dotenvy`, the regex log
   filter and two unused features gone (DECISIONS 64). **Tracy now needs viewer v0.14.1.** No `.env` is read.
+- **2026-10-19, second batch, to do:** #35 a second login takes over the character, as mangos hands it over;
+  #43 a fear without the damage-break flag breaks by chance, as mangos; #42 an interrupt locks out the school on a
+  creature immune to silence; #30 attack-speed slows multiply; #46 Fade gives back only what it took; #41 cancelling
+  Stealth with Vanish on removes both; #47 quest-log slots are seen by the group; #21 the grey "!" shows to 7 levels
+  below (a setting); #7 locked doors and buttons don't open by hand without their key.
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 
