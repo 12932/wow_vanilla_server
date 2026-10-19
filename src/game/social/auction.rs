@@ -566,6 +566,10 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     );
 }
 
+/// Inventory types: a chest, and a robe (a chest's).
+const INVTYPE_CHEST: u32 = 5;
+const INVTYPE_ROBE: u32 = 20;
+
 /// `CMSG_AUCTION_LIST_ITEMS`: a page of the market's auctions by name,
 /// level, slot, class, subclass and quality.
 pub fn list(map: &Map, g: Guid, m: &CMSG_AUCTION_LIST_ITEMS) {
@@ -603,7 +607,11 @@ pub fn list(map: &Map, g: Guid, m: &CMSG_AUCTION_LIST_ITEMS) {
                 && (m.usable == 0 || usable_by(me, &realm.data, t))
                 && (m.minimum_level == 0 || t.required_level >= u32::from(m.minimum_level))
                 && (m.maximum_level == 0 || t.required_level <= u32::from(m.maximum_level))
-                && (m.auction_slot_id == u32::MAX || t.inventory_type == m.auction_slot_id)
+                && (m.auction_slot_id == u32::MAX
+                    || t.inventory_type == m.auction_slot_id
+                    // The chest's slot finds the robes too (mangos's
+                    // `BuildListAuctionItems`, Thistle Tea's `Query`).
+                    || (m.auction_slot_id == INVTYPE_CHEST && t.inventory_type == INVTYPE_ROBE))
                 && (m.auction_main_category == u32::MAX || t.class == m.auction_main_category)
                 && (m.auction_sub_category == u32::MAX || t.subclass == m.auction_sub_category)
                 && t.quality >= m.auction_quality.as_int() as u32

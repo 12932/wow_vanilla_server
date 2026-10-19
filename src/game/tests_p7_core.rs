@@ -262,9 +262,10 @@ async fn feign_death_cast_again_keeps_the_pose_and_its_end_lets_them_up() {
 
 /// Thistle Tea's `SpellSkills.learn/2` "preserves earned progress and
 /// stable slots when learning ranks in any order": Expert Mining (step 3)
-/// learned over Apprentice keeps the sixty points earned and the slot, to
-/// a cap of 225; Apprentice learned after (a login reads the spells back
-/// in any order) changes nothing; nor is Enchanting touched.
+/// known over Apprentice keeps the sixty points earned and the slot, to a
+/// cap of 225; Apprentice known after (a login reads the spells back in
+/// any order) changes nothing; nor is Enchanting touched. (A teaching
+/// spell's step, cast, is set as it is: `tests_p6_spell_effects`.)
 #[tokio::test]
 async fn a_professions_ranks_in_any_order_keep_its_progress_slot_and_highest_cap() {
     use crate::game::fields::PLAYER_SKILL_INFO_1_1;
@@ -289,9 +290,9 @@ async fn a_professions_ranks_in_any_order_keep_its_progress_slot_and_highest_cap
         skills::learn_skill(p, MINING, 1);
         skills::set_value(p, MINING, 60);
         let (enchanting, before) = (state(p, ENCHANTING), state(p, MINING));
-        skills::learn_skill(p, MINING, 3);
+        skills::learn_rank(p, MINING, 3);
         let expert = state(p, MINING);
-        skills::learn_skill(p, MINING, 1);
+        skills::learn_rank(p, MINING, 1);
         (
             enchanting,
             before,

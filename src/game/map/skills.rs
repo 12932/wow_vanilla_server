@@ -100,12 +100,6 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
     if skill == 0 {
         return;
     }
-    // A lower rank learned after a higher one (the spells read back at a
-    // login, in whatever order) leaves the higher one's step (Thistle
-    // Tea's `SpellSkills.learn`).
-    let step = slot_of(p, skill).map_or(step, |i| {
-        step.max(p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) >> 16)
-    });
     let max = cap(p, skill, step);
     let (slot, value) = match slot_of(p, skill) {
         Some(i) => (i, value(p, skill).unwrap_or(1)),
@@ -293,7 +287,20 @@ pub fn learn_from_spell(p: &mut Player, data: &GameData, spell: u32) {
         .filter(|e| e.effect == crate::game::map::spells::EFFECT_SKILL)
     {
         let points = e.base_points + e.base_dice.max(1);
-        learn_skill(p, e.misc_value.max(0) as u32, points.max(1) as u32);
+        learn_rank(p, e.misc_value.max(0) as u32, points.max(1) as u32);
+    }
+}
+
+/// A rank known: its skill at its step, unless a higher rank known already
+/// gave a higher one. A login reads the spells back in any order, and a
+/// lower rank after a higher one changes nothing (Thistle Tea's
+/// `SpellSkills.learn`); a teaching spell's step, cast, is set as it is
+/// (`learn_skill`, mangos's `SetSkillStep`).
+pub fn learn_rank(p: &mut Player, skill: u32, step: u32) {
+    let had =
+        slot_of(p, skill).map_or(0, |i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) >> 16);
+    if had < step {
+        learn_skill(p, skill, step);
     }
 }
 
