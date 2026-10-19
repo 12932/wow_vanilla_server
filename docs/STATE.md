@@ -29,8 +29,8 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 - **Boats and zeppelins:** each sails its vmangos keyframes on the server's clock. At a crossing it goes to the
   other map first; then each passenger follows it (`SMSG_TRANSFER_PENDING` with the ship, `SMSG_NEW_WORLD` with
   their place on deck, as mangos's `TeleportTo`), and gets the ship's create before their own, aboard. A
-  passenger's movement on the wire is 1.12's (flag `0x0200_0000`, the ship's whole GUID, no timestamp), which
-  wow_messages's isn't (`0x200`, a packed GUID): `movement_wire` translates at the edges.
+  passenger's movement on the wire is 1.12's (flag `0x0200_0000`, the ship's whole GUID, no timestamp), as the
+  wow_messages fork's vanilla `MovementInfo` and `MovementBlock` read and write it.
 
 ## Running it
 - **Data:** `cargo run --release --bin wvs-setup` builds the navmesh and terrain from a 1.12.1 client. The databases

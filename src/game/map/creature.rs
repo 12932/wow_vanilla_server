@@ -726,7 +726,7 @@ impl Creature {
                 position,
                 orientation,
                 pitch: 0.0,
-                fall_time: 0.0,
+                fall_time: 0,
                 speeds: self.speeds,
                 spline,
                 transport: None,

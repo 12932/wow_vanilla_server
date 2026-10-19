@@ -188,7 +188,7 @@ fn moved(flags: MovementInfo_MovementFlags, at: Vector3d, orientation: f32) -> M
         timestamp: 0,
         position: at,
         orientation,
-        fall_time: 0.0,
+        fall_time: 0,
     }
 }
 

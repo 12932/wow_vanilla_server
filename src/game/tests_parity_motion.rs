@@ -1564,7 +1564,7 @@ async fn stuck_goes_back_to_where_one_last_stood() {
             timestamp: 0,
             position: leapt,
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     })
     .await;

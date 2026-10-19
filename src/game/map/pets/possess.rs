@@ -242,13 +242,13 @@ pub fn moved(
             return true;
         };
         let (anchor, old_cell) = (v.vis_anchor, v.cell);
-        v.movement = info.clone();
+        v.movement = *info;
         let new_cell = crate::game::map::grid::cell_of(info.position.x, info.position.y);
         v.cell = new_cell;
         v.move_check = Some((info.position, map.now));
         map.grid.relocate(unit, old_cell, new_cell);
         crate::game::map::visibility::moved(map, unit, anchor, info.position);
-        if let Some(frame) = relay(unit, info.clone()) {
+        if let Some(frame) = relay(unit, *info) {
             // Its own client sees it walk too.
             map.send_to_observers(unit, &frame, true);
         }
@@ -265,7 +265,7 @@ pub fn moved(
     c.cell = new_cell;
     map.grid.relocate(unit, old_cell, new_cell);
     crate::game::map::visibility::moved(map, unit, anchor, info.position);
-    if let Some(frame) = relay(unit, info.clone()) {
+    if let Some(frame) = relay(unit, *info) {
         map.send_to_observers(unit, &frame, false);
     }
     true

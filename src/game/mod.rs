@@ -14,7 +14,6 @@ pub mod instances;
 pub mod invasion;
 pub mod jaina;
 pub mod map;
-pub mod movement_wire;
 pub mod omen;
 pub mod registry;
 pub mod session;

@@ -329,7 +329,7 @@ fn here() -> MovementInfo {
             z: START.2,
         },
         orientation: 0.0,
-        fall_time: 0.0,
+        fall_time: 0,
     }
 }
 

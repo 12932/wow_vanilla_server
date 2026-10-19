@@ -751,7 +751,7 @@ fn moving(flags: MovementInfo_MovementFlags, x: f32, y: f32, z: f32) -> Movement
         timestamp: 0,
         position: Vector3d { x, y, z },
         orientation: 0.0,
-        fall_time: 0.0,
+        fall_time: 0,
     }
 }
 

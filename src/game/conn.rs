@@ -388,8 +388,6 @@ async fn read_packet<R: AsyncRead + Unpin + Send>(
     if RAW_OPCODES.contains(&header.opcode) {
         return Ok(Some(Inbound::Raw(header.opcode as u16, body)));
     }
-    // A movement aboard, as 1.12 lays it out, in wow_messages's.
-    crate::game::movement_wire::from_client(header.opcode, &mut body);
     let size = body.len();
     let mut plain = Vec::with_capacity(6 + size);
     plain.extend_from_slice(&((size + 4) as u16).to_be_bytes());

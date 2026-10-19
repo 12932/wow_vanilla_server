@@ -321,7 +321,7 @@ impl Player {
             timestamp: 0,
             position,
             orientation: row.orientation,
-            fall_time: 0.0,
+            fall_time: 0,
         };
         let items = row
             .items
@@ -593,7 +593,7 @@ impl Player {
                 .get_swimming()
                 .map(|s| s.pitch)
                 .unwrap_or(0.0),
-            fall_time: 0.0,
+            fall_time: 0,
             speeds: self.speeds,
             spline: None,
             transport: self.movement.flags.get_on_transport().map(|t| {

@@ -583,7 +583,7 @@ async fn where_things_stand() {
                 check(m, 60, Some(me), Some(rat)),
             );
             let p = m.players.get_mut(&me).unwrap();
-            p.movement.flags = p.movement.flags.clone().set_backward();
+            p.movement.flags = p.movement.flags.set_backward();
             let moving = check(m, 62, None, Some(me));
             (
                 area,

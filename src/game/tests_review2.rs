@@ -165,14 +165,13 @@ fn aboard(position: Vector3d, offset: Vector3d) -> MSG_MOVE_HEARTBEAT_Client {
                         ),
                         position: offset,
                         orientation: 0.0,
-                        timestamp: 0,
                     },
                 },
             ),
             timestamp: 0,
             position,
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     }
 }
@@ -261,6 +260,39 @@ async fn the_first_move_after_logging_in_is_checked() {
     assert!((back.x - at.x).abs() < 0.01, "to where she was: {back:?}");
     let now = on(&map, move |m| m.players[&g].position()).await;
     assert!((now.x - at.x).abs() < 0.01, "and there: {now:?}");
+}
+
+/// A passenger is carried by the ship, not by their legs: a move on deck
+/// isn't checked for speed, however far the world place goes between two
+/// heartbeats (ashore, the same move is pulled back, as above).
+#[tokio::test]
+async fn a_move_on_deck_is_not_pulled_back_for_speed() {
+    let realm = realm(GameData::empty(), false, Duration::from_secs(600));
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = map_of(&realm, g);
+    let at = on(&map, move |m| m.players[&g].position()).await;
+    let deck = Vector3d {
+        x: 2.0,
+        y: -1.0,
+        z: 3.0,
+    };
+    a.send(aboard(at, deck)).await;
+    let far = Vector3d {
+        x: at.x + 500.0,
+        ..at
+    };
+    a.clear();
+    a.send(aboard(far, deck)).await;
+    let back = a
+        .gets(Duration::from_secs(1), |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.position),
+            _ => None,
+        })
+        .await;
+    assert_eq!(back, None, "not pulled back on deck");
+    let now = on(&map, move |m| m.players[&g].position()).await;
+    assert!((now.x - far.x).abs() < 0.01, "carried: {now:?}");
 }
 
 /// A ban too long to count to is for good, where its end wrapped into the

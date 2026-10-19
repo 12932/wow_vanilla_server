@@ -30,7 +30,7 @@ fn info(flags: MovementInfo_MovementFlags, z: f32, fall_ms: u32) -> MovementInfo
             z,
         },
         orientation: 0.0,
-        fall_time: f32::from_bits(fall_ms),
+        fall_time: fall_ms,
     }
 }
 

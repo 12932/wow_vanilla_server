@@ -9,10 +9,9 @@ use std::io::Write;
 use std::sync::Arc;
 
 use wow_world_messages::Guid;
-use wow_world_messages::vanilla::Vector3d;
+use wow_world_messages::vanilla::{MovementFlags, Vector3d};
 
 use crate::game::fields::{Fields, TypeId, Visibility};
-use crate::game::movement_wire;
 
 pub const SMSG_UPDATE_OBJECT: u16 = 0x0A9;
 pub const SMSG_COMPRESSED_UPDATE_OBJECT: u16 = 0x1F6;
@@ -33,13 +32,13 @@ pub const UPDATEFLAG_LIVING: u8 = 0x20;
 pub const UPDATEFLAG_HAS_POSITION: u8 = 0x40;
 
 // Movement flags that change what a living block carries.
-pub const MOVEFLAG_FORWARD: u32 = 0x0000_0001;
-pub const MOVEFLAG_WALK_MODE: u32 = 0x0000_0100;
-pub const MOVEFLAG_ON_TRANSPORT: u32 = 0x0000_0200;
-pub const MOVEFLAG_JUMPING: u32 = 0x0000_2000;
-pub const MOVEFLAG_SWIMMING: u32 = 0x0020_0000;
-pub const MOVEFLAG_SPLINE_ENABLED: u32 = 0x0040_0000;
-pub const MOVEFLAG_SPLINE_ELEVATION: u32 = 0x0400_0000;
+pub const MOVEFLAG_FORWARD: u32 = MovementFlags::FORWARD;
+pub const MOVEFLAG_WALK_MODE: u32 = MovementFlags::WALK_MODE;
+pub const MOVEFLAG_ON_TRANSPORT: u32 = MovementFlags::ON_TRANSPORT;
+pub const MOVEFLAG_JUMPING: u32 = MovementFlags::JUMPING;
+pub const MOVEFLAG_SWIMMING: u32 = MovementFlags::SWIMMING;
+pub const MOVEFLAG_SPLINE_ENABLED: u32 = MovementFlags::SPLINE_ENABLED;
+pub const MOVEFLAG_SPLINE_ELEVATION: u32 = MovementFlags::SPLINE_ELEVATION;
 
 /// Run, walk, swim and turn speeds, in the order a living block carries
 /// them.
@@ -96,7 +95,7 @@ pub enum Placement {
         position: Vector3d,
         orientation: f32,
         pitch: f32,
-        fall_time: f32,
+        fall_time: u32,
         speeds: Speeds,
         spline: Option<SplineState>,
         transport: Option<Aboard>,
@@ -220,12 +219,11 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
             transport,
         } => {
             // A create carries a stable state: no jump or spline elevation;
-            // a spline only if there is one to send; a transport as 1.12
-            // lays it out (`movement_wire`): its flag, its whole GUID and
-            // the place and facing on deck (mangos's `MovementInfo::Write`).
+            // a spline only if there is one to send; a transport if aboard,
+            // its whole GUID and the place and facing on deck (mangos's
+            // `MovementInfo::Write`, wow_messages's `MovementBlock`).
             let mut move_flags = *flags
                 & !(MOVEFLAG_ON_TRANSPORT
-                    | movement_wire::ON_TRANSPORT
                     | MOVEFLAG_JUMPING
                     | MOVEFLAG_SPLINE_ELEVATION
                     | MOVEFLAG_SPLINE_ENABLED);
@@ -233,7 +231,7 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                 move_flags |= MOVEFLAG_SPLINE_ENABLED;
             }
             if transport.is_some() {
-                move_flags |= movement_wire::ON_TRANSPORT;
+                move_flags |= MOVEFLAG_ON_TRANSPORT;
             }
             out.extend_from_slice(&move_flags.to_le_bytes());
             out.extend_from_slice(&timestamp.to_le_bytes());
@@ -570,168 +568,6 @@ fn frame_update(payload: &[u8]) -> Arc<[u8]> {
     }
 }
 
-/// An update frame whose creates or movements have a unit aboard, as 1.12
-/// lays it out (`movement_wire`), with them as wow_messages lays them out,
-/// for the tests' clients to read; `None` for any other frame.
-#[cfg(test)]
-pub fn to_wow_messages(frame: &[u8]) -> Option<Arc<[u8]>> {
-    use std::io::Read;
-    let opcode = u16::from_le_bytes([*frame.get(2)?, *frame.get(3)?]);
-    let body = frame.get(4..)?;
-    let payload = match opcode {
-        SMSG_UPDATE_OBJECT => body.to_vec(),
-        SMSG_COMPRESSED_UPDATE_OBJECT => {
-            let mut out = Vec::new();
-            flate2::read::ZlibDecoder::new(body.get(4..)?)
-                .read_to_end(&mut out)
-                .ok()?;
-            out
-        }
-        _ => return None,
-    };
-    walk::aboard_to_wow_messages(&payload).map(|p| frame_update(&p))
-}
-
-/// Walking an update's blocks, as wvs writes them.
-#[cfg(test)]
-mod walk {
-    use super::*;
-
-    fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-        Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
-    }
-
-    fn guid_len(b: &[u8], at: usize) -> Option<usize> {
-        movement_wire::packed_guid_at(b, at).map(|(_, n)| n)
-    }
-
-    fn fields_len(b: &[u8], at: usize) -> Option<usize> {
-        let n = usize::from(*b.get(at)?);
-        let mut set = 0;
-        for i in 0..n {
-            set += u32_at(b, at + 1 + i * 4)?.count_ones() as usize;
-        }
-        Some(1 + n * 4 + set * 4)
-    }
-
-    /// A movement block's length, 1.12's layout.
-    fn movement_len(b: &[u8], at: usize) -> Option<usize> {
-        let flags = *b.get(at)?;
-        let mut p = at + 1;
-        if flags & UPDATEFLAG_LIVING != 0 {
-            let mf = u32_at(b, p)?;
-            p += 24;
-            if mf & movement_wire::ON_TRANSPORT != 0 {
-                p += 24;
-            }
-            if mf & MOVEFLAG_SWIMMING != 0 {
-                p += 4;
-            }
-            p += 4;
-            if mf & MOVEFLAG_JUMPING != 0 {
-                p += 16;
-            }
-            if mf & MOVEFLAG_SPLINE_ELEVATION != 0 {
-                p += 4;
-            }
-            p += 24;
-            if mf & MOVEFLAG_SPLINE_ENABLED != 0 {
-                let sf = u32_at(b, p)?;
-                p += 4;
-                p += if sf & 0x0004_0000 != 0 {
-                    4
-                } else if sf & 0x0002_0000 != 0 {
-                    8
-                } else if sf & 0x0001_0000 != 0 {
-                    12
-                } else {
-                    0
-                };
-                p += 12;
-                let n = u32_at(b, p)? as usize;
-                p += 4 + n * 12 + 12;
-            }
-        } else if flags & UPDATEFLAG_HAS_POSITION != 0 {
-            p += 16;
-        }
-        if flags & UPDATEFLAG_HIGHGUID != 0 {
-            p += 4;
-        }
-        if flags & UPDATEFLAG_ALL != 0 {
-            p += 4;
-        }
-        if flags & UPDATEFLAG_MELEE_ATTACKING != 0 {
-            p += guid_len(b, p)?;
-        }
-        if flags & UPDATEFLAG_TRANSPORT != 0 {
-            p += 4;
-        }
-        (p <= b.len()).then_some(p - at)
-    }
-
-    /// The payload with each living movement aboard in wow_messages's
-    /// layout; `None` if none is.
-    pub fn aboard_to_wow_messages(payload: &[u8]) -> Option<Vec<u8>> {
-        let count = u32_at(payload, 0)?;
-        let mut out = payload.get(..5)?.to_vec();
-        let mut at = 5;
-        let mut changed = false;
-        let mut movement = |out: &mut Vec<u8>, at: &mut usize| -> Option<()> {
-            let n = movement_len(payload, *at)?;
-            let block = &payload[*at..*at + n];
-            let living = block[0] & UPDATEFLAG_LIVING != 0;
-            match living
-                .then(|| movement_wire::movement_from_client(block, 1, false))
-                .flatten()
-            {
-                Some(b) => {
-                    out.extend_from_slice(&b);
-                    changed = true;
-                }
-                None => out.extend_from_slice(block),
-            }
-            *at += n;
-            Some(())
-        };
-        for _ in 0..count {
-            let kind = *payload.get(at)?;
-            let start = at;
-            at += 1;
-            match kind {
-                UPDATETYPE_VALUES => {
-                    at += guid_len(payload, at)?;
-                    at += fields_len(payload, at)?;
-                    out.extend_from_slice(payload.get(start..at)?);
-                }
-                UPDATETYPE_MOVEMENT => {
-                    at += guid_len(payload, at)?;
-                    out.extend_from_slice(payload.get(start..at)?);
-                    movement(&mut out, &mut at)?;
-                }
-                UPDATETYPE_CREATE_OBJECT | UPDATETYPE_CREATE_OBJECT2 => {
-                    at += guid_len(payload, at)? + 1;
-                    out.extend_from_slice(payload.get(start..at)?);
-                    movement(&mut out, &mut at)?;
-                    let n = fields_len(payload, at)?;
-                    out.extend_from_slice(payload.get(at..at + n)?);
-                    at += n;
-                }
-                UPDATETYPE_OUT_OF_RANGE_OBJECTS | 5 => {
-                    let n = u32_at(payload, at)?;
-                    at += 4;
-                    for _ in 0..n {
-                        at += guid_len(payload, at)?;
-                    }
-                    out.extend_from_slice(payload.get(start..at)?);
-                }
-                _ => return None,
-            }
-        }
-        out.extend_from_slice(payload.get(at..)?);
-        changed.then_some(out)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,7 +640,7 @@ mod tests {
                     position: v(-13718.63, 253.03, 29.67),
                     orientation: 1.38,
                     pitch: 0.0,
-                    fall_time: 0.0,
+                    fall_time: 0,
                     speeds: Speeds::default(),
                     spline: Some(spline),
                     transport: None,
@@ -846,7 +682,7 @@ mod tests {
                     },
                     orientation: 0.5,
                     pitch: 0.0,
-                    fall_time: 0.0,
+                    fall_time: 0,
                     speeds: Speeds::default(),
                     spline: None,
                     transport: None,
@@ -963,7 +799,7 @@ mod tests {
                     },
                     orientation: 0.0,
                     pitch: 0.25,
-                    fall_time: 0.0,
+                    fall_time: 0,
                     speeds: Speeds::default(),
                     spline: None,
                     transport: None,

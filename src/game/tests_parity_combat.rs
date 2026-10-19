@@ -465,7 +465,7 @@ fn movement(x: f32, orientation: f32, forward: bool) -> MovementInfo {
             z: START.2,
         },
         orientation,
-        fall_time: 0.0,
+        fall_time: 0,
     }
 }
 

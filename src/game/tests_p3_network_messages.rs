@@ -923,7 +923,7 @@ async fn a_knockback_is_laid_out_as_1_12_has_it() {
             timestamp: 0,
             position: at,
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     })
     .await;
@@ -959,7 +959,7 @@ async fn root_acknowledgements_move_the_player_and_tell_who_sees_them() {
         timestamp: 0,
         position: there,
         orientation: 0.0,
-        fall_time: 0.0,
+        fall_time: 0,
     };
     b.clear();
     let root = || CMSG_FORCE_MOVE_ROOT_ACK {

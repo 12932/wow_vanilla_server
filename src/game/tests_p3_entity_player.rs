@@ -166,7 +166,7 @@ fn falling(z: f32, far: bool) -> MSG_MOVE_HEARTBEAT_Client {
                 z,
             },
             orientation: 0.0,
-            fall_time: f32::from_bits(5_000),
+            fall_time: 5_000,
         },
     }
 }
@@ -245,7 +245,6 @@ async fn a_teleport_ends_a_fall_a_cast_and_a_ride() {
                         z: 3.0,
                     },
                     orientation: 0.25,
-                    timestamp: 0,
                 },
             },
         );
@@ -543,7 +542,6 @@ async fn a_dead_passenger_rises_as_the_ship_crosses() {
                             z: 0.0,
                         },
                         orientation: 0.0,
-                        timestamp: 0,
                     },
                 },
             ),
@@ -554,7 +552,7 @@ async fn a_dead_passenger_rises_as_the_ship_crosses() {
                 z: START.2,
             },
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     })
     .await;
@@ -619,7 +617,6 @@ async fn a_ship_is_known_on_its_map_and_carries_only_who_is_aboard() {
                                 z: 0.0,
                             },
                             orientation: 0.0,
-                            timestamp: 0,
                         },
                     },
                 )
@@ -633,7 +630,7 @@ async fn a_ship_is_known_on_its_map_and_carries_only_who_is_aboard() {
                 z: START.2,
             },
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     };
     a.sees(boat).await;
