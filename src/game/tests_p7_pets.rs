@@ -467,3 +467,89 @@ async fn a_masters_death_lets_a_charm_go_and_putting_a_pet_away_ends_its_eyes() 
     assert_eq!(eyes, (Guid::zero(), None, Guid::zero()), "her own eyes");
     assert!(!still, "no longer possessed");
 }
+
+/// Thistle Tea's `PetLearning.resolve` "uses the reference ten winning
+/// outcomes out of 101": a roll of 0 to 100 teaches below 10 (mangos's
+/// `Pet::CheckLearning`, `urand(0, 100) < 10`).
+#[test]
+fn ten_rolls_in_101_teach() {
+    use crate::game::map::pets::testing::teaches;
+    assert!(teaches(0) && teaches(9));
+    assert!(!teaches(10) && !teaches(100));
+    assert_eq!((0..=100).filter(|r| teaches(*r)).count(), 10);
+}
+
+/// Thistle Tea's `PetLearning.used` "only a living, owned hunter pet can
+/// request discovery": with the rolls on, a hunter's pet using Gore
+/// teaches her to teach it within some hundreds of uses, but not dead, nor
+/// with a passive; a warlock's imp's Firebolt teaches her nothing; and
+/// with the rolls fixed (certainty only), no use teaches.
+#[tokio::test]
+async fn only_a_living_hunters_pet_teaches_its_master_by_chance() {
+    const TEACH_FIREBOLT: u32 = 990_703;
+    const PASSIVE: u32 = 990_704;
+    const TEACH_PASSIVE: u32 = 990_705;
+    let mut d = revive_data();
+    let none = SpellEffect::default();
+    for id in [TEACH_FIREBOLT, TEACH_PASSIVE] {
+        d.spells
+            .spells
+            .insert(id, tests_pets::spell(id, "Teaching", [none, none, none]));
+    }
+    let mut passive = tests_pets::spell(PASSIVE, "Passive", [none, none, none]);
+    passive.attributes[0] = 0x40;
+    d.spells.spells.insert(PASSIVE, passive);
+    d.pets.teaching.insert(tests_pets::FIREBOLT, TEACH_FIREBOLT);
+    d.pets.teaching.insert(PASSIVE, TEACH_PASSIVE);
+    let (realm, mut h, gh, map, pet, _wolf) = tamed_with(d).await;
+    h.sees(pet).await;
+    let uses = move |m: &mut crate::game::map::Map, g: Guid, spell: u32, owner: Guid, teaching| {
+        let t = m.realm.data.spells.get(spell).cloned().unwrap();
+        for _ in 0..500 {
+            pets::before_effects(m, g, &t, &Default::default());
+            if m.players[&owner].spells.contains(&teaching) {
+                return true;
+            }
+        }
+        false
+    };
+    let gore = tests_pets::GORE;
+    let train = tests_pets::TRAIN_GORE;
+    let (fixed, passive, alive) = map
+        .query(move |m| {
+            let fixed = uses(m, pet, gore, gh, train);
+            m.spells.rolls = Some(true);
+            let passive = uses(m, pet, PASSIVE, gh, TEACH_PASSIVE);
+            (fixed, passive, uses(m, pet, gore, gh, train))
+        })
+        .await
+        .unwrap();
+    assert!(!fixed, "the rolls fixed, nothing taught");
+    assert!(!passive, "a passive teaches nothing");
+    assert!(alive, "Gore taught");
+    let dead = map
+        .query(move |m| {
+            m.players
+                .get_mut(&gh)
+                .unwrap()
+                .spells
+                .retain(|s| *s != train);
+            crate::game::map::combat::kill(m, gh, pet);
+            uses(m, pet, gore, gh, train)
+        })
+        .await
+        .unwrap();
+    assert!(!dead, "dead, it teaches nothing");
+    let (mut w, gw, wmap) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&wmap, gw, &[SUMMON_IMP]);
+    cast(&w, SUMMON_IMP, None).await;
+    let imp = pet_bar(&mut w).await;
+    let demon = wmap
+        .query(move |m| {
+            m.spells.rolls = Some(true);
+            uses(m, imp, tests_pets::FIREBOLT, gw, TEACH_FIREBOLT)
+        })
+        .await
+        .unwrap();
+    assert!(!demon, "an imp teaches nothing");
+}

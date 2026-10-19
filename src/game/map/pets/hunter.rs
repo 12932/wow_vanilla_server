@@ -730,20 +730,43 @@ fn same_ability(data: &GameData, a: u32, b: u32) -> bool {
         || matches!((data.spells.get(a), data.spells.get(b)), (Some(x), Some(y)) if x.name == y.name)
 }
 
-/// A hunter's pet used `spell`: its master learns to teach it to a pet.
+/// Whether a pet's use of an ability teaches its master, on a roll of
+/// 0 to 100: ten of the 101 do (mangos's `Pet::CheckLearning`,
+/// `urand(0, 100) < 10`; Thistle Tea's `PetLearning`).
+pub fn teaches(roll: u32) -> bool {
+    roll < 10
+}
+
+/// A hunter's living pet used `spell`: by [`teaches`]' chance, its master
+/// learns to teach it to a pet. With the rolls fixed (the tests), it
+/// doesn't.
 pub fn used(map: &mut Map, pet: Guid, spell: u32) {
     let Some(s) = state(map, pet).filter(|s| s.kind == Kind::Hunter) else {
         return;
     };
     let owner = s.owner;
+    if !map.unit_view(pet).is_some_and(|u| u.alive)
+        || map.realm.data.spells.get(spell).is_none_or(|t| t.passive())
+    {
+        return;
+    }
     let Some(teaching) = map.realm.data.pets.teaching.get(&spell).copied() else {
         return;
     };
     if map
         .players
         .get(&owner)
-        .is_some_and(|p| !p.spells.contains(&teaching))
+        .is_none_or(|p| p.spells.contains(&teaching))
     {
+        return;
+    }
+    let roll = if crate::game::map::spells::outcome::rolling(map) {
+        use rand::RngExt;
+        rand::rng().random_range(0..=100)
+    } else {
+        100
+    };
+    if teaches(roll) {
         crate::game::map::spells::learn(map, owner, teaching);
     }
 }
