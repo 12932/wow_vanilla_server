@@ -1172,7 +1172,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
         combat::deal_damage_by(map, caster, target, left, s.school_mask(), Some(s.id));
     }
     give_death_items(map, target, items);
-    super::threat(map, caster, target, s, left as f32, &l.mods);
+    super::threat(map, caster, target, s, left as f32, &l.mods, l.crit);
 }
 
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its

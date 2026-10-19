@@ -1770,10 +1770,27 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
 /// made (its school's threat auras on it, `deal_damage`'s): its
 /// `spell_threat`, the threat modifiers, the auras on those too, as Thistle
 /// Tea's `SpellThreat.multiplier` has it.
-pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: f32, m: &Mods) {
+pub fn threat(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    damage: f32,
+    m: &Mods,
+    crit: bool,
+) {
     if !guid::is_unit(target) || s.attr(1, sd::ATTR_EX_NO_THREAT) {
         return;
     }
+    // A critical hit's threat by its school's critical threat auras
+    // (mangos's `CalcThreat`, `SPELL_AURA_MOD_CRITICAL_THREAT`).
+    let critical = if crit {
+        auras::auras(map, caster).map_or(1.0, |a| {
+            a.product_mask(auras::AURA_MOD_CRITICAL_THREAT, s.school_mask())
+        })
+    } else {
+        1.0
+    };
     let (flat, mult) = map
         .realm
         .data
@@ -1784,7 +1801,9 @@ pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dama
         .unwrap_or((0, 1.0));
     let auras = crate::game::map::combat::threat_multiplier(map, caster, s.school_mask());
     let pct = m.pct[mods::OP_THREAT];
-    let total = (damage * mult.max(0.0) + flat as f32) * auras * (100 + pct).max(0) as f32 / 100.0;
+    let total =
+        (damage * mult.max(0.0) + flat as f32) * auras * critical * (100 + pct).max(0) as f32
+            / 100.0;
     let extra = total - damage * auras;
     if extra.abs() > 0.01 {
         crate::game::map::ai::add_threat(map, target, caster, extra);
@@ -1892,8 +1911,12 @@ pub fn periodic_damage_of(
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
         // Its threat is of its school, and has the spell's threat
-        // modifiers (Shadow Affinity), as Thistle Tea's periodic damage's.
-        let by_mods = mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0;
+        // modifiers (Shadow Affinity) and its `spell_threat` multiplier, as
+        // Thistle Tea's periodic damage's and mangos's `DealDamage` for a
+        // DOT (`GetSpellThreatMultiplier`, then `CalcThreat`).
+        let multiplier = data.spells.threat.get(&s.id).map_or(1.0, |t| t.1.max(0.0));
+        let by_mods =
+            mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0 * multiplier;
         let threat = left as f32 * combat::threat_multiplier(map, h.caster, h.school);
         combat::deal_periodic_damage(
             map,

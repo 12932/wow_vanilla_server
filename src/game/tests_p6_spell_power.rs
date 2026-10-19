@@ -506,3 +506,226 @@ fn diminishing_groups_go_by_family_then_mechanic_in_order() {
     assert_eq!(dr_group(&spell(5, 0x8000_0000, 11, 0)), None, "a curse");
     assert_eq!(dr_group(&spell(4, 0x2, 11, 0)), None, "Hamstring");
 }
+
+/// A shadow bolt of 100, of the warlock's family flag 2, one of a high
+/// flag (bit 33), one of another family; a third less threat of every
+/// school and a quarter less for the family's flag 2, then for flag 33; a
+/// shield of 40.
+const DARK: u32 = 990_990;
+const DARK_HIGH: u32 = 990_991;
+const DARK_OTHER: u32 = 990_992;
+const SUBTLE: u32 = 990_993;
+const SUBTLE_HIGH: u32 = 990_994;
+const ABSORB_40: u32 = 990_995;
+/// Sure crits of the family's flag 2, and a quarter less threat for a
+/// crit of a magic school.
+const SURE_CRIT: u32 = 990_996;
+const CALM_CRIT: u32 = 990_997;
+
+fn threats(d: &mut GameData) {
+    use crate::game::map::auras::{AURA_MOD_THREAT, AURA_SCHOOL_ABSORB};
+    let bolt = |id: u32, family: u32, flags: u64| {
+        let mut s = bare(id, 5);
+        s.family_name = family;
+        s.family_flags = flags;
+        effect(&mut s, 0, damage(100));
+        s
+    };
+    let subtle = |id: u32, mask: u64| {
+        let mut s = bare(id, 0);
+        s.family_name = 5;
+        s.duration_index = LASTS_LONG;
+        effect(&mut s, 0, aura(AURA_MOD_THREAT, 127, -30, 1));
+        effect(
+            &mut s,
+            1,
+            SpellEffect {
+                item_type: mask,
+                ..aura(AURA_ADD_PCT_MODIFIER, mods::OP_THREAT as i32, -25, 1)
+            },
+        );
+        s
+    };
+    let mut sure = bare(SURE_CRIT, 0);
+    sure.family_name = 5;
+    sure.duration_index = LASTS_LONG;
+    effect(
+        &mut sure,
+        0,
+        SpellEffect {
+            item_type: 0x2,
+            ..aura(
+                AURA_ADD_FLAT_MODIFIER,
+                mods::OP_CRITICAL_CHANCE as i32,
+                100,
+                1,
+            )
+        },
+    );
+    let mut calm = bare(CALM_CRIT, 0);
+    calm.duration_index = LASTS_LONG;
+    effect(
+        &mut calm,
+        0,
+        aura(
+            crate::game::map::auras::AURA_MOD_CRITICAL_THREAT,
+            126,
+            -25,
+            1,
+        ),
+    );
+    let mut shield = bare(ABSORB_40, 0);
+    shield.duration_index = LASTS_LONG;
+    effect(&mut shield, 0, aura(AURA_SCHOOL_ABSORB, 127, 40, 1));
+    let spells: Vec<SpellTemplate> = vec![
+        bolt(DARK, 5, 0x2),
+        bolt(DARK_HIGH, 5, 1 << 33),
+        bolt(DARK_OTHER, 6, 0x2),
+        subtle(SUBTLE, 0x2),
+        subtle(SUBTLE_HIGH, 1 << 33),
+        sure,
+        calm,
+        shield,
+    ];
+    insert(d, spells);
+}
+
+/// A tick of 100 damage and one of 100 healing, each with a `spell_threat`
+/// multiplier of 2; a third less threat of every school.
+const ROT: u32 = 990_998;
+const MEND: u32 = 990_999;
+const CALM: u32 = 991_000;
+
+fn ticking(d: &mut GameData) {
+    use crate::game::map::auras::{AURA_MOD_THREAT, AURA_PERIODIC_DAMAGE, AURA_PERIODIC_HEAL};
+    let over_time = |id: u32, kind: u32, target: u32| {
+        let mut s = bare(id, 5);
+        s.duration_index = LASTS_5S;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                amplitude: 1_000,
+                ..aura(kind, 0, 100, target)
+            },
+        );
+        s
+    };
+    let mut calm = bare(CALM, 0);
+    calm.duration_index = LASTS_LONG;
+    effect(&mut calm, 0, aura(AURA_MOD_THREAT, 127, -30, 1));
+    insert(
+        d,
+        [
+            over_time(ROT, AURA_PERIODIC_DAMAGE, 6),
+            over_time(MEND, AURA_PERIODIC_HEAL, 21),
+            calm,
+        ],
+    );
+    d.spells.threat.insert(ROT, (0, 2.0));
+    d.spells.threat.insert(MEND, (0, 2.0));
+}
+
+/// A tick's threat takes its spell's `spell_threat` multiplier and its
+/// caster's threat auras as a direct hit's does: 100 damage under a third
+/// less threat and a multiplier of 2 is 140; 100 healing, half that, 70,
+/// on the creature fighting the one healed (Thistle Tea's periodic
+/// threat; mangos's `DealDamage` for a DOT and `threatAssist` for a heal,
+/// both by `GetSpellThreatMultiplier` and `CalcThreat`).
+#[tokio::test]
+async fn a_ticks_threat_takes_its_spells_multiplier() {
+    let realm = fast_realm(ticking);
+    let (_c, a, map) = human(&realm, "P6PE", "Ticker", Class::Priest).await;
+    let (_d, b, _) = human(&realm, "P6PF", "Tanked", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[ROT, MEND]);
+            kit::apply(m, a, a, CALM);
+            let threat_of = |m: &crate::game::map::Map, c, g| {
+                m.creature(c)
+                    .and_then(|c| c.threat.iter().find(|(x, _)| *x == g).map(|(_, t)| *t))
+                    .unwrap_or(0.0)
+            };
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            kit::apply(m, a, kobold, ROT);
+            kit::tick_now(m, kobold, ROT);
+            let rotted = threat_of(m, kobold, a);
+
+            // Another creature fighting the warrior, who is healed.
+            let other = kit::dummy(m, a, 60, 6.0);
+            m.creature_mut(other).unwrap().threat = vec![(b, 10.0)];
+            kit::ready(m, b, 60, &[]);
+            kit::apply(m, a, b, MEND);
+            kit::set_health(m, b, 100);
+            kit::tick_now(m, b, MEND);
+            (rotted, threat_of(m, other, a))
+        })
+        .await
+        .unwrap();
+    let (rotted, mended) = out;
+    assert!((rotted - 140.0).abs() < 0.01, "{rotted}");
+    assert!((mended - 70.0).abs() < 0.01, "{mended}");
+}
+
+/// A spell's threat takes its school's threat auras and its family's
+/// threat modifier each as a factor, 0.7 and 0.75 making 0.525; a mask's
+/// modifier only for its flag, a high one too, and no other family's; the
+/// damage a shield absorbs makes none; a crit's threat takes the critical
+/// threat auras of its school as a third factor (Thistle Tea's
+/// `SpellThreat`; mangos's `ThreatCalcHelper::CalcThreat`: `SPELLMOD_THREAT`,
+/// `SPELL_AURA_MOD_CRITICAL_THREAT`, then the total threat modifier).
+#[tokio::test]
+async fn spell_threat_multiplies_its_school_and_family_and_skips_absorbs() {
+    let realm = fast_realm(threats);
+    let (_c, a, map) = human(&realm, "P6PD", "Subtle", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[DARK, DARK_HIGH, DARK_OTHER]);
+            let threat = |m: &mut crate::game::map::Map, spell: u32, shield: bool| {
+                let kobold = kit::dummy(m, a, 60, 5.0);
+                if shield {
+                    kit::apply(m, kobold, kobold, ABSORB_40);
+                }
+                cast_fresh(m, a, spell, at(kobold));
+                m.creature(kobold)
+                    .and_then(|c| c.threat.iter().find(|(g, _)| *g == a).map(|(_, t)| *t))
+                    .unwrap_or(0.0)
+            };
+            let plain = threat(m, DARK, false);
+            let shielded = threat(m, DARK, true);
+            kit::apply(m, a, a, SUBTLE);
+            let low = [DARK, DARK_HIGH, DARK_OTHER].map(|s| threat(m, s, false));
+            crate::game::map::auras::remove_spell(m, a, SUBTLE, None);
+            kit::apply(m, a, a, SUBTLE_HIGH);
+            let high = [DARK, DARK_HIGH, DARK_OTHER].map(|s| threat(m, s, false));
+            crate::game::map::auras::remove_spell(m, a, SUBTLE_HIGH, None);
+            // Crits of 150.
+            kit::apply(m, a, a, SURE_CRIT);
+            let crit = threat(m, DARK, false);
+            kit::apply(m, a, a, CALM_CRIT);
+            let calm = threat(m, DARK, false);
+            kit::apply(m, a, a, SUBTLE);
+            let all = threat(m, DARK, false);
+            (plain, shielded, low, high, (crit, calm, all))
+        })
+        .await
+        .unwrap();
+    let (plain, shielded, low, high, crits) = out;
+    let near = |x: f32, y: f32| (x - y).abs() < 0.01;
+    let (crit, calm, all) = crits;
+    assert!(near(crit, 150.0), "{crit}");
+    assert!(near(calm, 112.5), "{calm}: a quarter less for a crit");
+    assert!(near(all, 59.0625), "{all}: 0.7 by 0.75 by 0.75");
+    assert!(near(plain, 100.0), "{plain}");
+    assert!(near(shielded, 60.0), "{shielded}: 40 absorbed");
+    assert!(
+        near(low[0], 52.5) && near(low[1], 70.0) && near(low[2], 70.0),
+        "{low:?}"
+    );
+    assert!(
+        near(high[0], 70.0) && near(high[1], 52.5) && near(high[2], 70.0),
+        "{high:?}"
+    );
+}

@@ -191,6 +191,8 @@ pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
 /// Spell damage against creature types (`misc` their mask).
 pub const AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS: u32 = 180;
+/// The threat of a critical hit of the schools of its mask (28746's).
+pub const AURA_MOD_CRITICAL_THREAT: u32 = 183;
 /// Changes to the hit and crit chance of those who attack the unit.
 pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
 pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;

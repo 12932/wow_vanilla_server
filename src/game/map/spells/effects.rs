@@ -391,7 +391,7 @@ pub fn run(
         // An aura's threat: half a point a level for a helpful one, or the
         // spell's own for a harmful.
         if !auras::positive(s) {
-            super::threat(map, caster, target, s, 0.0, &l.mods);
+            super::threat(map, caster, target, s, 0.0, &l.mods, false);
         }
     }
 }

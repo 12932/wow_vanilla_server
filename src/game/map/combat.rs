@@ -2645,8 +2645,16 @@ pub fn heal_threat(map: &mut Map, healer: Guid, healed: Guid, spell: u32, gained
     if fighting.is_empty() {
         return;
     }
-    let threat = gained as f32 * 0.5 * spell_mult * threat_multiplier(map, healer, school)
-        / fighting.len() as f32;
+    // The spell's threat modifiers too (mangos's `threatAssist` through
+    // `CalcThreat`: `SPELLMOD_THREAT`).
+    let by_mods = s.map_or(1.0, |s| {
+        crate::game::map::spells::mods::for_spell(map, healer, s)
+            .apply(crate::game::map::spells::mods::OP_THREAT, 1.0)
+            .max(0.0)
+    });
+    let threat =
+        gained as f32 * 0.5 * spell_mult * by_mods * threat_multiplier(map, healer, school)
+            / fighting.len() as f32;
     for c in fighting {
         crate::game::map::ai::add_threat(map, c, healer, threat);
     }
