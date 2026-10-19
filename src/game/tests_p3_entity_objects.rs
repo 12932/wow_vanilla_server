@@ -605,6 +605,10 @@ async fn a_trap_springs_on_a_foe_as_its_charges_and_cooldown_allow() {
                 t.ready_at = m.now;
             }
         }
+        // Gone before it swings: its hundred a blow would kill Alice, at
+        // level 1, if the map's update came between this and her button,
+        // and a dead Alice takes no mark.
+        m.remove_creature(sheep);
         (idle, fighting, cooling, again, springs)
     })
     .await;
