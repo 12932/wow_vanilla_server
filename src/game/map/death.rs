@@ -198,6 +198,7 @@ pub fn kill(map: &mut Map, g: Guid) {
     // resurrection.
     crate::game::map::ai::forget(map, g);
     crate::game::map::auras::clear_on_death(map, g);
+    crate::game::map::pets::master_died(map, g);
     crate::game::map::intoxication::clear(map, g);
     crate::game::map::duel::left(map, g, false);
     crate::game::map::trade::cancel(
@@ -339,6 +340,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     p.death = Death::Alive;
     // An offer from before is spent.
     p.resurrect_offer = None;
+    p.resurrect_at = None;
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,

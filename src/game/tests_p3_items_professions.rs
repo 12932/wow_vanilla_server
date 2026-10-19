@@ -203,6 +203,12 @@ fn why(m: &Map, caster: Guid, spell: u32, t: Targets) -> Option<u8> {
 fn run(m: &mut Map, caster: Guid, spell: u32, t: Targets) {
     let s = m.realm.data.spells.get(spell).cloned().unwrap();
     professions::execute(m, caster, &s, &t, None);
+    // A pick's effect runs as it lands, with the spell's others.
+    if s.has_effect(professions::EFFECT_PICKPOCKET)
+        && let Some(unit) = t.unit
+    {
+        professions::pick_pocket(m, caster, unit);
+    }
 }
 
 fn learn_skill(m: &mut Map, g: Guid, skill: u32, value: u32) {

@@ -926,6 +926,12 @@ fn effect(
                 crate::game::map::movement::teleport_within(map, target, pos, o);
             }
         }
+        // Pockets picked once the pick has landed: a resisted one opens
+        // nothing (mangos's `EffectPickPocket`, "failure is handled
+        // through normal spell resist").
+        crate::game::map::professions::EFFECT_PICKPOCKET => {
+            crate::game::map::professions::pick_pocket(map, caster, target);
+        }
         EFFECT_BIND => {
             let to = lands_on(map, caster, target, &e, t);
             crate::game::map::npc::bind_home(map, to, caster);
@@ -1111,6 +1117,7 @@ fn effect(
                     flags & crate::game::map::npc::NPC_FLAG_SPIRITHEALER != 0,
                 )
             });
+            let offered_at = map.position_of(caster);
             if let Some(p) = map.players.get_mut(&target)
                 && p.death != crate::game::map::death::Death::Alive
                 && p.resurrect_offer.is_none()
@@ -1128,6 +1135,7 @@ fn effect(
                     )
                 };
                 p.resurrect_offer = Some((caster, health, mana));
+                p.resurrect_at = offered_at;
                 p.outbound.send_frame(resurrect_request(
                     caster,
                     &name,

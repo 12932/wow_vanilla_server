@@ -447,6 +447,7 @@ fn ends_here(map: &Map, player: Guid, giver: Guid, quest: u32) -> bool {
 /// `GAMEOBJECT_DYN_FLAGS`: usable for a quest.
 const GO_DYNFLAG_ACTIVATE: u32 = 0x1;
 const GO_QUESTGIVER: u8 = 2;
+const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
 
 /// Whether a quest object is usable to `player`: a quest giver with
@@ -455,6 +456,9 @@ const GO_GOOBER: u8 = 10;
 fn activates(map: &Map, player: Guid, object: Guid, kind: u8, data: &[u32; 24]) -> bool {
     if kind == GO_QUESTGIVER {
         return !giver_quests(map, player, object).is_empty();
+    }
+    if kind == GO_CHEST {
+        return chest_for_quest(map, player, object, data[1]);
     }
     let Some(p) = map.players.get(&player) else {
         return false;
@@ -473,6 +477,45 @@ fn activates(map: &Map, player: Guid, object: Guid, kind: u8, data: &[u32; 24]) 
                             .any(|(i, (id, n))| *id == -entry && l.kills[i] < *n)
                     }))
         })
+}
+
+/// Whether a chest holds what a quest of `player`'s wants (mangos's
+/// `ActivateToQuest` for a chest, `HaveQuestLootForPlayer`): a quest chest
+/// the client lets one use only so (`GO_FLAG_INTERACT_COND`).
+fn chest_for_quest(map: &Map, player: Guid, object: Guid, loot_id: u32) -> bool {
+    if map.gameobject(object).is_none() {
+        return false;
+    }
+    let tables = &map.realm.data.loot;
+    let quest_items = |t: &[crate::game::data::LootEntry]| -> Vec<u32> {
+        t.iter()
+            .flat_map(|e| {
+                if e.min < 0 {
+                    tables
+                        .reference
+                        .get(&e.item)
+                        .map(|r| {
+                            r.iter()
+                                .filter(|x| x.chance < 0.0 && x.min >= 0)
+                                .map(|x| x.item)
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else if e.chance < 0.0 {
+                    vec![e.item]
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect()
+    };
+    let Some(items) = tables.gameobject.get(&loot_id).map(|t| quest_items(t)) else {
+        return false;
+    };
+    !items.is_empty() && {
+        let wanted = wanted(map, player);
+        items.iter().any(|i| wanted.contains(i))
+    }
 }
 
 /// Every few updates: each player's quest objects shown as usable to them
@@ -495,7 +538,7 @@ pub fn update_objects(map: &mut Map) {
             let Some(t) = map
                 .gameobject(o)
                 .and_then(|x| data.gameobject_templates.get(&x.entry))
-                .filter(|t| matches!(t.kind, GO_QUESTGIVER | GO_GOOBER))
+                .filter(|t| matches!(t.kind, GO_QUESTGIVER | GO_CHEST | GO_GOOBER))
             else {
                 continue;
             };

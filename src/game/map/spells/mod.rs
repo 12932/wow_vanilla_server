@@ -1761,6 +1761,8 @@ const SEDUCTION: u32 = 6358;
 const ATTR_EX_NO_THREAT: u32 = 0x400;
 const ATTR_EX_THREAT_ONLY_ON_MISS: u32 = 0x20_0000;
 const ATTR_EX_FAILURE_BREAKS_STEALTH: u32 = 0x1000;
+/// Stealth's dispel type.
+const DISPEL_STEALTH: u32 = 5;
 const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 
 /// A harmful spell got to creature `target`, landing (`hit`) or not:
@@ -1812,6 +1814,12 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
         let breaks = s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH);
         (seen || breaks) && (breaks || (own && !s.attr(1, ATTR_EX_NO_THREAT)))
     };
+    // Caught at it (a resisted Pick Pocket), the caster's stealth ends
+    // (mangos's `CasterHitTargetWithSpell`: `RemoveAurasWithDispelType
+    // (DISPEL_STEALTH)` for `SPELL_ATTR_EX_FAILURE_BREAKS_STEALTH`).
+    if fights && !hit && s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH) {
+        auras::remove_where(map, caster, |h| h.dispel == DISPEL_STEALTH);
+    }
     if fights {
         if guid::is_unit(target) {
             crate::game::map::ai::attacked(map, target, caster);
@@ -2725,6 +2733,7 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
     let Some((caster, health, mana)) = p.resurrect_offer else {
         return;
     };
+    let offered_at = p.resurrect_at;
     // Declined, it is gone; accepted, it must be the one offered (Thistle
     // Tea's `Resurrection.respond`).
     if !accept {
@@ -2734,7 +2743,9 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
     if caster != from {
         return;
     }
-    let to = map.position_of(caster);
+    // Where the caster stood as they cast it, not where they are now
+    // (mangos's `ResurrectUsingRequestData`, Thistle Tea's offer).
+    let to = offered_at.or_else(|| map.position_of(caster));
     if crate::game::map::death::resurrect_with(map, player, health, mana)
         && let Some(pos) = to
     {

@@ -72,6 +72,15 @@ pub fn saves(map: &mut Map, g: Guid) -> bool {
     true
 }
 
+/// The spirit ended without the death it brings, `g` a living priest
+/// again, the talent kept (leaving a battleground: mangos's
+/// `RemovePlayerAtLeave`, Thistle Tea's `leave_battleground`).
+pub fn end_without_death(map: &mut Map, g: Guid) {
+    for id in std::iter::once(FORM).chain(STATE) {
+        auras::remove_spell(map, g, id, None);
+    }
+}
+
 /// A spirit's state ran out: the spirit dies.
 pub fn aura_gone(map: &mut Map, g: Guid, spell: u32, expired: bool) {
     if spell != STATE[1] || !expired {

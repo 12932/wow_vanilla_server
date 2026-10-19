@@ -931,8 +931,8 @@ async fn until<T: Send + 'static>(
 }
 
 const AUCTIONEER: u32 = 3301;
-const ROBE: u32 = 9320;
-const AXE: u32 = 9321;
+pub(crate) const ROBE: u32 = 9320;
+pub(crate) const AXE: u32 = 9321;
 const RECIPE: u32 = 9322;
 const HIGH: u32 = 9323;
 const PLAIN: u32 = 9324;
@@ -940,7 +940,7 @@ const COOKED: u32 = 900_610;
 
 /// An auctioneer (the goblins', for want of a faction) by the start, and
 /// what is up for auction.
-fn auction_data() -> GameData {
+pub(crate) fn auction_data() -> GameData {
     let mut d = data();
     let mut t = d.creature_templates[&VENDOR].clone();
     t.entry = AUCTIONEER;
@@ -981,7 +981,7 @@ fn auction_data() -> GameData {
     d
 }
 
-fn auctioneer() -> Guid {
+pub(crate) fn auctioneer() -> Guid {
     guid::unit(AUCTIONEER, 2)
 }
 

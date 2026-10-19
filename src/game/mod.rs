@@ -663,6 +663,18 @@ mod tests_p7_combat_rewards;
 #[cfg(test)]
 mod tests_p7_combat_zone;
 #[cfg(test)]
+mod tests_p7_core;
+#[cfg(test)]
+mod tests_p7_core_auction;
+#[cfg(test)]
+mod tests_p7_core_bg;
+#[cfg(test)]
+mod tests_p7_core_loot;
+#[cfg(test)]
+mod tests_p7_core_motion;
+#[cfg(test)]
+mod tests_p7_core_objects;
+#[cfg(test)]
 mod tests_p7_creature_charm;
 #[cfg(test)]
 mod tests_p7_creature_critters;

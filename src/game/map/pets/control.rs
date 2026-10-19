@@ -381,6 +381,18 @@ pub fn cast_failed(map: &Map, player: Guid, pet: Guid, spell: u32, reason: u8) {
     }
 }
 
+/// A pet told to follow, or made passive, stops its attack and its cast
+/// and lets go of its target, still in combat till it times out (mangos's
+/// `HandlePetAction`: `AttackStop(true, true)`; Thistle Tea's pet
+/// commands).
+fn stand_down(map: &mut Map, pet: Guid) {
+    crate::game::map::combat::stop_attack(map, pet);
+    crate::game::map::spells::interrupt(map, pet);
+    if let Some(f) = map.unit_fields_mut(pet) {
+        f.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+    }
+}
+
 /// `CMSG_PET_ACTION`: a command, a stance, or a spell.
 fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
     if !commands(map, player, pet) {
@@ -400,7 +412,7 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                 }
             }
             COMMAND_FOLLOW => {
-                crate::game::map::combat::stop_attack(map, pet);
+                stand_down(map, pet);
                 if let Some(s) = state_mut(map, pet) {
                     s.command = COMMAND_FOLLOW;
                     s.stay_at = None;
@@ -432,12 +444,10 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
             if let Some(s) = state_mut(map, pet) {
                 s.react = (action as u8).min(REACT_AGGRESSIVE);
             }
-            // Passive, it stops its attack, its cast (mangos's
-            // `AttackStop(true, true)`) and the chase it was on (Thistle
-            // Tea's movement transition).
+            // Passive, it stops its attack, its cast and its target, and
+            // the chase it was on (Thistle Tea's movement transition).
             if action as u8 == REACT_PASSIVE {
-                crate::game::map::combat::stop_attack(map, pet);
-                crate::game::map::spells::interrupt(map, pet);
+                stand_down(map, pet);
                 ai::stop(map, pet);
             }
         }
