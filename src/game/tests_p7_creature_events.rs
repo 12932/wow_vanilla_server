@@ -350,8 +350,8 @@ async fn an_events_model_goes_on_at_its_size_with_its_spells_and_comes_off() {
         (back, holds(m, back, START_SPELL), holds(m, back, END_SPELL))
     })
     .await;
-    assert_eq!(respawned.1, true, "its start cast as it comes back");
-    assert_eq!(respawned.2, false);
+    assert!(respawned.1, "its start cast as it comes back");
+    assert!(!respawned.2);
 }
 
 /// Thistle Tea's "keeps corpses dead and reapplies the active event after
@@ -406,4 +406,39 @@ async fn the_lowest_event_on_dresses_a_spawn_and_the_next_when_it_ends() {
         seen.push(on_map(&map, display).await);
     }
     assert_eq!(seen, [1_002, 1_049, 903]);
+}
+
+/// What an event's change and a script's entry change send, where they
+/// stand (new values on a creature already known: its entry, look, size,
+/// weapons, its start spell's aura; a newcomer's create of it), passes the
+/// 1.12 client's own parsers (tools/client_check).
+#[tokio::test]
+#[ignore = "extended"]
+async fn an_events_and_a_scripts_changes_in_place_pass_the_client() {
+    let (check_py, wow_exe) = crate::game::tests_client_emu::checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    for spawn in [CHANGED, ARMED, MODELLED] {
+        a.sees(of(spawn)).await;
+    }
+    events(&realm, &map, &[49, 27, 2]).await;
+    on_map(&map, |m| {
+        let g = creature_at(m, ARMED);
+        crate::game::map::scripts::update_entry(m, g, FORM);
+    })
+    .await;
+    let (mut b, _gb) = crate::game::tests_p3_entity::bob(&realm, ga).await;
+    b.sees(of(MODELLED)).await;
+    events(&realm, &map, &[]).await;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = crate::game::tests_client_emu::capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "its values and creates were captured"
+    );
+    crate::game::tests_client_emu::run_checker(&check_py, &wow_exe, &capture);
 }

@@ -311,7 +311,7 @@ async fn a_resisted_snare_sends_a_critter_running_and_a_heal_doesnt() {
         )
     })
     .await;
-    assert_eq!(out.0, false, "the snare resisted");
+    assert!(!out.0, "the snare resisted");
     assert!(out.1, "running all the same");
     assert!(out.2, "healed");
     assert_eq!(out.3, (None, None, false), "not running");

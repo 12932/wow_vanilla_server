@@ -303,11 +303,11 @@ pub fn apply(map: &mut Map, on: &AHashSet<u32>) {
                 // `CreatureEvent.reconcile`); a corpse takes them at its
                 // respawn.
                 (true, Some((g, worn)))
-                    if looks_differ && worn != looks(&data, s.guid, on).map_or(0, |e| e.event) =>
+                    if looks_differ
+                        && worn != looks(&data, s.guid, on).map_or(0, |e| e.event)
+                        && map.creature(g).is_some_and(|c| c.alive() && !c.despawned) =>
                 {
-                    if map.creature(g).is_some_and(|c| c.alive() && !c.despawned) {
-                        reconcile(map, g, s, on);
-                    }
+                    reconcile(map, g, s, on);
                 }
                 _ => {}
             }
