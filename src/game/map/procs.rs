@@ -438,7 +438,7 @@ fn run(
         }
         let script = crate::game::map::proc_scripts::fire(map, owner, other, &h, e);
         let went_off = script != crate::game::map::proc_scripts::Outcome::Unhandled || {
-            let fired = fire(map, owner, other, &h, e.damage);
+            let fired = fire(map, owner, other, &h, e.damage, hand);
             let answered = crate::game::map::spells::class_scripts::proc(
                 map, owner, other, &h, e.spell, outgoing,
             );
@@ -526,7 +526,7 @@ pub fn fear_break_chance(level: u32, damage: u32) -> f32 {
 /// A holder went off on a blow of `damage`: its trigger spells cast, its
 /// damage dealt, a fear broken by chance, and the class scripts the data
 /// can't say (Thistle Tea's `Core.Class`). Whether anything came of it.
-fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, damage: u32) -> bool {
+fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, damage: u32, hand: Hand) -> bool {
     let mut fired = false;
     for x in &h.effects {
         match x.kind {
@@ -582,7 +582,9 @@ fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, damage: u32) -> boo
                 let trigger = crate::game::map::spells::class_scripts::proc_spell(h.spell, trigger);
                 if trigger != 0 {
                     fired = true;
-                    if !crate::game::map::proc_scripts::deep_wounds(map, owner, other, trigger) {
+                    if !crate::game::map::proc_scripts::deep_wounds(
+                        map, owner, other, trigger, hand,
+                    ) {
                         crate::game::map::spells::cast_triggered(map, owner, trigger, Some(other));
                     }
                 }
