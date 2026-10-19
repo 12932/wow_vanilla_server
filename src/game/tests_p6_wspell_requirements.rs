@@ -23,6 +23,12 @@ const HUMANOID: u32 = 99_620;
 const RANGE_5: u32 = 953;
 /// A heal at the caster's pet.
 const MEND: u32 = 991_400;
+/// A craft at a focus of 50 001, two seconds, 10 mana and 5 seconds'
+/// cooldown; foci of it reaching 5 and 100 yards, and one of another.
+const CRAFT: u32 = 991_401;
+const FOCUS: u32 = 99_630;
+const FOCUS_FAR: u32 = 99_631;
+const FOCUS_OTHER: u32 = 99_632;
 
 fn data(d: &mut GameData) {
     sides(d);
@@ -58,7 +64,33 @@ fn data(d: &mut GameData) {
             ..Default::default()
         },
     );
-    let spells: Vec<SpellTemplate> = vec![cannibalize, channel, mend];
+    let mut craft = bare(CRAFT, 0);
+    craft.requires_spell_focus = 50_001;
+    craft.casting_time_index = CAST_2S;
+    craft.mana_cost = 10;
+    craft.recovery_time = 5_000;
+    effect(&mut craft, 0, aura(AURA_DUMMY, 0, 1, 1));
+    for (entry, id, reach) in [
+        (FOCUS, 50_001, 5),
+        (FOCUS_FAR, 50_001, 100),
+        (FOCUS_OTHER, 50_002, 5),
+    ] {
+        let mut data = [0u32; 24];
+        data[0] = id;
+        data[1] = reach;
+        d.gameobject_templates.insert(
+            entry,
+            crate::game::data::GameObjectTemplate {
+                entry,
+                kind: 8,
+                name: format!("Focus {entry}"),
+                size: 1.0,
+                data,
+                ..Default::default()
+            },
+        );
+    }
+    let spells: Vec<SpellTemplate> = vec![cannibalize, channel, mend, craft];
     insert(d, spells);
 }
 
@@ -240,4 +272,100 @@ async fn a_spell_at_the_pet_is_ranged_at_the_pet() {
         (Some(fail::OUT_OF_RANGE), None),
         "the pet 50 yards off, then 10"
     );
+}
+
+fn focus_at(m: &mut Map, a: Guid, entry: u32, dx: f32) -> Guid {
+    let at = off(m, a, dx, 0.0);
+    crate::game::map::objects::summon(m, None, entry, at, 0.0, 0, 0, 0, None).unwrap()
+}
+
+fn craft(m: &mut Map, caster: Guid) -> Option<u8> {
+    kit::fresh(m, caster);
+    let s = m.realm.data.spells.get(CRAFT).cloned().unwrap();
+    let mods = mods::for_spell(m, caster, &s);
+    checks::check(m, caster, &s, &Targets::default(), None, false, &mods)
+}
+
+/// A focus is one of the spell's, within its template's reach of both
+/// edges in three dimensions, however far that reach (a hundred yards for
+/// some); one of another kind won't do. A creature needs none. Lost while
+/// the cast goes on, the cast fails as it ends, nothing paid and no
+/// cooldown; kept, it goes off once, paid (Thistle Tea's `SpellFocus`;
+/// mangos's `GameObjectFocusCheck` in `CheckCast`, at the start and the end).
+#[tokio::test]
+async fn a_focus_is_within_its_reach_and_checked_again_as_the_cast_ends() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P6XL", "Crafter", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[CRAFT]);
+            let none = craft(m, a);
+            let other = focus_at(m, a, FOCUS_OTHER, 1.0);
+            let wrong = craft(m, a);
+            crate::game::map::objects::despawn(m, other);
+            let reach = 5.0 + size(m, a) + 0.389;
+            let f = focus_at(m, a, FOCUS, reach - 0.02);
+            let within = craft(m, a);
+            crate::game::map::objects::despawn(m, f);
+            let f = focus_at(m, a, FOCUS, reach + 0.02);
+            let beyond = craft(m, a);
+            crate::game::map::objects::despawn(m, f);
+            let far = focus_at(m, a, FOCUS_FAR, 80.0);
+            let long = craft(m, a);
+            crate::game::map::objects::despawn(m, far);
+            let creature = unit_at(m, a, BEAST, 3.0, 0.0);
+            let creature_casts = kit::cast_fresh(m, creature, CRAFT, Targets::default());
+            // Lost as the cast goes on, then kept.
+            let mana = |m: &Map| kit::power(m, a, 0);
+            let cooling = |m: &Map| {
+                m.caster(a)
+                    .is_some_and(|c| c.cooldowns.contains_key(&CRAFT))
+            };
+            let f = focus_at(m, a, FOCUS, 1.0);
+            kit::set_power(m, a, 0, 1_000);
+            let before = mana(m);
+            assert!(kit::cast_fresh(m, a, CRAFT, Targets::default()));
+            crate::game::map::objects::despawn(m, f);
+            kit::pass(m, 2_100);
+            let lost = (
+                kit::casting(m, a),
+                before - mana(m),
+                cooling(m),
+                has(m, a, CRAFT),
+            );
+            focus_at(m, a, FOCUS, 1.0);
+            kit::set_power(m, a, 0, 1_000);
+            let before = mana(m);
+            assert!(kit::cast_fresh(m, a, CRAFT, Targets::default()));
+            kit::pass(m, 2_100);
+            let kept = (
+                kit::casting(m, a),
+                before - mana(m),
+                cooling(m),
+                has(m, a, CRAFT),
+            );
+            (
+                none,
+                wrong,
+                within,
+                beyond,
+                long,
+                creature_casts,
+                lost,
+                kept,
+            )
+        })
+        .await
+        .unwrap();
+    let refused = Some(fail::REQUIRES_SPELL_FOCUS);
+    assert_eq!((out.0, out.1), (refused, refused), "none, or another kind");
+    assert_eq!((out.2, out.3), (None, refused), "its reach of both edges");
+    assert_eq!(out.4, None, "a hundred yards' focus at eighty");
+    assert!(out.5, "a creature needs none");
+    assert_eq!(
+        out.6,
+        (None, 0, false, false),
+        "lost: failed, unpaid, no cooldown"
+    );
+    assert_eq!(out.7, (None, 10, true, true), "kept: once, paid");
 }

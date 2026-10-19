@@ -711,6 +711,13 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
     if !super::area::allows(map, caster, s.id) {
         return Some(fail::REQUIRES_AREA);
     }
+    // Its focus still by them (a campfire burnt out meanwhile), as mangos's
+    // `CheckCast(false)` and Thistle Tea's launch revalidation have it.
+    if s.requires_spell_focus != 0
+        && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
+    {
+        return Some(fail::REQUIRES_SPELL_FOCUS);
+    }
     None
 }
 

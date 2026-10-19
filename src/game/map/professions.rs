@@ -593,8 +593,19 @@ pub fn focus_near(map: &Map, caster: Guid, focus: u32) -> bool {
     else {
         return false;
     };
+    // As far as the farthest-reaching focus of its kind reaches (a
+    // hundred yards for some), not a fixed distance (mangos looks as far
+    // as the map's sight).
+    let search = data
+        .gameobject_templates
+        .values()
+        .filter(|t| t.kind == GO_SPELL_FOCUS && t.data[0] == focus)
+        .map(|t| t.data[1] as f32)
+        .fold(0.0f32, f32::max)
+        + own
+        + OBJECT_RADIUS;
     map.grid
-        .around(at.x, at.y, 50.0)
+        .around(at.x, at.y, search)
         .filter(|g| guid::is_game_object(*g))
         .filter_map(|g| map.gameobject(g))
         .any(|o| {
