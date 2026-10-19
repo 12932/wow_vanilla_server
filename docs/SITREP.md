@@ -83,6 +83,24 @@ Until you answer, wvs keeps what the line says.
 - **#17 Quest 2078:** start its follower from the gossip option, as Thistle Tea does?
 - **#24 Model heights:** dbc.sqlite's `CreatureModelData` columns are shifted by one. Is that known?
 
+## Your list of 2026-10-19 evening, and my calls
+Being done by agent agents, four at a time; merged after the fast suite (the whole extended suite at most every 4
+hours), the crate version bumped with each merge.
+- **In progress:** Frost Nova on a Young Wolf, a critter's death not showing and `.kill`'s delays, stable masters for
+  non-hunters, dead quest givers' icons (`fix/bugs1019`); a 400-yard view on flight paths, boats across continents
+  (`feat/travel`); raid roles, buffs, strong raiders, healers' spots, druid forms, hunter pets (peon
+  `feat/raidroles`); the fork's spell-miss layouts.
+- **Next:** sitting to eat, bones (`feat/body`); human-like raid movement, the auction house wall (peon
+  `feat/raidmove`); then the Thistle Tea alignment.
+- **My calls:**
+  - **Stable masters:** mangos's way: a non-hunter gets the stable master's greeting window, without the stable
+    option, rather than no flag at all.
+  - **Hunter pets (your item 11):** wvs already has taming, the stable and pet training (round 5), so I took it as
+    the raid's hunters having pets and using them (and checking the server's pets work end to end on the way).
+  - **Bones:** 18 hours as you asked, a setting; mangos's own figure goes here when the agent reports it.
+  - **Strong raiders:** 1%, in their class's tier set at 60 (a new `.gear raid`), a setting.
+  - **Raid AI:** two agents, one for roles, buffs and spells, one for movement and pathing, to keep their files apart.
+
 ## Answered
 - **#10** keep swinging on arrival.
 - **#18** keep moving unusable gear off at login.
