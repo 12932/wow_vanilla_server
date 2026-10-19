@@ -1466,10 +1466,10 @@ impl Map {
     /// After a run of events (packets, calls) between updates: a client
     /// they held needn't wait for the update. The objects they brought into
     /// the map (or the players they placed) are seen now, whole, as the
-    /// events left them, and each held client that has something waiting
-    /// gets its creates and forgets, then what waited. One with nothing
-    /// waiting, or near a creature yet to have its first turn, stays held,
-    /// its blocks for the update.
+    /// events left them, and each held client gets its creates and forgets,
+    /// then what waited: held to the update, it would hold what other tasks
+    /// send it (the session's name queries) too. One near a creature yet to
+    /// have its first turn stays held, its blocks for the update.
     pub(crate) fn after_events(&mut self) {
         if self.holding.is_empty() {
             return;
@@ -1496,7 +1496,7 @@ impl Map {
         }
         let mut pending = Held(std::mem::take(&mut self.holding));
         while let Some((g, out)) = pending.0.pop() {
-            if !out.has_held() || waiting.contains(&g) {
+            if waiting.contains(&g) {
                 self.holding.push((g, out));
                 continue;
             }
