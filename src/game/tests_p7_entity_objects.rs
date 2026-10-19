@@ -25,6 +25,10 @@ const FLAME: u32 = 97_712;
 const SHRINE: u32 = 97_713;
 /// A dummy aura on the brute near its caster its script names.
 const BLESSING: u32 = 97_714;
+/// A door a dungeon's script breaks (Thistle Tea's 16_397), spawned shut.
+const BROKEN_DOOR: u32 = 97_715;
+/// A hunter's trap of five yards, its flame on whom it springs on.
+const FLAME_TRAP: u32 = 97_716;
 
 fn world() -> GameData {
     let mut d = data();
@@ -33,9 +37,24 @@ fn world() -> GameData {
         object(QUEST_OBJECT, GO_GOOBER, "Quest Object", &[(1, 9_999)]),
         object(BRAZIER, 5, "Brazier", &[]),
         object(SHRINE, GO_GOOBER, "Shrine", &[(10, BLESSING)]),
+        object(BROKEN_DOOR, 0, "Door", &[]),
+        object(FLAME_TRAP, 6, "Flame Trap", &[(2, 5), (3, FLAME), (4, 1)]),
     ] {
         d.gameobject_templates.insert(t.entry, t);
     }
+    d.gameobject_spawns
+        .entry(0)
+        .or_default()
+        .push(crate::game::data::GameObjectSpawn {
+            guid: 77,
+            entry: BROKEN_DOOR,
+            map: 0,
+            x: START.0 + 6.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            ..Default::default()
+        });
     let mut flame = spell(
         FLAME,
         &[SpellEffect {
@@ -198,4 +217,95 @@ async fn an_objects_damage_harms_but_makes_it_no_foe() {
     }
     assert_eq!(idle, (vec![], false, 0), "no foe, no fight");
     assert_eq!(fighting, (vec![ga], ga), "its fight its own");
+}
+
+/// A script breaks a door (an instance's `Destroy`): its state is 2,
+/// broken open for good, until a reset puts it back as it spawned, shut
+/// (Thistle Tea's "projects a destroyed door state and can reset it";
+/// mangos-classic's `GO_STATE_ACTIVE_ALTERNATIVE`).
+#[tokio::test]
+async fn a_door_broken_by_a_script_is_back_as_it_spawned_on_a_reset() {
+    use crate::game::map::instance_adapters::{Act, operate};
+    let (_realm, mut a, _ga, map) = setup_with(world(), Class::Warrior).await;
+    let door = guid::game_object(BROKEN_DOOR, 77);
+    a.sees(door).await;
+    let state = move |m: &crate::game::map::Map| {
+        let f = &m.gameobject(door).unwrap().fields;
+        (
+            f.get_u32(GAMEOBJECT_STATE),
+            f.get_u32(GAMEOBJECT_FLAGS) & GO_FLAG_IN_USE,
+        )
+    };
+    let out = map
+        .query(move |m| {
+            let spawned = state(m);
+            operate(m, BROKEN_DOOR, Act::Destroy);
+            let broken = state(m);
+            operate(m, BROKEN_DOOR, Act::Reset);
+            (spawned, broken, state(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (1, 0), "shut");
+    assert_eq!(out.1, (2, GO_FLAG_IN_USE), "broken");
+    assert_eq!(out.2, (1, 0), "as it spawned");
+}
+
+/// A trap disarmed goes without springing, and frees its owner's slot: a
+/// foe by it isn't harmed, the owner's next trap in the slot is the only
+/// one (Thistle Tea's "disarming releases the owner's slot without
+/// activating the trap"; mangos-classic's Disarm Trap despawns it).
+#[tokio::test]
+async fn a_disarmed_trap_goes_without_springing_and_frees_its_slot() {
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            let f = &mut m.players.get_mut(&ga).unwrap().fields;
+            f.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+            f.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+            // A foe fighting Alice, which her trap springs on.
+            let foe = spawn(m, ga, BRUTE, 10, 3.0);
+            crate::game::map::ai::attacked(m, foe, ga);
+            let spot = m.creature(foe).unwrap().position;
+            let health =
+                |m: &crate::game::map::Map| m.unit_fields(foe).unwrap().get_u32(UNIT_FIELD_HEALTH);
+            let look = |m: &mut crate::game::map::Map| {
+                m.objects.next_trap_look = None;
+                objects::update(m);
+            };
+            let armed = objects::summon(m, Some(ga), FLAME_TRAP, spot, 0.0, 0, 0, 2, None).unwrap();
+            m.objects.traps.get_mut(&armed).unwrap().ready_at = m.now;
+            let before = health(m);
+            look(m);
+            let sprung = health(m) < before;
+            let trap = objects::summon(m, Some(ga), FLAME_TRAP, spot, 0.0, 0, 0, 1, None).unwrap();
+            m.objects.traps.get_mut(&trap).unwrap().ready_at = m.now;
+            let health_before = health(m);
+            objects::disarm(m, trap);
+            look(m);
+            let after = health(m);
+            let next =
+                objects::summon(m, Some(ga), FLAME_TRAP, at(9.0), 0.0, 0, 0, 1, None).unwrap();
+            let slot: Vec<_> = m
+                .objects
+                .summoned
+                .iter()
+                .filter(|s| s.owner == Some(ga) && s.slot == 1)
+                .map(|s| s.guid)
+                .collect();
+            (
+                sprung,
+                m.gameobject(trap).is_some(),
+                health_before == after,
+                slot == vec![next],
+            )
+        })
+        .await
+        .unwrap();
+    assert!(out.0, "an armed one springs on the foe");
+    assert_eq!(
+        (out.1, out.2, out.3),
+        (false, true, true),
+        "the disarmed one gone, unsprung, the slot free"
+    );
 }

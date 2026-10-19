@@ -43,7 +43,7 @@ fn v(data: &Data, field: u32) -> u32 {
 /// `GameObjectActions.operate` has it: opening and destroying mark it in
 /// use, the rest clear the mark.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Act {
+pub(crate) enum Act {
     /// A closed one opens.
     Open,
     /// An open one shuts.
@@ -65,7 +65,7 @@ const GO_FLAG_IN_USE: u32 = 0x1;
 const GO_FLAG_LOCKED: u32 = 0x2;
 const GO_FLAG_NO_INTERACT: u32 = 0x10;
 
-pub(super) fn operate(map: &mut Map, entry: u32, act: Act) {
+pub(crate) fn operate(map: &mut Map, entry: u32, act: Act) {
     let objects: Vec<(Guid, Option<u32>)> = map
         .gameobjects
         .iter()
