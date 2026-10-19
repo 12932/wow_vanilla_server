@@ -1702,3 +1702,179 @@ async fn slim_reaching_the_gate_fails_the_missing_diplomat() {
     }
     assert!(failed, "the gate reached fails the quest");
 }
+
+/// Whether `me` has `quest` failed in their log.
+pub(super) fn failed(m: &Map, me: Guid, quest: u32) -> bool {
+    m.players[&me]
+        .journal
+        .log
+        .iter()
+        .find(|l| l.quest == quest)
+        .is_some_and(|l| l.failed)
+}
+
+/// Whether `me` has `quest`'s event or place done in their log.
+pub(super) fn explored(m: &Map, me: Guid, quest: u32) -> bool {
+    m.players[&me]
+        .journal
+        .log
+        .iter()
+        .find(|l| l.quest == quest)
+        .is_some_and(|l| l.explored)
+}
+
+/// `quest` taken from `giver` again, as though new: whether it was.
+fn take_again(m: &mut Map, me: Guid, giver: Guid, quest: u32, before: &[u32]) -> bool {
+    let p = m.players.get_mut(&me).unwrap();
+    p.journal.log.retain(|l| l.quest != quest);
+    p.journal.rewarded.remove(&quest);
+    p.journal.rewarded.extend(before.iter().copied());
+    let data = m.realm.data.clone();
+    quests::refresh_log(m.players.get_mut(&me).unwrap(), &data);
+    quests::accept(m, me, giver, quest);
+    m.players[&me].journal.has(quest)
+}
+
+const PIZNIK: u32 = 4276;
+const GERENZOS_ORDERS: u32 = 1090;
+const WINDSHEAR: [u32; 3] = [3998, 4001, 4003];
+
+/// Gerenzo's Orders: Piznik's waves and the quest's credit come only
+/// while the defense is under way, so a defense ended early brings
+/// neither; and his death in it fails the quest and ends it (Thistle
+/// Tea's `piznik`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn piznik_s_waves_and_credit_need_the_defense_and_his_death_fails_it() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map, piznik) = hero_by(&realm, "Miner", PIZNIK).await;
+    let goblins = |m: &Map| -> usize { WINDSHEAR.iter().map(|e| living(m, *e).len()).sum() };
+    // Ended at once: nothing comes, and no credit.
+    let (taken, before) = map
+        .query(move |m| {
+            tough(m, piznik);
+            (take_again(m, me, piznik, GERENZOS_ORDERS, &[]), goblins(m))
+        })
+        .await
+        .unwrap();
+    assert!(taken);
+    assert!(
+        until(&map, 2_000, move |m| event_ai::phase(m, piznik) == 1).await,
+        "defending"
+    );
+    let after = map
+        .query(move |m| {
+            crate::game::map::map_events::end(m, GERENZOS_ORDERS, false);
+            for _ in 0..40 {
+                hurry_runs(m, None, Duration::from_secs(5));
+            }
+            (goblins(m), explored(m, me, GERENZOS_ORDERS))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        after,
+        (before, false),
+        "no waves, no credit, the defense over"
+    );
+    // His death in it.
+    let taken = map
+        .query(move |m| {
+            if let Some(c) = m.creature_mut(piznik) {
+                c.fields.set_u32(UNIT_FIELD_HEALTH, 1);
+            }
+            event_ai::set_phase(m, piznik, 0);
+            take_again(m, me, piznik, GERENZOS_ORDERS, &[])
+        })
+        .await
+        .unwrap();
+    assert!(taken);
+    assert!(
+        until(&map, 2_000, move |m| event_ai::phase(m, piznik) == 1).await,
+        "defending"
+    );
+    let ended = map
+        .query(move |m| {
+            kill(m, me, piznik);
+            hurry_runs(m, None, Duration::from_millis(100));
+            (
+                failed(m, me, GERENZOS_ORDERS),
+                crate::game::map::map_events::active(m, GERENZOS_ORDERS),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(ended, (true, false), "failed with him, and over");
+}
+
+const SHAKES: u32 = 2610;
+const DEATH_FROM_BELOW: u32 = 667;
+
+/// Death From Below: taking it, Shakes O'Breen sounds the alarm, stops
+/// offering quests and stands to his defense; if he dies, or the player
+/// strays over 150 yards, the quest fails and he is back (Thistle Tea's
+/// `shakes_o_breen`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn shakes_sounds_the_alarm_and_fails_if_he_dies_or_the_player_strays() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, shakes) = hero_by(&realm, "Sailor", SHAKES).await;
+    let home = map
+        .query(move |m| m.position_of(shakes))
+        .await
+        .flatten()
+        .unwrap();
+    for stray in [false, true] {
+        c.clear();
+        let shakes = map
+            .query(move |m| first(m, SHAKES))
+            .await
+            .flatten()
+            .expect("Shakes");
+        let taken = map
+            .query(move |m| {
+                put(m, me, off(home, 2.0, 0.0));
+                // On speaking terms with his cove, whatever this hero's
+                // standing there.
+                crate::game::map::scripts::set_faction(m, shakes, 35);
+                take_again(m, me, shakes, DEATH_FROM_BELOW, &[670])
+            })
+            .await
+            .unwrap();
+        assert!(taken);
+        assert!(hears(&mut c, &realm, shakes, 6372).await, "battle stations");
+        let standing = map
+            .query(move |m| (event_ai::phase(m, shakes), npc_flags(m, shakes) & 0x2))
+            .await
+            .unwrap();
+        assert_eq!(standing, (1, 0), "to his defense, no quests");
+        let failed_now = map
+            .query(move |m| {
+                if stray {
+                    put(m, me, off(home, 200.0, 0.0));
+                } else {
+                    kill(m, me, shakes);
+                }
+                check_events(m);
+                hurry_runs(m, None, Duration::from_millis(100));
+                (
+                    failed(m, me, DEATH_FROM_BELOW),
+                    crate::game::map::map_events::active(m, DEATH_FROM_BELOW),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(failed_now, (true, false), "stray {stray}: failed");
+        assert!(
+            until(&map, 3_000, move |m| first(m, SHAKES).is_some_and(|g| {
+                event_ai::phase(m, g) == 0 && npc_flags(m, g) & 0x2 != 0
+            }))
+            .await,
+            "stray {stray}: he is back"
+        );
+    }
+}
