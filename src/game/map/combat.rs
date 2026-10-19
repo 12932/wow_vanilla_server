@@ -1042,6 +1042,10 @@ pub fn chase_distance(reach: f32) -> f32 {
 /// How far its victim may go from where a chaser last aimed before it
 /// paths again (Thistle Tea's `chase_rechase_distance`): three quarters of
 /// the reach, less the victim's bounding radius.
+/// Within this of its victim, an attack owed needn't face it (Thistle
+/// Tea's overlap distance).
+const OVERLAP_YARDS: f32 = 1.4;
+
 pub fn rechase_distance(reach: f32, bounding: f32) -> f32 {
     (reach * 0.75 - bounding).max(0.0)
 }
@@ -1760,6 +1764,35 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     if casting && !extra {
         return;
     }
+    // The extra attacks owed go in reach, a player's facing their victim
+    // or so close that facing doesn't count (Thistle Tea's overlap, 1.4
+    // yards; mangos's `DoExtraAttacks` asks reach alone).
+    let close = (va.position.x - vb.position.x).powi(2) + (va.position.y - vb.position.y).powi(2)
+        <= OVERLAP_YARDS * OVERLAP_YARDS;
+    let extra_done = extra
+        && va.standing
+        && in_melee_range(&va, &vb)
+        && (!va.is_player || close || facing(&va, &vb));
+    if extra_done {
+        let owed = map.combat(attacker).map_or(0, |c| c.extra_attacks);
+        if let Some(c) = map.combat_mut(attacker) {
+            c.extra_attacks = 0;
+            c.in_extra_attack = true;
+        }
+        for _ in 0..owed {
+            if !still_swinging(map, attacker, victim) {
+                break;
+            }
+            swing(map, attacker, victim, Hand::Main, true);
+        }
+        if let Some(c) = map.combat_mut(attacker) {
+            c.in_extra_attack = false;
+        }
+    }
+    // Casting, the regular swings wait without a word.
+    if casting || (extra_done && !main_due && !off_due) {
+        return;
+    }
     let error = if !va.standing {
         Some(SWING_ERROR_NOT_STANDING)
     } else if !in_melee_range(&va, &vb) {
@@ -1773,10 +1806,6 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         let Some(c) = map.combat_mut(attacker) else {
             return;
         };
-        // Casting, the attacks owed wait without a word.
-        if casting {
-            return;
-        }
         // Told once while it lasts, again when it changes (mangos's
         // `UpdateMeleeAttackingState`); the hands stay due, and try again
         // at the next update.
@@ -1793,25 +1822,6 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     }
     if let Some(c) = map.combat_mut(attacker) {
         c.last_swing_error = None;
-    }
-    if extra {
-        let owed = map.combat(attacker).map_or(0, |c| c.extra_attacks);
-        if let Some(c) = map.combat_mut(attacker) {
-            c.extra_attacks = 0;
-            c.in_extra_attack = true;
-        }
-        for _ in 0..owed {
-            if !still_swinging(map, attacker, victim) {
-                break;
-            }
-            swing(map, attacker, victim, Hand::Main, true);
-        }
-        if let Some(c) = map.combat_mut(attacker) {
-            c.in_extra_attack = false;
-        }
-    }
-    if casting {
-        return;
     }
     // A script's melee spell stands in for the blow.
     if main_due && let Some(spell) = crate::game::map::event_ai::melee_spell(map, attacker) {

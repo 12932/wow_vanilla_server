@@ -466,8 +466,10 @@ async fn swings_go_at_the_victim_owed_ones_wait_to_face_it_and_a_cleave_takes_a_
     let r = on(&map, move |m| {
         // Far above them: her blows and her Cleave aren't turned aside.
         base::level(m, ga, 60);
-        let brute = spawn(m, ga, BRUTE, 20, 1.0);
-        let other = spawn(m, ga, BRUTE, 20, 2.5);
+        // Past the overlap of 1.4 yards, where facing counts for the
+        // attacks owed too.
+        let brute = spawn(m, ga, BRUTE, 20, 2.0);
+        let other = spawn(m, ga, BRUTE, 20, 3.0);
         let (home, facing) = {
             let p = &m.players[&ga];
             (p.position(), p.movement.orientation)
