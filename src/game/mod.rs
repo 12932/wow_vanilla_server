@@ -779,6 +779,8 @@ mod tests_p7_world_spells;
 #[cfg(test)]
 mod tests_p7_world_system;
 #[cfg(test)]
+mod tests_p8_ai_motion;
+#[cfg(test)]
 mod tests_p8_ai_pets;
 #[cfg(test)]
 mod tests_p8_ai_retreat;

@@ -1779,7 +1779,14 @@ fn evade(map: &mut Map, g: Guid) {
     // evade).
     // A flyer flies home, as it chased (Thistle Tea's airborne home
     // movement).
-    let (path, fly) = if crate::game::map::creature_motion::sessile(map, g) {
+    // So does one a script set following someone, who follows on from
+    // there (Thistle Tea's follower's reset after combat).
+    let follows = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.follow)
+        .is_some_and(|(leader, _, _)| map.unit_view(leader).is_some_and(|u| u.alive));
+    let (path, fly) = if follows || crate::game::map::creature_motion::sessile(map, g) {
         (vec![from], false)
     } else if crate::game::map::creature_motion::habitat(map, g).fly {
         match crate::game::map::creature_motion::route(map, g, from, home) {
