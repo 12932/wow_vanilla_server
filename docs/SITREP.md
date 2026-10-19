@@ -427,6 +427,19 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     size is its own even at 1.0; several growths multiply (Thistle Tea; mangos adds them).
   - **Left:** ground areas deal their damage from the area, not through auras on those inside (four rows);
     Thistle Tea's 1 s of no detection after Vanish isn't in wvs or mangos.
+- **7l, movement and the network, round 7:** **forced movements now wait for their acknowledgement** (roots,
+  speeds, water walk, Slow Fall, hover, knockbacks, teleports): each ack settles the order it names by counter,
+  unit and change, and any other changes nothing (Thistle Tea's `MovementControl`, mangos's `GetOrderCounter`); a
+  teleport drops the orders waiting before it. Peon already echoes every counter. Fixed on the way: a root ack sent
+  before a teleport put the player back where they had been. Also: a pet left 50 yards behind by a teleport goes and
+  comes back at the ack (mangos's `TeleportTo`); a player dying on a charge lies where they fell; what prevents
+  fleeing (Recklessness) holds a fear back until it goes; a unit a player controls is taken from their client while
+  feared or confused; a knockback goes to the client that moves the unit. **Merging 7j and 7l** left two arms for
+  "prevents fleeing" where the first shadowed the second (a critter's held run, a held fear taking hold); I merged
+  them into one. **My calls** (`wrong-for-1.12`, mangos's): a spirit's release teleports at once; roots and stuns
+  caught on a charge land at once; a refreshed or second fear doesn't restart the run; a fear drops the creature's
+  target. **To ask you again:** Distract turning players (mangos's `EffectDistract` turns them; DECISIONS.md said
+  not to).
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -528,6 +541,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7i: pets, round 7 | 81.5% | 296f744 |
 | 7j: creatures, round 7 | 82.1% | 63a5e39 |
 | 7k: auras, round 7 | 82.6% | 462b7fb |
+| 7l: movement and the network | 83.3% | d68535e |
 
 **Running now:** round 7 (7g creature scripts, 7i pets, 7j creatures, 7k auras, 7l movement and the network), and the extended suite (19:40, at 0.1.27).
 
