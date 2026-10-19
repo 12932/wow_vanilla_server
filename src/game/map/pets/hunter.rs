@@ -821,6 +821,18 @@ fn stable_result(map: &Map, player: Guid, r: StableResult) {
 /// `MSG_LIST_STABLED_PETS`: the current pet (alive) and those stabled.
 pub fn list_stable(map: &mut Map, player: Guid, npc: Guid) {
     if !stable_master(map, player, npc) {
+        // The client asks for the stable at a right-click on a stable
+        // master with no gossip of its own (Wesley's NPC flags are the
+        // stable's alone): one not a hunter gets its gossip instead, its
+        // greeting with no stable in it, as mangos's would show them. It
+        // got nothing at all.
+        let not_hunter = map.players.get(&player).is_some_and(|p| p.row.class != 3);
+        let master = map.creature(npc).is_some_and(|c| {
+            c.fields.get_u32(crate::game::fields::UNIT_NPC_FLAGS) & NPC_FLAG_STABLEMASTER != 0
+        });
+        if not_hunter && master {
+            crate::game::map::npc::hello(map, player, npc);
+        }
         return;
     }
     sync_record(map, player);

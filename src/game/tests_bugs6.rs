@@ -431,3 +431,80 @@ async fn a_dead_quest_giver_shows_no_quest_and_offers_nothing() {
         QuestGiverStatus::Available
     );
 }
+
+const WESLEY: u32 = 9978;
+
+/// The gossip window `c` is told of `npc` within half a second, if any:
+/// its text and its options.
+async fn gossip(c: &mut harness::Client, npc: Guid) -> Option<(u32, Vec<String>)> {
+    c.gets(Duration::from_millis(500), |m| match m {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) if g.guid == npc => Some((
+            g.title_text_id,
+            g.gossips.iter().map(|o| o.message.clone()).collect(),
+        )),
+        _ => None,
+    })
+    .await
+}
+
+/// Wesley, a stable master and nothing else: the client asks him for the
+/// stable at a right-click (`MSG_LIST_STABLED_PETS`, for his NPC flags
+/// are the stable's alone), and a mage, who has none, gets his greeting
+/// (mangos's default, "Greetings, $n.") with no stable in it, as mangos's
+/// gossip hides it from those not hunters; so does her gossip hello. A
+/// hunter gets the stable, and the option in his gossip.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_stable_master_greets_a_mage_and_stables_a_hunters_pets() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut m, mage, map) = player(&realm, "B6SM", "Stablemage", Race::Human, Class::Mage).await;
+    m.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let wesley = map
+        .query(move |m| {
+            ready(m, mage, 2, &[]);
+            spawned_near(m, mage, WESLEY, 2.0, 0x7F_0005)
+        })
+        .await
+        .unwrap();
+    m.sees_on(&map, wesley).await;
+    m.clear();
+    m.send(MSG_LIST_STABLED_PETS_Client { npc: wesley }).await;
+    assert_eq!(
+        gossip(&mut m, wesley).await,
+        Some((crate::game::map::npc::DEFAULT_TEXT, Vec::new())),
+        "his greeting, and no stable"
+    );
+    m.send(CMSG_GOSSIP_HELLO { guid: wesley }).await;
+    assert_eq!(
+        gossip(&mut m, wesley).await,
+        Some((crate::game::map::npc::DEFAULT_TEXT, Vec::new())),
+        "the same at a gossip hello"
+    );
+    // A hunter beside her.
+    let (mut h, hunter, _) =
+        player(&realm, "B6SH", "Stablehunter", Race::Dwarf, Class::Hunter).await;
+    h.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    map.query(move |m| {
+        let at = m.creature(wesley).unwrap().position;
+        let p = m.players.get_mut(&hunter).unwrap();
+        p.movement.position = Vector3d {
+            x: at.x - 1.5,
+            ..at
+        };
+    })
+    .await
+    .unwrap();
+    h.clear();
+    h.send(MSG_LIST_STABLED_PETS_Client { npc: wesley }).await;
+    h.wait_for("the stable", |m| match m {
+        ServerOpcodeMessage::MSG_LIST_STABLED_PETS(s) if s.npc == wesley => Some(()),
+        _ => None,
+    })
+    .await;
+    h.send(CMSG_GOSSIP_HELLO { guid: wesley }).await;
+    let (_, options) = gossip(&mut h, wesley).await.expect("his gossip");
+    assert_eq!(options, ["I wish to stable my pet."]);
+}
