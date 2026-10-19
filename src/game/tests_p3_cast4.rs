@@ -431,10 +431,10 @@ async fn range_takes_its_modifiers_and_the_reaches_and_a_triggered_spell_none() 
                 place(m, d);
                 seen.push(check(m, mage, &strike, at(k)));
             }
-            // The minimum range.
+            // The minimum range, beyond both reaches (round 6).
             let mut far = bolt(990_474, 1);
             far.range_index = RANGE_8_TO_30;
-            for d in [7.9, 8.1] {
+            for d in [8.0 + reach - 1.1, 8.0 + reach - 0.9] {
                 place(m, d);
                 seen.push(check(m, mage, &far, at(k)));
             }

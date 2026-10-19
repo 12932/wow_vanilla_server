@@ -544,6 +544,8 @@ mod tests_p6_spell_effects;
 #[cfg(test)]
 mod tests_p6_spell_power;
 #[cfg(test)]
+mod tests_p6_spell_range;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

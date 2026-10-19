@@ -653,15 +653,16 @@ pub fn at_finish(
         return None;
     }
     let me = map.unit_view(caster)?;
-    let (_, max) = map.realm.data.spells.range(s);
-    let max = m.apply(mods::OP_RANGE, max);
+    let (_, base) = map.realm.data.spells.range(s);
+    let max = m.apply(mods::OP_RANGE, base).max(0.0);
     let d = dist(me.position, u.position);
-    let reach = if s.melee_or_ranged() && max <= 5.0 {
+    let melee = s.melee_or_ranged() && max <= 5.0;
+    let reach = if melee {
         combat::melee_range(&me, &u) + 1.0
     } else {
         max + me.combat_reach + u.combat_reach + (max * 0.1).min(3.0)
-    };
-    if max > 0.0 && d > reach {
+    } + moving_leeway(&me, &u, melee, target);
+    if base > 0.0 && d > reach {
         return Some(fail::OUT_OF_RANGE);
     }
     let forward = !s.on_next_swing()
@@ -705,6 +706,17 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
         return Some(fail::REQUIRES_AREA);
     }
     None
+}
+
+/// What a spell reaches beyond its range when caster and target both run
+/// forward: mangos's `MELEE_LEEWAY`, for a melee spell or one at a player
+/// (`GetMinMaxRange`; Thistle Tea's movement allowance).
+fn moving_leeway(me: &combat::UnitView, u: &combat::UnitView, melee: bool, target: Guid) -> f32 {
+    if me.running && u.running && (melee || guid::is_player(target)) {
+        combat::MELEE_LEEWAY
+    } else {
+        0.0
+    }
 }
 
 fn resurrects(s: &SpellTemplate) -> bool {
@@ -756,10 +768,20 @@ fn check_target(
             })
             && !triggered
         {
-            let (_, max) = map.realm.data.spells.range(s);
-            let max = m.apply(mods::OP_RANGE, max);
-            if max > 0.0 && dist(me.position, d) > max + 2.0 {
+            // Within range (a modifier can't take it below nothing), not too
+            // close, and in sight, as mangos's `CheckRange` has a
+            // destination: no combat reach.
+            let (min, base) = map.realm.data.spells.range(s);
+            let max = m.apply(mods::OP_RANGE, base).max(0.0);
+            let far = dist(me.position, d);
+            if base > 0.0 && far > max + 2.0 {
                 return Some(fail::OUT_OF_RANGE);
+            }
+            if min > 0.0 && far < min {
+                return Some(fail::TOO_CLOSE);
+            }
+            if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, d) {
+                return Some(fail::LINE_OF_SIGHT);
             }
         }
         return None;
@@ -899,17 +921,21 @@ fn check_target(
     if target != caster && !triggered {
         let me = map.unit_view(caster)?;
         let (min, max) = map.realm.data.spells.range(s);
-        let max = m.apply(mods::OP_RANGE, max);
+        let max = m.apply(mods::OP_RANGE, max).max(0.0);
         let d = dist(me.position, u.position);
-        let reach = if s.melee_or_ranged() && max <= 5.0 {
+        let melee = s.melee_or_ranged() && max <= 5.0;
+        let reach = if melee {
             combat::melee_range(&me, &u)
         } else {
             max + me.combat_reach + u.combat_reach
         };
-        if d > reach + 1.0 {
+        if d > reach + 1.0 + moving_leeway(&me, &u, melee, target) {
             return Some(fail::OUT_OF_RANGE);
         }
-        if min > 0.0 && d < min {
+        // The minimum beyond both reaches, as the maximum is (mangos's
+        // `GetMinMaxRange`, Thistle Tea's `Range`): a hunter's dead zone is
+        // from its target's edge.
+        if min > 0.0 && d < min + me.combat_reach + u.combat_reach {
             return Some(fail::TOO_CLOSE);
         }
         if s.from_behind() && facing(map, target, caster, std::f32::consts::PI) {
