@@ -322,12 +322,7 @@ pub fn pick_charm_spells(
     let mut out = Vec::new();
     for slot in 0..4 {
         let roll = rng.random_range(0.0f32..1.0) * 100.0;
-        let mut sum = 0.0;
-        let picked = options.iter().filter(|o| o.slot == slot).find(|o| {
-            let hit = roll > sum && roll <= sum + o.availability;
-            sum += o.availability;
-            hit
-        });
+        let picked = pick_slot(options.iter().filter(|o| o.slot == slot), roll);
         if let Some(o) = picked.filter(|o| data.spells.get(o.spell).is_some() && !controls(o.spell))
         {
             let cooldown = rng.random_range(o.cooldown_min_ms..=o.cooldown_max_ms);
@@ -335,6 +330,23 @@ pub fn pick_charm_spells(
         }
     }
     Some(out)
+}
+
+/// A slot's pick for a roll of `roll` (0 to 100): the option whose share of
+/// the slot's running availability takes it, or none past them all
+/// (Thistle Tea's `CharmSpells.pick`).
+pub fn pick_slot<'a>(
+    options: impl Iterator<Item = &'a crate::game::data::pets::CharmSpell>,
+    roll: f32,
+) -> Option<&'a crate::game::data::pets::CharmSpell> {
+    let mut sum = 0.0;
+    for o in options {
+        if roll > sum && roll <= sum + o.availability {
+            return Some(o);
+        }
+        sum += o.availability;
+    }
+    None
 }
 
 pub fn charm_spells(data: &GameData, entry: u32) -> Vec<u32> {
