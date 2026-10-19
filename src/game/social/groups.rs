@@ -364,6 +364,15 @@ impl Groups {
         self.groups.get(&id).is_some_and(|gr| gr.formed)
     }
 
+    /// Group `id`, while it is together.
+    pub fn get(&self, id: u32) -> Option<&Group> {
+        self.groups.get(&id).filter(|gr| gr.formed)
+    }
+
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut Group> {
+        self.groups.get_mut(&id).filter(|gr| gr.formed)
+    }
+
     /// The other members of `g`'s group.
     pub fn others(&self, g: Guid) -> Vec<Guid> {
         self.group_of(g)

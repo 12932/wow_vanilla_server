@@ -484,7 +484,7 @@ fn id_dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> boo
                 c.fields.set_u32(UNIT_NPC_FLAGS, npc_flags);
                 // Nothing left on it to loot, and no one's kill.
                 c.loot = None;
-                c.tapped_by = None;
+                crate::game::map::tap::clear(c);
                 let s = c.scripted.get_or_insert_with(Default::default);
                 s.despawn_at = Some(now + std::time::Duration::from_secs(120));
                 s.despawn_type = 1;

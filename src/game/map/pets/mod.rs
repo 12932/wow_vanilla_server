@@ -721,9 +721,10 @@ pub fn on_attacked(map: &mut Map, creature: Guid, attacker: Guid) -> bool {
         return true;
     }
     if let Some(master) = owner_of(map, attacker).filter(|m| guid::is_player(*m)) {
+        let realm = map.realm.clone();
         if let Some(c) = map.creature_mut(creature) {
             if c.tapped_by.is_none() {
-                c.tapped_by = Some(master);
+                crate::game::map::tap::take(&realm, c, master);
             }
             if c.threat.iter().all(|(g, _)| *g != master) {
                 c.threat.push((master, 0.0));
@@ -830,7 +831,7 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     c.owner = Some(master);
     c.pet = Some(Box::new(s));
     c.threat.clear();
-    c.tapped_by = None;
+    crate::game::map::tap::clear(c);
     c.evading = false;
     c.hostile_to_players = false;
     c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);

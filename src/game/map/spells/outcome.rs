@@ -1267,10 +1267,7 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
         // (mangos's `isAllowedToLoot`).
         if item == SOUL_SHARD {
             let tapped = guid::is_player(target)
-                || creature.is_some_and(|c| {
-                    c.tapped_by
-                        .is_none_or(|t| crate::game::map::tap::holds(map, t, h.caster))
-                });
+                || creature.is_some_and(|c| crate::game::map::tap::holds(map, c, h.caster));
             if !shard_target || !tapped || target_level <= combat::gray_level(level(map, h.caster))
             {
                 continue;
