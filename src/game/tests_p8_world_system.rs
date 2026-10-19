@@ -130,3 +130,229 @@ async fn a_member_leaves_its_group_and_its_leader_leaving_disbands_it() {
         "the leader's leaving disbands it"
     );
 }
+
+const TRAP: u32 = 997_855;
+const TRAP_SPAWN: u32 = 7_855;
+const MARK: u32 = 997_856;
+
+/// Thistle Tea's `SpawnPool` "disarmed and triggered static traps respawn
+/// through their pool with fresh state": a trap spawned thirty yards off,
+/// sprung once (one charge) and then gone, disarmed, goes for its spawn's
+/// minute and comes back armed; sprung by Alice beside it, it marks her
+/// and goes, and back after its minute it is armed again, its charge
+/// whole, and springs on her once more (mangos-classic's
+/// `GameObject::Update` for a trap: used up, it goes and comes back at its
+/// spawn's time, as new).
+#[tokio::test]
+async fn a_spawned_trap_disarmed_or_sprung_comes_back_armed() {
+    use crate::game::data::GameObjectSpawn;
+    use crate::game::map::{auras, objects};
+    use crate::game::tests_p3_cast_kit::{LASTS_LONG, aura, bare, data_with, effect, insert};
+    use wow_world_messages::vanilla::Vector3d;
+    let mut d = data_with(|d| {
+        let mut mark = bare(MARK, 0);
+        mark.duration_index = LASTS_LONG;
+        effect(&mut mark, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, [mark]);
+    });
+    d.faction_templates.extend(world().faction_templates);
+    d.gameobject_templates.insert(
+        TRAP,
+        crate::game::tests_p3_entity_objects::object(TRAP, 6, "Trap", &[(2, 3), (3, MARK), (4, 1)]),
+    );
+    d.gameobject_spawns
+        .entry(0)
+        .or_default()
+        .push(GameObjectSpawn {
+            guid: TRAP_SPAWN,
+            entry: TRAP,
+            map: 0,
+            x: START.0 + 30.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 60,
+            state: 1,
+            ..Default::default()
+        });
+    let realm = realm_of(d);
+    let (_a, ga, map) = player(&realm, "Alice").await;
+    let trap = guid::game_object(TRAP, TRAP_SPAWN);
+    let out = map
+        .query(move |m| {
+            let look = |m: &mut Map| {
+                m.objects.next_trap_look = None;
+                objects::update(m);
+            };
+            let armed = |m: &Map| {
+                m.gameobject(trap).is_some()
+                    && m.objects.traps.get(&trap).is_none_or(|t| !t.depleted)
+            };
+            let marks = |m: &Map| {
+                auras::auras(m, ga)
+                    .map_or(0, |a| a.holders.iter().filter(|h| h.spell == MARK).count())
+            };
+            look(m);
+            let first = armed(m);
+            objects::disarm(m, trap);
+            let disarmed = m.gameobject(trap).is_some();
+            m.now += std::time::Duration::from_secs(61);
+            look(m);
+            let back = armed(m);
+            // She stands on it.
+            crate::game::map::movement::teleport_within(
+                m,
+                ga,
+                Vector3d {
+                    x: START.0 + 30.0,
+                    y: START.1,
+                    z: START.2,
+                },
+                0.0,
+            );
+            look(m);
+            let sprung = (marks(m), m.gameobject(trap).is_some());
+            auras::remove_spell(m, ga, MARK, None);
+            // Back, it springs on her at once, its one charge whole.
+            m.now += std::time::Duration::from_secs(61);
+            look(m);
+            let again = (marks(m), m.gameobject(trap).is_some());
+            (first, disarmed, back, sprung, again)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, false, true, (1, false), (1, false)),
+        "armed; disarmed, gone; back armed; sprung once, gone; back, and springs again"
+    );
+}
+
+const STONE: u32 = 997_857;
+const STONE_SPAWN: u32 = 7_857;
+
+/// A world of a stone spawned beside where Alice comes in, back five
+/// minutes after it goes, with `steps` for its `gameobject_scripts`.
+fn stone_world(steps: Vec<ScriptStep>) -> GameData {
+    let mut d = world();
+    d.gameobject_templates.insert(
+        STONE,
+        crate::game::tests_p3_entity_objects::object(STONE, 5, "Stone", &[]),
+    );
+    d.gameobject_spawns
+        .entry(0)
+        .or_default()
+        .push(crate::game::data::GameObjectSpawn {
+            guid: STONE_SPAWN,
+            entry: STONE,
+            map: 0,
+            x: START.0 + 3.0,
+            y: START.1,
+            z: START.2,
+            respawn_min: 300,
+            state: 1,
+            ..Default::default()
+        });
+    d.scripts.gameobject.insert(STONE_SPAWN, steps);
+    d
+}
+
+/// Thistle Tea's `SpawnPool` "executes immediate and delayed scripts
+/// through the game object owner": a stone's script, its step at once
+/// opening it (state 0) and its step 200 ms on setting it to 2, runs as
+/// Alice uses it, the first at once and the second after its time
+/// (vmangos's `gameobject_scripts`).
+#[tokio::test]
+async fn an_objects_script_runs_its_steps_at_once_and_in_their_time() {
+    let set = |state: u32, delay_ms: u32| ScriptStep {
+        delay_ms,
+        ..step(80, [state, 0, 0, 0])
+    };
+    let realm = realm_of(stone_world(vec![set(0, 0), set(2, 200)]));
+    let (_a, ga, map) = player(&realm, "Alice").await;
+    let stone = guid::game_object(STONE, STONE_SPAWN);
+    let out = map
+        .query(move |m| {
+            use crate::game::fields::GAMEOBJECT_STATE;
+            let state = |m: &Map| {
+                m.gameobject(stone)
+                    .unwrap()
+                    .fields
+                    .get_u32(GAMEOBJECT_STATE)
+            };
+            let before = state(m);
+            scripts::object_scripts(m, ga, stone);
+            scripts::update(m);
+            let at_once = state(m);
+            m.now += std::time::Duration::from_millis(100);
+            scripts::update(m);
+            let early = state(m);
+            m.now += std::time::Duration::from_millis(150);
+            scripts::update(m);
+            (before, at_once, early, state(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (1, 0, 0, 2), "ready; opened at once; 2 after 200 ms");
+}
+
+/// Thistle Tea's `SpawnPool` "temporarily respawns a suspended game
+/// object" and "suspends a game object by its database guid": a script
+/// removes the stone, named by its database guid (41, at an object of a
+/// spawn, 14), and it stays gone past its spawn's five minutes; a
+/// script's respawn of it (9) brings it out for its ten seconds, after
+/// which it goes again and stays gone (vmangos's
+/// `SCRIPT_COMMAND_REMOVE_OBJECT` and `SCRIPT_COMMAND_RESPAWN_GAMEOBJECT`).
+#[tokio::test]
+async fn a_removed_object_stays_gone_but_for_a_scripts_while() {
+    let realm = realm_of(stone_world(Vec::new()));
+    let (_a, ga, map) = player(&realm, "Alice").await;
+    let stone = guid::game_object(STONE, STONE_SPAWN);
+    let out = map
+        .query(move |m| {
+            let here = |m: &Map| m.gameobject(stone).is_some();
+            let wait = |m: &mut Map, secs: u64| {
+                m.now += std::time::Duration::from_secs(secs);
+                scripts::update(m);
+                scripts::update_objects(m);
+                crate::game::map::objects::update(m);
+            };
+            let first = here(m);
+            let remove = ScriptStep {
+                target_type: 14,
+                target_param1: STONE_SPAWN,
+                ..step(41, [0; 4])
+            };
+            assert!(scripts::execute(m, &remove, ga, ga));
+            let removed = here(m);
+            wait(m, 301);
+            let past_its_time = here(m);
+            assert!(scripts::execute(
+                m,
+                &step(9, [STONE_SPAWN, 10, 0, 0]),
+                ga,
+                ga
+            ));
+            let out_for_a_while = here(m);
+            wait(m, 5);
+            let still = here(m);
+            wait(m, 6);
+            let gone = here(m);
+            wait(m, 301);
+            (
+                first,
+                removed,
+                past_its_time,
+                out_for_a_while,
+                still,
+                gone,
+                here(m),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, false, false, true, true, false, false),
+        "there; removed, and not back at its time; out for ten seconds; gone again for good"
+    );
+}
