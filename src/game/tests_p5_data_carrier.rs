@@ -109,7 +109,7 @@ async fn by_the_flag() -> (Client, Client, MapHandle) {
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

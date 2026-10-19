@@ -125,11 +125,15 @@ fn pull(map: &mut Map, caster: Guid, target: Guid, speed: f32) {
     p.fall_from = None;
     let mut b = crate::game::data::items::Body::default();
     crate::game::update::write_packed_guid(&mut b.0, target);
-    b.u32(p.outbound.next_order())
-        .f32(angle.cos())
-        .f32(angle.sin())
-        .f32(speed)
-        .f32(-vertical);
+    let impulse = [angle.cos(), angle.sin(), speed, -vertical];
+    b.u32(p.outbound.order(crate::game::conn::Order::KnockBack {
+        guid: target,
+        impulse,
+    }))
+    .f32(impulse[0])
+    .f32(impulse[1])
+    .f32(impulse[2])
+    .f32(impulse[3]);
     p.outbound.send_frame(b.frame(SMSG_MOVE_KNOCK_BACK));
 }
 

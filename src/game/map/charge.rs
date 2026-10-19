@@ -135,6 +135,11 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
             *at = Some(at.map_or(now, |t| t.max(now)) + delay);
         }
         p.movement.orientation = (to.y - from.y).atan2(to.x - from.x);
+        // A fall under way is over (mangos's `EffectCharge`:
+        // `SetFallInformation`; Thistle Tea's "server-driven movement
+        // clears tracked height").
+        p.fall_from = None;
+        p.misc.fall_far = false;
         p.charge = Some(Charge {
             arrives_at,
             spline_id,
@@ -198,7 +203,15 @@ pub fn update(map: &mut Map) {
         .map(|p| p.guid)
         .collect();
     for g in players {
-        advance(map, g);
+        // One who fell on the way lies where they fell (Thistle Tea's
+        // "death ends the charge without moving the corpse").
+        if map
+            .players
+            .get(&g)
+            .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
+        {
+            advance(map, g);
+        }
         let Some(p) = map.players.get(&g) else {
             continue;
         };

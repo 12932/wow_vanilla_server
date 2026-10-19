@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
+use crate::game::conn::Order;
 use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::fields::*;
 use crate::game::map::Map;
@@ -1701,6 +1702,31 @@ fn linked(map: &mut Map, target: Guid, h: &Holder, spell: u32) {
 }
 
 /// An aura effect began: what it does at once.
+/// Fear or confusion takes hold of `target`: its fight and cast stop, and
+/// it is flagged fleeing or confused.
+fn taken_over(map: &mut Map, target: Guid, kind: u32) {
+    crate::game::map::combat::stop_attack(map, target);
+    crate::game::map::spells::interrupt(map, target);
+    if let Some(f) = map.unit_fields_mut(target) {
+        let flag = if kind == AURA_MOD_FEAR {
+            UNIT_FLAG_FLEEING
+        } else {
+            UNIT_FLAG_CONFUSED
+        };
+        f.set_flag(UNIT_FIELD_FLAGS, flag, true);
+    }
+}
+
+/// What moves `target` may have changed (fear, confusion, what prevents
+/// fleeing): a player's control is brought in line, a creature's walk
+/// under way stops for its new mode, or for none, at once.
+fn controls_changed(map: &mut Map, target: Guid) {
+    crate::game::map::player_motion::control(map, target);
+    if crate::game::guid::is_unit(target) {
+        crate::game::map::creature_combat::control_changed(map, target);
+    }
+}
+
 fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     let kind = a.kind;
     let misc = a.misc;
@@ -1741,25 +1767,26 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             crate::game::map::player_motion::immobilized(map, target);
         }
         AURA_MOD_FEAR | AURA_MOD_CONFUSE => {
-            crate::game::map::combat::stop_attack(map, target);
-            crate::game::map::spells::interrupt(map, target);
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(
-                    UNIT_FIELD_FLAGS,
-                    if kind == AURA_MOD_FEAR {
-                        UNIT_FLAG_FLEEING
-                    } else {
-                        UNIT_FLAG_CONFUSED
-                    },
-                    true,
-                );
+            // A fear under an aura that prevents fleeing (Recklessness,
+            // Death Wish) holds back until that goes: no flight, the cast
+            // and the fight go on (mangos's `SetFleeing`, Thistle Tea's
+            // "fear applied under recklessness leaves casting intact").
+            let held_back = kind == AURA_MOD_FEAR
+                && auras(map, target).is_some_and(|x| x.has(AURA_PREVENTS_FLEEING));
+            if !held_back {
+                taken_over(map, target, kind);
             }
             // A player is moved by the server while it lasts; a creature's
             // walk under way stops for it.
-            crate::game::map::player_motion::control(map, target);
-            if crate::game::guid::is_unit(target) {
-                crate::game::map::creature_combat::control_changed(map, target);
+            controls_changed(map, target);
+        }
+        // A fear under way ends while it lasts (mangos's
+        // `HandlePreventFleeing`: `SetFleeing(false)`).
+        AURA_PREVENTS_FLEEING => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
             }
+            controls_changed(map, target);
         }
         // A creature's run (for help, or a critter's escape) waits while it
         // lasts, its fleeing flag off (mangos's `HandlePreventFleeing` and
@@ -1909,19 +1936,28 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     AURA_WATER_WALK => {
                         p.outbound.send(&SMSG_MOVE_WATER_WALK {
                             guid: target,
-                            counter: p.outbound.next_order(),
+                            counter: p.outbound.order(Order::WaterWalk {
+                                guid: target,
+                                on: true,
+                            }),
                         });
                     }
                     AURA_FEATHER_FALL => {
                         p.outbound.send(&SMSG_MOVE_FEATHER_FALL {
                             guid: target,
-                            counter: p.outbound.next_order(),
+                            counter: p.outbound.order(Order::FeatherFall {
+                                guid: target,
+                                on: true,
+                            }),
                         });
                     }
                     _ => {
                         p.outbound.send(&SMSG_MOVE_SET_HOVER {
                             guid: target,
-                            counter: p.outbound.next_order(),
+                            counter: p.outbound.order(Order::Hover {
+                                guid: target,
+                                on: true,
+                            }),
                         });
                     }
                 }
@@ -2037,7 +2073,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
             }
-            crate::game::map::player_motion::control(map, target);
+            controls_changed(map, target);
         }
         // A creature's run held by it goes on, if it isn't over (mangos's
         // `HandlePreventFleeing` putting the flight back).
@@ -2054,7 +2090,15 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_CONFUSED, false);
             }
-            crate::game::map::player_motion::control(map, target);
+            controls_changed(map, target);
+        }
+        // The fear it held back takes hold (mangos's `HandlePreventFleeing`:
+        // `SetFleeing(true)` for the first fear).
+        AURA_PREVENTS_FLEEING
+            if !still(map, AURA_PREVENTS_FLEEING) && still(map, AURA_MOD_FEAR) =>
+        {
+            taken_over(map, target, AURA_MOD_FEAR);
+            controls_changed(map, target);
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE | AURA_MOD_PACIFY => {
             // What's left of either still holds (Thistle Tea's
@@ -2141,7 +2185,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_LAND_WALK {
                     guid: target,
-                    counter: p.outbound.next_order(),
+                    counter: p.outbound.order(Order::WaterWalk {
+                        guid: target,
+                        on: false,
+                    }),
                 });
             }
         }
@@ -2149,7 +2196,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_NORMAL_FALL {
                     guid: target,
-                    counter: p.outbound.next_order(),
+                    counter: p.outbound.order(Order::FeatherFall {
+                        guid: target,
+                        on: false,
+                    }),
                 });
             }
         }
@@ -2157,7 +2207,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_UNSET_HOVER {
                     guid: target,
-                    counter: p.outbound.next_order(),
+                    counter: p.outbound.order(Order::Hover {
+                        guid: target,
+                        on: false,
+                    }),
                 });
             }
         }

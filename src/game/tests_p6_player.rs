@@ -1365,7 +1365,7 @@ async fn a_conditioned_trigger_sends_on_those_who_meet_it_alone() {
     assert_eq!(stepped(&mut a, CONDITIONED).await, Ok(()));
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

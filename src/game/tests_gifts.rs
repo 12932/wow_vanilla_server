@@ -736,7 +736,7 @@ async fn winter_veils_presents_come_with_the_event_and_give_once() {
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

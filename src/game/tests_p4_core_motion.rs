@@ -281,7 +281,7 @@ async fn the_ground_the_water_or_a_teleport_ends_a_fall_and_one_may_start_below_
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

@@ -3,6 +3,7 @@
 //! for what time drives.
 
 pub mod account_data;
+pub mod acks;
 pub mod ai;
 pub mod arena;
 pub mod assistance;
@@ -1039,6 +1040,9 @@ impl Map {
                     Some(t) => (t.transport.position, t.transport.orientation),
                     None => (p.position(), p.movement.orientation),
                 };
+                // What the client was told to do on the old map, it can't
+                // acknowledge on this one.
+                p.outbound.forget_orders();
                 p.outbound
                     .send(&wow_world_messages::vanilla::SMSG_NEW_WORLD {
                         map: crate::game::map::movement::map_enum(self.key.map),
@@ -1318,6 +1322,7 @@ impl Map {
             crate::game::map::spells::interrupt(self, guid);
         }
         if key == self.key {
+            pets::teleporting(self, guid, position);
             movement::teleport_within(self, guid, position, orientation);
             return;
         }

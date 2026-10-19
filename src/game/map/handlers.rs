@@ -46,6 +46,9 @@ impl Map {
             trace!("{guid} is held by another: {msg} dropped");
             return;
         }
+        let Some(msg) = crate::game::map::acks::handle(self, guid, msg) else {
+            return;
+        };
         let Some(msg) = crate::game::map::misc::handle_all(self, guid, msg) else {
             return;
         };

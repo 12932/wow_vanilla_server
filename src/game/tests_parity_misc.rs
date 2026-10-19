@@ -386,7 +386,7 @@ async fn released(who: &mut Client, g: Guid) {
     .await;
     who.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: who.teleport_order(),
         time: Default::default(),
     })
     .await;

@@ -180,7 +180,7 @@ pub(super) async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32) {
     .await;
     c.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: c.teleport_order(),
         time: Default::default(),
     })
     .await;

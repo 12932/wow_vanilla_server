@@ -1180,11 +1180,27 @@ async fn movement_acknowledgements_reach_those_who_watch() {
         fall_time: 0,
     };
     // (A speed's acknowledgement isn't passed on: those watching were told
-    // at the change, `tests_parity_misc`.)
+    // at the change, `tests_parity_misc`.) A launch's is, for the launch
+    // sent.
+    let impulse = [1.0, 0.0, 10.0, -5.0];
+    let counter = on_map(&realm, move |m| {
+        m.players[&ga]
+            .outbound
+            .order(crate::game::conn::Order::KnockBack { guid: ga, impulse })
+    })
+    .await;
     a.send(CMSG_MOVE_KNOCK_BACK_ACK {
         guid: ga,
-        counter: 0,
-        info,
+        counter,
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::new_jumping(MovementInfo_MovementFlags_Jumping {
+                cos_angle: 1.0,
+                sin_angle: 0.0,
+                xy_speed: 10.0,
+                z_speed: -5.0,
+            }),
+            ..info
+        },
     })
     .await;
     b.wait_frame("MSG_MOVE_KNOCK_BACK", 0x0F1, |_| true).await;

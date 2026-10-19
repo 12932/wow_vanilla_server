@@ -490,7 +490,7 @@ async fn arriving_in_an_enemy_capital_is_honorless_a_while() {
     .await;
     g.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: grom,
-        movement_counter: 0,
+        movement_counter: g.teleport_order(),
         time: Default::default(),
     })
     .await;

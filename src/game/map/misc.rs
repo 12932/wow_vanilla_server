@@ -1,10 +1,9 @@
 //! The smaller player systems Thistle Tea has: far sight, the mount's
 //! special animation, growth auras, the looking-for-group stub,
 //! self-resurrection (soulstones and Reincarnation), summons, talent
-//! resets, unlearning a skill, and the movement acknowledgements other
-//! clients hear of (knockbacks, skipped time). A speed change they hear of
-//! at the change itself ([`speed_to_observers`]), not at its
-//! acknowledgement.
+//! resets, unlearning a skill, and the client's skipped time, which other
+//! clients hear of. A speed change they hear of at the change itself
+//! ([`speed_to_observers`]), not at its acknowledgement (`acks`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -102,25 +101,8 @@ pub fn movement_bytes(guid: Guid, info: &MovementInfo) -> Vec<u8> {
     frame[4..].to_vec()
 }
 
-fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
-    let Some(p) = map.players.get_mut(&g) else {
-        return;
-    };
-    if p.movement.flags.get_root() == root {
-        return;
-    }
-    p.movement = info;
-    let frame = if root {
-        encode(&MSG_MOVE_ROOT_Server { player: g, info })
-    } else {
-        encode(&MSG_MOVE_UNROOT_Server { player: g, info })
-    };
-    if let Some(frame) = frame {
-        map.send_to_observers(g, &frame, false);
-    }
-}
-
-fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
+/// `g`'s movement, as `opcode` with `tail` after it, to those who see it.
+pub fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
     if let Some(p) = map.players.get_mut(&g) {
         p.movement = info;
     }
@@ -207,41 +189,6 @@ impl Map {
 pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     use ClientOpcodeMessage as C;
     match msg {
-        // A unit the player's client moves (Mind Control, Eyes of the
-        // Beast): those who see it hear of its new speed once that client
-        // has it, as mangos-classic tells them. Its own speed it hears at
-        // the change.
-        C::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(m)
-            if m.guid != g
-                && map
-                    .players
-                    .get(&g)
-                    .is_some_and(|p| p.owned.mover == Some(m.guid)) =>
-        {
-            relay(
-                map,
-                m.guid,
-                m.info,
-                MSG_MOVE_SET_RUN_SPEED,
-                &m.new_speed.to_le_bytes(),
-            )
-        }
-        // A root or an unroot taken: the client is where it says, and
-        // those who see it are told, as mangos's HandleMoveRootAck tells
-        // them; one for the state the client is already in is stale.
-        C::CMSG_FORCE_MOVE_ROOT_ACK(m) if m.guid == g => root_ack(map, g, m.info, true),
-        C::CMSG_FORCE_MOVE_UNROOT_ACK(m) if m.guid == g => root_ack(map, g, m.info, false),
-        C::CMSG_MOVE_KNOCK_BACK_ACK(m) if m.guid == g => {
-            // The jump's angle and speeds, as the client fell.
-            let tail: Vec<u8> = match m.info.flags.get_jumping() {
-                Some(j) => [j.cos_angle, j.sin_angle, j.xy_speed, j.z_speed]
-                    .iter()
-                    .flat_map(|f| f.to_le_bytes())
-                    .collect(),
-                None => vec![0; 16],
-            };
-            relay(map, g, m.info, MSG_MOVE_KNOCK_BACK, &tail)
-        }
         C::CMSG_MOVE_TIME_SKIPPED(m) if m.guid == g => {
             if let Some(p) = map.players.get_mut(&g) {
                 p.movement.timestamp = p.movement.timestamp.wrapping_add(m.lag);

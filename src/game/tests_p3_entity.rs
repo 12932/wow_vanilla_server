@@ -567,7 +567,7 @@ async fn the_hearthstone_takes_a_player_to_their_bind() {
     );
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

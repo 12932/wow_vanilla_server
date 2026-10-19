@@ -512,7 +512,7 @@ async fn a_corpse_and_its_bones_pass_the_client() {
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: ga,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

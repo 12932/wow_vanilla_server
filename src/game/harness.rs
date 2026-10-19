@@ -209,6 +209,9 @@ pub struct Client {
     /// one packet can carry many.
     created: ahash::AHashMap<Guid, u32>,
     forgot: ahash::AHashMap<Guid, u32>,
+    /// The order counter of the last teleport received, for its
+    /// acknowledgement ([`Client::teleport_order`]).
+    teleport_order: u32,
 }
 
 impl Client {
@@ -231,7 +234,14 @@ impl Client {
             captured: Vec::new(),
             created: ahash::AHashMap::new(),
             forgot: ahash::AHashMap::new(),
+            teleport_order: 0,
         }
+    }
+
+    /// The order counter `MSG_MOVE_TELEPORT_ACK` answers: the last teleport
+    /// received's, as a client echoes it (a stale one is refused).
+    pub fn teleport_order(&self) -> u32 {
+        self.teleport_order
     }
 
     pub async fn send(&self, msg: impl Into<ClientOpcodeMessage>) {
@@ -275,6 +285,9 @@ impl Client {
             self.captured.push(frame.clone());
             match ServerOpcodeMessage::read_unencrypted(&frame[..]) {
                 Ok(m) => {
+                    if let ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) = &m {
+                        self.teleport_order = t.movement_counter;
+                    }
                     for g in creates(&m) {
                         *self.created.entry(g).or_default() += 1;
                     }

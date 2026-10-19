@@ -3,7 +3,7 @@
 //! to the client through an [`Outbound`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -11,6 +11,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, warn};
 use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, HeaderCrypto};
+use wow_world_messages::Guid;
 use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::{SMSG_PONG, ServerMessage};
@@ -48,9 +49,74 @@ struct OutboundInner {
     /// Frames wait in `held` (see [`Outbound::hold`]).
     holding: AtomicBool,
     held: parking_lot::Mutex<Vec<Arc<[u8]>>>,
-    /// The connection's order counter: the next forced movement's (see
-    /// [`Outbound::next_order`]).
-    orders: AtomicU32,
+    /// The connection's order counter and the forced movements it hasn't
+    /// acknowledged (see [`Outbound::order`]).
+    orders: parking_lot::Mutex<Orders>,
+}
+
+/// A forced movement a client has been sent and hasn't acknowledged, by
+/// the unit it moves (Thistle Tea's `pending_movement_acks`): the client's
+/// acknowledgement settles it only if it names the same unit and change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Order {
+    Root {
+        guid: Guid,
+        root: bool,
+    },
+    Speed {
+        guid: Guid,
+        kind: SpeedKind,
+        speed: f32,
+    },
+    WaterWalk {
+        guid: Guid,
+        on: bool,
+    },
+    FeatherFall {
+        guid: Guid,
+        on: bool,
+    },
+    Hover {
+        guid: Guid,
+        on: bool,
+    },
+    /// The launch: its direction's cosine and sine, and its horizontal and
+    /// vertical speeds, as sent.
+    KnockBack {
+        guid: Guid,
+        impulse: [f32; 4],
+    },
+    Teleport {
+        guid: Guid,
+    },
+}
+
+/// Which speed a forced speed change sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeedKind {
+    Run,
+    RunBack,
+    Swim,
+    SwimBack,
+    Walk,
+    TurnRate,
+}
+
+/// How many orders wait for their acknowledgement at most: past it, the
+/// oldest goes (a client that never acknowledges keeps no more).
+const MAX_PENDING_ORDERS: usize = 64;
+
+#[derive(Debug, Default)]
+struct Orders {
+    next: u32,
+    pending: std::collections::VecDeque<(u32, Order)>,
+}
+
+impl Order {
+    /// What it moves the client somewhere else with: a teleport, a launch.
+    fn relocates(&self) -> bool {
+        matches!(self, Order::Teleport { .. } | Order::KnockBack { .. })
+    }
 }
 
 /// What a queue's two ends share.
@@ -128,7 +194,7 @@ fn queue(budget: usize) -> (Outbound, Frames) {
             overflowed: AtomicBool::new(false),
             holding: AtomicBool::new(false),
             held: parking_lot::Mutex::new(Vec::new()),
-            orders: AtomicU32::new(0),
+            orders: parking_lot::Mutex::new(Orders::default()),
         }),
     };
     (outbound, Frames { rx, shared })
@@ -142,7 +208,53 @@ impl Outbound {
     /// Tea's `movement_counter` stamps them, so the client's
     /// acknowledgement names the order it answers.
     pub fn next_order(&self) -> u32 {
-        self.inner.orders.fetch_add(1, Ordering::Relaxed)
+        let mut o = self.inner.orders.lock();
+        let counter = o.next;
+        o.next = counter.wrapping_add(1);
+        counter
+    }
+
+    /// [`Outbound::next_order`] for `order`, kept until the client
+    /// acknowledges it ([`Outbound::settle`]). A teleport makes the
+    /// teleports and launches before it stale, as Thistle Tea's
+    /// `MovementControl` drops them: their acknowledgements name a place
+    /// the client is no longer bound for.
+    pub fn order(&self, order: Order) -> u32 {
+        let mut o = self.inner.orders.lock();
+        let counter = o.next;
+        o.next = counter.wrapping_add(1);
+        if matches!(order, Order::Teleport { .. }) {
+            o.pending.retain(|(_, p)| !p.relocates());
+        }
+        if o.pending.len() >= MAX_PENDING_ORDERS {
+            o.pending.pop_front();
+        }
+        o.pending.push_back((counter, order));
+        counter
+    }
+
+    /// The client acknowledges the order `counter`: settled, and returned,
+    /// if one is waiting under it and `matches` it; else nothing changes
+    /// (a stale, repeated or forged acknowledgement).
+    pub fn settle(&self, counter: u32, matches: impl FnOnce(&Order) -> bool) -> Option<Order> {
+        let mut o = self.inner.orders.lock();
+        let i = o.pending.iter().position(|(c, _)| *c == counter)?;
+        if !matches(&o.pending[i].1) {
+            return None;
+        }
+        o.pending.remove(i).map(|(_, order)| order)
+    }
+
+    /// The orders waiting go: the client is sent to another map
+    /// (`SMSG_NEW_WORLD`), where none of them applies, as Thistle Tea
+    /// clears them there. The counter goes on.
+    pub fn forget_orders(&self) {
+        self.inner.orders.lock().pending.clear();
+    }
+
+    /// The orders waiting for their acknowledgement, oldest first.
+    pub fn pending_orders(&self) -> Vec<(u32, Order)> {
+        self.inner.orders.lock().pending.iter().copied().collect()
     }
 
     /// A queue nothing drains, with an unlimited budget, and the receiving

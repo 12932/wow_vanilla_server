@@ -38,7 +38,7 @@ async fn release(c: &mut Client, g: Guid) -> MovementInfo {
         .await;
     c.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: g,
-        movement_counter: 0,
+        movement_counter: c.teleport_order(),
         time: Default::default(),
     })
     .await;

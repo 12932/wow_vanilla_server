@@ -10,6 +10,7 @@ use ahash::AHashSet;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
+use crate::game::conn::{Order, SpeedKind};
 use crate::game::data::GameData;
 use crate::game::fields::*;
 use crate::game::guid;
@@ -278,18 +279,29 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
     p.speeds.swim = 4.722_222 * speed;
     p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
         guid: p.guid,
-        move_event: p.outbound.next_order(),
+        move_event: p.outbound.order(Order::Speed {
+            guid: p.guid,
+            kind: SpeedKind::Run,
+            speed: p.speeds.run,
+        }),
         speed: p.speeds.run,
     });
     p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
         guid: p.guid,
-        move_event: p.outbound.next_order(),
+        move_event: p.outbound.order(Order::Speed {
+            guid: p.guid,
+            kind: SpeedKind::Swim,
+            speed: p.speeds.swim,
+        }),
         speed: p.speeds.swim,
     });
     // A ghost walks on water (mangos's `HandleAuraGhost`: `SetWaterWalk`).
     p.outbound.send(&SMSG_MOVE_WATER_WALK {
         guid: p.guid,
-        counter: p.outbound.next_order(),
+        counter: p.outbound.order(Order::WaterWalk {
+            guid: p.guid,
+            on: true,
+        }),
     });
     let left = crate::game::map::corpses::remaining_ms(p, unix);
     if left > 0 {
@@ -363,12 +375,20 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
         p.speeds.swim = 4.722_222;
         p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
             guid: g,
-            move_event: p.outbound.next_order(),
+            move_event: p.outbound.order(Order::Speed {
+                guid: g,
+                kind: SpeedKind::Run,
+                speed: p.speeds.run,
+            }),
             speed: p.speeds.run,
         });
         p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
             guid: g,
-            move_event: p.outbound.next_order(),
+            move_event: p.outbound.order(Order::Speed {
+                guid: g,
+                kind: SpeedKind::Swim,
+                speed: p.speeds.swim,
+            }),
             speed: p.speeds.swim,
         });
     }
@@ -381,7 +401,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
         {
             p.outbound.send(&SMSG_MOVE_LAND_WALK {
                 guid: g,
-                counter: p.outbound.next_order(),
+                counter: p.outbound.order(Order::WaterWalk { guid: g, on: false }),
             });
         }
     }
@@ -461,7 +481,7 @@ pub fn resend_water_walk(map: &Map, g: Guid) {
     {
         p.outbound.send(&SMSG_MOVE_WATER_WALK {
             guid: g,
-            counter: p.outbound.next_order(),
+            counter: p.outbound.order(Order::WaterWalk { guid: g, on: true }),
         });
     }
 }

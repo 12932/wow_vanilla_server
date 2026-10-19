@@ -181,7 +181,7 @@ async fn a_saved_pet_returns_at_login_unless_dismissed_dead_or_its_hunter_a_ghos
     .await;
     a.send(MSG_MOVE_TELEPORT_ACK_Client {
         guid: h,
-        movement_counter: 0,
+        movement_counter: a.teleport_order(),
         time: Default::default(),
     })
     .await;

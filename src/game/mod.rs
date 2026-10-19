@@ -699,6 +699,16 @@ mod tests_p7_loader_spells;
 #[cfg(test)]
 mod tests_p7_loader_world;
 #[cfg(test)]
+mod tests_p7_movement_acks;
+#[cfg(test)]
+mod tests_p7_movement_charge;
+#[cfg(test)]
+mod tests_p7_movement_fear;
+#[cfg(test)]
+mod tests_p7_movement_ground;
+#[cfg(test)]
+mod tests_p7_movement_wire;
+#[cfg(test)]
 mod tests_p7_pets;
 #[cfg(test)]
 mod tests_p7_pets_real;
