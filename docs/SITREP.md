@@ -354,7 +354,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     so the row stays `wrong-for-1.12`.
   - **The bake's sea surface** is 0.19 where Thistle Tea's is 0.268 (the test allows 0.1).
   - **Noticed, not changed:** a script group's members keep pointing at a leader who left (Thistle Tea disbands
-    it); spells' hit chance has a 22% floor (`magic_hit_chance`), not yet checked against mangos.
+    it). **Spells' hit chance** keeps vmangos's 22% floor (`magic_hit_chance`), as Thistle Tea has it; mangos-classic
+    has none (a miss of 1% to 100%, `CalculateSpellMissChance`), which matters only far above the caster's level.
 - **7f, creature AI, round 7 (0.1.27):** a wander in reach stops as the fight begins; a swimmer chases its victim's
   depth; the victim selector works for a player source after a swap; hostile selectors measure between the two
   reaches, minimum included; a pet finishes its cast before it walks, settles by a master at rest, stops walking and
@@ -368,6 +369,18 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **A pet settles** within 1.4 × 2 yards plus both radii of a master at rest (Thistle Tea's follow slack).
   - **Left:** 81 rows: formations, scripted follow, the rest of distancing, pets' ally autocast and Devour Magic,
     targeting by threat and PvP flag, guardians dropped by distance, totems' last pulse, scripted waypoint routes.
+- **7h, entities, round 7 (0.1.28):** forced movements (roots, speeds, water walk, feather fall, hover, knockbacks,
+  the teleport ack) carry each client's order counter, counting up from 0 (mangos's `GetOrderCounter`), where wvs
+  sent 0 (the acks aren't checked against it, so older clients and peon are unaffected); a possessed creature's
+  root goes to the client moving it; a kill that leaves no loot turns no round robin; an object's spell puts no
+  object on a threat list. **My calls:**
+  - **Game objects cast through a stand-in** (mangos's `GameObject::Use`): a trap's spell by its owner, else the
+    one it springs on; a quest object's by its owner, else its user.
+  - **`wrong-for-1.12`, mangos's way:** with one roller or none, no roll and the item stays on the corpse; a chest
+    with no loot table opens an empty window; a creature's pet's level offset cuts toward zero and never below
+    the template's.
+  - **Left:** 130 rows (triggered hits, the AI's environment, event sinks, formations, wild summons); Lunar
+    Festival fireworks, cheer speakers and the Ghost Magnet don't exist in wvs (content work).
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -464,7 +477,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7d: combat, round 7 | 78.5% | 5890d1f |
 | 7e: the world, round 7 | 79.2% | 0c99ac6 |
 | 7f: creature AI, round 7 | 80.0% | 427b0c3 |
+| 7h: entities, round 7 | MATRIX | c7f8585 |
 
-**Running now:** round 7 (7g creature scripts, 7h entities, 7i pets, 7j creatures, 7k auras).
+**Running now:** round 7 (7g creature scripts, 7i pets, 7j creatures, 7k auras, 7l movement and the network), and the extended suite (19:40, at 0.1.27).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
