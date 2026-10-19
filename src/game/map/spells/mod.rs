@@ -1140,10 +1140,21 @@ fn execute(
     }
     if s.channeled() {
         let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
-        let ms = m.apply_ms(
-            mods::OP_DURATION,
-            map.realm.data.spells.duration(s, level).unwrap_or(0),
-        );
+        // A channel of no end (a duration of -1: Blackfathom Channeling, a
+        // ribbon pole's) runs until something stops it, its start telling
+        // the client -1, as mangos-classic's channel with no timer.
+        let spells = &map.realm.data.spells;
+        let ms = match spells.duration(s, level) {
+            Some(d) => m.apply_ms(mods::OP_DURATION, d),
+            None if spells
+                .durations
+                .get(&s.duration_index)
+                .is_some_and(|d| d.base < 0) =>
+            {
+                u32::MAX
+            }
+            None => 0,
+        };
         if let Some(c) = map.caster_mut(caster) {
             c.casting = Some(Casting {
                 spell: s.id,
@@ -2140,6 +2151,18 @@ pub fn pushback(map: &mut Map, g: Guid) {
 pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
     let data = map.realm.data.clone();
     if !map.players.contains_key(&g) {
+        // A creature's channel that damage breaks stops (Destroy Spear's,
+        // Blackfathom Channeling's), as mangos-classic's `DealDamage` has
+        // it for any unit; nothing of a creature's is pushed back.
+        let breaks = map
+            .caster(g)
+            .and_then(|c| c.casting.as_ref())
+            .filter(|c| c.channel_until.is_some())
+            .and_then(|c| data.spells.get(c.spell))
+            .is_some_and(|s| s.channel_interrupt_flags & 0x2 != 0);
+        if breaks {
+            interrupt(map, g);
+        }
         return;
     }
     let Some((spell, channel)) = map

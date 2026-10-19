@@ -386,40 +386,43 @@ pub fn check(
             return Some(fail::SILENCED);
         }
     }
-    // The caster's state.
-    // Breaking free (a trinket, Will of the Forsaken) works under control.
-    let frees = s.effects.iter().any(|e| {
-        e.effect == 108
-            || (e.effect == 6
-                && matches!(e.aura, AURA_MECHANIC_IMMUNITY | AURA_MECHANIC_IMMUNITY_MASK))
-    });
+    // The caster's state. Breaking free (a trinket, Will of the Forsaken,
+    // Divine Shield, Blink) works under what the spell's own immunities
+    // cancel, and only that (mangos-classic's `CheckCasterAuras`).
     if !triggered && let Some(a) = auras::auras(map, caster) {
-        if a.has(AURA_MOD_STUN) && !frees {
+        let data = &map.realm.data;
+        let held = |kinds: &[u32]| {
+            a.holders.iter().any(|h| {
+                h.effects
+                    .iter()
+                    .any(|x| kinds.contains(&x.kind) && !cancels(data, s, h, x))
+            })
+        };
+        if held(&[AURA_MOD_STUN]) {
             return Some(fail::STUNNED);
-        }
-        if a.has(AURA_MOD_CONFUSE) && !frees {
-            return Some(fail::CONFUSED);
-        }
-        if a.has(AURA_MOD_FEAR) && !frees {
-            return Some(fail::FLEEING);
-        }
-        if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
-            return Some(fail::NOT_IN_CONTROL);
         }
         // Silence stops what its prevention type says silence stops, and
         // pacify what pacify does (mangos's `Spell::CheckCasterAuras`,
         // Thistle Tea's `CombatControl`): a wand's Shoot goes on under a
         // silence.
         if s.prevention_type == PREVENTION_SILENCE
-            && !frees
-            && (a.has(AURA_MOD_SILENCE) || a.has(AURA_MOD_PACIFY_SILENCE))
+            && held(&[AURA_MOD_SILENCE, AURA_MOD_PACIFY_SILENCE])
         {
             return Some(fail::SILENCED);
         }
         if s.prevention_type == PREVENTION_PACIFY
-            && (a.has(AURA_MOD_PACIFY) || a.has(AURA_MOD_PACIFY_SILENCE))
+            && held(&[AURA_MOD_PACIFY, AURA_MOD_PACIFY_SILENCE])
         {
             return Some(fail::PACIFIED);
+        }
+        if held(&[AURA_MOD_FEAR]) {
+            return Some(fail::FLEEING);
+        }
+        if held(&[AURA_MOD_CONFUSE]) {
+            return Some(fail::CONFUSED);
+        }
+        if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
+            return Some(fail::NOT_IN_CONTROL);
         }
     }
     if !triggered {
@@ -894,4 +897,49 @@ fn check_target(
         }
     }
     None
+}
+
+/// `SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT`: the spell's immunities punch
+/// through what they guard against.
+const ATTR_EX_IMMUNITY_PURGES_EFFECT: u32 = 0x8000;
+
+/// Whether `s` frees its caster from effect `x` of aura `h` (a stun, a
+/// silence, a fear): mangos-classic's `SpellCancelsAuraEffect`. The spell
+/// must purge what it is immune to, and have an immunity to the aura's
+/// kind, its school, its dispel type or its mechanic (the spell's or the
+/// effect's); an aura that ignores immunities holds anyway. Divine Shield
+/// and Ice Block (every school) free from any; Blessing of Protection
+/// (physical) from Kidney Shot, not Hammer of Justice's holy stun or a
+/// fear; Blink (stun and root) from a stun, not a silence.
+pub fn cancels(
+    data: &crate::game::data::GameData,
+    s: &SpellTemplate,
+    h: &auras::Holder,
+    x: &auras::Aura,
+) -> bool {
+    if !s.attr(1, ATTR_EX_IMMUNITY_PURGES_EFFECT) {
+        return false;
+    }
+    let Some(t) = data.spells.get(h.spell) else {
+        return false;
+    };
+    if t.attr(0, sd::ATTR_NO_IMMUNITIES) {
+        return false;
+    }
+    let effect_mechanic = t
+        .effects
+        .get(usize::from(x.effect))
+        .map_or(0, |e| e.mechanic);
+    s.effects.iter().filter(|e| e.effect == 6).any(|e| {
+        let misc = e.misc_value as u32;
+        match e.aura {
+            AURA_STATE_IMMUNITY => misc == x.kind,
+            AURA_SCHOOL_IMMUNITY => {
+                !t.attr(2, sd::ATTR_EX2_NO_SCHOOL_IMMUNITIES) && t.school_mask() & misc != 0
+            }
+            AURA_DISPEL_IMMUNITY => misc == t.dispel,
+            AURA_MECHANIC_IMMUNITY => misc != 0 && (misc == t.mechanic || misc == effect_mechanic),
+            _ => false,
+        }
+    })
 }
