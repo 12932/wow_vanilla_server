@@ -391,7 +391,6 @@ pub fn handles(data: &GameData, s: &SpellTemplate, index: usize) -> bool {
     match e.effect {
         EFFECT_OPEN_LOCK
         | EFFECT_OPEN_LOCK_ITEM
-        | EFFECT_PICKPOCKET
         | EFFECT_SKINNING
         | EFFECT_DISENCHANT
         | EFFECT_ENCHANT_ITEM
@@ -646,11 +645,6 @@ pub fn execute(
                     skin(map, caster, unit, s.id);
                 }
             }
-            EFFECT_PICKPOCKET => {
-                if let Some(unit) = t.unit {
-                    pick_pocket(map, caster, unit);
-                }
-            }
             EFFECT_DISENCHANT => {
                 if let Some(item) = t.item {
                     disenchant(map, caster, item, s.id);
@@ -896,8 +890,9 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     loot::show(map, caster, creature);
 }
 
-/// Picking a living creature's pockets: once a life.
-fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
+/// Picking a living creature's pockets: once a life. A pick's effect, run
+/// as it lands (`spells::effects`), so a resisted one picks nothing.
+pub fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     let data = map.realm.data.clone();
     let Some((entry, level)) = map
         .creature(creature)

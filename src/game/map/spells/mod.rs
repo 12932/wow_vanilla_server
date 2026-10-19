@@ -1753,6 +1753,8 @@ const SEDUCTION: u32 = 6358;
 const ATTR_EX_NO_THREAT: u32 = 0x400;
 const ATTR_EX_THREAT_ONLY_ON_MISS: u32 = 0x20_0000;
 const ATTR_EX_FAILURE_BREAKS_STEALTH: u32 = 0x1000;
+/// Stealth's dispel type.
+const DISPEL_STEALTH: u32 = 5;
 const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 
 /// A harmful spell got to creature `target`, landing (`hit`) or not:
@@ -1804,6 +1806,12 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
         let breaks = s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH);
         (seen || breaks) && (breaks || (own && !s.attr(1, ATTR_EX_NO_THREAT)))
     };
+    // Caught at it (a resisted Pick Pocket), the caster's stealth ends
+    // (mangos's `CasterHitTargetWithSpell`: `RemoveAurasWithDispelType
+    // (DISPEL_STEALTH)` for `SPELL_ATTR_EX_FAILURE_BREAKS_STEALTH`).
+    if fights && !hit && s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH) {
+        auras::remove_where(map, caster, |h| h.dispel == DISPEL_STEALTH);
+    }
     if fights {
         if guid::is_unit(target) {
             crate::game::map::ai::attacked(map, target, caster);

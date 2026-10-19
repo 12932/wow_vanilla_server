@@ -926,6 +926,12 @@ fn effect(
                 crate::game::map::movement::teleport_within(map, target, pos, o);
             }
         }
+        // Pockets picked once the pick has landed: a resisted one opens
+        // nothing (mangos's `EffectPickPocket`, "failure is handled
+        // through normal spell resist").
+        crate::game::map::professions::EFFECT_PICKPOCKET => {
+            crate::game::map::professions::pick_pocket(map, caster, target);
+        }
         EFFECT_BIND => {
             let to = lands_on(map, caster, target, &e, t);
             crate::game::map::npc::bind_home(map, to, caster);
