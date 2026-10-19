@@ -343,3 +343,483 @@ async fn out_of_time_freedom_for_all_creatures_fails_in_the_timeouts_words() {
         "Kindal put back as she was"
     );
 }
+
+const ROWE: u32 = 17804;
+const WINDSOR: u32 = 12580;
+const RENDEZVOUS: u32 = 6402;
+const MASQUERADE: u32 = 6403;
+const GOSSIP: u32 = 0x1;
+const QUESTGIVER: u32 = 0x2;
+
+/// The menu `c` is shown by `npc` at its hello: its text, and its options'
+/// ids and words.
+pub(super) async fn menu_of(c: &mut Client, npc: Guid) -> (u32, Vec<(u32, String)>) {
+    c.clear();
+    hello(c, npc).await;
+    c.wait_for("the menu", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g)
+            if g.guid == npc =>
+        {
+            Some((
+                g.title_text_id,
+                g.gossips
+                    .iter()
+                    .map(|o| (o.id, o.message.clone()))
+                    .collect(),
+            ))
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// `me`'s quests as `log` (each complete or not) and `rewarded` have them.
+fn quests_as(m: &mut Map, me: Guid, log: &[(u32, bool)], rewarded: &[u32]) {
+    let data = m.realm.data.clone();
+    let p = m.players.get_mut(&me).unwrap();
+    p.journal.log.clear();
+    p.journal.rewarded.clear();
+    p.journal.rewarded.extend(rewarded.iter().copied());
+    for (quest, complete) in log {
+        p.journal.log.push(crate::game::store::Logged {
+            quest: *quest,
+            // The masquerade's one objective: its event.
+            explored: *complete,
+            ..Default::default()
+        });
+    }
+    crate::game::map::quests::refresh_log(p, &data);
+}
+
+/// Squire Rowe's menu: for a stranger his greeting alone; for a player
+/// fresh from the rendezvous (or back on the masquerade) while Windsor is
+/// away, his word for Windsor and the option to send it; for one done
+/// with both, his last. Sent, the rendezvous's event starts, Rowe runs to
+/// the road and kneels, lights a flare and runs back as Windsor rides in
+/// from the gates, mounted and offering nothing; Rowe, at his post again,
+/// gives his menu back (Windsor is up, he says so) and speaks. Windsor,
+/// at the gates' end of the road, gets down, turns to the player who
+/// called him, offers the masquerade and greets them; with no one taking
+/// it for five minutes he leaves (Thistle Tea's `stormwind_rendezvous`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn squire_rowe_signals_windsor_who_rides_in_and_waits_for_the_masquerade() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, rowe) = hero_by(&realm, "Signaller", ROWE).await;
+    // A watcher midway along the road, so that Windsor rides in sight.
+    let (mut w, watcher, _) = hero(&realm, "Watcher").await;
+    let midway = Vector3d {
+        x: -9099.0,
+        y: 407.0,
+        z: 92.0,
+    };
+    relocate(&map, &mut w, midway).await;
+    let sent = "Let Marshal Windsor know that I am ready.";
+    for (log, rewarded, text, offered) in [
+        (&[][..], &[][..], 9063, false),
+        (&[(RENDEZVOUS, true)][..], &[][..], 9065, true),
+        (&[(MASQUERADE, false)][..], &[RENDEZVOUS][..], 9065, true),
+        (&[][..], &[RENDEZVOUS, MASQUERADE][..], 9066, false),
+    ] {
+        map.query(move |m| quests_as(m, me, log, rewarded)).await;
+        let (shown, options) = menu_of(&mut c, rowe).await;
+        assert_eq!(shown, text, "{log:?} {rewarded:?}");
+        assert_eq!(
+            options.iter().any(|(_, t)| t == sent),
+            offered,
+            "{log:?} {rewarded:?}: {options:?}"
+        );
+    }
+    // Sent.
+    map.query(move |m| quests_as(m, me, &[(RENDEZVOUS, true)], &[]))
+        .await;
+    let (_, options) = menu_of(&mut c, rowe).await;
+    let id = options.iter().find(|(_, t)| t == sent).unwrap().0;
+    map.query(move |m| {
+        if let Some(c) = m.creature_mut(rowe) {
+            c.speeds.walk = 20.0;
+            c.speeds.run = 20.0;
+        }
+    })
+    .await;
+    choose(&c, rowe, id).await;
+    assert!(
+        until(&map, 2_000, move |m| map_events::active(m, RENDEZVOUS)
+            && npc_flags(m, rowe) & GOSSIP == 0)
+        .await,
+        "the rendezvous under way, Rowe's menu gone"
+    );
+    // The signaller by Rowe's post.
+    let post = Vector3d {
+        x: -9042.23,
+        y: 434.241,
+        z: 93.2955,
+    };
+    map.query(move |m| {
+        stand(m, watcher, midway);
+        stand(m, me, off(post, -3.0, 3.0));
+    })
+    .await;
+    let road = Vector3d {
+        x: -9084.88,
+        y: 419.23,
+        z: 92.42,
+    };
+    assert!(
+        until(&map, 5_000, move |m| m
+            .position_of(rowe)
+            .is_some_and(|at| dist(at, road) < 2.0))
+        .await,
+        "Rowe runs to the road"
+    );
+    assert!(
+        until(&map, 3_000, move |m| m
+            .scripts
+            .runs
+            .iter()
+            .any(|r| r.source == rowe && r.next != usize::MAX))
+        .await,
+        "and kneels there"
+    );
+    hurry_all(&map, 5.0).await;
+    assert!(
+        until(&map, 2_000, |m| m
+            .gameobjects
+            .iter()
+            .any(|(_, o)| o.entry == 181987))
+        .await,
+        "the flare"
+    );
+    hurry_all(&map, 1.5).await;
+    let windsor = until_some(&map, 2_000, |m| first(m, WINDSOR))
+        .await
+        .expect("Windsor rides in");
+    let (mount, flags) = map
+        .query(move |m| {
+            if let Some(c) = m.creature_mut(windsor) {
+                c.speeds.walk = 40.0;
+                c.speeds.run = 40.0;
+            }
+            (
+                m.unit_fields(windsor).map_or(0, |f| {
+                    f.get_u32(crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID)
+                }),
+                npc_flags(m, windsor),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(mount, 2410, "mounted");
+    assert_eq!(flags & QUESTGIVER, 0, "offering nothing yet");
+    assert!(
+        until(&map, 5_000, move |m| npc_flags(m, rowe) & GOSSIP != 0).await,
+        "Rowe at his post, his menu back"
+    );
+    assert!(hears(&mut c, &realm, rowe, 14389).await, "and speaks");
+    let (shown, options) = menu_of(&mut c, rowe).await;
+    assert_eq!(shown, 9064, "Windsor is up");
+    assert!(options.is_empty(), "nothing to send");
+    // Windsor at the road's end.
+    let end = Vector3d {
+        x: -9050.406,
+        y: 443.9748,
+        z: 93.05646,
+    };
+    assert!(
+        until(&map, 8_000, move |m| {
+            hasten(m, windsor);
+            m.position_of(windsor).is_some_and(|at| dist(at, end) < 2.0)
+        })
+        .await,
+        "Windsor rides to the road's end: {:?}",
+        map.query(move |m| m.creature(windsor).map(|c| (
+            c.position,
+            format!("{:?}", c.motion)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        )))
+        .await
+    );
+    sleep_ms(300).await;
+    c.clear();
+    hurry_all(&map, 12.0).await;
+    assert!(
+        until(&map, 2_000, move |m| npc_flags(m, windsor) & QUESTGIVER
+            != 0
+            && event_ai::phase(m, windsor) == 1)
+        .await,
+        "he offers the masquerade"
+    );
+    assert!(
+        hears(&mut c, &realm, windsor, 8090).await,
+        "and greets the player who called him"
+    );
+    assert_eq!(
+        map.query(move |m| m.unit_fields(windsor).map_or(1, |f| f
+            .get_u32(crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID)))
+            .await,
+        Some(0),
+        "down from his horse"
+    );
+    // Five minutes and no one takes it.
+    fire(&map, windsor, 1258002).await;
+    assert!(
+        until(&map, 3_000, move |m| gone(m, windsor)
+            && !map_events::active(m, RENDEZVOUS))
+        .await,
+        "he leaves"
+    );
+}
+
+/// Wait, a little at a time, up to `ms`, for `what` to find something.
+pub(super) async fn until_some<T: Send + 'static>(
+    map: &MapHandle,
+    ms: u64,
+    what: impl Fn(&mut Map) -> Option<T> + Send + Clone + 'static,
+) -> Option<T> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+    loop {
+        let w = what.clone();
+        if let Some(v) = map.query(move |m| w(m)).await.flatten() {
+            return Some(v);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        sleep_ms(25).await;
+    }
+}
+
+const BOLVAR: u32 = 1748;
+const PRESTOR: u32 = 1749;
+const ONYXIA: u32 = 12756;
+const ELITE: u32 = 12739;
+const GUARD: u32 = 68;
+
+/// The Great Masquerade: Windsor, up from the rendezvous for the player,
+/// takes it; its escort's event starts, the bridge is lined with six
+/// guards and Prestor's voice is heard, and he sets off down his
+/// procession. At the keep's doorstep he waits for the player's word,
+/// and at it walks to the throne room, where the tablets unmask Prestor
+/// and her royal guards turn. Once no elite guard stands, Bolvar mourns,
+/// the player is credited, both events end well, and Windsor dies
+/// (Thistle Tea's `stormwind_rendezvous`, vmangos's
+/// `npc_reginald_windsor`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn windsor_unmasks_prestor_at_the_players_word() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, rowe) = hero_by(&realm, "Unmasker", ROWE).await;
+    let end = Vector3d {
+        x: -9050.406,
+        y: 443.9748,
+        z: 93.05646,
+    };
+    // Windsor up for the player, as Rowe's signal leaves him.
+    let windsor = map
+        .query(move |m| {
+            quests_as(m, me, &[], &[RENDEZVOUS]);
+            map_events::start(m, RENDEZVOUS, rowe, me, Duration::from_secs(2400));
+            stand(m, me, off(end, 2.0, 0.0));
+            let w = summon(m, WINDSOR, end, 0.66);
+            event_ai::set_phase(m, w, 1);
+            if let Some(f) = m.unit_fields_mut(w) {
+                f.set_u32(crate::game::fields::UNIT_NPC_FLAGS, QUESTGIVER);
+            }
+            w
+        })
+        .await
+        .unwrap();
+    c.sees(windsor).await;
+    c.clear();
+    assert!(
+        takes(&mut c, &map, windsor, MASQUERADE).await,
+        "the masquerade's escort under way"
+    );
+    assert!(
+        hears(&mut c, &realm, windsor, 8107).await,
+        "Windsor takes it"
+    );
+    assert_eq!(
+        map.query(move |m| (event_ai::phase(m, windsor), npc_flags(m, windsor)))
+            .await,
+        Some((2, 0)),
+        "nothing more to offer"
+    );
+    hurry_all(&map, 10.0).await;
+    let (guards, voice, route) = map
+        .query(move |m| {
+            let guards = m
+                .creatures
+                .iter()
+                .filter(|(_, c)| c.entry == GUARD && c.spawn_guid.is_none() && c.alive())
+                .count();
+            let voice = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == PRESTOR && c.spawn_guid.is_none())
+                .map(|(_, c)| c.fields.get_u32(crate::game::fields::UNIT_FIELD_DISPLAYID));
+            let route = event_ai::scripted(m, windsor)
+                .and_then(|s| s.route.as_ref())
+                .map(|r| r.points.len());
+            (guards, voice, route)
+        })
+        .await
+        .unwrap();
+    assert_eq!(guards, 6, "the bridge lined with guards");
+    assert_eq!(voice, Some(11686), "Prestor's voice");
+    assert_eq!(route, Some(18), "Windsor on his procession");
+    // At the bridge he talks Marcus down, for a minute and a half.
+    c.clear();
+    map.query(move |m| bring(m, me, windsor, 0)).await;
+    assert!(
+        until(&map, 3_000, move |m| reached(m, windsor, 0)).await,
+        "at the bridge"
+    );
+    let waits = map
+        .query(move |m| match m.creature(windsor).map(|c| &c.motion) {
+            Some(crate::game::map::creature::Motion::Idle { until: Some(t) }) => {
+                Some(t.saturating_duration_since(m.now).as_secs_f32())
+            }
+            _ => None,
+        })
+        .await
+        .flatten();
+    assert!(
+        waits.is_some_and(|w| (86.0..=87.7).contains(&w)),
+        "he stays there: {waits:?}"
+    );
+    let marcus = map
+        .query(move |m| {
+            let at = m.position_of(windsor).unwrap();
+            scripts::creatures_near(m, at, 466, 150.0, true)
+                .into_iter()
+                .next()
+        })
+        .await
+        .flatten()
+        .expect("Marcus at the bridge");
+    hurry_all(&map, 1.0).await;
+    assert!(
+        hears(&mut c, &realm, marcus, 8121).await,
+        "Marcus stops him"
+    );
+    hurry_all(&map, 5.0).await;
+    assert!(
+        hears(&mut c, &realm, windsor, 8123).await,
+        "and Windsor has words for him"
+    );
+    // At the keep's doorstep, he waits for the word.
+    c.clear();
+    map.query(move |m| bring(m, me, windsor, 16)).await;
+    assert!(
+        until(&map, 3_000, move |m| reached(m, windsor, 16)).await,
+        "at the keep"
+    );
+    hurry_all(&map, 1.0).await;
+    assert!(hears(&mut c, &realm, windsor, 8207).await, "he asks for it");
+    assert!(
+        until(&map, 2_000, move |m| npc_flags(m, windsor) & GOSSIP != 0).await,
+        "his menu"
+    );
+    let (text, options) = menu_of(&mut c, windsor).await;
+    assert_eq!(text, 5633);
+    let (id, _) = options
+        .iter()
+        .find(|(_, t)| t.starts_with("I am ready, as are my forces."))
+        .cloned()
+        .expect("the word");
+    c.clear();
+    choose(&c, windsor, id).await;
+    assert!(hears(&mut c, &realm, windsor, 8208).await, "on to the keep");
+    assert!(
+        until(&map, 2_000, move |m| npc_flags(m, windsor) == 0
+            && event_ai::scripted(m, windsor)
+                .and_then(|s| s.route.as_ref())
+                .is_some_and(|r| r.points.len() == 5))
+        .await,
+        "his walk to the throne room"
+    );
+    // The throne room.
+    c.clear();
+    map.query(move |m| bring(m, me, windsor, 4)).await;
+    assert!(
+        until(&map, 3_000, move |m| reached(m, windsor, 4)).await,
+        "in the throne room"
+    );
+    let prestor = map
+        .query(move |m| {
+            let at = m.position_of(windsor).unwrap();
+            scripts::creatures_near(m, at, PRESTOR, 60.0, true)
+                .into_iter()
+                .next()
+        })
+        .await
+        .flatten()
+        .expect("Prestor at her throne");
+    hurry_all(&map, 55.0).await;
+    assert_eq!(
+        cast_any_of(&mut c, windsor, 20358, Duration::from_secs(3)).await,
+        Some(prestor),
+        "the tablets at Prestor"
+    );
+    hurry_all(&map, 10.0).await;
+    assert!(
+        until(&map, 2_000, move |m| m.creature(prestor).map(|c| c.entry)
+            == Some(ONYXIA))
+        .await,
+        "Prestor unmasked"
+    );
+    hurry_all(&map, 11.0).await;
+    assert!(
+        until(&map, 2_000, |m| !living(m, ELITE).is_empty()).await,
+        "her royal guards turn"
+    );
+    hurry_all(&map, 28.0).await;
+    assert!(
+        until(&map, 2_000, move |m| event_ai::phase(m, windsor) == 3).await,
+        "the fight's phase"
+    );
+    // No elite guard standing.
+    c.clear();
+    map.query(move |m| {
+        for g in living(m, ELITE) {
+            kill(m, me, g);
+        }
+    })
+    .await;
+    let bolvar = map
+        .query(|m| first(m, BOLVAR))
+        .await
+        .flatten()
+        .expect("Bolvar");
+    assert!(
+        until(&map, 8_000, move |m| event_ai::phase(m, windsor) == 4).await,
+        "the guards down"
+    );
+    hurry_all(&map, 6.0).await;
+    assert!(hears(&mut c, &realm, bolvar, 8249).await, "Bolvar mourns");
+    assert!(
+        until(&map, 2_000, move |m| explored(m, me, MASQUERADE)
+            && stand_state(m, bolvar) == 8)
+        .await,
+        "kneeling; the masquerade credited"
+    );
+    hurry_all(&map, 8.0).await;
+    assert!(
+        until(&map, 3_000, move |m| !map_events::active(m, MASQUERADE)
+            && !map_events::active(m, RENDEZVOUS)
+            && m.creature(windsor).is_some_and(|c| !c.alive()))
+        .await,
+        "both events over well, and Windsor dies"
+    );
+    assert!(
+        !map.query(move |m| failed(m, me, MASQUERADE)).await.unwrap(),
+        "not failed"
+    );
+}

@@ -90,6 +90,17 @@ pub(super) fn gone(m: &Map, g: Guid) -> bool {
     m.creature(g).is_none_or(|c| c.despawned)
 }
 
+/// `g`'s walk under way over at once: it arrives at the next update.
+pub(super) fn hasten(m: &mut Map, g: Guid) {
+    let now = m.now;
+    if let Some(c) = m.creature_mut(g)
+        && let Motion::Moving(w) = &mut c.motion
+        && let Some(t) = now.checked_sub(w.duration)
+    {
+        w.started = t;
+    }
+}
+
 /// Whether `g` is held on its path by a script.
 pub(super) fn held(m: &Map, g: Guid) -> bool {
     event_ai::scripted(m, g).is_some_and(|s| s.hold.is_some())
