@@ -75,9 +75,11 @@ The review of 79b6def that this file held before predates the per-map rewrite, a
 - **M1, height** (review 2): the speed check ignores height. A fix needs a vertical allowance that real falls pass.
   **Accepted** (2026-10-19): the speed check keeps ignoring height.
 - **M2, copies** (review 2): two group members entering a dungeon at once can get different copies. `key_for`
-  releases its lock between choosing an id and storing it. **To fix** (your go, 2026-10-19; not started).
-- **M3, shutdown** (review 2): shutdown can miss a player between maps. **To fix** (your go, 2026-10-19; not
-  started).
+  releases its lock between choosing an id and storing it. **Fixed** (2026-10-20, `fix/m2m3`): `key_for` holds
+  the lock from choosing the copy to storing it, and those let in count against the copy's limit until they arrive.
+- **M3, shutdown** (review 2): shutdown can miss a player between maps. **Fixed** (2026-10-20, `fix/m2m3`): a map
+  asked for after the shutdown began, or one that has shut down, saves whoever arrives, and the shutdown waits
+  (within its limit) until no one is online.
 - **M4, empty pools** (review 2): health or mana saved at 0 loads as full, so a relog refills a mage. A fix needs a
   marker that a character has been saved. **Explained, waiting on you** (2026-10-19): a pool saved at 0 (mana
   spent, or rage and energy at rest) loads full, as the loader can't tell spent from never saved, so a relog refills
