@@ -107,6 +107,12 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   the capital's elite; from 60 in Stormwind, Jaina Proudmoore comes from Theramore (`jaina.rs`), fights, goes home a
   minute after the fight, and dead, is back in Theramore a day later. Each threshold crossed, and each of her moves,
   is logged at `info`.
+- **The Stormwind Elite Guard** (`map/elites.rs`, entry 101756, defined in code over the data): the Royal Guard's
+  looks and side at level 62, elite, with the Tower Point Warmaster's multipliers (health 20, damage 13.5) and fight,
+  its Charge going for a healer in sight (one who healed in the last 5 s first), else its victim; a sword in each
+  hand (the Alliance PvP blade and the Grand Marshal's Swiftblade), swinging both. Two come as Stormwind's alarm
+  rises through 50 (`elite_from`), once a crossing, as guards come and go; four come 40 yards around Jaina, walk to
+  her side fighting what they meet, guard her and leave with her.
 
 ## What's left
 - **Parity:** 2,652 rows are still gap. The biggest areas:
