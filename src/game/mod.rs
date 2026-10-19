@@ -619,6 +619,8 @@ mod tests_p7_loader_effects;
 #[cfg(test)]
 mod tests_p7_loader_items;
 #[cfg(test)]
+mod tests_p7_loader_pets;
+#[cfg(test)]
 mod tests_p7_loader_quests;
 #[cfg(test)]
 mod tests_p7_loader_scripts;
