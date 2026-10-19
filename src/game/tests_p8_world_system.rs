@@ -406,3 +406,96 @@ async fn a_script_for_a_zone_runs_on_those_in_its_areas_only() {
         "the forest's and Goldshire's, not Westfall's"
     );
 }
+
+/// Thistle Tea's `VendorStock.list/4` "isolates merchant spawns and world
+/// copies and clears only the expired copy": two clerks of one entry sell
+/// a limited ware, six of it each; Alice's buying three from one leaves
+/// it three, the other its six (a stock is the vendor's own, by its guid;
+/// a copy's vendors are its map's, gone with it).
+#[tokio::test]
+async fn a_vendors_limited_stock_is_its_own() {
+    use crate::game::data::{CreatureTemplate, ItemTemplate, VendorItem};
+    use crate::game::map::vendor;
+    use crate::game::tests_p3_combat::{HUMANS, data, setup_with, spawn, template};
+    const CLERK: u32 = 997_860;
+    const WARE: u32 = 997_861;
+    let mut d = data();
+    d.creature_templates.insert(
+        CLERK,
+        CreatureTemplate {
+            faction: HUMANS,
+            npc_flags: vendor::NPC_FLAG_VENDOR,
+            ..template(CLERK, 7)
+        },
+    );
+    d.items.insert(
+        WARE,
+        ItemTemplate {
+            entry: WARE,
+            name: "Ware".into(),
+            display_id: 1000,
+            stackable: 5,
+            allowable_class: -1,
+            allowable_race: -1,
+            buy_count: 3,
+            buy_price: 2,
+            ..Default::default()
+        },
+    );
+    d.vendors.insert(
+        CLERK,
+        vec![VendorItem {
+            item: WARE,
+            max_count: 6,
+            restock_secs: 600,
+            ..Default::default()
+        }],
+    );
+    let (_realm, _a, ga, map) = setup_with(d, wow_world_messages::vanilla::Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            m.players.get_mut(&ga).unwrap().set_money(100);
+            let (one, other) = (spawn(m, ga, CLERK, 20, 2.0), spawn(m, ga, CLERK, 20, 3.0));
+            let v = m.realm.data.vendor_items(CLERK)[0];
+            vendor::buy(m, ga, one, WARE, 1);
+            (
+                vendor::stock_left(m, one, &v, 3),
+                vendor::stock_left(m, other, &v, 3),
+                m.players[&ga].count_of(WARE),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (3, 6, 3), "three left of hers, six of the other's");
+}
+
+/// Thistle Tea's `Battleground.EffectSink.emit/2` "keeps the offline
+/// carrier's name after live metadata disappears": Alice takes the Horde's
+/// flag and goes offline with it; it drops where she stood, and Grom is
+/// told it was dropped by her, by name.
+#[tokio::test]
+async fn a_carrier_gone_offline_drops_the_flag_and_is_named_for_it() {
+    use crate::game::map::battleground::Flag;
+    use crate::game::tests_bg5::{alice_takes_the_horde_flag, horde_flag, said};
+    let (a, mut b, map, _alice) = alice_takes_the_horde_flag().await;
+    let mut carried = false;
+    for _ in 0..200 {
+        carried = matches!(
+            map.query(|m| horde_flag(m)).await.flatten(),
+            Some(Flag::Carried(_))
+        );
+        if carried {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(carried, "she carries it");
+    b.clear();
+    a.disconnect();
+    let line = said(&mut b, "dropped").await;
+    assert_eq!(line, "The Horde Flag was dropped by Alice!");
+    assert!(matches!(
+        map.query(|m| horde_flag(m)).await.flatten(),
+        Some(Flag::Dropped(_))
+    ));
+}
