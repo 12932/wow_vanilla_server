@@ -160,7 +160,11 @@ async fn group_spells_take_the_party_or_raid_and_a_member_spell_only_a_member() 
     let party = sorted(vec![a, b]);
     assert_eq!(out[0], party, "the party, not the kobold picked");
     assert_eq!(out[1], party, "nothing picked");
-    assert_eq!(out[2], party, "the raid, not the stranger picked");
+    assert_eq!(
+        out[2],
+        [b],
+        "the raid, not the stranger picked, nor for harm its caster"
+    );
     assert_eq!(out[3], party, "the member's party");
     assert_eq!(out[4], [b], "a member");
     assert!(out[5].is_empty(), "not a stranger");

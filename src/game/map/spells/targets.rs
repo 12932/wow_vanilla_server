@@ -130,6 +130,30 @@ pub fn party_unit(map: &Map, caster: Guid, target: Guid) -> bool {
         || (guid::is_player(target_owner) && members(map, owner, true).contains(&target_owner))
 }
 
+/// The group `about` is of, with its pets: its master's subgroup (or the
+/// whole raid), or its master alone, the members `keep` keeps and each
+/// one's pet (mangos's `FillRaidOrPartyTargets` with its pets, Thistle
+/// Tea's `party_pet?`). A pet's group is its master's.
+fn group_units(
+    map: &Map,
+    about: Guid,
+    raid_wide: bool,
+    mut keep: impl FnMut(Guid) -> bool,
+) -> Vec<Guid> {
+    let owner = crate::game::map::pets::master(map, about);
+    let mut out = Vec::new();
+    for g in members(map, owner, raid_wide) {
+        if !keep(g) {
+            continue;
+        }
+        out.push(g);
+        if let Some(pet) = crate::game::map::pets::pet_of(map, g) {
+            out.push(pet);
+        }
+    }
+    out
+}
+
 fn alive(map: &Map, g: Guid) -> bool {
     map.unit_view(g).is_some_and(|u| u.alive)
 }
@@ -255,10 +279,10 @@ pub fn effect_targets(
         (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => {
             units_around(map, center(map, caster, t, e.target_a != 18), r, ally)
         }
+        // The caster's party and its pets: a pet's, its master's.
         (PartyAroundCaster, _) | (_, PartyAroundCaster) => {
             let at = center(map, caster, t, e.target_a == 34);
-            let party = members(map, about, false);
-            party
+            group_units(map, about, false, |_| true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
                 .filter(|g| {
@@ -269,8 +293,11 @@ pub fn effect_targets(
                 })
                 .collect()
         }
-        // Within the effect's radius, or the spell's range without one
-        // (Thistle Tea's raid area).
+        // The raid and its pets within the effect's radius, or the spell's
+        // range without one (Thistle Tea's raid area): not those it can't
+        // help (a duel's other side), nor their pets; the one it is about
+        // only for a helpful spell (mangos's `FillRaidOrPartyTargets`
+        // `withcaster`), so Plague spares its carrier.
         (RaidAroundCaster, _) => {
             let at = center(map, caster, t, false);
             let reach = if r > 0.0 {
@@ -278,18 +305,27 @@ pub fn effect_targets(
             } else {
                 map.realm.data.spells.range(s).1
             };
-            members(map, about, true)
-                .into_iter()
-                .filter(|g| alive(map, *g))
-                .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= reach))
-                .collect()
+            let helpful = crate::game::map::auras::positive(s);
+            group_units(map, about, true, |g| {
+                g == about || (combat::can_assist(map, about, g) && !combat::hostile(map, about, g))
+            })
+            .into_iter()
+            .filter(|g| helpful || *g != about)
+            .filter(|g| alive(map, *g))
+            .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= reach))
+            .collect()
         }
+        // The party of the one aimed at (a pet's, its master's) about its
+        // master, with their pets (mangos's `TARGET_UNIT_FRIEND_AND_PARTY`,
+        // Thistle Tea's `target_party_guids`).
         (PartyAroundTarget, _) => {
             let target = t.unit.unwrap_or(caster);
+            let owner = crate::game::map::pets::master(map, target);
             let at = map
-                .position_of(target)
+                .position_of(owner)
+                .or_else(|| map.position_of(target))
                 .unwrap_or(center(map, caster, t, false));
-            members(map, target, false)
+            group_units(map, owner, false, |_| true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
                 .filter(|g| {
@@ -298,16 +334,23 @@ pub fn effect_targets(
                 })
                 .collect()
         }
+        // The raid's of the class of the one aimed at, and their pets of
+        // that class (mangos's `TARGET_UNIT_RAID_AND_CLASS`: a hunter's
+        // beast is a warrior's).
         (RaidAndClass, _) => {
             let target = t.unit.unwrap_or(caster);
-            let class = map.players.get(&target).map(|p| p.row.class);
+            let class_of = |g: Guid| {
+                map.unit_fields(g)
+                    .map(|f| f.get_byte(crate::game::fields::UNIT_FIELD_BYTES_0, 1))
+            };
+            let class = class_of(target);
             let at = map
                 .position_of(caster)
                 .unwrap_or(center(map, caster, t, false));
-            members(map, target, true)
+            group_units(map, target, true, |_| true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
-                .filter(|g| map.players.get(g).map(|p| p.row.class) == class)
+                .filter(|g| class_of(*g) == class)
                 .filter(|g| {
                     map.position_of(*g)
                         .is_some_and(|p| dist(p, at) <= r.max(100.0))
