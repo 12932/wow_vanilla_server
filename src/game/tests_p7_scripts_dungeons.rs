@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::Vector3d;
 
 use super::tests_p3_scripts::*;
 use super::tests_p4_scripts_dungeons::{data, inside, set};
@@ -436,4 +437,166 @@ async fn thermaplugg_knocks_away_and_his_bombs_open_the_faces() {
         until(&map, 2_000, move |m| event_ai::phase(m, t) == 0).await,
         "back to his first half"
     );
+}
+
+const KING_GORDOK: u32 = 11501;
+const MIZZLE: u32 = 14353;
+
+/// The king fallen, Mizzle hails the new one, walks back to the throne,
+/// and only there offers to talk (Thistle Tea's `dire_maul`; AI5_GAPS
+/// D25, a script's walk home arriving).
+#[tokio::test]
+#[ignore = "extended"]
+async fn mizzle_hails_the_new_king_and_talks_only_at_the_throne() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = inside(&realm, "Kingslayer", 429, KING_GORDOK).await;
+    c.clear();
+    map.query(move |m| {
+        for g in living(m, KING_GORDOK) {
+            kill(m, me, g);
+        }
+    })
+    .await;
+    let mizzle = until_some(&map, 2_000, |m| first(m, MIZZLE))
+        .await
+        .expect("Mizzle comes");
+    assert!(
+        hears(&mut c, &realm, mizzle, 9348).await,
+        "he hails the king"
+    );
+    let throne = Vector3d {
+        x: 816.3,
+        y: 481.8,
+        z: 37.3,
+    };
+    let (home, flags) = map
+        .query(move |m| (m.creature(mizzle).map(|c| c.home), npc_flags(m, mizzle)))
+        .await
+        .unwrap();
+    assert!(
+        home.is_some_and(|h| crate::game::map::combat::dist(h, throne) < 1.0),
+        "his home the throne: {home:?}"
+    );
+    assert_eq!(flags & 0x1, 0, "not talking on his way");
+    c.clear();
+    assert!(
+        until(&map, 8_000, move |m| {
+            // Waiting for him there (a copy sees 170 yards).
+            stand(m, me, off(throne, 3.0, 0.0));
+            hasten(m, mizzle);
+            npc_flags(m, mizzle) & 0x1 != 0
+        })
+        .await,
+        "at the throne he offers to talk"
+    );
+    assert!(
+        map.query(move |m| m
+            .position_of(mizzle)
+            .is_some_and(|p| crate::game::map::combat::dist(p, throne) < 3.0))
+            .await
+            .unwrap(),
+        "there"
+    );
+    assert!(hears(&mut c, &realm, mizzle, 9411).await, "and says so");
+}
+
+const DATHROHAN: u32 = 10812;
+const BALNAZZAR: u32 = 10813;
+
+/// Balnazzar's shadow magic, each on its vmangos timer, sending itself
+/// again: Mind Blast at his victim every 11 seconds, Sleep at an attacker
+/// other than his top every 15, Psychic Scream every 20, and Domination
+/// at his second-highest threat every 25 to 30 (Thistle Tea's
+/// `stratholme`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn balnazzars_shadow_magic_repeats_on_its_timers() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = inside(&realm, "Purifier", 329, DATHROHAN).await;
+    let d = map.query(|m| first(m, DATHROHAN)).await.flatten().unwrap();
+    let at = map
+        .query(move |m| m.position_of(d))
+        .await
+        .flatten()
+        .unwrap();
+    let (_c2, second) = joins(&realm, "Second", &map, off(at, 3.0, 0.0)).await;
+    c.sees(d).await;
+    map.query(move |m| {
+        crate::game::map::ai::attacked(m, d, me);
+        crate::game::map::ai::add_threat(m, d, me, 10_000.0);
+        crate::game::map::ai::add_threat(m, d, second, 5_000.0);
+        tough(m, d);
+        set_pct(m, d, 39);
+        if let Some(s) = event_ai::scripted_mut(m, d) {
+            s.next_tick = None;
+        }
+        event_ai::tick(m, d);
+    })
+    .await;
+    assert!(
+        until(&map, 3_000, move |m| m.creature(d).map(|c| c.entry)
+            == Some(BALNAZZAR)
+            && event_ai::phase(m, d) == 1)
+        .await,
+        "Balnazzar"
+    );
+    // His own sending, put by: each is sent here.
+    map.query(move |m| crate::game::map::scripts::stop_for(m, d))
+        .await;
+    let ready = move |m: &mut Map| {
+        crate::game::map::spells::interrupt(m, d);
+        if let Some(cr) = m.caster_mut(d) {
+            cr.gcd_until = None;
+            cr.cooldowns.clear();
+            cr.category_cooldowns.clear();
+        }
+    };
+    for (event, spell, at, again) in [
+        (1, 17399, Some(me), 11.0),
+        (2, 12098, Some(second), 15.0),
+        (3, 13704, None, 20.0),
+        (4, 17405, Some(second), 30.0),
+    ] {
+        c.clear();
+        map.query(move |m| {
+            ready(m);
+            event_ai::script_event(m, d, event, 0, None);
+        })
+        .await;
+        let aimed = cast_any_of(&mut c, d, spell, Duration::from_secs(3)).await;
+        assert!(aimed.is_some(), "{spell} cast");
+        if let Some(at) = at {
+            assert_eq!(aimed, Some(at), "{spell} aimed");
+        }
+        // Not before its time; at it, again.
+        c.clear();
+        map.query(move |m| {
+            ready(m);
+            hurry_runs(m, Some(d), Duration::from_secs_f32(again - 3.0));
+        })
+        .await;
+        assert!(
+            cast_any_of(&mut c, d, spell, Duration::from_millis(300))
+                .await
+                .is_none(),
+            "{spell} not yet"
+        );
+        map.query(move |m| {
+            ready(m);
+            hurry_runs(m, Some(d), Duration::from_secs(3));
+        })
+        .await;
+        assert!(
+            cast_any_of(&mut c, d, spell, Duration::from_secs(3))
+                .await
+                .is_some(),
+            "{spell} again {again} seconds on"
+        );
+        map.query(move |m| crate::game::map::scripts::stop_for(m, d))
+            .await;
+    }
 }
