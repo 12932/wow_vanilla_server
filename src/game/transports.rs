@@ -769,24 +769,27 @@ pub fn settle_aboard(map: &mut Map, g: Guid) {
 /// see and be seen there, until they stepped.
 fn carry(realm: &Arc<Realm>, route: &Route, pose: Pose) {
     let g = route.guid;
-    realm.maps.get(realm, MapKey::world(route.map)).call(move |m| {
-        let aboard: Vec<(Guid, Vector3d, f32)> = m
-            .players
-            .values()
-            .filter(|p| !p.awaiting_worldport && p.teleport.is_none())
-            .filter_map(|p| {
-                let t = p.movement.flags.get_on_transport()?;
-                (t.transport.guid == g).then_some((
-                    p.guid,
-                    t.transport.position,
-                    t.transport.orientation,
-                ))
-            })
-            .collect();
-        for (p, offset, o) in aboard {
-            on_deck(m, p, offset, o, &pose);
-        }
-    });
+    realm
+        .maps
+        .get(realm, MapKey::world(route.map))
+        .call(move |m| {
+            let aboard: Vec<(Guid, Vector3d, f32)> = m
+                .players
+                .values()
+                .filter(|p| !p.awaiting_worldport && p.teleport.is_none())
+                .filter_map(|p| {
+                    let t = p.movement.flags.get_on_transport()?;
+                    (t.transport.guid == g).then_some((
+                        p.guid,
+                        t.transport.position,
+                        t.transport.orientation,
+                    ))
+                })
+                .collect();
+            for (p, offset, o) in aboard {
+                on_deck(m, p, offset, o, &pose);
+            }
+        });
 }
 
 /// `g` in the world at `offset` on the deck of a ship at `pose`.
