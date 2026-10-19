@@ -785,6 +785,8 @@ mod tests_p8_world_sight;
 #[cfg(test)]
 mod tests_p8_world_spells;
 #[cfg(test)]
+mod tests_p8_world_system;
+#[cfg(test)]
 mod tests_p8_world_units;
 #[cfg(test)]
 mod tests_parity_combat;

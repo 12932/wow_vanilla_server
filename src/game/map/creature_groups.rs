@@ -24,12 +24,16 @@ pub fn leader_of(map: &Map, g: Guid) -> Option<u32> {
         return spawn_of(map, *leader).or(Some(0));
     }
     let spawn = spawn_of(map, g)?;
+    if map.left_groups.contains(&spawn) {
+        return None;
+    }
     map.realm.data.scripts.group_of.get(&spawn).copied()
 }
 
 pub fn is_leader(map: &Map, g: Guid) -> bool {
-    spawn_of(map, g).is_some_and(|s| map.realm.data.scripts.groups.contains_key(&s))
-        || map.script_groups.values().any(|(l, _, _, _)| *l == g)
+    spawn_of(map, g).is_some_and(|s| {
+        map.realm.data.scripts.groups.contains_key(&s) && !map.left_groups.contains(&s)
+    }) || map.script_groups.values().any(|(l, _, _, _)| *l == g)
 }
 
 /// The flags of `g`'s place in a group a script made: its own as a
@@ -81,7 +85,10 @@ pub fn members_of(map: &Map, g: Guid) -> Vec<Guid> {
     let data = &map.realm.data.scripts;
     let mut out: Vec<Guid> = creature_of_spawn(map, leader).into_iter().collect();
     if let Some(members) = data.groups.get(&leader) {
-        for m in members {
+        for m in members
+            .iter()
+            .filter(|m| !map.left_groups.contains(&m.guid))
+        {
             if let Some(c) = creature_of_spawn(map, m.guid)
                 && !out.contains(&c)
             {
@@ -126,8 +133,56 @@ pub fn join_with(map: &mut Map, g: Guid, leader: Guid, distance: f32, angle: f32
         .insert(g, (leader, distance, angle, flags));
 }
 
+/// A script takes `g` out of its group (vmangos's
+/// `SCRIPT_COMMAND_LEAVE_CREATURE_GROUP`, Thistle Tea's
+/// `CreatureGroups.leave`): a member leaves it alone, its place in the
+/// formation gone; its leader disbands it, every member free. Out of a
+/// database group, they stay out while the map is up, through their
+/// respawns.
 pub fn leave(map: &mut Map, g: Guid) {
     map.script_groups.remove(&g);
+    map.script_groups.retain(|_, (l, _, _, _)| *l != g);
+    let Some(spawn) = spawn_of(map, g) else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    let Some(&leader) = data.scripts.group_of.get(&spawn) else {
+        return;
+    };
+    if map.left_groups.contains(&spawn) {
+        return;
+    }
+    map.left_groups.insert(spawn);
+    if leader == spawn {
+        map.left_groups.extend(
+            data.scripts
+                .groups
+                .get(&leader)
+                .into_iter()
+                .flatten()
+                .map(|m| m.guid),
+        );
+        // One leading its patrol meanwhile walks on its own.
+        stop_acting(map, spawn);
+    }
+}
+
+/// The member leading the formation of `leader`'s spawn meanwhile, if one
+/// is, leads it no more and stands.
+fn stop_acting(map: &mut Map, leader: u32) {
+    let Some(acting) = map.acting_leaders.remove(&leader) else {
+        return;
+    };
+    let Some(c) = map.creature_mut(acting) else {
+        return;
+    };
+    if let Some(s) = c.scripted.as_deref_mut() {
+        s.route = None;
+    }
+    c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+    if !c.combat.attacking && !c.evading {
+        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+    }
 }
 
 /// `g` was attacked by `enemy`: its group and its links join in. Its
@@ -396,8 +451,10 @@ fn led_group(map: &Map, g: Guid) -> Option<u32> {
         return Some(*key);
     }
     let spawn = spawn_of(map, g)?;
-    (map.realm.data.scripts.groups.contains_key(&spawn) && !map.acting_leaders.contains_key(&spawn))
-        .then_some(spawn)
+    (map.realm.data.scripts.groups.contains_key(&spawn)
+        && !map.acting_leaders.contains_key(&spawn)
+        && !map.left_groups.contains(&spawn))
+    .then_some(spawn)
 }
 
 /// The followers that keep their places by `leader` as it walks: those a
@@ -422,7 +479,7 @@ fn formation_of(map: &Map, leader: Guid) -> Vec<(Guid, f32, f32)> {
     let own = spawn_of(map, leader);
     for m in members
         .iter()
-        .filter(|m| m.guid != key && Some(m.guid) != own)
+        .filter(|m| m.guid != key && Some(m.guid) != own && !map.left_groups.contains(&m.guid))
     {
         if let Some(c) = creature_of_spawn(map, m.guid) {
             out.push((c, m.distance, m.angle));
@@ -452,7 +509,7 @@ pub fn died(map: &mut Map, g: Guid) {
         .map_or((0, None), |c| (c.waypoint, c.last_waypoint));
     let mut candidates: Vec<Guid> = members
         .iter()
-        .filter(|m| m.guid != key)
+        .filter(|m| m.guid != key && !map.left_groups.contains(&m.guid))
         .filter_map(|m| creature_of_spawn(map, m.guid))
         .filter(|c| *c != g && map.creature(*c).is_some_and(|x| x.alive()))
         .collect();
@@ -488,19 +545,7 @@ fn leader_back(map: &mut Map, g: Guid) {
     let Some(spawn) = spawn_of(map, g) else {
         return;
     };
-    let Some(acting) = map.acting_leaders.remove(&spawn) else {
-        return;
-    };
-    let Some(c) = map.creature_mut(acting) else {
-        return;
-    };
-    if let Some(s) = c.scripted.as_deref_mut() {
-        s.route = None;
-    }
-    c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
-    if !c.combat.attacking && !c.evading {
-        c.motion = crate::game::map::creature::Motion::Idle { until: None };
-    }
+    stop_acting(map, spawn);
 }
 
 /// Whether `g` keeps its place in a formation rather than walking its own
@@ -509,7 +554,9 @@ pub fn following(map: &Map, g: Guid) -> bool {
     let Some(c) = map.creature(g) else {
         return false;
     };
-    follows(&map.realm.data, c.spawn_guid) && !map.acting_leaders.values().any(|a| *a == g)
+    follows(&map.realm.data, c.spawn_guid)
+        && !c.spawn_guid.is_some_and(|s| map.left_groups.contains(&s))
+        && !map.acting_leaders.values().any(|a| *a == g)
 }
 
 /// Whether a follower is free to keep its place: alive, out of a fight,
@@ -623,7 +670,7 @@ pub fn formation_home(map: &Map, g: Guid) -> Option<Vector3d> {
         Some((l, d, a, f)) if f & GROUP_FORMATION != 0 => (*l, *d, *a),
         _ => {
             let spawn = spawn_of(map, g)?;
-            if !follows(&map.realm.data, Some(spawn)) {
+            if !follows(&map.realm.data, Some(spawn)) || map.left_groups.contains(&spawn) {
                 return None;
             }
             let leader = *map.realm.data.scripts.group_of.get(&spawn)?;
