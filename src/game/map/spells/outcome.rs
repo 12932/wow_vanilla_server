@@ -736,13 +736,8 @@ pub fn aura_max_ticks(s: &SpellTemplate, duration: u32) -> u32 {
                     AURA_PERIODIC_DAMAGE | AURA_PERIODIC_HEAL | AURA_PERIODIC_LEECH
                 )
         })
-        .map_or(6, |x| {
-            if x.amplitude > 0 {
-                duration / x.amplitude
-            } else {
-                6
-            }
-        })
+        .and_then(|x| duration.checked_div(x.amplitude))
+        .unwrap_or(6)
 }
 
 /// Spells learned below level 20 get less of the caster's power.

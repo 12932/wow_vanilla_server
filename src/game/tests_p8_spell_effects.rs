@@ -21,6 +21,10 @@ const STRIKE: u32 = 998_601;
 const CAPTURE: u32 = 11_885;
 const CAPTURE_LIVING: u32 = 998_602;
 const TREANT_SEED: u32 = 9_593;
+/// A cast of two seconds that moving doesn't break, and one that it does
+/// (interrupt flag 0x1).
+const UNMOVED: u32 = 998_603;
+const MOVE_BREAKS: u32 = 998_604;
 
 fn data(d: &mut GameData) {
     let mut strike = bare(STRIKE, 0);
@@ -72,7 +76,18 @@ fn data(d: &mut GameData) {
     let mut living = capture.clone();
     living.id = CAPTURE_LIVING;
     living.attributes[2] &= !ATTR_EX2_ALLOW_DEAD_TARGET;
-    insert(d, [strike, capture, living]);
+    let mut unmoved = bare(UNMOVED, 0);
+    unmoved.casting_time_index = CAST_2S;
+    unmoved.duration_index = LASTS_LONG;
+    effect(
+        &mut unmoved,
+        0,
+        aura(crate::game::map::auras::AURA_DUMMY, 0, 0, 1),
+    );
+    let mut breaks = unmoved.clone();
+    breaks.id = MOVE_BREAKS;
+    breaks.interrupt_flags = 0x1;
+    insert(d, [strike, capture, living, unmoved, breaks]);
     d.items.insert(
         TREANT_SEED,
         ItemTemplate {
@@ -149,4 +164,31 @@ async fn a_captured_corpse_goes_and_its_captor_has_the_item() {
         .await
         .unwrap();
     assert_eq!(out, (true, false, true, true, 1_000, 0, 1, true));
+}
+
+/// A cast its caster moves under goes off if its interrupt flags don't
+/// name moving, and stops if they do (Thistle Tea's "moving casts without
+/// the interrupt flag complete normally"; mangos-classic's
+/// `SPELL_INTERRUPT_FLAG_MOVEMENT`).
+#[tokio::test]
+async fn a_cast_moving_doesnt_break_goes_off_under_a_move() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P8EF3", "Walker", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[UNMOVED, MOVE_BREAKS]);
+            let walk = |m: &mut crate::game::map::Map, spell: u32| {
+                cast_fresh(m, a, spell, Default::default());
+                let p = m.players.get_mut(&a).unwrap();
+                p.movement.position.x += 2.0;
+                spells::moved(m, a);
+                let under_way = kit::casting(m, a);
+                kit::pass(m, 2_100);
+                (under_way, kit::has(m, a, spell))
+            };
+            (walk(m, UNMOVED), walk(m, MOVE_BREAKS))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, ((Some(UNMOVED), true), (None, false)));
 }
