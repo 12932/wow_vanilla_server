@@ -847,11 +847,13 @@ pub fn can_assist(map: &Map, a: Guid, b: Guid) -> bool {
     if ma == mb {
         return true;
     }
+    // The duel's arbiter and side: a duel's two sides help neither each
+    // other nor anyone outside it (mangos's `PLAYER_DUEL_ARBITER` and
+    // `PLAYER_DUEL_TEAM`).
     let arbiter = |g: Guid| {
-        map.players
-            .get(&g)
-            .and_then(|p| p.duel)
-            .and_then(|d| (d.phase == crate::game::map::duel::Phase::Fighting).then_some(d.flag))
+        map.players.get(&g).and_then(|p| p.duel).and_then(|d| {
+            (d.phase == crate::game::map::duel::Phase::Fighting).then_some((d.flag, d.initiator))
+        })
     };
     match (map.players.contains_key(&ma), map.players.contains_key(&mb)) {
         (true, true) => arbiter(ma) == arbiter(mb),

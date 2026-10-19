@@ -844,10 +844,14 @@ async fn belnistrasz_fights_only_out_of_his_chant_and_takes_it_up_again() {
         heard(&mut c, g, Duration::from_millis(500)).await.is_none(),
         "once"
     );
-    // Out of the fight in the chant: its channel again.
+    // Out of the fight in the chant: its channel again, at the idol (its
+    // script's creature, without which the cast is refused).
     c.clear();
-    map.query(move |m| crate::game::map::event_ai::evade(m, g))
-        .await;
+    map.query(move |m| {
+        crate::game::tests_p3_spells_kit::spawn(m, g, 8662, 30, 3.0);
+        crate::game::map::event_ai::evade(m, g)
+    })
+    .await;
     assert!(
         cast_any_of(&mut c, g, 12774, Duration::from_secs(2))
             .await

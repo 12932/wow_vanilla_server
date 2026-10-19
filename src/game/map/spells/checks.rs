@@ -50,6 +50,7 @@ pub mod fail {
     pub const NOT_STANDING: u8 = 0x3e;
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_EDIBLE_CORPSES: u8 = 0x86;
+    pub const NO_PET: u8 = 0x4c;
     pub const NO_POWER: u8 = 0x4d;
     pub const NOTHING_TO_DISPEL: u8 = 0x4e;
     pub const ONLY_BATTLEGROUNDS: u8 = 0x87;
@@ -538,6 +539,10 @@ pub fn check(
         if s.script_name == "spell_cannibalize" && !super::scripts::edible_corpse(map, caster, s) {
             return Some(fail::NO_EDIBLE_CORPSES);
         }
+        // A script's creature near the caster wants one there.
+        if targets::script_creature_missing(map, caster, s, t, m) {
+            return Some(fail::BAD_TARGETS);
+        }
         // Without the weapon or item it wants, as mangos's `CheckItems`
         // and Thistle Tea answer it: at an item, that item is what must be
         // of the kind (an enchantment's bracer, not the gear its enchanter
@@ -628,6 +633,11 @@ pub fn at_finish(
     if let Some(code) = caster_at_finish(map, caster, s) {
         return Some(code);
     }
+    // A script's creature gone meanwhile (Thistle Tea's launch recheck,
+    // mangos's targets filled again as the cast goes off).
+    if map.players.contains_key(&caster) && targets::script_creature_missing(map, caster, s, t, m) {
+        return Some(fail::BAD_TARGETS);
+    }
     let target = t.unit.filter(|u| *u != caster)?;
     let Some(u) = map.unit_view(target) else {
         return Some(fail::BAD_TARGETS);
@@ -713,6 +723,13 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
     if !super::area::allows(map, caster, s.id) {
         return Some(fail::REQUIRES_AREA);
     }
+    // Its focus still by them (a campfire burnt out meanwhile), as mangos's
+    // `CheckCast(false)` and Thistle Tea's launch revalidation have it.
+    if s.requires_spell_focus != 0
+        && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
+    {
+        return Some(fail::REQUIRES_SPELL_FOCUS);
+    }
     None
 }
 
@@ -795,6 +812,33 @@ fn check_target(
                 return Some(fail::TOO_CLOSE);
             }
             if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, d) {
+                return Some(fail::LINE_OF_SIGHT);
+            }
+        }
+        // A spell at the caster's pet wants it out, alive, in range and in
+        // sight, whatever unit the client named (mangos's `CheckCast` for
+        // `TARGET_UNIT_CASTER_PET`, Thistle Tea's implicit pet range).
+        if !triggered
+            && s.effects
+                .iter()
+                .any(|e| e.effect != 0 && targets::implicit(e.target_a) == Implicit::Pet)
+        {
+            let Some(pet) = crate::game::map::pets::pet_of(map, caster) else {
+                return Some(fail::NO_PET);
+            };
+            let (Some(me), Some(u)) = (map.unit_view(caster), map.unit_view(pet)) else {
+                return Some(fail::NO_PET);
+            };
+            if !u.alive {
+                return Some(fail::TARGETS_DEAD);
+            }
+            let (_, base) = map.realm.data.spells.range(s);
+            let max = m.apply(mods::OP_RANGE, base).max(0.0);
+            if base > 0.0 && dist(me.position, u.position) > max + me.combat_reach + u.combat_reach
+            {
+                return Some(fail::OUT_OF_RANGE);
+            }
+            if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, u.position) {
                 return Some(fail::LINE_OF_SIGHT);
             }
         }

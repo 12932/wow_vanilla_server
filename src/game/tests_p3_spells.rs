@@ -788,7 +788,8 @@ async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_rea
             spells::cast_triggered(m, me, 2457, None);
             place(m, me, kobold, 3.0);
             let close = check(m, CHARGE, at(kobold));
-            place(m, me, kobold, 10.0);
+            // Beyond eight yards and both reaches (round 6's minimum).
+            place(m, me, kobold, 12.0);
             let charge = check(m, CHARGE, at(kobold));
             clear_all(m, me);
             // Forms: Claw is a cat's; Fireball no shape's; Renew no shadow's.

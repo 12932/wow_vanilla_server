@@ -130,6 +130,30 @@ pub fn party_unit(map: &Map, caster: Guid, target: Guid) -> bool {
         || (guid::is_player(target_owner) && members(map, owner, true).contains(&target_owner))
 }
 
+/// The group `about` is of, with its pets: its master's subgroup (or the
+/// whole raid), or its master alone, the members `keep` keeps and each
+/// one's pet (mangos's `FillRaidOrPartyTargets` with its pets, Thistle
+/// Tea's `party_pet?`). A pet's group is its master's.
+fn group_units(
+    map: &Map,
+    about: Guid,
+    raid_wide: bool,
+    mut keep: impl FnMut(Guid) -> bool,
+) -> Vec<Guid> {
+    let owner = crate::game::map::pets::master(map, about);
+    let mut out = Vec::new();
+    for g in members(map, owner, raid_wide) {
+        if !keep(g) {
+            continue;
+        }
+        out.push(g);
+        if let Some(pet) = crate::game::map::pets::pet_of(map, g) {
+            out.push(pet);
+        }
+    }
+    out
+}
+
 fn alive(map: &Map, g: Guid) -> bool {
     map.unit_view(g).is_some_and(|u| u.alive)
 }
@@ -202,6 +226,26 @@ pub fn effect_targets(
     let e = &s.effects[index];
     let (a, b) = (implicit(e.target_a), implicit(e.target_b));
     let r = radius(map, s, index, m).max(if e.radius_index == 0 { 0.0 } else { 1.0 });
+    // A summon or a ground's effect at a script area's place is the
+    // place's, not each unit's there (Thistle Tea's destination effects).
+    if matches!(e.target_a, 7 | 8) && place_effect(s, index) {
+        return Vec::new();
+    }
+    // A unit's place (53, 63) is where the unit is now, whatever place was
+    // sent (mangos's `TARGET_LOCATION_CASTER_TARGET_POSITION` setting the
+    // destination to its unit, Thistle Tea's unit locations).
+    let at_unit;
+    let t = if matches!(e.target_a, 53 | 63)
+        && let Some(p) = t.unit.and_then(|u| map.position_of(u))
+    {
+        at_unit = Targets {
+            dest: Some(p),
+            ..*t
+        };
+        &at_unit
+    } else {
+        t
+    };
     // Areas and groups about the caster are about the unit a triggering
     // aura is on, and their friends and foes are that unit's (mangos's
     // `PickTargetsForSpellTrigger`, Thistle Tea's trigger resolution).
@@ -255,10 +299,10 @@ pub fn effect_targets(
         (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => {
             units_around(map, center(map, caster, t, e.target_a != 18), r, ally)
         }
+        // The caster's party and its pets: a pet's, its master's.
         (PartyAroundCaster, _) | (_, PartyAroundCaster) => {
             let at = center(map, caster, t, e.target_a == 34);
-            let party = members(map, about, false);
-            party
+            group_units(map, about, false, |_| true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
                 .filter(|g| {
@@ -269,8 +313,11 @@ pub fn effect_targets(
                 })
                 .collect()
         }
-        // Within the effect's radius, or the spell's range without one
-        // (Thistle Tea's raid area).
+        // The raid and its pets within the effect's radius, or the spell's
+        // range without one (Thistle Tea's raid area): not those it can't
+        // help (a duel's other side), nor their pets; the one it is about
+        // only for a helpful spell (mangos's `FillRaidOrPartyTargets`
+        // `withcaster`), so Plague spares its carrier.
         (RaidAroundCaster, _) => {
             let at = center(map, caster, t, false);
             let reach = if r > 0.0 {
@@ -278,18 +325,27 @@ pub fn effect_targets(
             } else {
                 map.realm.data.spells.range(s).1
             };
-            members(map, about, true)
-                .into_iter()
-                .filter(|g| alive(map, *g))
-                .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= reach))
-                .collect()
+            let helpful = crate::game::map::auras::positive(s);
+            group_units(map, about, true, |g| {
+                g == about || (combat::can_assist(map, about, g) && !combat::hostile(map, about, g))
+            })
+            .into_iter()
+            .filter(|g| helpful || *g != about)
+            .filter(|g| alive(map, *g))
+            .filter(|g| map.position_of(*g).is_some_and(|p| dist(p, at) <= reach))
+            .collect()
         }
+        // The party of the one aimed at (a pet's, its master's) about its
+        // master, with their pets (mangos's `TARGET_UNIT_FRIEND_AND_PARTY`,
+        // Thistle Tea's `target_party_guids`).
         (PartyAroundTarget, _) => {
             let target = t.unit.unwrap_or(caster);
+            let owner = crate::game::map::pets::master(map, target);
             let at = map
-                .position_of(target)
+                .position_of(owner)
+                .or_else(|| map.position_of(target))
                 .unwrap_or(center(map, caster, t, false));
-            members(map, target, false)
+            group_units(map, owner, false, |_| true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
                 .filter(|g| {
@@ -298,16 +354,23 @@ pub fn effect_targets(
                 })
                 .collect()
         }
+        // The raid's of the class of the one aimed at, and their pets of
+        // that class (mangos's `TARGET_UNIT_RAID_AND_CLASS`: a hunter's
+        // beast is a warrior's).
         (RaidAndClass, _) => {
             let target = t.unit.unwrap_or(caster);
-            let class = map.players.get(&target).map(|p| p.row.class);
+            let class_of = |g: Guid| {
+                map.unit_fields(g)
+                    .map(|f| f.get_byte(crate::game::fields::UNIT_FIELD_BYTES_0, 1))
+            };
+            let class = class_of(target);
             let at = map
                 .position_of(caster)
                 .unwrap_or(center(map, caster, t, false));
-            members(map, target, true)
+            group_units(map, target, true, |_| true)
                 .into_iter()
                 .filter(|g| alive(map, *g))
-                .filter(|g| map.players.get(g).map(|p| p.row.class) == class)
+                .filter(|g| class_of(*g) == class)
                 .filter(|g| {
                     map.position_of(*g)
                         .is_some_and(|p| dist(p, at) <= r.max(100.0))
@@ -366,13 +429,24 @@ pub fn effect_targets(
                 .filter(|g| *g != about && in_cone(map, caster, *g, degrees))
                 .collect()
         }
-        (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, t, r),
-        // vmangos's script units about the source (7) or the destination
-        // (8): every one of them there, as Separation Anxiety and
-        // Golemagg's Trust name theirs.
-        (_, ScriptUnits) if matches!(e.target_b, 7 | 8) => {
-            script_area(map, caster, center(map, caster, t, e.target_b == 8), s, r)
+        // Script units about the source (7) or the destination (8): every
+        // one of them there, as Separation Anxiety and Golemagg's Trust
+        // name theirs, or with none named every unit there, the caster
+        // too (mangos's `TARGET_ENUM_UNITS_SCRIPT_AOE_AT_*`, Thistle Tea's
+        // unrestricted areas): Coarse Dynamite's blast, a Cozy Fire's
+        // warmth. About the caster's own place (18), the caster's.
+        (_, ScriptUnits) | (ScriptUnits, _)
+            if matches!(e.target_b, 7 | 8) || matches!(e.target_a, 7 | 8) =>
+        {
+            let kind = if matches!(e.target_b, 7 | 8) {
+                e.target_b
+            } else {
+                e.target_a
+            };
+            let at_dest = kind == 8 && e.target_a != 18;
+            script_area(map, caster, center(map, caster, t, at_dest), s, r)
         }
+        (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, index, t, r),
         (GameObject, _) | (Location, _) => Vec::new(),
         (Other(_), _) => t.unit.into_iter().collect(),
     };
@@ -388,6 +462,14 @@ pub fn effect_targets(
     }
     limit(map, &mut out, s.max_affected_targets as usize, t.unit);
     out
+}
+
+/// Whether effect `index` of `s` is done at a place, not on a unit: a
+/// summon of a creature or an object, a portal, a persistent area.
+pub(crate) fn place_effect(s: &SpellTemplate, index: usize) -> bool {
+    crate::game::map::pets::handles(s, index)
+        && s.effects[index].effect != crate::game::map::pets::EFFECT_DISMISS_PET
+        || matches!(s.effects[index].effect, 27 | 50 | 76 | 104..=107)
 }
 
 /// No more than `max` of `out` (0 for no limit), as Thistle Tea's
@@ -413,8 +495,23 @@ pub(crate) fn limit(map: &Map, out: &mut Vec<Guid>, max: usize, primary: Option<
     }
 }
 
-/// A chain: the first target, then the nearest (or, for heals, the most
-/// hurt) within a jump of the last, up to the effect's count.
+/// How much health `g` is short of its maximum.
+fn missing_health(map: &Map, g: Guid) -> u32 {
+    map.unit_fields(g).map_or(0, |f| {
+        f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH)
+            .saturating_sub(f.get_u32(crate::game::fields::UNIT_FIELD_HEALTH))
+    })
+}
+
+/// A chain: the first target, then the next within a jump of the last,
+/// up to the effect's count, each once (Thistle Tea's `ChainTargets`,
+/// mangos's `SCHEME_CLOSEST_CHAIN` and `ChainHealingOrder`). A jump goes
+/// only to a living unit of a type the spell names, that the caster sees
+/// through any stealth, in sight of the last unless the spell ignores
+/// sight: for harm, an enemy an area may hit, the nearest; for a heal, a
+/// friend the caster may help who is hurt, the last one's group first,
+/// then the most hurt, then the nearest. A heal may come back to its
+/// caster.
 fn chain(
     map: &Map,
     caster: Guid,
@@ -427,6 +524,7 @@ fn chain(
     let count = m
         .apply(mods::OP_JUMP_TARGETS, s.effects[index].chain_target as f32)
         .max(1.0) as usize;
+    let ignores_sight = s.attr(2, crate::game::data::spells::ATTR_EX2_IGNORE_LOS);
     let mut out = vec![first];
     let mut last = first;
     while out.len() < count {
@@ -436,19 +534,28 @@ fn chain(
         let next = units_around(map, at, CHAIN_JUMP_YARDS, |g| {
             !out.contains(&g)
                 && alive(map, g)
+                && super::checks::unit_type_allowed(map, s, g)
                 && if heal {
-                    !combat::can_attack(map, caster, g) && !combat::hostile(map, caster, g)
+                    !combat::can_attack(map, caster, g)
+                        && !combat::hostile(map, caster, g)
+                        && combat::can_assist(map, caster, g)
+                        && missing_health(map, g) > 0
                 } else {
-                    g != caster && combat::can_attack(map, caster, g)
+                    g != caster && combat::can_attack_in_area(map, caster, g)
                 }
+                && super::stealth::sees(map, caster, g)
+                && (ignores_sight
+                    || map
+                        .position_of(g)
+                        .is_some_and(|p| super::checks::sight(map, at, p)))
         });
+        // Nearest first already; a heal's order over that.
         let pick = if heal {
-            next.into_iter().min_by_key(|g| {
-                map.unit_fields(*g).map_or(u32::MAX, |f| {
-                    let max = f.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH).max(1);
-                    f.get_u32(crate::game::fields::UNIT_FIELD_HEALTH) * 1000 / max
-                })
-            })
+            let group = members(map, last, true);
+            next.into_iter()
+                .enumerate()
+                .min_by_key(|(i, g)| (!group.contains(g), u32::MAX - missing_health(map, *g), *i))
+                .map(|(_, g)| g)
         } else {
             next.into_iter().next()
         };
@@ -500,7 +607,7 @@ pub fn script_target(
 /// Every creature a spell's script targets name within `radius` of `at`.
 fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius: f32) -> Vec<Guid> {
     if !map.realm.data.spells.script_targets.contains_key(&s.id) {
-        return Vec::new();
+        return units_around(map, at, radius, |g| alive(map, g));
     }
     units_around(map, at, radius, |g| {
         map.creature(g)
@@ -508,31 +615,91 @@ fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius:
     })
 }
 
-fn script_units(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, radius: f32) -> Vec<Guid> {
-    let named = map
-        .realm
+/// How far a script's creature is looked for: the effect's radius, else
+/// the spell's range, else as far as one sees (mangos's
+/// `GetSpellRangeAndRadius` and `CheckScriptTargeting`).
+fn script_reach(map: &Map, s: &SpellTemplate, index: usize, radius: f32) -> f32 {
+    let reach = if s.effects[index].radius_index != 0 {
+        radius
+    } else {
+        map.realm.data.spells.range(s).1
+    };
+    if reach > 0.0 { reach } else { 100.0 }
+}
+
+/// A unit's size, its bounding radius.
+fn bounding(map: &Map, g: Guid) -> f32 {
+    map.unit_fields(g)
+        .map_or(0.0, |f| {
+            f.get_f32(crate::game::fields::UNIT_FIELD_BOUNDINGRADIUS)
+        })
+        .max(0.0)
+}
+
+/// Whether a spell names creatures for its effect `index` to look for
+/// (`spell_script_target` rows of the living or the dead).
+fn names_creatures(map: &Map, s: &SpellTemplate) -> bool {
+    map.realm
         .data
         .spells
         .script_targets
         .get(&s.id)
-        .is_some_and(|v| v.iter().any(|(k, _)| *k == 1 || *k == 2));
-    if !named {
+        .is_some_and(|v| v.iter().any(|(k, _)| *k == 1 || *k == 2))
+}
+
+/// The creature a scripted spell's effect `index` aims at: the one picked
+/// if it is one of those named, else the nearest within reach of both
+/// edges (mangos's `CheckScriptTargeting`, Thistle Tea's `SpellUnits`).
+fn script_units(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    t: &Targets,
+    radius: f32,
+) -> Vec<Guid> {
+    if !names_creatures(map, s) {
         return t.unit.into_iter().collect();
     }
+    let reach = script_reach(map, s, index, radius);
+    let at = center(map, caster, t, false);
+    let mine = bounding(map, t.origin.unwrap_or(caster));
     let fits = |g: Guid| {
-        map.creature(g)
-            .is_some_and(|c| script_target(map, caster, s.id, &[1, 2], c.entry, g))
+        map.creature(g).is_some_and(|c| {
+            script_target(map, caster, s.id, &[1, 2], c.entry, g)
+                && dist(c.position, at) <= reach + mine + bounding(map, g)
+        })
     };
     if let Some(u) = t.unit
         && fits(u)
     {
         return vec![u];
     }
-    let at = center(map, caster, t, false);
-    units_around(map, at, radius.max(30.0), fits)
+    // Wide enough for the biggest creature's edge.
+    units_around(map, at, reach + mine + 10.0, fits)
         .into_iter()
         .take(1)
         .collect()
+}
+
+/// Whether a cast's effect at a script's creature near its caster (38)
+/// finds none of those its spell names, which refuses it (mangos's
+/// `CheckScriptTargeting`'s `SPELL_FAILED_BAD_TARGETS`, Thistle Tea's
+/// `UnitTargets` error).
+pub(crate) fn script_creature_missing(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    m: &Mods,
+) -> bool {
+    names_creatures(map, s)
+        && (0..3).any(|i| {
+            let e = &s.effects[i];
+            e.effect != 0
+                && e.target_a == 38
+                && script_units(map, caster, s, i, t, radius(map, s, i, m)).is_empty()
+        })
 }
 
 #[cfg(test)]

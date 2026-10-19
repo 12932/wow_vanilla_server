@@ -930,7 +930,10 @@ fn effect(
         EFFECT_LEAP => {
             let flying = map.players.get(&caster).is_some_and(|p| p.flight.is_some());
             if let Some(me) = map.unit_view(caster).filter(|_| !flying) {
-                let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
+                // As far as its radius, none without one (mangos's
+                // caster-relative place at its radius, Thistle Tea's
+                // `CasterLocation`): every leap of 1.12 has twenty yards.
+                let d = super::targets::radius(map, s, index, &l.mods);
                 let o = me.orientation + leap_angle(e.target_a, e.target_b);
                 let want = Vector3d {
                     x: me.position.x + d * o.cos(),
@@ -1697,7 +1700,8 @@ pub fn run_untargeted(
             }
             // Summons and totems aim at a place: the caster's side.
             _ if crate::game::map::pets::handles(s, index)
-                && super::targets::implicit(e.target_a) == super::targets::Implicit::Location =>
+                && (super::targets::implicit(e.target_a) == super::targets::Implicit::Location
+                    || matches!(e.target_a, 7 | 8)) =>
             {
                 let amount = m.points(s, index, points_with(s, index, level, combo));
                 crate::game::map::pets::effect(map, caster, caster, s, index, amount, triggered);
@@ -1986,37 +1990,56 @@ pub fn refresh_area_auras(map: &mut Map) {
                 })
                 .unwrap_or_else(|| master.into_iter().collect())
         };
+        let caster_level = map.unit_view(caster).map_or(1, |u| u.level);
         for member in party {
-            let near = map
-                .position_of(member)
-                .is_some_and(|p| dist(p, at) <= radius)
-                && map.unit_view(member).is_some_and(|u| u.alive);
-            let has = auras::auras(map, member).is_some_and(|a| {
+            let Some(view) = map.unit_view(member) else {
+                continue;
+            };
+            let near = dist(view.position, at) <= radius && view.alive;
+            // The rank a member's level may have: a lower one for one too
+            // low, none for one too low for any (mangos's area aura
+            // `SelectAuraRankForLevel`, Thistle Tea's `AuraRank`).
+            let wanted = super::aura_rank::for_level(&data, s, view.level).filter(|_| near);
+            let has = auras::auras(map, member).and_then(|a| {
                 a.holders
                     .iter()
-                    .any(|h| h.spell == spell && h.caster == caster)
+                    .find(|h| h.caster == caster && same_chain(&data, h.spell, spell))
+                    .map(|h| h.spell)
             });
-            if near && !has {
-                let left = expires.map(|t| t.saturating_duration_since(now).as_millis() as u32);
-                let effects: Vec<(usize, i32)> = effects
+            if has.is_some() && has != wanted {
+                auras::remove_spell(map, member, has.unwrap_or(spell), Some(caster));
+            }
+            let Some(rank) = wanted.filter(|w| has != Some(*w)) else {
+                continue;
+            };
+            let Some(t) = data.spells.get(rank) else {
+                continue;
+            };
+            let left = expires.map(|t| t.saturating_duration_since(now).as_millis() as u32);
+            // The caster's own amounts for its rank, a lower rank's own.
+            let effects: Vec<(usize, i32)> = if rank == spell {
+                effects
                     .iter()
                     .copied()
                     .filter(|(i, _)| s.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY)
-                    .collect();
-                let _ = auras::apply_spell(
-                    map,
-                    caster,
-                    member,
-                    s,
-                    &effects,
-                    auras::Context {
-                        duration: Some(left),
-                        ..Default::default()
-                    },
-                );
-            } else if !near && has {
-                auras::remove_spell(map, member, spell, Some(caster));
-            }
+                    .collect()
+            } else {
+                (0..3)
+                    .filter(|i| t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY)
+                    .map(|i| (i, super::points(t, i, caster_level)))
+                    .collect()
+            };
+            let _ = auras::apply_spell(
+                map,
+                caster,
+                member,
+                t,
+                &effects,
+                auras::Context {
+                    duration: Some(left),
+                    ..Default::default()
+                },
+            );
         }
     }
     // Party auras whose caster is gone or has dropped them.
@@ -2044,12 +2067,23 @@ pub fn refresh_area_auras(map: &mut Map) {
         let source = auras::auras(map, caster).is_some_and(|a| {
             a.holders
                 .iter()
-                .any(|h| h.spell == spell && h.caster == caster)
+                .any(|h| h.caster == caster && same_chain(&data, h.spell, spell))
         });
         if !source {
             auras::remove_spell(map, member, spell, Some(caster));
         }
     }
+}
+
+/// Whether spells `a` and `b` are ranks of one spell.
+fn same_chain(data: &crate::game::data::GameData, a: u32, b: u32) -> bool {
+    let first = |s: u32| {
+        data.spells
+            .ranks
+            .get(&s)
+            .map_or(s, |r| if r.first != 0 { r.first } else { s })
+    };
+    a == b || first(a) == first(b)
 }
 
 /// The power a unit shows, as an offset from `UNIT_FIELD_POWER1`: a

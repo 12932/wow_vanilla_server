@@ -591,6 +591,20 @@ mod tests_p6_world_system;
 #[cfg(test)]
 mod tests_p6_world_trade;
 #[cfg(test)]
+mod tests_p6_wspell;
+#[cfg(test)]
+mod tests_p6_wspell_areas;
+#[cfg(test)]
+mod tests_p6_wspell_groups;
+#[cfg(test)]
+mod tests_p6_wspell_locations;
+#[cfg(test)]
+mod tests_p6_wspell_reception;
+#[cfg(test)]
+mod tests_p6_wspell_requirements;
+#[cfg(test)]
+mod tests_p6_wspell_units;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

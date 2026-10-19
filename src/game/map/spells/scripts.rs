@@ -541,29 +541,50 @@ pub fn after_energize(map: &mut Map, caster: Guid, s: &SpellTemplate) {
 /// player's corpse, none of them a friend's (mangos's
 /// `CannibalizeObjectCheck`, Thistle Tea's `CorpseTarget`).
 pub fn edible_corpse(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
+    use crate::game::fields::{UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_FLAGS};
+    /// A world object's size, a corpse's (mangos's
+    /// `DEFAULT_WORLD_OBJECT_SIZE`).
+    const OBJECT_SIZE: f32 = 0.389;
+    /// On a flight.
+    const UNIT_FLAG_TAXI_FLIGHT: u32 = 0x0010_0000;
     let Some(at) = map.position_of(caster) else {
         return false;
     };
-    let range = map.realm.data.spells.range(s).1.max(5.0);
-    let near = |p| combat::dist(at, p) <= range;
+    let size = |g: Guid| {
+        map.unit_fields(g)
+            .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+            .filter(|r| *r > 0.0)
+            .unwrap_or(OBJECT_SIZE)
+    };
+    let range = map.realm.data.spells.range(s).1.max(5.0) + size(caster);
+    // Within the range of both edges, as mangos's `IsWithinDistInMap`.
+    let near = |p, other: f32| combat::dist(at, p) <= range + other;
     let foe = |g| !combat::friendly(map, caster, g);
+    let flying = |g: Guid| {
+        map.unit_fields(g)
+            .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_TAXI_FLIGHT != 0)
+    };
     map.creatures.iter().any(|(_, c)| {
         !c.alive()
-            && near(c.position)
+            && near(c.position, size(c.guid))
             && map
                 .realm
                 .data
                 .creature_template(c.entry)
                 .is_some_and(|t| matches!(t.creature_type, 6 | 7))
+            && !flying(c.guid)
             && foe(c.guid)
     }) || map.players.values().any(|p| {
         matches!(p.death, crate::game::map::death::Death::Dead { .. })
-            && near(p.position())
+            && p.flight.is_none()
+            && !flying(p.guid)
+            && near(p.position(), size(p.guid))
             && foe(p.guid)
     }) || map.corpses.values().any(|c| {
-        // Not bones (mangos's "ignore bones").
+        // Not bones (mangos's "ignore bones"), and its owner here to say
+        // whose side it is.
         !c.is_bones()
-            && near(c.position)
+            && near(c.position, OBJECT_SIZE)
             && map
                 .players
                 .get(&c.owner)
