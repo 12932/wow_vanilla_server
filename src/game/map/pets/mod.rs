@@ -891,6 +891,16 @@ pub fn uncharmed(map: &mut Map, master: Guid, unit: Guid) {
     }
 }
 
+/// `master` died: what they charm or possess is let go at once, a
+/// creature or a player (mangos's `BreakCharmOutgoing` in
+/// `Unit::SetDeathState`, Thistle Tea's `Companion.dismiss` at the
+/// owner's death).
+pub fn master_died(map: &mut Map, master: Guid) {
+    if let Some(unit) = map.players.get(&master).and_then(|p| p.owned.charm) {
+        uncharmed(map, master, unit);
+    }
+}
+
 /// Let a charmed or possessed unit go: its own faction again, and (alive)
 /// it turns on its master.
 fn release(map: &mut Map, master: Guid, unit: Guid) {

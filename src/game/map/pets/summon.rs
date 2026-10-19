@@ -681,8 +681,9 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
         spells: s.spells.clone(),
         autocast: s.autocast.clone(),
         bar: s.bar.to_vec(),
-        react: s.react,
-        command: s.command,
+        // Under Eyes of the Beast, the stance it goes back to.
+        react: s.eyes.map_or(s.react, |(react, _)| react),
+        command: s.eyes.map_or(s.command, |(_, command)| command),
         dead: !c.alive(),
         summon_spell: s.summon_spell,
         display_id: f.get_u32(UNIT_FIELD_NATIVEDISPLAYID),
@@ -704,6 +705,13 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
 /// hands.
 pub fn remove(map: &mut Map, g: Guid) {
     let owner = owner_of(map, g);
+    // Seen through, its master sees through their own eyes again
+    // (Thistle Tea's `Companion.suspend` clears the possession).
+    if let Some(owner) = owner
+        && state(map, g).is_some_and(|s| s.eyes.is_some())
+    {
+        super::eyes::look_away(map, owner, g);
+    }
     let totem = state(map, g).map(|s| s.kind) == Some(Kind::Totem);
     if totem {
         totems::lift_auras(map, g);

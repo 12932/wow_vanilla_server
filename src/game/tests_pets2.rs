@@ -284,7 +284,7 @@ async fn a_pet_fights_a_flagged_enemy_and_its_kill_is_honor_for_its_master() {
 }
 
 /// A hunter with a tamed boar on `realm`.
-async fn tamed_on(
+pub(crate) async fn tamed_on(
     realm: std::sync::Arc<crate::game::Realm>,
 ) -> (
     std::sync::Arc<crate::game::Realm>,

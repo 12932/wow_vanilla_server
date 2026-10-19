@@ -190,6 +190,7 @@ pub fn kill(map: &mut Map, g: Guid) {
     // A logout's countdown goes on (mangos's session logs the dead out
     // too); cancelled, it leaves them lying rooted.
     crate::game::map::misc::capture_self_res(map, g);
+    crate::game::map::pets::master_died(map, g);
     crate::game::map::combat::leave_combat(map, g);
     // Creatures let go of the dead: their threat on them goes, and they
     // turn to the next or go home (mangos's `deleteReferences` on death,
