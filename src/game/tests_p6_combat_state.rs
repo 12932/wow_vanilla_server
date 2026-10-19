@@ -12,8 +12,12 @@ use crate::game::map::{Map, death};
 use crate::game::tests_p3_combat::*;
 
 fn in_combat(m: &Map, g: Guid) -> bool {
-    m.unit_fields(g)
-        .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT))
+    m.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+    })
 }
 
 /// Thistle Tea's "environmental and self damage do not establish combat"
@@ -57,9 +61,7 @@ async fn the_dead_open_no_defensive_window() {
         let realm = crate::game::harness::realm_with(data());
         let mut a = crate::game::harness::Client::connect(&realm, "A");
         let ga = a.enter("Alice", race, class).await;
-        let map = realm
-            .maps
-            .get(&realm, crate::game::map::MapKey::world(0));
+        let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
         let r = map
             .query(move |m| {
                 level(m, ga, 60);
@@ -67,8 +69,9 @@ async fn the_dead_open_no_defensive_window() {
                 death::kill(m, ga);
                 [Outcome::Dodge, Outcome::Parry, Outcome::Block].map(|o| {
                     combat::after_outcome(m, brute, ga, o);
-                    m.combat(ga)
-                        .is_some_and(|c| c.defense_window.is_some() || c.hunter_parry_window.is_some())
+                    m.combat(ga).is_some_and(|c| {
+                        c.defense_window.is_some() || c.hunter_parry_window.is_some()
+                    })
                 })
             })
             .await
