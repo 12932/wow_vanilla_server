@@ -213,18 +213,17 @@ fn creature_type_allowed(s: &SpellTemplate, creature_type: u32) -> bool {
 }
 
 /// Whether unit `g`'s type is one the spell may land on: a creature's
-/// template's, a player's humanoid.
+/// template's, a player's by their form.
 pub(crate) fn unit_type_allowed(map: &Map, s: &SpellTemplate, g: Guid) -> bool {
     if s.target_creature_type == 0 {
         return true;
     }
-    let creature_type = match map.creature(g) {
-        Some(c) => map
-            .realm
-            .data
-            .creature_template(c.entry)
-            .map_or(0, |t| t.creature_type),
-        None => 7,
+    // A player is a humanoid, a beast in a druid's animal forms and the
+    // Ghost Wolf (Hibernate and Scare Beast take a druid so shifted).
+    let creature_type = if map.creature(g).is_some() || map.players.contains_key(&g) {
+        crate::game::map::combat::creature_type(map, g)
+    } else {
+        7
     };
     creature_type_allowed(s, creature_type)
 }
@@ -1013,21 +1012,12 @@ fn check_target(
         // filter: one can't attack oneself).
         return Some(fail::BAD_TARGETS);
     }
-    if let Some(c) = map.creature(target) {
-        let creature_type = map
-            .realm
-            .data
-            .creature_template(c.entry)
-            .map(|t| t.creature_type)
-            .unwrap_or(0);
-        if !creature_type_allowed(s, creature_type) {
-            return Some(fail::BAD_TARGETS);
-        }
-    } else if s.target_creature_type != 0 && guid::is_player(target) {
-        // Players are humanoids.
-        if !creature_type_allowed(s, 7) {
-            return Some(fail::BAD_TARGETS);
-        }
+    // A creature by its template; a player a humanoid, but a beast in a
+    // druid's animal forms (mangos's `GetCreatureType`).
+    if (map.creature(target).is_some() || map.players.contains_key(&target))
+        && !unit_type_allowed(map, s, target)
+    {
+        return Some(fail::BAD_TARGETS);
     }
     if s.max_target_level > 0 && u.level > s.max_target_level {
         return Some(fail::HIGHLEVEL);
