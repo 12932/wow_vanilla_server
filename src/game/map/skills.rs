@@ -100,6 +100,12 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
     if skill == 0 {
         return;
     }
+    // A lower rank learned after a higher one (the spells read back at a
+    // login, in whatever order) leaves the higher one's step (Thistle
+    // Tea's `SpellSkills.learn`).
+    let step = slot_of(p, skill).map_or(step, |i| {
+        step.max(p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) >> 16)
+    });
     let max = cap(p, skill, step);
     let (slot, value) = match slot_of(p, skill) {
         Some(i) => (i, value(p, skill).unwrap_or(1)),
