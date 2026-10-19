@@ -941,7 +941,7 @@ dependencies = [
 [[package]]
 name = "landmark"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=b300060548511e42670a1cbe2cbac0ab62530172#b300060548511e42670a1cbe2cbac0ab62530172"
+source = "git+https://github.com/12932/rustigator?rev=921d5108495c2d126d6a6acd4cb3e4ad22ea450c#921d5108495c2d126d6a6acd4cb3e4ad22ea450c"
 dependencies = [
  "glam 0.34.1",
  "log",
@@ -1595,7 +1595,7 @@ dependencies = [
 [[package]]
 name = "rustigator-mapbuild"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=b300060548511e42670a1cbe2cbac0ab62530172#b300060548511e42670a1cbe2cbac0ab62530172"
+source = "git+https://github.com/12932/rustigator?rev=921d5108495c2d126d6a6acd4cb3e4ad22ea450c#921d5108495c2d126d6a6acd4cb3e4ad22ea450c"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1614,7 +1614,7 @@ dependencies = [
 [[package]]
 name = "rustigator-parser"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=b300060548511e42670a1cbe2cbac0ab62530172#b300060548511e42670a1cbe2cbac0ab62530172"
+source = "git+https://github.com/12932/rustigator?rev=921d5108495c2d126d6a6acd4cb3e4ad22ea450c#921d5108495c2d126d6a6acd4cb3e4ad22ea450c"
 dependencies = [
  "ahash",
  "glam 0.34.1",
@@ -1629,7 +1629,7 @@ dependencies = [
 [[package]]
 name = "rustigator-pathfind"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=b300060548511e42670a1cbe2cbac0ab62530172#b300060548511e42670a1cbe2cbac0ab62530172"
+source = "git+https://github.com/12932/rustigator?rev=921d5108495c2d126d6a6acd4cb3e4ad22ea450c#921d5108495c2d126d6a6acd4cb3e4ad22ea450c"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1645,7 +1645,7 @@ dependencies = [
 [[package]]
 name = "rustigator-util"
 version = "0.1.0"
-source = "git+https://github.com/12932/rustigator?rev=b300060548511e42670a1cbe2cbac0ab62530172#b300060548511e42670a1cbe2cbac0ab62530172"
+source = "git+https://github.com/12932/rustigator?rev=921d5108495c2d126d6a6acd4cb3e4ad22ea450c#921d5108495c2d126d6a6acd4cb3e4ad22ea450c"
 dependencies = [
  "byteorder",
  "glam 0.34.1",
@@ -2500,7 +2500,7 @@ dependencies = [
 [[package]]
 name = "wow_items"
 version = "0.1.0"
-source = "git+https://github.com/12932/wow_messages?rev=0f646a2ded5340d95b36a02e65cd18e7fcb452bf#0f646a2ded5340d95b36a02e65cd18e7fcb452bf"
+source = "git+https://github.com/12932/wow_messages?rev=2c9fe11624ae790a2b817261964cf4c04cd2d96e#2c9fe11624ae790a2b817261964cf4c04cd2d96e"
 dependencies = [
  "wow_world_base",
 ]
@@ -2508,7 +2508,7 @@ dependencies = [
 [[package]]
 name = "wow_login_messages"
 version = "0.3.0"
-source = "git+https://github.com/12932/wow_messages?rev=0f646a2ded5340d95b36a02e65cd18e7fcb452bf#0f646a2ded5340d95b36a02e65cd18e7fcb452bf"
+source = "git+https://github.com/12932/wow_messages?rev=2c9fe11624ae790a2b817261964cf4c04cd2d96e#2c9fe11624ae790a2b817261964cf4c04cd2d96e"
 dependencies = [
  "tokio",
 ]
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "wow_vanilla_server"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -2570,7 +2570,7 @@ dependencies = [
 [[package]]
 name = "wow_world_base"
 version = "0.1.1"
-source = "git+https://github.com/12932/wow_messages?rev=0f646a2ded5340d95b36a02e65cd18e7fcb452bf#0f646a2ded5340d95b36a02e65cd18e7fcb452bf"
+source = "git+https://github.com/12932/wow_messages?rev=2c9fe11624ae790a2b817261964cf4c04cd2d96e#2c9fe11624ae790a2b817261964cf4c04cd2d96e"
 dependencies = [
  "serde",
 ]
@@ -2578,7 +2578,7 @@ dependencies = [
 [[package]]
 name = "wow_world_messages"
 version = "0.1.0"
-source = "git+https://github.com/12932/wow_messages?rev=0f646a2ded5340d95b36a02e65cd18e7fcb452bf#0f646a2ded5340d95b36a02e65cd18e7fcb452bf"
+source = "git+https://github.com/12932/wow_messages?rev=2c9fe11624ae790a2b817261964cf4c04cd2d96e#2c9fe11624ae790a2b817261964cf4c04cd2d96e"
 dependencies = [
  "flate2",
  "tokio",

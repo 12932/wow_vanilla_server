@@ -150,6 +150,12 @@ hours), the crate version bumped with each merge.
   `.pet` (no beasts of their level near Stormwind to tame), warlocks a Voidwalker. **Left:** raiders aren't grouped,
   so party buffs and totems reach only the caster; healers don't favour tanks; Shield Block needs `.gear` to hand a
   warrior a shield.
+- **The navmesh, format 13 (0.1.14; you must re-bake):** rustigator now shrinks the walkable area by a player's
+  radius (mangos's 0.533 yards), so paths keep off walls instead of grazing them; wvs, peon and rustigator pin the
+  fork at `2c9fe11` (its `clear_*` helpers clear only their own flag; 1.12's walk speed) and rustigator at `921d510`.
+  **Your part:** run `cargo run --release --bin wvs-setup` once (about 20 minutes for every map). It sees the old
+  bake as stale and builds it again; until then wvs runs without a navmesh (straight-line movement, as with none).
+  Peon's real-navmesh tests and wvs's navmesh tests pass on the new bake.
 - **The possible client crash (0.1.9): not a crash.** `0x466816` is the client's per-field-group flush after a values
   block (`0x4667A0`), a copy from storage the real client set up at the create and the emulator never models; it reads
   nothing from the packet. The check now stubs it, as it stubs the renderer; the values block's parse is still checked,
