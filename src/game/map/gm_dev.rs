@@ -1351,8 +1351,13 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
         ["taxi"] => {
             let to = player_target(map, g);
             let p = map.players.get_mut(&to)?;
-            let top = data.npc.taxi_nodes.keys().copied().max().unwrap_or(0);
-            p.row.state.taxi_mask = vec![u32::MAX; (top / 32 + 1) as usize];
+            // Every node a flight master can teach, not those only a
+            // spell flies from (Thistle Tea's `Taxi.unlock_all`).
+            for node in data.npc.taxi_nodes.keys() {
+                if !data.npc.spell_only_nodes.contains(node) {
+                    crate::game::map::npc::learn_node(&mut p.row.state.taxi_mask, *node);
+                }
+            }
             Some("Every flight path known.".into())
         }
         ["position"] => {
