@@ -789,6 +789,8 @@ mod tests_p8_combat_posture;
 #[cfg(test)]
 mod tests_p8_combat_reactive;
 #[cfg(test)]
+mod tests_p8_combat_share;
+#[cfg(test)]
 mod tests_p8_combat_state;
 #[cfg(test)]
 mod tests_parity_combat;
