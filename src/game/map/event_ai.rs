@@ -185,7 +185,60 @@ pub struct ScriptedMove {
     /// evade's arrival.
     pub home: bool,
     /// Distancing (movement 19): only force-cast spells go meanwhile.
-    pub distancing: bool,
+    pub distancing: Option<Retreat>,
+}
+
+/// A retreat from a unit (movement 19): whom it backs from, and the
+/// victim and fight it had when it began.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Retreat {
+    pub from: Guid,
+    pub victim: Guid,
+    pub fighting: bool,
+}
+
+/// Whether a creature may back away (Thistle Tea's `Distancing.allowed?`):
+/// not stunned, feared, confused or rooted, not running from a fight, not
+/// feigning death.
+pub fn may_retreat(map: &Map, g: Guid) -> bool {
+    use crate::game::map::auras::{AURA_FEIGN_DEATH, auras, held};
+    !held(map, g, false)
+        && !crate::game::map::creature_combat::immobile(map, g)
+        && !auras(map, g).is_some_and(|a| a.has(AURA_FEIGN_DEATH))
+        && map.creature(g).is_some_and(|c| c.engagement.flee.is_none())
+}
+
+/// A retreat under way is called off, the creature stopping where it is,
+/// once it may no longer back away, its fight began or ended, its victim
+/// changed, or the one it backs from is dead or gone (Thistle Tea's
+/// `Distancing.maintain`). A walk that took the retreat's place goes on.
+pub fn retreat_step(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let Some((m, r)) = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.scripted_move)
+        .and_then(|m| m.distancing.map(|r| (m, r)))
+    else {
+        return;
+    };
+    let own = matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if w.spline_id == m.spline_id);
+    if !own {
+        return;
+    }
+    let off = c.combat.attacking != r.fighting
+        || c.combat.victim != r.victim
+        || map.unit_view(r.from).is_none_or(|u| !u.alive)
+        || !may_retreat(map, g);
+    if !off {
+        return;
+    }
+    crate::game::map::ai::halt(map, g);
+    if let Some(s) = map.creature_mut(g).and_then(|c| c.scripted.as_deref_mut()) {
+        s.scripted_move = None;
+    }
 }
 
 /// The motion type of a script's point movement.
@@ -749,7 +802,7 @@ pub fn scripted_move_ended(map: &mut Map, g: Guid) {
     }
     // Its distance kept, its spell list tries again at once (Thistle
     // Tea's `Distancing.tick` releasing the list's deadline).
-    if m.distancing
+    if m.distancing.is_some()
         && let Some(l) = c.caster.spell_list.as_deref_mut()
     {
         l.next_at = None;

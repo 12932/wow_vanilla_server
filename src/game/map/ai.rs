@@ -909,6 +909,7 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
             crate::game::map::world::step_creature_key(map, key);
         }
     }
+    crate::game::map::event_ai::retreat_step(map, g);
     let (moving, follows, fighting) = map
         .creature(g)
         .map(|c| {
