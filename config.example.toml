@@ -275,6 +275,72 @@ corpse_decay_rare_elite = 1200
 # Default 3600. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.WORLDBOSS.
 corpse_decay_world_boss = 3600
 
+# Town guards, as mangos-classic calls them: a guard each time a
+# creature that calls the guards takes a victim. A town's alarm
+# counts the guards called there lately and cools when the calls
+# stop; as it rises, the guards grow harder to fight, a capital sends
+# its elite two at a time, and Jaina Proudmoore comes to her city.
+[guards]
+
+# Seconds a called guard stays once out of combat (mangos-classic's
+# 30); it goes at once when it dies.
+# Default 300. Range 5 to 86400, clamped. Changes at a reload.
+despawn_secs = 300
+
+# Yards a called guard wanders about where it came, out of combat.
+# Default 8.0. Range 0 to 30, clamped. Changes at a reload.
+wander_yards = 8.0
+
+# Seconds without a call after which a town's alarm halves.
+# Default 300. Range 10 to 86400, clamped. Changes at a reload.
+alarm_half_life_secs = 300
+
+# Guards in the alarm from which each new guard comes with
+# Avoidance (spell 23198's aura: area spells miss it that many
+# percent more often).
+# Default 20. Range 1 to 100000, clamped. Changes at a reload.
+avoidance_from = 20
+
+# Avoidance, in percent, at the threshold and for each further
+# `avoidance_step_guards` guards.
+# Default 5. Range 0 to 100, clamped. Changes at a reload.
+avoidance_step_pct = 5
+
+# Guards in the alarm per step of Avoidance.
+# Default 10. Range 1 to 100000, clamped. Changes at a reload.
+avoidance_step_guards = 10
+
+# The most Avoidance a guard comes with, in percent.
+# Default 50. Range 0 to 100, clamped. Changes at a reload.
+avoidance_max_pct = 50
+
+# Guards in the alarm from which a call brings two of the town's
+# elite (Stormwind's Royal Guard, Orgrimmar's Kor'kron, Undercity's
+# Royal Dreadguard, Thunder Bluff's Honor Guard), or two of its
+# guards where it has none.
+# Default 40. Range 1 to 100000, clamped. Changes at a reload.
+royal_from = 40
+
+# Guards in the alarm of Jaina's city from which she comes, if she
+# is alive and at home in Theramore.
+# Default 60. Range 1 to 100000, clamped. Changes at a reload.
+jaina_from = 60
+
+# The area of the city Jaina comes to: 1519, Stormwind City; 0,
+# she never leaves Theramore.
+# Default 1519. Changes at a reload.
+jaina_city = 1519
+
+# Seconds Jaina stays once she has no one left to fight and is
+# out of combat, before she goes home.
+# Default 60. Range 5 to 86400, clamped. Changes at a reload.
+jaina_stays_secs = 60
+
+# Seconds Jaina takes to come back to Theramore once she has died
+# in her city (her spawn's own time, a day).
+# Default 86400. Range 5 to 2592000, clamped. Changes at a reload.
+jaina_respawn_secs = 86400
+
 # New characters, the level cap, and the realm's type.
 [players]
 

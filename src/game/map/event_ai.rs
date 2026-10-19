@@ -59,6 +59,8 @@ pub struct Scripted {
     pub despawn_at: Option<Instant>,
     pub despawn_type: i32,
     pub despawn_after: Option<Duration>,
+    /// A called guard's Avoidance, in percent: put back after an evade.
+    pub guard_avoidance: Option<i32>,
     /// The entry whose events it runs: the one it had before a script
     /// changed it (`update_entry`), as vmangos and Thistle Tea keep them.
     pub ai_entry: Option<u32>,

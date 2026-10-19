@@ -54,6 +54,7 @@ pub fn apply(map: &mut Map, g: Guid) {
 
 /// A creature home from evading takes back the spawn auras it lost.
 pub fn restore(map: &mut Map, g: Guid) {
+    crate::game::map::guards::restore(map, g);
     for spell in spells(map, g) {
         if !auras::auras(map, g).is_some_and(|a| a.has_spell(spell)) {
             put_on(map, g, spell);

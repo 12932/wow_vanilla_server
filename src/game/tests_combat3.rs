@@ -17,7 +17,7 @@ use crate::game::guid;
 use crate::game::harness::{self, Client};
 use crate::game::map::auras;
 use crate::game::map::combat::dist;
-use crate::game::map::creature_combat::{self, GuardCall};
+use crate::game::map::creature_combat;
 use crate::game::map::player_motion::{self, Mode};
 use crate::game::map::procs::{self, Event};
 use crate::game::map::{Map, MapHandle, MapKey};
@@ -417,67 +417,6 @@ async fn a_player_a_creature_charms_follows_it_and_closes_on_its_foes() {
     assert!(dist(to, master_at) <= 3.5, "beside its charmer: {to:?}");
     let (_, to, _) = chase.expect("chasing");
     assert!(dist(to, bob_at) <= 5.0, "at its foe: {to:?}");
-}
-
-#[tokio::test]
-async fn a_civilian_seeing_an_enemy_calls_once_and_a_post_sends_a_guard() {
-    let (_realm, mut a, ga, map) = setup().await;
-    let (peasant, guard) = (unit(PEASANT), unit(GUARD));
-    a.sees(guard).await;
-    // Out of its sight, the peon is quiet.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let quiet = map
-        .query(move |m| m.creature(peasant).unwrap().engagement.guard_call.is_none())
-        .await
-        .unwrap();
-    assert!(quiet);
-    // Beside Alice, it sees her and calls: the guard near comes.
-    map.query(move |m| {
-        let c = m.creature_mut(peasant).unwrap();
-        c.position = Vector3d {
-            x: START.0 - 2.0,
-            y: START.1 + 4.0,
-            z: START.2,
-        };
-        c.engagement.watch_at = None;
-    })
-    .await;
-    let mut roused = false;
-    for _ in 0..100 {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        roused = map
-            .query(move |m| {
-                m.creature(guard)
-                    .is_some_and(|c| c.combat.attacking && c.combat.victim == ga)
-            })
-            .await
-            .unwrap();
-        if roused {
-            break;
-        }
-    }
-    assert!(roused, "the guard comes");
-    let (answer, summoned) = map
-        .query(move |m| {
-            let answer = m.creature(peasant).unwrap().engagement.guard_call;
-            // A post's guard, five yards before the civilian.
-            let at = m.creature(peasant).unwrap().position;
-            let summoned = creature_combat::summon_guard(m, peasant, GUARD.0, at, 0.0, ga)
-                .and_then(|g| m.creature(g))
-                .map(|c| {
-                    (
-                        dist(c.position, at),
-                        c.combat.attacking && c.combat.victim == ga,
-                    )
-                });
-            (answer, summoned)
-        })
-        .await
-        .unwrap();
-    assert_eq!(answer, Some(GuardCall::Held), "one call");
-    let (away, fighting) = summoned.expect("a guard");
-    assert!((away - 5.0).abs() < 0.1, "{away}");
-    assert!(fighting);
 }
 
 #[tokio::test]

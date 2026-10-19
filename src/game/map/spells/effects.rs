@@ -790,10 +790,14 @@ fn effect(
         EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY => {}
         EFFECT_TELEPORT_UNITS => {
             let data = map.realm.data.clone();
-            let to = match data.spells.target_positions.get(&s.id) {
-                Some(&(m, x, y, z, o)) => Some((m, Vector3d { x, y, z }, o)),
-                // The hearthstone and its kind: home.
-                None => home(map, target),
+            // Jaina's Teleport in her city keeps its victim there.
+            let to = match crate::game::jaina::teleport_to(map, caster, s.id) {
+                Some(to) => Some(to),
+                None => match data.spells.target_positions.get(&s.id) {
+                    Some(&(m, x, y, z, o)) => Some((m, Vector3d { x, y, z }, o)),
+                    // The hearthstone and its kind: home.
+                    None => home(map, target),
+                },
             };
             // Within this map, it keeps a fight if it is short (mangos's
             // `EffectTeleportUnits` by `NearTeleportTo`).

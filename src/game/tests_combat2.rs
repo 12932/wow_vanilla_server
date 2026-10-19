@@ -622,20 +622,25 @@ async fn fear_runs_a_creature_about() {
     assert!(moving);
 }
 
+/// mangos-classic's call, not vmangos's: a civilian of no town the table
+/// knows calls no guard, and doesn't rouse the guard near it (the calls
+/// themselves are `tests_guards`').
 #[tokio::test]
-async fn a_civilian_calls_the_guards() {
+async fn a_civilian_of_no_known_town_calls_no_guard() {
     let (_realm, mut a, ga, map) = setup(Class::Warrior).await;
     let (peasant, guard) = (unit(PEASANT), unit(GUARD));
     a.sees(guard).await;
-    let called = map
+    let (roused, called) = map
         .query(move |m| {
             crate::game::map::ai::attacked(m, peasant, ga);
-            m.creature(guard)
-                .is_some_and(|c| c.combat.attacking && c.combat.victim == ga)
+            (
+                m.creature(guard).is_some_and(|c| c.combat.attacking),
+                m.creatures.iter().any(|(_, c)| c.spawn_guid.is_none()),
+            )
         })
         .await
         .unwrap();
-    assert!(called);
+    assert!(!roused && !called);
 }
 
 #[tokio::test]

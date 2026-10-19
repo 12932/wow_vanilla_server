@@ -193,6 +193,25 @@ Creatures: how near they notice players, how far they chase, how they call for h
 | `corpse_decay_rare_elite` | Seconds a rare elite's corpse lies. | `1200` | 1 to 86400, clamped | live | `Corpse.Decay.RAREELITE` |
 | `corpse_decay_world_boss` | Seconds a boss's corpse lies. | `3600` | 1 to 86400, clamped | live | `Corpse.Decay.WORLDBOSS` |
 
+### `[guards]`
+
+Town guards, as mangos-classic calls them: a guard each time a creature that calls the guards takes a victim. A town's alarm counts the guards called there lately and cools when the calls stop; as it rises, the guards grow harder to fight, a capital sends its elite two at a time, and Jaina Proudmoore comes to her city.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `despawn_secs` | Seconds a called guard stays once out of combat (mangos-classic's 30); it goes at once when it dies. | `300` | 5 to 86400, clamped | live |  |
+| `wander_yards` | Yards a called guard wanders about where it came, out of combat. | `8.0` | 0 to 30, clamped | live |  |
+| `alarm_half_life_secs` | Seconds without a call after which a town's alarm halves. | `300` | 10 to 86400, clamped | live |  |
+| `avoidance_from` | Guards in the alarm from which each new guard comes with Avoidance (spell 23198's aura: area spells miss it that many percent more often). | `20` | 1 to 100000, clamped | live |  |
+| `avoidance_step_pct` | Avoidance, in percent, at the threshold and for each further `avoidance_step_guards` guards. | `5` | 0 to 100, clamped | live |  |
+| `avoidance_step_guards` | Guards in the alarm per step of Avoidance. | `10` | 1 to 100000, clamped | live |  |
+| `avoidance_max_pct` | The most Avoidance a guard comes with, in percent. | `50` | 0 to 100, clamped | live |  |
+| `royal_from` | Guards in the alarm from which a call brings two of the town's elite (Stormwind's Royal Guard, Orgrimmar's Kor'kron, Undercity's Royal Dreadguard, Thunder Bluff's Honor Guard), or two of its guards where it has none. | `40` | 1 to 100000, clamped | live |  |
+| `jaina_from` | Guards in the alarm of Jaina's city from which she comes, if she is alive and at home in Theramore. | `60` | 1 to 100000, clamped | live |  |
+| `jaina_city` | The area of the city Jaina comes to: 1519, Stormwind City; 0, she never leaves Theramore. | `1519` |  | live |  |
+| `jaina_stays_secs` | Seconds Jaina stays once she has no one left to fight and is out of combat, before she goes home. | `60` | 5 to 86400, clamped | live |  |
+| `jaina_respawn_secs` | Seconds Jaina takes to come back to Theramore once she has died in her city (her spawn's own time, a day). | `86400` | 5 to 2592000, clamped | live |  |
+
 ### `[players]`
 
 New characters, the level cap, and the realm's type.
