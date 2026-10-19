@@ -241,6 +241,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   player raised from Hated with the Brood of Nozdormu couldn't take Anachronos's quest; it now ends, as mangos's
   `SetOneFactionReputation` (Thistle Tea never clears it). Triage's test was racing the doctor's one-a-second pace
   on a loaded machine; it waits by the clock.
+- **6f, creature scripts (0.1.18):** 73 rows, every one a test of a ported script: the Affray, Riggle Bassbait's
+  week, Lady Jaina in Theramore, Unbagwa's waves, the Scourge cauldrons and watchtowers, Naralex's waking, Zul'Farrak
+  (Zum'rah, Weegli, Bly), the Stave of the Ancients, the Scourge Invasion, and a dozen smaller ones. **A real bug:** a
+  script's damage to the creature itself (command 48) stopped at its invincibility floor, so a necropolis never
+  fell (and Reginald Windsor never died); it now goes past it, as Thistle Tea's `lose_health` (vmangos's intent).
+  **My calls:** Big Will stops at the Affray ring's edge on the navmesh, 14 to 16 yards from its middle; I left it.
+  **Left:** 65 rows (Alterac Valley 16, Gnomeregan 9, the Gizelton Caravan 9, Eris Havenfire 8, the Stormwind
+  Rendezvous 8, Eranikus 7, Kindal 7). **To look into:** a test hero was at war with Booty Bay before any fight
+  (the agent worked around it); it may be the reputation fix above or a creature's temporary war.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -327,7 +336,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6d: combat | 72.0% | fd2fa71 |
 | 6e: spells in the world | 72.9% | fce32da |
 | The 15:38 extended run's four failures | fixed | 37a0656 |
+| 6f: creature scripts | 73.8% | dd31c4f |
 
-**Running now:** round 6 (6f, 6h, 6i, 6j).
+**Running now:** round 6 (6h, 6i, 6j) and round 7 (7a, the player).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
