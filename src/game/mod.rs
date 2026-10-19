@@ -536,6 +536,10 @@ mod tests_p5_spell_targets;
 #[cfg(test)]
 mod tests_p5_spell_warlock;
 #[cfg(test)]
+mod tests_p6_spell;
+#[cfg(test)]
+mod tests_p6_spell_combat;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

@@ -1268,8 +1268,8 @@ fn execute(
         if auras::auras(map, caster).is_some_and(|a| a.holders.iter().any(breaks)) {
             auras::remove_where(map, caster, breaks);
         }
-        crate::game::map::combat::spell_launched(map, caster, s);
     }
+    crate::game::map::combat::spell_launched(map, caster, s, triggered);
 }
 
 /// A mechanic immunity with charges kept `s` off `target`: a charge of it

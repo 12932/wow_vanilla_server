@@ -287,6 +287,12 @@ pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bo
         || f.get_fallingfar()
 }
 
+/// Whether a stand state isn't standing, as mangos's `IsStandState` has
+/// it: sitting, in a chair, asleep or kneeling; the dead stand.
+pub fn seated(state: u8) -> bool {
+    !matches!(state, 0 | 7)
+}
+
 /// `PreventionType`: what silence keeps from being cast, and what pacify
 /// does.
 pub const PREVENTION_SILENCE: u32 = 1;
@@ -320,7 +326,7 @@ pub fn check(
     }
     let player = map.players.get(&caster);
     if let Some(p) = player {
-        if !triggered && p.stand_state() != 0 && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
+        if !triggered && seated(p.stand_state()) && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
             return Some(fail::NOT_STANDING);
         }
         // Food and drink, which standing up ends, aren't had on the move
@@ -609,7 +615,16 @@ fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
 /// the range, at most three yards, beyond the reaches) and in front if the
 /// spell must be cast forward (mangos's `CheckCast(false)` and
 /// `CheckRange(false)`, Thistle Tea's launch checks). Why not, if not.
-pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mods) -> Option<u8> {
+pub fn at_finish(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    m: &Mods,
+) -> Option<u8> {
+    if let Some(code) = caster_at_finish(map, caster, s) {
+        return Some(code);
+    }
     let target = t.unit.filter(|u| *u != caster)?;
     let Some(u) = map.unit_view(target) else {
         return Some(fail::BAD_TARGETS);
@@ -653,6 +668,41 @@ pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mo
         && (s.range_index == RANGE_MELEE || s.custom(sd::CUSTOM_FACE_TARGET) || s.auto_repeat());
     if forward && d >= OVERLAP_DISTANCE && !facing(map, caster, target, std::f32::consts::PI) {
         return Some(fail::UNIT_NOT_INFRONT);
+    }
+    None
+}
+
+/// A player's own state as their cast ends, checked again before it costs
+/// anything, as mangos's `Spell::cast` runs `CheckCast(false)` and Thistle
+/// Tea's `Casting.complete` its requirements: still standing (unless the
+/// spell allows sitting), not moving with food or drink, not on a flight,
+/// still somewhere a mount may be had, still where the spell's area rules
+/// allow, and its school not locked out meanwhile.
+fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    let p = map.players.get(&caster)?;
+    if seated(p.stand_state()) && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
+        return Some(fail::NOT_STANDING);
+    }
+    if s.aura_interrupt_flags & INTERRUPT_NOT_SEATED != 0 && moving(&p.movement.flags) {
+        return Some(fail::MOVING);
+    }
+    if p.flight.is_some() {
+        return Some(fail::NOT_ON_TAXI);
+    }
+    let now = map.now;
+    let locked = p
+        .caster
+        .school_lockout
+        .iter()
+        .any(|(mask, until)| *until > now && mask & s.school_mask() != 0);
+    if locked && !s.melee_or_ranged() {
+        return Some(fail::SILENCED);
+    }
+    if let Some(code) = crate::game::map::mounts::check(map, caster, s, false) {
+        return Some(code);
+    }
+    if !super::area::allows(map, caster, s.id) {
+        return Some(fail::REQUIRES_AREA);
     }
     None
 }

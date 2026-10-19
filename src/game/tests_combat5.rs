@@ -371,7 +371,7 @@ async fn a_cast_starts_the_swing_over_and_some_end_auto_attack() {
                 interrupt_flags: 0x08,
                 ..Default::default()
             };
-            combat::spell_launched(m, ga, &interrupting);
+            combat::spell_launched(m, ga, &interrupting, false);
             let period = m
                 .unit_fields(ga)
                 .unwrap()
@@ -380,7 +380,7 @@ async fn a_cast_starts_the_swing_over_and_some_end_auto_attack() {
                 == Some(now + Duration::from_millis(u64::from(period)));
             let mut gouge = SpellTemplate::default();
             gouge.attributes[0] = crate::game::data::spells::ATTR_CANCELS_AUTO_ATTACK;
-            combat::spell_launched(m, ga, &gouge);
+            combat::spell_launched(m, ga, &gouge, false);
             (restarted, !m.combat(ga).unwrap().attacking)
         })
         .await

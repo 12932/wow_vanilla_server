@@ -2164,12 +2164,19 @@ pub fn sheathe(map: &mut Map, g: Guid, state: u8) {
     }
 }
 
-/// A cast of `s` went off (Thistle Tea's `CastingCombat`): one that
-/// interrupts the swing (interrupt flag 0x08) starts its caster's swings
-/// over, unless it says not to; one that cancels auto attack ends it.
-pub fn spell_launched(map: &mut Map, caster: Guid, s: &crate::game::data::spells::SpellTemplate) {
+/// A cast of `s` went off (Thistle Tea's `CastingCombat`, mangos's
+/// `Spell::cast`): one cast, not triggered, that interrupts the swing
+/// (interrupt flag 0x08) starts its caster's swings over, unless it says
+/// not to; one that cancels auto attack ends it, triggered or not, and a
+/// ranged one of those ends Auto Shot too (mangos's "blizzlike order").
+pub fn spell_launched(
+    map: &mut Map,
+    caster: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+    triggered: bool,
+) {
     let now = map.now;
-    if s.interrupt_flags & 0x08 != 0 && !s.attr(2, 0x2_0000) {
+    if !triggered && s.interrupt_flags & 0x08 != 0 && !s.attr(2, 0x2_0000) {
         let dual = dual_wields(map, caster);
         let periods = map.unit_fields(caster).map_or((2000, 2000), |f| {
             (
@@ -2186,10 +2193,13 @@ pub fn spell_launched(map: &mut Map, caster: Guid, s: &crate::game::data::spells
             }
         }
     }
-    if s.attr(0, crate::game::data::spells::ATTR_CANCELS_AUTO_ATTACK)
-        && map.combat(caster).is_some_and(|c| c.attacking)
-    {
-        stop_attack(map, caster);
+    if s.attr(0, crate::game::data::spells::ATTR_CANCELS_AUTO_ATTACK) {
+        if s.attr(0, crate::game::data::spells::ATTR_RANGED) {
+            crate::game::map::ranged::cancel(map, caster, true);
+        }
+        if map.combat(caster).is_some_and(|c| c.attacking) {
+            stop_attack(map, caster);
+        }
     }
 }
 
