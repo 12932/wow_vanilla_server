@@ -779,6 +779,8 @@ mod tests_p7_world_spells;
 #[cfg(test)]
 mod tests_p7_world_system;
 #[cfg(test)]
+mod tests_p8_world_combat;
+#[cfg(test)]
 mod tests_p8_world_sight;
 #[cfg(test)]
 mod tests_p8_world_spells;
