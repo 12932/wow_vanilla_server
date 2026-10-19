@@ -137,6 +137,7 @@ pub fn test_config() -> RealmConfig {
         visibility_yards: visibility.continents_yards,
         instance_visibility_yards: visibility.instances_yards,
         battleground_visibility_yards: visibility.battleground_yards,
+        flight_visibility_yards: visibility.flight_yards,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,

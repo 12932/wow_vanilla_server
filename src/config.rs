@@ -261,6 +261,9 @@ settings! {
         instances_yards: f32 = 170.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.Instances";
         /// In battlegrounds: further, so a battle's far side is in view.
         battleground_yards: f32 = 400.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.BGArenas";
+        /// On a flight master's gryphon or wyvern: further, as the land
+        /// goes by below. Back to the map's own on landing.
+        flight_yards: f32 = 400.0, Clamp(20.0, 500.0), Live, "";
     }
 }
 

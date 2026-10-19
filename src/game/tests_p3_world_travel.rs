@@ -450,6 +450,48 @@ async fn a_flight_flown_by_logout_is_a_landing_and_a_dead_passengers_flight_isnt
     assert!(!flying);
 }
 
+/// A flier sees 400 yards (`[visibility] flight_yards`), measured on the
+/// ground: Alice, flying from node 2 to node 3, is told of Bob 350 yards
+/// off her path and 300 above it, as Carol, walking where she took off,
+/// isn't. Landed, she sees as far as anyone again, and forgets him.
+#[tokio::test]
+async fn a_flier_sees_four_hundred_yards_and_landing_forgets_what_is_further() {
+    let realm = harness::realm_with(world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Carol", Race::Human, Class::Warrior).await;
+    a.sees(master()).await;
+    a.sees(gb).await;
+    c.sees(gb).await;
+    let off = (START.0 + 34.0, START.1 + 350.0, START.2 + 300.0);
+    put(&map(&realm), &mut b, off).await;
+    a.forgets(gb).await;
+    c.forgets(gb).await;
+    map(&realm)
+        .query(move |m| {
+            let p = m.players.get_mut(&ga).unwrap();
+            p.row.state.taxi_mask = vec![(1 << 2) | (1 << 3)];
+            p.set_money(100);
+        })
+        .await;
+    assert_eq!(fly(&mut a, vec![2, 3]).await, ActivateTaxiReply::Ok);
+    a.sees(gb).await;
+    assert!(
+        !c.sees_within(gb, Duration::from_millis(300)).await,
+        "Carol, walking, sees 100 yards"
+    );
+    // Landed at node 3, 351 yards from him.
+    a.forgets(gb).await;
+    let landed = map(&realm)
+        .query(move |m| m.players[&ga].flight.is_none())
+        .await
+        .unwrap();
+    assert!(landed);
+}
+
 #[test]
 fn a_ship_and_a_zeppelin_are_open_to_the_sky_only_at_their_deck_spots() {
     use crate::game::map::spells::environment::on_open_deck;

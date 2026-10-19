@@ -625,6 +625,8 @@ pub struct RealmConfig {
     /// In dungeons and raids.
     pub instance_visibility_yards: f32,
     pub battleground_visibility_yards: f32,
+    /// On a flight master's mount.
+    pub flight_visibility_yards: f32,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -682,6 +684,7 @@ impl RealmConfig {
             visibility_yards: c.visibility.continents_yards,
             instance_visibility_yards: c.visibility.instances_yards,
             battleground_visibility_yards: c.visibility.battleground_yards,
+            flight_visibility_yards: c.visibility.flight_yards,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,
