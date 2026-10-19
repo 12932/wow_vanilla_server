@@ -228,7 +228,10 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
 /// `HostileReference::addThreat`, Thistle Tea's `Threat.add` and
 /// `Threat.change`).
 pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
-    if from == creature || from.is_zero() {
+    // An object's spell (a script's cast from it) makes it no foe: it is
+    // never on a threat list (Thistle Tea's object damage, no combat
+    // opponent).
+    if from == creature || from.is_zero() || guid::is_game_object(from) {
         return;
     }
     let Some(c) = map.creature_mut(creature) else {
