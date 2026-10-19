@@ -219,6 +219,9 @@ pub struct MapSpells {
     pub next_dynamic: u32,
     /// Who looks from where (far sight, bind sight): viewer to object.
     pub viewpoints: AHashMap<Guid, Guid>,
+    /// The viewers whose client brought its camera back to themselves
+    /// (`CMSG_FAR_SIGHT` 0), their viewpoint kept for its asking again.
+    pub cameras_home: ahash::AHashSet<Guid>,
     /// When and where each player's surroundings were last looked at.
     pub outdoor_checked: AHashMap<Guid, (Instant, Vector3d)>,
     /// Indoors or out, by player, for tests without a navmesh.
@@ -1055,6 +1058,25 @@ pub fn cast_triggered_at(map: &mut Map, caster: Guid, spell: u32, at: Vector3d) 
     execute(map, caster, s, targets, None, true);
 }
 
+/// A cast of an effect at its spell's database place (17) is at that
+/// place, if its `spell_target_position` row is on this map, whatever
+/// place the cast was sent or a trigger gave it: its summons, its ground
+/// and its areas are there, and its go says so (mangos's `SetTargetMap`
+/// for `TARGET_LOCATION_DATABASE`, Thistle Tea's database locations). A
+/// row on another map is a teleport's own; with none, the cast keeps its
+/// place.
+fn database_place(map: &Map, s: &SpellTemplate, mut t: Targets) -> Targets {
+    if s.effects
+        .iter()
+        .any(|e| e.effect != 0 && (e.target_a == 17 || e.target_b == 17))
+        && let Some(&(m, x, y, z, _)) = map.realm.data.spells.target_positions.get(&s.id)
+        && m == map.key.map
+    {
+        t.dest = Some(Vector3d { x, y, z });
+    }
+    t
+}
+
 /// The units a cast lands on, in order, with the effects for each.
 fn resolve(
     map: &Map,
@@ -1173,6 +1195,7 @@ fn execute(
         .map_or(0, |c| c.combo_points);
     let aimed = targets.unit;
     let targets = magnet(map, caster, s, targets);
+    let targets = database_place(map, s, targets);
     let resolved = resolve(map, caster, s, &targets, &m);
     // A spell a magnet took stops there: a chain jumps on to no one from
     // it (mangos's `CheckAndAddMagnetTarget`, Thistle Tea's resolver), and

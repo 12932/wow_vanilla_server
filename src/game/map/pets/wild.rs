@@ -103,6 +103,26 @@ pub fn destination(
     }
 }
 
+/// A point about `base` within `radius`, on its level (mangos's
+/// `GetRandomPoint` for a summon's second and later).
+pub(crate) fn about(base: Vector3d, radius: f32) -> Vector3d {
+    if radius <= 0.0 {
+        return base;
+    }
+    let (a, d) = {
+        let mut rng = rand::rng();
+        (
+            rng.random_range(0.0..std::f32::consts::TAU),
+            radius * rng.random_range(0.0f32..=1.0).sqrt(),
+        )
+    };
+    Vector3d {
+        x: base.x + d * a.cos(),
+        y: base.y + d * a.sin(),
+        z: base.z,
+    }
+}
+
 /// Effect `index` of `s`, cast by creature `caster`: `count` of `entry`,
 /// the first at `at` (else at its spot about the caster) and the rest
 /// about it within the effect's radius.
@@ -151,22 +171,7 @@ pub fn summon(
     let radius = data.spells.radius(s.effects[index].radius_index);
     for i in 0..count {
         // The rest about the first, within the effect's radius.
-        let at = if i > 0 && radius > 0.0 {
-            let (a, d) = {
-                let mut rng = rand::rng();
-                (
-                    rng.random_range(0.0..std::f32::consts::TAU),
-                    radius * rng.random_range(0.0f32..=1.0).sqrt(),
-                )
-            };
-            Vector3d {
-                x: base.x + d * a.cos(),
-                y: base.y + d * a.sin(),
-                z: base.z,
-            }
-        } else {
-            base
-        };
+        let at = if i > 0 { about(base, radius) } else { base };
         let counter = map.next_creature_counter;
         map.next_creature_counter += 1;
         let mut c = Creature::new(

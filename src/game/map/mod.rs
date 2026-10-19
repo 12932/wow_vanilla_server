@@ -457,6 +457,10 @@ pub struct Map {
     pub object_resets: Vec<(Instant, Guid, u32)>,
     /// Groups scripts made: member → (leader, distance, angle, flags).
     pub script_groups: AHashMap<Guid, (Guid, f32, f32, u32)>,
+    /// The spawns a script took out of their database group, for as long
+    /// as the map is up: a member that left, every one of a group whose
+    /// leader left (its leader's spawn too).
+    pub left_groups: ahash::AHashSet<u32>,
     /// Formations whose leader died, by the leader's spawn: the member
     /// leading their patrol meanwhile.
     pub acting_leaders: AHashMap<u32, Guid>,
@@ -874,6 +878,7 @@ impl Map {
             by_spawn: AHashMap::new(),
             object_resets: Vec::new(),
             script_groups: AHashMap::new(),
+            left_groups: Default::default(),
             acting_leaders: AHashMap::new(),
             held_slaves: Default::default(),
             pools: AHashMap::new(),

@@ -1491,8 +1491,12 @@ async fn the_deep_sea_tires_a_swimmer_out() {
     .await;
 }
 
+/// The client's `CMSG_FAR_SIGHT` 0 brings its camera home and leaves the
+/// field alone (mangos's `HandleFarSightOpcode` resets the view without
+/// it): the far sight's own end clears it. See
+/// `tests_p8_world_units::the_clients_camera_comes_home_and_goes_back_to_its_viewpoint`.
 #[tokio::test]
-async fn far_sight_ends() {
+async fn the_clients_far_sight_off_keeps_the_field() {
     let (realm, a) = setup().await;
     let g = a.guid;
     on_map(&realm, move |m| {
@@ -1512,7 +1516,7 @@ async fn far_sight_ends() {
         m.players[&g].fields.get_guid(PLAYER_FARSIGHT)
     })
     .await;
-    assert!(sight.is_zero());
+    assert_eq!(sight, Guid::new(5));
 }
 
 #[tokio::test]

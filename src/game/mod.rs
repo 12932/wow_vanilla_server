@@ -825,6 +825,16 @@ mod tests_p8_spell_stealth;
 #[cfg(test)]
 mod tests_p8_spell_wounds;
 #[cfg(test)]
+mod tests_p8_world_combat;
+#[cfg(test)]
+mod tests_p8_world_sight;
+#[cfg(test)]
+mod tests_p8_world_spells;
+#[cfg(test)]
+mod tests_p8_world_system;
+#[cfg(test)]
+mod tests_p8_world_units;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
