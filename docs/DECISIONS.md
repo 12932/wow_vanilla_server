@@ -997,4 +997,35 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Next:** rustigator's dependencies (wow-mpq's rsa and old rand, parry3d's second glam, the old digest), and
       the parking_lot investigation.
 
+65. **Guards, the alarm and Jaina** (2026-10-19, your asks; `feat/guards`).
+    - **mangos-classic's call** (`CreatureAI::AttackStart`, `HandleSpawnGuard`) in place of vmangos's posts: a
+      civilian with `CALLS_GUARDS` (bit 0x08000000 of `static_flags1`, 2,431 templates) calls one guard each time it
+      takes a victim (a fight's start, a threat switch, a taunt), at a reachable point within 30 yards, attacking its
+      attacker. Your changes to mangos: gone 5 minutes out of combat or at death, and wandering 8 yards meanwhile.
+      No calls on sight, no rousing. A civilian shouts at most once in 10 s.
+    - **The table:** mangos's, with vmangos's zones and two-sided areas and Razor Hill's line. Shadowglen keeps 12160
+      (mangos's 4844 is a Badlands surveyor, a typo); Goldshire, Undercity, Hammerfall and the Sepulcher follow
+      mangos; a caller's area is matched, then its zone.
+    - **The alarm,** per town, halving each 5 minutes without a call (`[guards]`): from 20, Avoidance (aura 160, as
+      spell 23198) 5% a step of 10 to 50%, kept through an evade; from 40, two elite a call (Royal Guard 1756,
+      Kor'kron Elite 14304, Royal Dreadguard 13839, Honor Guard 3083; Ironforge and Darnassus have none, so two of
+      their guards); each threshold logged at `info`.
+    - **Jaina,** from 60 in `jaina_city` (Stormwind): alive and home, she speaks and flashes out of Theramore (12980),
+      and a copy flashes in near the caller, her flash and line after her create. She fights the attackers, leashed
+      to the city; 60 s at peace, she says farewell and goes home. Dead in the city, her home spawn returns after
+      `jaina_respawn_secs` (86,400, your choice). Her combat script came with the Thistle Tea import; in Stormwind her
+      Teleport sends its victim to the Stockade's exit (area trigger 503), her 40-yard rule about that spot.
+    - **Left:** a lost "home" message leaves her "returning"; a restart forgets where she was (her spawn returns).
+
+66. **The raid that drives it** (`feat/gear`, peon's `feat/raid`).
+    - **`.gear`** (GM level 2): random uncommon and rare items of the target's class and level in every slot,
+      replacing what is worn (destroyed, not bagged), teaching the skills they need, with a wand or ranged weapon and
+      ammo; the shirt and tabard are left alone. Armour kinds and dual wield are fixed per class.
+    - **peon `--mode raid`:** Horde bots, levelled from `--raid-levels` (50-60), geared, out of GM mode, placed at
+      `--raid-at` (the Trade District); each fights its attacker, else the nearest Alliance civilian within 40 yards,
+      else a guard, leashed 60 yards from the point, and is revived after `--raid-revive-secs` (30). Movement is a
+      straight line, without the navmesh.
+    - **Matrix:** the rows that named the removed post tests, and those of #27 and #20's removed tests, are
+      `accepted`, each with its reason.
+
 ## Left for later, and why

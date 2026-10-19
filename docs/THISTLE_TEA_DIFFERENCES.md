@@ -59,6 +59,11 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **vmangos's spell corrections** (`spell_mod`, `spell_effect_mod`) win over the raw DBC Thistle Tea reads:
   Concussive Shot and Piercing Howl are dazes, not snares; Blessed Sunfruit Juice and Alterac Spring Water aren't
   Well Fed; Blood Siphon and Blood Funnel are a heal and a hit, not funnels.
+- **Guards, as mangos-classic calls them:** a civilian calls one guard each time it takes a victim, with no posts,
+  charges or cooldowns, no call on sight and no rousing of a guard nearby (Thistle Tea's `GuardCall` ports vmangos's
+  `GuardMgr`). Each town's alarm escalates (Avoidance, then two elite a call, then Jaina for Stormwind): wvs's own.
+- **`.gear`** replaces what is worn and teaches the skills its items need; Thistle Tea's `.debug random equipment`
+  fills only empty slots.
 - **The player's combat**, as mangos-classic's `CombatManager` has it: a player leaves combat once no creature holds
   them on its threat list, the 5 s timer runs only between players (and their pets), and Bloodrage holds a warrior in
   combat while it lasts. Thistle Tea also gives 5 s for a creature's blow and for any help.

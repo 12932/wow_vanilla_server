@@ -113,6 +113,10 @@ Until you answer, wvs keeps what the line says.
     among them (DECISIONS 62).
   - **#39** new weapon skills start at 1, and skills are now saved (DECISIONS 62).
   - **#11** nothing reaches a client about an object before its create (DECISIONS 63).
+- **2026-10-19, guards:** mangos-classic's guard call, guards gone 5 minutes after a fight and wandering meanwhile,
+  each town's alarm (Avoidance from 20, two elite from 40) and Jaina from Theramore to Stormwind from 60, her
+  Teleport there to the Stockade's door and her respawn the standard day (DECISIONS 65). peon's `--mode raid` and
+  wvs's `.gear` drive it (DECISIONS 66).
 - **2026-10-19, dependencies:** every crate at its newest release, and `rayon`, `pprof`, `dotenvy`, the regex log
   filter and two unused features gone (DECISIONS 64). **Tracy now needs viewer v0.14.1.** No `.env` is read.
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
