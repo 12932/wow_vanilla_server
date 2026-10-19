@@ -842,11 +842,11 @@ on Eastern Kingdoms before, 2.27 and 2.31 after; 2.76 and 2.77 on Kalimdor, 2.88
 ## The concurrency micro-benchmarks
 
 `benches/sync.rs` settles "which channel" or "which lock" in five minutes, not in hours of load tests. It is
-[divan](https://crates.io/crates/divan)'s (a dev-dependency, as are flume, crossbeam-channel and arc-swap). Each
-benchmark stands for a path in wvs, named in its doc comment, and runs that path's shape (who sends, from where, who
-receives and how) with each candidate. What the paths do besides is left out (the cipher and the socket, SQLite, the
-disk, a map's handling of an event), so a row is the channel's or the lock's cost, and the harness's, which is the
-same for every candidate.
+[divan](https://crates.io/crates/divan)'s (a dev-dependency, as are kanal, flume, crossbeam-channel and arc-swap;
+wvs's own channels are all tokio's, DECISIONS 67). Each benchmark stands for a path in wvs, named in its doc comment,
+and runs that path's shape (who sends, from where, who receives and how) with each candidate. What the paths do
+besides is left out (the cipher and the socket, SQLite, the disk, a map's handling of an event), so a row is the
+channel's or the lock's cost, and the harness's, which is the same for every candidate.
 
 ```sh
 cargo bench --bench sync                     # everything: 76 cases, about five minutes
@@ -866,10 +866,10 @@ cargo bench --bench sync -- --list           # the cases, without running them
 
 | Benchmark | wvs's path | The shape | Candidates, wvs's first |
 |---|---|---|---|
-| `channels::outbound` | `conn.rs`: `Outbound`, `run_writer` | 1, 4 or 16 producer threads send `Arc<[u8]>` frames (36 to 384 bytes) with a sync send; one writer task waits for a frame, takes up to 128 and copies them out. A round: 16,384 frames | `Kanal`; `Tokio` (drained as kanal is), `TokioRecvMany` (`recv_many`), `Flume` |
+| `channels::outbound` | `conn.rs`: `Outbound`, `run_writer` | 1, 4 or 16 producer threads send `Arc<[u8]>` frames (36 to 384 bytes) with a sync send; one writer task waits for a frame, takes up to 128 and copies them out. A round: 16,384 frames | `TokioRecvMany` (`recv_many`); `Kanal` (wvs's before), `Tokio` (drained as kanal was), `Flume` |
 | `channels::mailbox` | `map/mod.rs`: `MapHandle`, `map::run` | 1 or 64 sender tasks send the real `MapEvent` (a movement packet) with a sync send; the map's task receives in `select!` beside its 50 ms ticker, then drains up to 512. A round: 4,096 events | `Tokio`; `Flume` in `select!`; `TokioNoSelect` and `KanalNoSelect` in a loop of their own (kanal's receive isn't safe in `select!`: a message can be lost) |
-| `channels::tiles` | `map/tiles.rs`: `tiles::read` | one sender, 4 reader threads asleep in a blocking receive (a round waits 1 ms first, untimed). A round: 8 jobs | `Kanal`; `Crossbeam`, `Flume`; `Std` and `Tokio`, whose one receiver the readers share behind a mutex |
-| `channels::store` | `store.rs`: `Store`, `serve_all` | 1 caller task, or 16, sends a request with a sync send and awaits the reply on tokio's `oneshot`; the store's thread waits in a blocking receive, takes up to 512 and answers each. A round: 256 round trips | `Std`; `Tokio` (`blocking_recv`), `Kanal`, `Flume`, `Crossbeam` |
+| `channels::tiles` | `map/tiles.rs`: `tiles::read` | one sender, 4 reader threads asleep in a blocking receive (a round waits 1 ms first, untimed). A round: 8 jobs | `Tokio`, whose one receiver the readers share behind parking_lot's mutex; `Kanal` (wvs's before), `Crossbeam`, `Flume`; `Std`, behind std's |
+| `channels::store` | `store.rs`: `Store`, `serve_all` | 1 caller task, or 16, sends a request with a sync send and awaits the reply on tokio's `oneshot`; the store's thread waits in a blocking receive, takes up to 512 and answers each. A round: 256 round trips | `Tokio` (`blocking_recv`); `Std` (wvs's before), `Kanal`, `Flume`, `Crossbeam` |
 | `locks::registry` | `registry.rs`: `Registry::online` | 1,000 players in a `RwLock<AHashMap<Guid, Arc<Online>>>`, looked up (the `Arc` cloned and dropped) from 1, 4, 16 or 32 threads; every 1,000th operation on a thread a write (a login) | `ParkingLot`; `Std`, `StdRecovering` (a poisoned lock taken anyway, as wvs would need) |
 | `locks::social` | `social/mod.rs`: a service's `Mutex` | the friends lists of 1,000 players, a friend added or removed, from 1, 4 or 16 threads | `ParkingLot`; `Std`, `StdRecovering` |
 | `live_config::*` | `game/mod.rs`: `Realm::config` | the real `RealmConfig`, read from 1, 4, 16 or 32 threads | `generation` (a map's look, once an update), `parking_lot_read_clone` (`Realm::config`); `std_read_clone`, `arc_swap_load` (`Realm::config` before), `arc_swap_load_full` |
