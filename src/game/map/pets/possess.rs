@@ -257,6 +257,11 @@ pub fn moved(
     let Some(c) = map.creature_mut(unit) else {
         return true;
     };
+    // Feared or confused, the server moves it (Thistle Tea's "possessed
+    // creatures reject input").
+    if c.engagement.control.is_some() {
+        return true;
+    }
     let (anchor, old_cell) = (c.vis_anchor, c.cell);
     c.position = info.position;
     c.orientation = info.orientation;

@@ -31,6 +31,7 @@ const SLOW_FALL: u32 = 97_712;
 const SLOW: u32 = 97_713;
 const KNOCK: u32 = 97_714;
 const WOLF: u32 = 97_715;
+const EYES: u32 = 97_716;
 
 fn world() -> GameData {
     let mut d = data();
@@ -43,6 +44,7 @@ fn world() -> GameData {
     aura(WATER_WALK, AURA_WATER_WALK, 1);
     aura(SLOW_FALL, AURA_FEATHER_FALL, 1);
     aura(SLOW, AURA_MOD_DECREASE_SPEED, -50);
+    aura(EYES, auras::AURA_MOD_POSSESS_PET, 0);
     d.spells.spells.insert(
         KNOCK,
         spell(
@@ -729,6 +731,75 @@ async fn a_launch_ack_settles_once_for_the_launch_sent() {
     .await;
     let kalimdor = realm.maps.get(&realm, MapKey::world(1));
     assert!(pending(&kalimdor, gb).await.is_empty());
+}
+
+/// A hunter's pet she moves (Eyes of the Beast), feared: her client is
+/// told it no longer moves it, what it sends for it moves nothing, and
+/// she has it back when the fear goes (Thistle Tea's "possessed creatures
+/// reject input and notify the controller"; mangos's
+/// `AbstractRandomMovementGenerator`: `UpdateClientControl`).
+#[tokio::test]
+async fn a_feared_unit_is_taken_from_the_client_that_moves_it() {
+    let realm = crate::game::harness::realm_with(world());
+    let mut a = Client::connect(&realm, "H");
+    let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
+    // Its login's own active mover handled first.
+    handled(&mut a).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let pet = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&h).unwrap();
+        crate::game::map::stats::set_level(p, &data, 20);
+        let at = p.position();
+        let pet = crate::game::map::pets::testing::spawn(
+            m,
+            h,
+            WOLF,
+            crate::game::map::pets::Kind::Hunter,
+            20,
+            at,
+            0.0,
+        );
+        m.players.get_mut(&h).unwrap().owned.pet = Some(pet);
+        crate::game::map::pets::sync_record(m, h);
+        // Not unhappy enough to run away meanwhile.
+        let later = m.now + Duration::from_secs(3600);
+        if let Some(s) = crate::game::map::pets::state_mut(m, pet) {
+            s.loyalty_at = later;
+            s.happiness_at = later;
+        }
+        let s = |id| m.realm.data.spells.get(id).cloned().unwrap();
+        let (eyes, fear) = (s(EYES), s(FEAR));
+        auras::apply(m, h, pet, &eyes, 0, 0);
+        crate::game::map::pets::set_mover(m, h, pet);
+        assert_eq!(m.players[&h].owned.mover, Some(pet), "she moves it");
+        auras::apply(m, h, pet, &fear, 0, 0);
+        pet
+    })
+    .await;
+    let control = move |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(c) if c.guid == pet => {
+            Some(c.allow_movement)
+        }
+        _ => None,
+    };
+    // (Its possession granted her client the pet first.)
+    a.wait_for("the pet taken from her", |m| {
+        control(m).filter(|allow| !allow)
+    })
+    .await;
+    a.clear();
+    let before = on(&map, move |m| m.creature(pet).unwrap().position).await;
+    let away = Vector3d {
+        x: before.x + 3.0,
+        ..before
+    };
+    a.send(MSG_MOVE_HEARTBEAT_Client { info: at(away) }).await;
+    handled(&mut a).await;
+    let after = on(&map, move |m| m.creature(pet).unwrap().position).await;
+    assert_ne!(after, away, "her client moves it no more");
+    on(&map, move |m| auras::remove_spell(m, pet, FEAR, None)).await;
+    assert!(a.wait_for("and back", control).await);
 }
 
 /// A hunter teleported far from her pet within the map: it goes, and comes

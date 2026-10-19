@@ -783,6 +783,18 @@ pub fn control_changed(map: &mut Map, g: Guid) -> Option<Control> {
         c.engagement.control_spline = None;
         c.engagement.next_move_at = want.map(|_| now);
     }
+    // A unit a player's client moves (Mind Control, Eyes of the Beast) is
+    // taken from that client while the server moves it, and given back
+    // after (mangos's `AbstractRandomMovementGenerator::Initialize` and
+    // `Finalize`: `UpdateClientControl`).
+    if had.is_none() != want.is_none()
+        && let Some(p) = crate::game::map::movement::controller(map, g)
+    {
+        p.outbound.send(&SMSG_CLIENT_CONTROL_UPDATE {
+            guid: g,
+            allow_movement: want.is_none(),
+        });
+    }
     want
 }
 
