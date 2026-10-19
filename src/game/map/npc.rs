@@ -663,9 +663,10 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
 /// [`trainer_buy`] teaches it but free (`.character spells`): what their
 /// class's trainers have for their class and race, each once its level,
 /// its rank before and the spell it needs are had, so the ranks come one
-/// after another up to the highest for their level; a talent's higher
-/// ranks only to one with the talent. Pet and profession trainers (weapon
-/// masters among them) aren't their class's. The number learned.
+/// after another up to the highest for their level; a talent's ranks
+/// (and those trained after it) only to one with the talent. Pet and
+/// profession trainers (weapon masters among them) aren't their class's.
+/// The number learned.
 pub fn learn_class_spells(map: &mut Map, player: Guid) -> usize {
     let data = map.realm.data.clone();
     let Some(p) = map.players.get(&player) else {
@@ -681,6 +682,22 @@ pub fn learn_class_spells(map: &mut Map, player: Guid) -> usize {
         .collect();
     offered.sort_by_key(|s| (s.required_level, s.spell));
     offered.dedup_by_key(|s| s.spell);
+    // A talent's rank, or one trained after it (Mortal Strike's), only to
+    // one with a rank of the talent, as Thistle Tea's
+    // `trainable_spell_ids`: vmangos's `spell_chain` doesn't chain them to
+    // the talent, so the rank before isn't asked for.
+    let talents: Vec<u32> = map.players.get(&player).map_or_else(Vec::new, |p| {
+        p.spells
+            .iter()
+            .filter_map(|s| data.spells.talent_of(*s))
+            .collect()
+    });
+    offered.retain(|s| {
+        let learned = crate::game::map::spells::learns(&data, s.spell);
+        data.spells
+            .talent_of(learned)
+            .is_none_or(|t| talents.contains(&t))
+    });
     let mut learned = 0;
     // A pass for each rank at most: each teaches what the last made
     // green.

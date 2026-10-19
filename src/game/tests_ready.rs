@@ -280,7 +280,8 @@ async fn trained(
 ) -> (String, Vec<u32>) {
     let mut c = Client::connect(realm, account);
     let g = c.enter(account, race, class).await;
-    let map = realm.maps.get(realm, MapKey::world(0));
+    // Where the race starts: an orc in Kalimdor.
+    let map = realm.registry.online(g).expect("in the world").map();
     if level > 1 {
         c.say(&format!(".character level {level}")).await;
         c.system_message(&format!("Level {level}")).await;
@@ -323,7 +324,8 @@ async fn character_spells_gives_a_level_60_mage_the_top_ranks() {
 
 /// A level-55 warrior: Heroic Strike's seventh rank (the eighth is at 56),
 /// Whirlwind; Mortal Strike's trained ranks follow its talent. A level-1
-/// warrior has nothing new.
+/// warrior has nothing new but Battle Shout, which the trainers teach at
+/// level 1 (what it starts with it knows already).
 #[tokio::test]
 #[ignore = "extended"]
 async fn character_spells_gives_a_warrior_the_ranks_for_its_level() {
@@ -336,6 +338,8 @@ async fn character_spells_gives_a_warrior_the_ranks_for_its_level() {
     assert!(!spells.contains(&11_567), "Heroic Strike 8 is at 56");
     assert!(spells.contains(&1680), "Whirlwind");
     assert!(!spells.contains(&21_551), "Mortal Strike 2, the talent's");
-    let (reply, _) = trained(&realm, "Novice", Race::Orc, Class::Warrior, 1).await;
-    assert_eq!(reply, "Learned 0 spells.");
+    let (reply, spells) = trained(&realm, "Novice", Race::Orc, Class::Warrior, 1).await;
+    assert_eq!(reply, "Learned 1 spells.");
+    assert!(spells.contains(&6673), "Battle Shout");
+    assert!(!spells.contains(&100), "nor Charge, at 4");
 }
