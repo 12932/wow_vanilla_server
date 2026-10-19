@@ -480,6 +480,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   **My calls:** any cast ends at a sale (mangos; Thistle Tea only the sold item's); reputation losses take no aura
   bonus (wvs's, kept; mangos shrinks them); `wrong-for-1.12`: taking a weapon off doesn't reset the swing timer, a
   saved flight resumes at login, abandoning a quest doesn't give its starter item back.
+- **8e, the world, round 8:** a spell at its database place (target 17) lands on that place's map: its summons,
+  guardian, object and ground area; a teleport at a unit's place (63, a creature's Blink) goes there and moves a
+  creature on its map (mangos's `SetTargetMap`, `EffectTeleportUnits`); a druid in an animal form is a beast to a
+  spell's creature types as to an aura's; far sight's camera comes home and goes back (mangos's
+  `HandleFarSightOpcode`); a script's leave takes a member out of its database group, and its leader's disbands it
+  (as Thistle Tea, 7e's find; it stays left for the map's life, vmangos). **My calls** (`wrong-for-1.12`, mangos's):
+  leash clocks per creature (Thistle Tea shares one between a caller and its helpers); no combat hold for a fighting
+  pet under Feign Death; group reward measured from the member, not the corpse; no Void Zone lift; stealth checked
+  again on moving, not on turning; a leech's heal makes no threat.
 
 ## Answered
 - **#10** keep swinging on arrival.
