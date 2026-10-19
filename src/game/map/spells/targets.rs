@@ -231,6 +231,21 @@ pub fn effect_targets(
     if matches!(e.target_a, 7 | 8) && place_effect(s, index) {
         return Vec::new();
     }
+    // A unit's place (53, 63) is where the unit is now, whatever place was
+    // sent (mangos's `TARGET_LOCATION_CASTER_TARGET_POSITION` setting the
+    // destination to its unit, Thistle Tea's unit locations).
+    let at_unit;
+    let t = if matches!(e.target_a, 53 | 63)
+        && let Some(p) = t.unit.and_then(|u| map.position_of(u))
+    {
+        at_unit = Targets {
+            dest: Some(p),
+            ..*t
+        };
+        &at_unit
+    } else {
+        t
+    };
     // Areas and groups about the caster are about the unit a triggering
     // aura is on, and their friends and foes are that unit's (mangos's
     // `PickTargetsForSpellTrigger`, Thistle Tea's trigger resolution).
