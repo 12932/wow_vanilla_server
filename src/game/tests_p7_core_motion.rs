@@ -278,3 +278,54 @@ fn a_transports_create_carries_its_place_and_its_paths_time() {
     assert_eq!(u32_at(b, 16), 1, "the update-all word");
     assert_eq!(u32_at(b, 20), 123_456, "its path's time");
 }
+
+/// Thistle Tea's `UpdateObject` "transport creates set the packet transport
+/// header": a packet with a ship's create (a `MoTransport` GUID) says so in
+/// the byte after its count; one with a unit's, or an elevator's (a game
+/// object), doesn't.
+#[test]
+fn a_ships_create_sets_the_packets_transport_byte_and_an_elevators_doesnt() {
+    use crate::game::guid::{HighGuid, make};
+    let header = |g: Guid, type_id: TypeId| {
+        let fields = Fields::new(type_id, g, guid::entry(g));
+        let block = create_block(
+            &Create {
+                guid: g,
+                type_id,
+                placement: Placement::Transport {
+                    position: Vector3d {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    },
+                    orientation: 0.0,
+                    time: 5,
+                },
+                fields: &fields,
+                is_self: false,
+                melee_target: None,
+            },
+            Visibility::Public,
+        );
+        let mut batch = Batch::new();
+        batch.push_for(g, &block);
+        let packets = batch.finish();
+        // `[size BE][opcode LE][u32 count][u8 has transport]`.
+        packets[0][8]
+    };
+    assert_eq!(
+        header(make(HighGuid::MoTransport, 164_871, 1), TypeId::GameObject),
+        1,
+        "a ship"
+    );
+    assert_eq!(
+        header(guid::game_object(176_080, 1), TypeId::GameObject),
+        0,
+        "an elevator"
+    );
+    let g = guid::unit(299, 7);
+    let (block, _) = living(g, 0, None, None);
+    let mut batch = Batch::new();
+    batch.push_for(g, &block);
+    assert_eq!(batch.finish()[0][8], 0, "a unit");
+}
