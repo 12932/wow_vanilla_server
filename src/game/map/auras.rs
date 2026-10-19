@@ -1215,9 +1215,13 @@ pub fn apply_spell(
         }
         // And what the scripts add with it (Bestial Wrath's immunities).
         crate::game::map::spells::class_scripts::aura_applied(map, target, h);
-        // A transform refreshed is the newest put on.
-        if h.has(AURA_TRANSFORM) {
+        // A transform refreshed is the newest put on, and lands again: a
+        // Discombobulate again takes its target off the mount it got on
+        // since (Thistle Tea's "only a new Discombobulate transformation
+        // interrupts a mount").
+        if let Some(x) = h.effects.iter().find(|x| x.kind == AURA_TRANSFORM) {
             sync_display(map, target);
+            crate::game::map::spells::interrupts::transformed(map, target, h.spell, x.effect);
         }
     }
     if let Some(h) = h
@@ -3040,10 +3044,19 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 .unwrap_or(false);
             if paid {
                 crate::game::map::combat::deal_damage(map, h.caster, h.caster, cost);
-                let gain = (cost as f32
-                    * map.realm.data.spells.get(h.spell).map_or(1.0, |s| {
-                        s.effects[a.effect as usize].multiple_value.max(1.0)
-                    })) as u32;
+                // Its multiplier, one if the data has none, with the
+                // caster's modifiers to it: none of it if they take it all
+                // (mangos-classic's `SPELLMOD_MULTIPLE_VALUE` in
+                // `PeriodicTick`; Thistle Tea's "a zero transfer modifier
+                // does not revert to the default ratio").
+                let multiplier = map.realm.data.spells.get(h.spell).map_or(1.0, |s| {
+                    let v = s.effects[a.effect as usize].multiple_value;
+                    let v = if v > 0.0 { v } else { 1.0 };
+                    crate::game::map::spells::mods::for_spell(map, h.caster, s)
+                        .apply(crate::game::map::spells::mods::OP_MULTIPLE_VALUE, v)
+                        .max(0.0)
+                });
+                let gain = (cost as f32 * multiplier) as u32;
                 crate::game::map::spells::heal(map, h.caster, target, h.spell, gain, true);
             }
         }

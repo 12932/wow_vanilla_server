@@ -594,12 +594,16 @@ pub fn periodic_triggered(map: &mut Map, target: Guid, h: &Holder) {
     }
 }
 
+/// Whether stealth allows `s`: what says so, and stealth's own spells.
+pub fn allows_stealth(s: &SpellTemplate) -> bool {
+    STEALTH_ICONS.contains(&s.spell_icon)
+        || s.attr(1, crate::game::data::spells::ATTR_EX_ALLOW_WHILE_STEALTHED)
+}
+
 /// Whether casting `s` keeps `caster`'s stealth: the spells stealth allows,
 /// and Sap with Improved Sap's chance (Thistle Tea's `Spell.Stealth`).
 pub fn keeps_stealth(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
-    if STEALTH_ICONS.contains(&s.spell_icon)
-        || s.attr(1, crate::game::data::spells::ATTR_EX_ALLOW_WHILE_STEALTHED)
-    {
+    if allows_stealth(s) {
         return true;
     }
     if s.spell_icon != SAP_ICON {

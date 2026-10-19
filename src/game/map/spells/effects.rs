@@ -207,8 +207,23 @@ fn aura_amount(
     if let Some(amount) = crate::game::map::item_scripts::aura_amount(s) {
         return amount;
     }
+    // A fixed amount over time, and Ignite's burn (its crits' shares
+    // already), hold their base: no power, percentage or modifier of the
+    // caster's (vmangos's custom flag in `SpellDamageBonusDone`; Thistle
+    // Tea's "fixed periodic effects and Ignite bypass outgoing amount
+    // modifiers").
+    if (s.custom(sd::CUSTOM_FIXED_DAMAGE) || s.id == crate::game::map::proc_scripts::IGNITE_BURN)
+        && matches!(
+            e.aura,
+            AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_HEAL
+        )
+    {
+        return base;
+    }
     match e.aura {
-        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
+        // A funnel of health's too (mangos-classic's
+        // `HandlePeriodicHealthFunnel`, `SpellDamageBonusDone` as a DoT's).
+        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_HEALTH_FUNNEL => {
             let mut d =
                 base as f32 + outcome::bonus(map, caster, target, s, index, Kind::Dot, &l.mods);
             d *= outcome::done_multiplier(map, caster, target, s);

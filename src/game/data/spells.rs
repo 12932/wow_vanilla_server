@@ -134,14 +134,17 @@ pub const ATTR_EX_NO_REFLECTION: u32 = 0x80;
 pub const ATTR_EX_ONLY_PEACEFUL_TARGETS: u32 = 0x100;
 pub const ATTR_EX_FROM_BEHIND: u32 = 0x200;
 pub const ATTR_EX_NO_THREAT: u32 = 0x400;
+pub const ATTR_EX_FAILURE_BREAKS_STEALTH: u32 = 0x1000;
 pub const ATTR_EX_DISCOUNT_POWER_ON_MISS: u32 = 0x800_0000;
 pub const ATTR_EX_REQ_COMBO_POINTS: u32 = 0x10_0000 | 0x40_0000;
 /// `AttributesEx2` (word 2).
 pub const ATTR_EX2_ALLOW_DEAD_TARGET: u32 = 0x1;
 pub const ATTR_EX2_IGNORE_LOS: u32 = 0x4;
 pub const ATTR_EX2_AUTO_REPEAT: u32 = 0x20;
+pub const ATTR_EX2_ALLOW_WHILE_INVISIBLE: u32 = 0x4000;
 pub const ATTR_EX2_BEHIND_TARGET: u32 = 0x10_0000;
 pub const ATTR_EX2_NO_SCHOOL_IMMUNITIES: u32 = 0x400_0000;
+pub const ATTR_EX2_NOT_AN_ACTION: u32 = 0x1000_0000;
 pub const ATTR_EX2_CANT_CRIT: u32 = 0x2000_0000;
 /// `AttributesEx3` (word 3).
 /// A resurrection that doesn't wait out the reclaim delay (Rebirth's).

@@ -779,6 +779,22 @@ mod tests_p7_world_spells;
 #[cfg(test)]
 mod tests_p7_world_system;
 #[cfg(test)]
+mod tests_p8_spell_amounts;
+#[cfg(test)]
+mod tests_p8_spell_effects;
+#[cfg(test)]
+mod tests_p8_spell_funnel;
+#[cfg(test)]
+mod tests_p8_spell_mounts;
+#[cfg(test)]
+mod tests_p8_spell_real;
+#[cfg(test)]
+mod tests_p8_spell_resists;
+#[cfg(test)]
+mod tests_p8_spell_stealth;
+#[cfg(test)]
+mod tests_p8_spell_wounds;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

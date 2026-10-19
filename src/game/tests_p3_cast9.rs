@@ -139,7 +139,8 @@ const VANISHING: u32 = 990_964;
 fn stealth_kit(d: &mut GameData) {
     use crate::game::data::spells::{ATTR_EX_ALLOW_WHILE_STEALTHED, ATTR_ONLY_STEALTHED};
     let mut stealth = lasting(STEALTH, &[aura(AURA_MOD_STEALTH, 0, 5, 1)]);
-    stealth.aura_interrupt_flags = INTERRUPT_CAST;
+    // 1.12 Stealth's: a hostile action and a cast's launch break it.
+    stealth.aura_interrupt_flags = INTERRUPT_CAST | INTERRUPT_ACTION_COMPLETE;
     let opener = |id: u32| {
         let mut s = lasting(id, &[aura(AURA_DUMMY, 0, 0, 1)]);
         s.attributes[0] |= ATTR_ONLY_STEALTHED;

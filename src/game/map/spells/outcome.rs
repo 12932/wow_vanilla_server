@@ -721,17 +721,33 @@ pub fn coefficient(map: &Map, s: &SpellTemplate, index: usize, kind: Kind) -> f3
         } else {
             duration as f32 / 15000.0
         };
-        let ticks = s
-            .effects
-            .iter()
-            .filter(|x| x.amplitude > 0)
-            .map(|x| duration / x.amplitude)
-            .max()
-            .unwrap_or(0);
+        let ticks = aura_max_ticks(s, duration);
         let factor = if ticks > 0 { base / ticks as f32 } else { base };
         c = time / 3500.0 * factor;
     }
     c * level_penalty(s)
+}
+
+/// The ticks a coefficient over time is shared by (vmangos's
+/// `GetAuraMaxTicks`, Thistle Tea's `max_ticks`): the first aura of damage,
+/// healing or a leech over time's, over at most 30 seconds; one for no
+/// duration; six for an aura of none of those (a funnel of health's).
+pub fn aura_max_ticks(s: &SpellTemplate, duration: u32) -> u32 {
+    if duration == 0 {
+        return 1;
+    }
+    let duration = duration.min(30_000);
+    s.effects
+        .iter()
+        .find(|x| {
+            x.effect == 6
+                && matches!(
+                    x.aura,
+                    AURA_PERIODIC_DAMAGE | AURA_PERIODIC_HEAL | AURA_PERIODIC_LEECH
+                )
+        })
+        .and_then(|x| duration.checked_div(x.amplitude))
+        .unwrap_or(6)
 }
 
 /// Spells learned below level 20 get less of the caster's power.
@@ -1054,6 +1070,13 @@ pub fn healing(
     base: f32,
     l: &Landing,
 ) -> u32 {
+    // A fixed amount takes no bonus or modifier, done or taken, as fixed
+    // damage doesn't (vmangos's custom flag, Thistle Tea's "fixed damage
+    // and healing keep base modifiers but bypass outgoing bonuses").
+    if s.custom(sd::CUSTOM_FIXED_DAMAGE) {
+        let h = base * if l.chain > 0.0 { l.chain } else { 1.0 };
+        return (if l.crit { h * 1.5 } else { h }).max(0.0) as u32;
+    }
     let mut h = base + bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
     h *= if l.chain > 0.0 { l.chain } else { 1.0 };
     if let Some(a) = auras::auras(map, caster)
