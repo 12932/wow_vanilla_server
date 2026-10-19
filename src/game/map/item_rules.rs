@@ -227,6 +227,16 @@ pub fn limit_location(map: &mut Map, g: Guid) {
             && p.misc.item_loot.as_ref().is_some_and(|(l, _)| *l == item)
         {
             p.misc.item_loot = None;
+            // Its window closes with it (mangos's `Loot::~Loot` releases
+            // every looter).
+            if p.looting == Some(item) {
+                p.looting = None;
+                p.outbound
+                    .send(&wow_world_messages::vanilla::SMSG_LOOT_RELEASE_RESPONSE {
+                        guid: item,
+                        unknown1: 1,
+                    });
+            }
         }
     }
     if worn && let Some(p) = map.players.get_mut(&g) {

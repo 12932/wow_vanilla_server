@@ -415,6 +415,9 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     for o in observers {
         map.visibility_dirty.insert(o);
     }
+    // The place's auras again (mangos's `ResurrectPlayer` forces
+    // `UpdateZone` "to reapply auras").
+    crate::game::map::spell_areas::reconcile(map, g);
     true
 }
 

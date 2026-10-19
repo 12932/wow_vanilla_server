@@ -29,7 +29,7 @@ fn text(d: &mut GameData, id: u32, line: &str) {
 }
 
 /// Move `c` within the match's map, at once, to a height.
-async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
+pub(super) async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
     let g = c.guid;
     map.query(move |m| m.teleport(g, m.key, Vector3d { x, y, z }, 0.0))
         .await;
@@ -45,7 +45,7 @@ async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
     .await;
 }
 
-fn gulch() -> GameData {
+pub(super) fn gulch() -> GameData {
     let mut d = GameData::empty();
     battleground(&mut d, WSG, 2, "PVPZone03", [769, 770]);
     for (s, id) in wsg::CAPTURE_TRIGGERS.into_iter().enumerate() {
@@ -78,7 +78,7 @@ fn gulch() -> GameData {
     d
 }
 
-async fn said(c: &mut Client, containing: &str) -> String {
+pub(super) async fn said(c: &mut Client, containing: &str) -> String {
     c.wait_for(containing, |m| match m {
         ServerOpcodeMessage::SMSG_MESSAGECHAT(chat) if chat.message.contains(containing) => {
             Some(chat.message.clone())
@@ -100,7 +100,7 @@ async fn state(c: &mut Client, field: u32, value: u32) {
     .await
 }
 
-fn horde_flag(m: &crate::game::map::Map) -> Option<Flag> {
+pub(super) fn horde_flag(m: &crate::game::map::Map) -> Option<Flag> {
     m.battleground.as_ref().and_then(|b| b.flags[1])
 }
 
@@ -119,7 +119,7 @@ async fn hurry(map: &MapHandle) {
 
 /// Alice (Alliance) and Grom (Horde) in Warsong Gulch, Alice by the
 /// Horde's flag with it in hand.
-async fn alice_takes_the_horde_flag() -> (Client, Client, MapHandle, Guid) {
+pub(super) async fn alice_takes_the_horde_flag() -> (Client, Client, MapHandle, Guid) {
     let realm = harness::realm_with(gulch());
     let mut a = Client::connect(&realm, "A");
     a.enter("Alice", Race::Human, Class::Warrior).await;

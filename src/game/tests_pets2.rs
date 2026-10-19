@@ -21,7 +21,7 @@ use crate::game::tests_pets::*;
 
 const EYE: u32 = 4277;
 const EYE_OF_KILROGG: u32 = 126;
-const MIND_CONTROL: u32 = 605;
+pub(super) const MIND_CONTROL: u32 = 605;
 const IMPROVED_IMP: u32 = 18694;
 const MASTER_DEMONOLOGIST: u32 = 23785;
 const MASTER_DEMONOLOGIST_IMP: u32 = 23759;
@@ -33,7 +33,7 @@ const CHARM_PLAYER: u32 = 9060;
 const BURN: u32 = 9070;
 const FIRE: u32 = 9071;
 
-fn more() -> GameData {
+pub(super) fn more() -> GameData {
     let mut d = data();
     let none = SpellEffect::default();
     let mut eye = template(EYE, "Eye of Kilrogg", 35, 1);
@@ -146,7 +146,7 @@ fn tests_duration(ms: i32) -> crate::game::data::spells::SpellDuration {
 }
 
 /// Bring `who` next to `to` in their map, `d` yards before them.
-async fn bring(map: &MapHandle, who: Guid, to: Guid, d: f32) {
+pub(super) async fn bring(map: &MapHandle, who: Guid, to: Guid, d: f32) {
     map.query(move |m| {
         let p = &m.players[&to];
         let (pos, o) = (p.position(), p.movement.orientation);
@@ -161,7 +161,7 @@ async fn bring(map: &MapHandle, who: Guid, to: Guid, d: f32) {
     .await;
 }
 
-fn flag_pvp(map: &MapHandle, gs: Vec<Guid>) {
+pub(super) fn flag_pvp(map: &MapHandle, gs: Vec<Guid>) {
     map.call(move |m| {
         for g in &gs {
             crate::game::map::pvp::toggle(m, *g, Some(true));
@@ -169,7 +169,7 @@ fn flag_pvp(map: &MapHandle, gs: Vec<Guid>) {
     });
 }
 
-async fn control_update(c: &mut Client, guid: Guid) -> bool {
+pub(super) async fn control_update(c: &mut Client, guid: Guid) -> bool {
     c.wait_for("SMSG_CLIENT_CONTROL_UPDATE", |m| match m {
         ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u) if u.guid == guid => {
             Some(u.allow_movement)

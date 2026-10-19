@@ -17,9 +17,9 @@ use crate::game::map::{Map, MapKey};
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
 .character level <n>, .character spells, .gear [raid [1|2]], .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
-.weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
+.weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
-events [start|stop <id>]|explore|position|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
+events [start|stop <id>]|explore|position [guid]|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
 skill <id> <value>|skills|spells|taxi|transport|random equipment, .event list [all]|start <id>|stop <id>|<id>";
 
 /// The level a command here needs, if it is one of these: looking is for
@@ -137,6 +137,22 @@ fn event(map: &mut Map, args: &[&str]) -> Option<String> {
 }
 
 /// The GM's selection.
+/// Where `t` is on this map, with its facing; `None` if it isn't here.
+fn position_report(map: &Map, t: Guid) -> Option<String> {
+    let at = map.position_of(t)?;
+    let facing = if let Some(p) = map.players.get(&t) {
+        p.movement.orientation
+    } else if let Some(c) = map.creature(t) {
+        c.orientation
+    } else {
+        map.gameobject(t).map_or(0.0, |o| o.orientation)
+    };
+    Some(format!(
+        "{t}: {:.2}, {:.2}, {:.2}, orientation {facing:.2} in {}",
+        at.x, at.y, at.z, map.key
+    ))
+}
+
 fn selected(map: &Map, g: Guid) -> Guid {
     map.players
         .get(&g)
@@ -1108,7 +1124,43 @@ fn instance(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let gone = crate::game::instances::reset_raid(&realm, m);
             Some(format!("{gone} raid copies of map {m} reset."))
         }
-        _ => Some("Usage: .instance info|reset|switch <id>|raid-reset <map>".into()),
+        // The copy's script's data, to read (Thistle Tea's `.instance
+        // data [field]`): every field set, or the one asked for.
+        ["data"] | ["data", _] => {
+            if map.key.instance == 0 {
+                return Some("Current world is not an instance copy.".into());
+            }
+            let script = map
+                .instance
+                .script
+                .map_or_else(|| "none".to_owned(), |s| format!("{s:?}"));
+            let fields: Vec<String> = match args.get(1) {
+                Some(f) => {
+                    let Ok(f) = f.parse::<u32>() else {
+                        return Some("Usage: .instance data [field]".into());
+                    };
+                    vec![format!(
+                        "{f}={}",
+                        crate::game::map::instance_script::get_data(map, f)
+                    )]
+                }
+                None => map
+                    .instance
+                    .data
+                    .iter()
+                    .map(|(f, v)| format!("{f}={v}"))
+                    .collect(),
+            };
+            Some(format!(
+                "Instance data ({script}): {}",
+                if fields.is_empty() {
+                    "none".to_owned()
+                } else {
+                    fields.join(", ")
+                }
+            ))
+        }
+        _ => Some("Usage: .instance info|reset|switch <id>|raid-reset <map>|data [field]".into()),
     }
 }
 
@@ -1300,11 +1352,22 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
         ["position"] => {
             let t = selected(map, g);
             let t = if t.is_zero() { g } else { t };
-            let at = map.position_of(t)?;
-            Some(format!(
-                "{t}: {:.2}, {:.2}, {:.2} in {}",
-                at.x, at.y, at.z, map.key
-            ))
+            Some(position_report(map, t)?)
+        }
+        // By guid, in decimal or 0x hex (Thistle Tea's `.debug position
+        // <guid>`): one on this map, or none.
+        ["position", id] => {
+            let raw = id.strip_prefix("0x").map_or_else(
+                || id.parse::<u64>().ok(),
+                |hex| u64::from_str_radix(hex, 16).ok(),
+            );
+            let Some(raw) = raw else {
+                return Some("Usage: .debug position [guid]".into());
+            };
+            Some(
+                position_report(map, Guid::new(raw))
+                    .unwrap_or_else(|| format!("Entity {id} is inactive or missing.")),
+            )
         }
         ["professions"] => {
             let to = player_target(map, g);

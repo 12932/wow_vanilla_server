@@ -44,11 +44,11 @@ const NET_OUTCOMES: [u32; 3] = [16566, 13119, 13099];
 const SHIFT: u32 = 93_100;
 const IMMUNE: u32 = 93_101;
 const OTHER_CHANNEL: u32 = 93_102;
-const DISENCHANT: u32 = 93_103;
+pub(super) const DISENCHANT: u32 = 93_103;
 
-const BRACER: u32 = 61_100;
+pub(super) const BRACER: u32 = 61_100;
 const DUST: u32 = 61_101;
-const ENCHANTING: u32 = 333;
+pub(super) const ENCHANTING: u32 = 333;
 const MINING: u32 = 186;
 const HERBALISM: u32 = 182;
 
@@ -215,7 +215,7 @@ fn data() -> GameData {
     d
 }
 
-async fn setup() -> (Arc<Realm>, Client, Guid) {
+pub(super) async fn setup() -> (Arc<Realm>, Client, Guid) {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
     let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -252,7 +252,7 @@ fn holder(m: &Map, g: Guid, spell: u32) -> Option<auras::Holder> {
     auras::auras(m, g).and_then(|a| a.holders.iter().find(|h| h.spell == spell).cloned())
 }
 
-fn template(m: &Map, id: u32) -> SpellTemplate {
+pub(super) fn template(m: &Map, id: u32) -> SpellTemplate {
     m.realm.data.spells.get(id).unwrap().clone()
 }
 

@@ -116,6 +116,18 @@ fn join(map: &mut Map, g: Guid, stone: Guid) {
     if crate::game::map::combat::dist(p.position(), o.position) > STONE_YARDS {
         return;
     }
+    // Not by the dead, one flying, or one moving another (mangos's
+    // `IsSelfMover` and `GetGameObjectIfCanInteractWith`); not at a stone
+    // that can't be used (Thistle Tea's `go_flags` 0x10).
+    if p.death != crate::game::map::death::Death::Alive
+        || p.flight.is_some()
+        || p.owned.mover.is_some()
+        || o.fields.get_u32(crate::game::fields::GAMEOBJECT_FLAGS)
+            & crate::game::map::objects::GO_FLAG_NO_INTERACT
+            != 0
+    {
+        return;
+    }
     let level = u32::from(p.level());
     if level < info.min_level || (info.max_level > 0 && level > info.max_level) {
         map.system_message(g, "You are not the right level for this dungeon.");

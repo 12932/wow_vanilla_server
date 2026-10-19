@@ -1197,6 +1197,7 @@ pub fn apply_spell(
         }
     }
     recalc(map, target);
+    crate::game::map::spell_areas::prerequisite_changed(map, target, spell.id);
     // Helping a flagged player flags the helper.
     if pos && caster != target {
         crate::game::map::combat::assist_contact(map, caster, target, spell);
@@ -1465,6 +1466,9 @@ pub fn remove_where(map: &mut Map, target: Guid, mut pick: impl FnMut(&Holder) -
         removed(map, target, h);
     }
     recalc(map, target);
+    for h in &gone {
+        crate::game::map::spell_areas::prerequisite_changed(map, target, h.spell);
+    }
 }
 
 /// Take every aura of `spell` from `caster` off `target`.

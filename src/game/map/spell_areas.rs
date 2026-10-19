@@ -88,6 +88,37 @@ pub fn reconcile(map: &mut Map, g: Guid) {
     }
 }
 
+/// An aura of `spell` came onto or went from `g`: the rules that ask for
+/// it (or against it) are judged again, as mangos's aura handler does for
+/// `GetSpellAreaForAuraMapBounds`, so a place's aura that needs another
+/// goes with it, and one kept off by another comes when it goes.
+pub fn prerequisite_changed(map: &mut Map, g: Guid, spell: u32) {
+    thread_local! {
+        // Rules that ask each other's auras in a ring stop going round.
+        static DEPTH: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    }
+    let asked = crate::game::guid::is_player(g)
+        && map
+            .realm
+            .data
+            .scripts
+            .spell_areas
+            .iter()
+            .any(|r| r.aura_spell != 0 && r.aura_spell.unsigned_abs() == spell);
+    if !asked || DEPTH.get() >= 4 {
+        return;
+    }
+    struct Deeper;
+    impl Drop for Deeper {
+        fn drop(&mut self) {
+            DEPTH.set(DEPTH.get() - 1);
+        }
+    }
+    DEPTH.set(DEPTH.get() + 1);
+    let _deeper = Deeper;
+    reconcile(map, g);
+}
+
 /// Whether `spell` may be cast by `g` where they are: a spell with rules
 /// only where one holds.
 pub fn allowed(map: &Map, g: Guid, spell: u32) -> bool {
