@@ -54,7 +54,7 @@ fn creature(entry: u32, rank: u32) -> CreatureTemplate {
     }
 }
 
-fn data() -> GameData {
+pub(super) fn data() -> GameData {
     let mut d = GameData::empty();
     d.creature_templates.insert(ELITE, creature(ELITE, 1));
     d.creature_templates.insert(PLAIN, creature(PLAIN, 0));
@@ -1430,14 +1430,14 @@ async fn a_logout_in_a_rest_area_is_at_once_but_never_in_a_fight() {
     .await;
 }
 
-const GUILD: u32 = 96_301;
+pub(super) const GUILD: u32 = 96_301;
 const HIDDEN_GUILD: u32 = 96_302;
 const GUILD_TEMPLATE: u32 = 9_631;
-const MERCHANT: u32 = 960_020;
-const MERCHANT_A: u32 = 96_020;
-const FORCE: u32 = 960_210;
+pub(super) const MERCHANT: u32 = 960_020;
+pub(super) const MERCHANT_A: u32 = 96_020;
+pub(super) const FORCE: u32 = 960_210;
 
-fn with_factions(mut d: GameData) -> GameData {
+pub(super) fn with_factions(mut d: GameData) -> GameData {
     use crate::game::data::FactionTemplate;
     use crate::game::data::items::ItemTemplate;
     use crate::game::data::misc::FactionDef;
