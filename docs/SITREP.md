@@ -515,6 +515,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7h: entities, round 7 | merged | c7f8585 |
 | 7g: creature scripts, round 7 | merged | 1a96144 |
 | 7i: pets, round 7 | 81.5% | 296f744 |
+| 7j: creatures, round 7 | 82.1% | 63a5e39 |
 
 **Running now:** round 7 (7g creature scripts, 7i pets, 7j creatures, 7k auras, 7l movement and the network), and the extended suite (19:40, at 0.1.27).
 
