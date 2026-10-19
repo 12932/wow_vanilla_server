@@ -49,6 +49,24 @@ CREATE = 0x466E00  # (ecx type; guid) -> a new object
 POST_CREATE = 0x466A20  # (ecx; edx object; movement)
 CREATE_LOG = 0x466BC0  # (ecx type): "Creating player" and so on
 LINK = 0x4662A6, 0x4662E0  # the new object onto the object manager's list
+# CGObject_C's per-field-group flush, which `0x466590` (the values reader)
+# calls once a values block has been read off the packet: it copies each
+# changed field group from the object's flat value array into the object's
+# per-group renderer storage. The group offsets and byte counts it copies
+# come from globals (`0xb23310`, `0xb4143c`), never the packet, so this copy
+# can reveal no packet-driven fault. Its safety rests on the object's
+# storage and its field-group descriptor list, which `ClntObjMgrCreate`
+# (`0x466e00`, stubbed) and the object's constructor build at create time;
+# the model builds neither, so for an object created in this same packet the
+# copy walks an uninitialised list with a wild count and overruns (the
+# `0x466816` report). The create's own initial values already skip this
+# flush (`0x466320` passes the reader its "no flush" flag); only a standalone
+# values block reaches it. It is the renderer-side apply, out of the parse's
+# scope like the main pass and the post-init, so it is stubbed to nothing:
+# the values PARSE above it still runs — the mask read (bounded at
+# `0x4665C4`) and the per-field reads off the packet — so a real values fault
+# is still caught (see the captured mask-overrun crashes, and selftest.py).
+FIELD_GROUP_FLUSH = 0x4667A0
 # Right after the create pass (`0x466010`), before the main apply loop
 # (`0x465236`). The create pass reads every block — creates, values,
 # movement, out-of-range and near — so after it the whole packet has been
@@ -97,6 +115,7 @@ class UpdateCheck:
         e.stub(CREATE, "ClntObjMgrCreate", 2, self._create)
         e.stub(POST_CREATE, "CGObject_C::PostInit", 1, self._post_create)
         e.stub(CREATE_LOG, "the create's log line", 0, lambda emu, a: 0)
+        e.stub(FIELD_GROUP_FLUSH, "CGObject_C::flush field groups", 0, lambda emu, a: 0)
         e.jump(LINK[0], LINK[1], "the object manager's list of objects")
         for at, reg in VALUES_MASKS.items():
             e.uc.hook_add(UC_HOOK_CODE, self._mask_word, begin=at, end=at, user_data=reg)
