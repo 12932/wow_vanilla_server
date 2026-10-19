@@ -239,14 +239,10 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// `CMSG_FAR_SIGHT`: the client's view moves to (or back from) a far sight
-/// object; the server only keeps the field in step.
+/// `CMSG_FAR_SIGHT`: the client's camera moves to (or back from) the far
+/// sight object it was given, which stays its own (`sight::camera`).
 fn far_sight(map: &mut Map, g: Guid, add: bool) {
-    if let Some(p) = map.players.get_mut(&g)
-        && !add
-    {
-        p.fields.set_guid(PLAYER_FARSIGHT, Guid::zero());
-    }
+    crate::game::map::spells::sight::camera(map, g, add);
 }
 
 /// At death: the self-resurrection a soulstone or Reincarnation offers,

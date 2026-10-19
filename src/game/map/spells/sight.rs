@@ -31,6 +31,32 @@ pub fn grant(map: &mut Map, viewer: Guid, object: Guid) {
     p.fields.set_guid(PLAYER_FARSIGHT, object);
     p.misc.view = Some(at);
     map.spells.viewpoints.insert(viewer, object);
+    map.spells.cameras_home.remove(&viewer);
+    map.visibility_dirty.insert(viewer);
+}
+
+/// `CMSG_FAR_SIGHT`: the client's camera back to `viewer` (`to_viewpoint`
+/// false) or to what they look from, the viewpoint they were given kept
+/// either way (mangos's `HandleFarSightOpcode` by `Camera::ResetView` and
+/// `SetView` without the field, Thistle Tea's camera selection). With no
+/// viewpoint, or one no longer in this map, it does nothing.
+pub fn camera(map: &mut Map, viewer: Guid, to_viewpoint: bool) {
+    let Some(object) = map.spells.viewpoints.get(&viewer).copied() else {
+        return;
+    };
+    let Some(at) = map.position_of(object) else {
+        return;
+    };
+    let Some(p) = map.players.get_mut(&viewer) else {
+        return;
+    };
+    if to_viewpoint {
+        p.misc.view = Some(at);
+        map.spells.cameras_home.remove(&viewer);
+    } else {
+        p.misc.view = None;
+        map.spells.cameras_home.insert(viewer);
+    }
     map.visibility_dirty.insert(viewer);
 }
 
@@ -40,6 +66,7 @@ pub fn release(map: &mut Map, viewer: Guid, object: Guid) {
         return;
     }
     map.spells.viewpoints.remove(&viewer);
+    map.spells.cameras_home.remove(&viewer);
     if let Some(p) = map.players.get_mut(&viewer) {
         p.fields.set_guid(PLAYER_FARSIGHT, Guid::zero());
         p.misc.view = None;
@@ -91,8 +118,13 @@ pub fn update(map: &mut Map) {
         };
         let Some(p) = map.players.get_mut(&viewer) else {
             map.spells.viewpoints.remove(&viewer);
+            map.spells.cameras_home.remove(&viewer);
             continue;
         };
+        // A camera its client brought home stays there.
+        if map.spells.cameras_home.contains(&viewer) {
+            continue;
+        }
         if p.misc
             .view
             .is_none_or(|v| dist2(v, at) >= MOVE_THRESHOLD * MOVE_THRESHOLD)

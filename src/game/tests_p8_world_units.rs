@@ -184,3 +184,75 @@ async fn a_transformed_player_has_the_reach_of_what_she_is_and_hers_after() {
     assert_eq!(back, own, "herself again: {own:?}");
     assert!((own.3 - 1.5).abs() < 0.01, "her own reach: {own:?}");
 }
+
+/// Thistle Tea's `Visibility` viewpoints "client camera selection
+/// survives refresh without changing the authorized target" and "rejects
+/// missing, foreign-world, and invalid camera requests": Alice looks
+/// through a brute's eyes 150 yards off (Mind Vision's bind sight) and is
+/// told of it there; her client's `CMSG_FAR_SIGHT` 0 brings her camera
+/// home, so she forgets the brute while it walks on, her far sight still
+/// named; a 1 sends it back, and she is told of the brute again. An
+/// operation of 2 is dropped; with her sight released, a 1 does nothing
+/// (mangos's `HandleFarSightOpcode`).
+#[tokio::test]
+async fn the_clients_camera_comes_home_and_goes_back_to_its_viewpoint() {
+    use crate::game::map::spells::sight;
+    use crate::game::tests_p3_combat::{BRUTE, spawn};
+    use crate::game::tests_p3_entity::NONE_WITHIN;
+    let (_realm, mut a, ga, map) = setup_with(data(), Class::Priest).await;
+    let brute = on(&map, move |m| spawn(m, ga, BRUTE, 20, 150.0)).await;
+    a.clear();
+    on(&map, move |m| sight::grant(m, ga, brute)).await;
+    a.sees_on(&map, brute).await;
+    let named = move |m: &crate::game::map::Map| m.players[&ga].fields.get_guid(PLAYER_FARSIGHT);
+    a.send(CMSG_FAR_SIGHT {
+        operation: FarSightOperation::Remove,
+    })
+    .await;
+    a.forgets(brute).await;
+    // It walks on twenty yards; her camera stays home.
+    on(&map, move |m| {
+        let at = m.position_of(brute).unwrap();
+        crate::game::map::scripts::place(
+            m,
+            brute,
+            Vector3d {
+                x: at.x + 20.0,
+                ..at
+            },
+            0.0,
+        );
+    })
+    .await;
+    for _ in 0..5 {
+        crate::game::harness::an_update(&map).await;
+    }
+    assert!(
+        !a.sees_within(brute, NONE_WITHIN).await,
+        "home, she isn't told of it"
+    );
+    let kept = on(&map, move |m| named(m)).await;
+    assert_eq!(kept, brute, "her far sight still names it");
+    a.send(CMSG_FAR_SIGHT {
+        operation: FarSightOperation::Add,
+    })
+    .await;
+    a.sees_on(&map, brute).await;
+    // An operation the client has none of.
+    a.send_raw(0x27A, &[2]).await;
+    on(&map, move |m| sight::release(m, ga, brute)).await;
+    a.forgets(brute).await;
+    a.send(CMSG_FAR_SIGHT {
+        operation: FarSightOperation::Add,
+    })
+    .await;
+    for _ in 0..5 {
+        crate::game::harness::an_update(&map).await;
+    }
+    assert!(
+        !a.sees_within(brute, NONE_WITHIN).await,
+        "released, a 1 shows nothing"
+    );
+    let cleared = on(&map, move |m| named(m)).await;
+    assert!(cleared.is_zero());
+}

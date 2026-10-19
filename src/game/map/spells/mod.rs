@@ -219,6 +219,9 @@ pub struct MapSpells {
     pub next_dynamic: u32,
     /// Who looks from where (far sight, bind sight): viewer to object.
     pub viewpoints: AHashMap<Guid, Guid>,
+    /// The viewers whose client brought its camera back to themselves
+    /// (`CMSG_FAR_SIGHT` 0), their viewpoint kept for its asking again.
+    pub cameras_home: ahash::AHashSet<Guid>,
     /// When and where each player's surroundings were last looked at.
     pub outdoor_checked: AHashMap<Guid, (Instant, Vector3d)>,
     /// Indoors or out, by player, for tests without a navmesh.
