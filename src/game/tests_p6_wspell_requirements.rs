@@ -90,6 +90,15 @@ fn data(d: &mut GameData) {
             },
         );
     }
+    // A spell for humans alone, one for orcs alone, one for any female.
+    for (spell, race_mask, gender) in [(991_402, 0x1, 2), (991_403, 0x2, 2), (991_404, 0, 1)] {
+        d.scripts.spell_areas.push(crate::game::data::scripts::SpellArea {
+            spell,
+            race_mask,
+            gender,
+            ..Default::default()
+        });
+    }
     let spells: Vec<SpellTemplate> = vec![cannibalize, channel, mend, craft];
     insert(d, spells);
 }
@@ -368,4 +377,34 @@ async fn a_focus_is_within_its_reach_and_checked_again_as_the_cast_ends() {
         "lost: failed, unpaid, no cooldown"
     );
     assert_eq!(out.7, (None, 10, true, true), "kept: once, paid");
+}
+
+/// A spell kept to a race or a gender by its area rules is judged for a
+/// pet by its master: a human's pet may cast the humans' spell, not the
+/// orcs'; a creature of no master, neither asking that, nor one for women
+/// (Thistle Tea's `SpellAreas.context`, its controlling player's facts;
+/// mangos's `GetSpellAllowedInLocationError` with `GetBeneficiaryPlayer`).
+#[tokio::test]
+async fn a_pets_area_rules_are_its_masters() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P6XV", "Arean", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            let to = off(m, a, 2.0, 0.0);
+            let pet = crate::game::map::pets::testing::spawn(m, a, BEAST, Kind::Hunter, 60, to, 0.0);
+            m.players.get_mut(&a).unwrap().owned.pet = Some(pet);
+            let wild = unit_at(m, a, BEAST, 4.0, 0.0);
+            let allowed = |m: &Map, g: Guid| {
+                [991_402, 991_403, 991_404]
+                    .map(|s| crate::game::map::spell_areas::allowed(m, g, s))
+            };
+            let male = m.players[&a].row.gender == 0;
+            (allowed(m, a), allowed(m, pet), allowed(m, wild), male)
+        })
+        .await
+        .unwrap();
+    let (me, pet, wild, male) = out;
+    assert_eq!(me, [true, false, !male], "the human");
+    assert_eq!(pet, me, "the pet as its master");
+    assert_eq!(wild, [false, false, false], "no master to ask");
 }

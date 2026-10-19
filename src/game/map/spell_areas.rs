@@ -102,6 +102,13 @@ pub fn allowed(map: &Map, g: Guid, spell: u32) -> bool {
     if rules.is_empty() {
         return true;
     }
+    // A pet's or a totem's are its master's (mangos's
+    // `GetBeneficiaryPlayer`, Thistle Tea's controlling player's facts),
+    // where its master is.
+    let master = crate::game::map::pets::master(map, g);
+    if master != g && map.players.contains_key(&master) {
+        return rules.iter().any(|r| matches(map, master, r));
+    }
     if !crate::game::guid::is_player(g) {
         // No player to hold to a race, gender, quest or aura: a rule asking
         // one fails, as mangos's `SpellArea::IsFitToRequirements` without a
