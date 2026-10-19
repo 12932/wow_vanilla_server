@@ -113,6 +113,83 @@ async fn a_scripts_cast_by_a_player() {
     assert_eq!(dead, None, "the dead cast nothing");
 }
 
+const BOW: u32 = 64_510;
+const ARROW: u32 = 64_511;
+const INSTANT: u32 = 96_422;
+
+/// Thistle Tea's `Projectile.fields` "omits projectile fields from
+/// non-ranged spells": a hunter with a bow and arrows chosen casts a
+/// spell that isn't of the ranged slot, and its `SMSG_SPELL_GO` carries
+/// no projectile.
+#[tokio::test]
+async fn a_spell_not_of_the_ranged_slot_shows_no_arrow() {
+    let mut d = world();
+    let item = |entry, class, subclass, inventory_type| crate::game::data::ItemTemplate {
+        entry,
+        name: format!("Item {entry}"),
+        class,
+        subclass,
+        inventory_type,
+        display_id: entry - 60_000,
+        stackable: if class == 6 { 200 } else { 1 },
+        allowable_class: -1,
+        allowable_race: -1,
+        ..Default::default()
+    };
+    let mut bow = item(BOW, 2, 2, 15);
+    bow.ammo_type = 2;
+    bow.delay = 2_000;
+    d.items.insert(BOW, bow);
+    d.items.insert(ARROW, item(ARROW, 6, 2, 24));
+    let s = crate::game::tests_p3_entity::spell(
+        INSTANT,
+        &[SpellEffect {
+            effect: 3,
+            target_a: 1,
+            ..Default::default()
+        }],
+    );
+    d.spells.spells.insert(INSTANT, s);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Dwarf, Class::Hunter).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    on(&map, move |m| {
+        crate::game::map::inventory::add_item(m, g, BOW, 1, false).unwrap();
+        crate::game::map::inventory::add_item(m, g, ARROW, 100, false).unwrap();
+        let p = &m.players[&g];
+        let at = p
+            .items
+            .iter()
+            .find(|i| i.entry == BOW)
+            .map(|i| (i.bag, i.slot))
+            .unwrap();
+        crate::game::map::inventory::auto_equip(m, g, at);
+        crate::game::map::ranged::set_ammo(m, g, ARROW);
+        m.players.get_mut(&g).unwrap().spells.push(INSTANT);
+    })
+    .await;
+    a.clear();
+    a.send(CMSG_CAST_SPELL {
+        spell: INSTANT,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::empty(),
+        },
+    })
+    .await;
+    let ammo = a
+        .wait_for("SMSG_SPELL_GO", |m| match m {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELL_GO(s)
+                if s.spell == INSTANT =>
+            {
+                Some(s.flags.get_ammo().is_some())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(!ammo, "no projectile");
+}
+
 /// A place's aura (in Elwynn or Westfall, wanting another aura first),
 /// that other aura, and one a quest taken brings until it is done.
 const PLACE: u32 = 96_430;
