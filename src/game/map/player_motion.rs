@@ -75,6 +75,13 @@ pub fn fear_destination(
     }
 }
 
+/// The faults a test arms (`Map::faults`) for a navmesh with no point to
+/// run to, or no way to it.
+#[cfg(test)]
+pub const NO_POINT: &str = "navmesh: no point";
+#[cfg(test)]
+pub const NO_PATH: &str = "navmesh: no path";
+
 /// Where a fear run from `at` goes, as Thistle Tea's `fear_point` finds
 /// it: [`fear_destination`], as far toward it as a walk over the navmesh
 /// gets, and a random point of the navmesh within five yards of there.
@@ -86,6 +93,11 @@ pub fn fear_point(
     rng: &mut impl rand::Rng,
 ) -> Option<Vector3d> {
     let to = fear_destination(at, frightener_distance, rng);
+    // A test's navmesh with no point there.
+    #[cfg(test)]
+    if map.faults.any() && map.faults.refuses(NO_POINT) {
+        return None;
+    }
     let Some(nav) = map.nav_at(&[at, to]) else {
         return Some(to);
     };
@@ -133,6 +145,11 @@ pub fn control_path(
     to: Vector3d,
     max: f32,
 ) -> Option<Vec<Vector3d>> {
+    // A test's navmesh with no way there.
+    #[cfg(test)]
+    if map.faults.any() && map.faults.refuses(NO_PATH) {
+        return None;
+    }
     let path = match map.nav.as_mut() {
         Some(nav) => nav.path(from, to)?,
         None => vec![from, to],
