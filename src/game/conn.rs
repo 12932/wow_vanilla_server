@@ -105,11 +105,12 @@ impl Outbound {
                 };
             }
         }
-        self.send_now(frame)
+        self.send_frame_unheld(frame)
     }
 
-    /// Queue a frame past any hold.
-    fn send_now(&self, frame: Arc<[u8]>) -> bool {
+    /// Queue a frame past any hold: for what names no object a create could
+    /// be waiting for, and is waited on (a pong, a query's answer).
+    pub fn send_frame_unheld(&self, frame: Arc<[u8]>) -> bool {
         let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
         match self.inner.budget.try_acquire_many(n) {
             Ok(permit) => {
@@ -144,7 +145,7 @@ impl Outbound {
     pub fn release(&self, first: Vec<Arc<[u8]>>) {
         let mut held = self.inner.held.lock();
         for frame in first {
-            self.send_now(frame);
+            self.send_frame_unheld(frame);
         }
         for frame in held.drain(..) {
             let _ = self.inner.tx.try_send(frame);
@@ -159,11 +160,10 @@ impl Outbound {
         }
     }
 
-    /// [`Outbound::send`] past any hold, for what names no object and is
-    /// timed (a pong).
+    /// [`Outbound::send`] past any hold ([`Outbound::send_frame_unheld`]).
     pub fn send_unheld<M: ServerMessage>(&self, m: &M) -> bool {
         match encode(m) {
-            Some(frame) => self.send_now(frame),
+            Some(frame) => self.send_frame_unheld(frame),
             None => false,
         }
     }

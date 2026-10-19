@@ -738,6 +738,9 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 if handle_guarded(&mut map, event) {
                     break;
                 }
+                // A client the event held goes as it ends, not at the
+                // burst's: what else it is sent waits no longer.
+                guarded(&mut map, "after an event", Map::after_events);
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved.
                 for _ in 0..512 {
@@ -747,11 +750,11 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                                 hand_on(&map, &mut rx);
                                 return;
                             }
+                            guarded(&mut map, "after an event", Map::after_events);
                         }
                         Err(_) => break,
                     }
                 }
-                guarded(&mut map, "after events", Map::after_events);
             }
             _ = ticker.tick() => {
                 guarded(&mut map, "the update", Map::update);
@@ -1426,7 +1429,7 @@ impl Map {
 
     /// [`Map::hold`] every client near `at`, where `object` has come into
     /// the map (or a player has come to): those its visibility will tell of
-    /// it, at the end of the events at hand ([`Map::after_events`]) or at
+    /// it, at the end of the event at hand ([`Map::after_events`]) or at
     /// the update's.
     pub fn hold_near(&mut self, object: Guid, at: wow_world_messages::vanilla::Vector3d) {
         if self.players.is_empty() {
@@ -1463,10 +1466,9 @@ impl Map {
         }
     }
 
-    /// After a run of events (packets, calls) between updates: a client
-    /// they held needn't wait for the update. The objects they brought into
-    /// the map (or the players they placed) are seen now, whole, as the
-    /// events left them, and each held client gets its creates and forgets,
+    /// After an event (a packet, a call) between updates: a client it held
+    /// needn't wait for the update. The objects it brought into the map (or
+    /// the players it placed) are seen now, whole, as the event left them, and each held client gets its creates and forgets,
     /// then what waited: held to the update, it would hold what other tasks
     /// send it (the session's name queries) too. One near a creature yet to
     /// have its first turn stays held, its blocks for the update.

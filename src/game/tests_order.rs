@@ -282,11 +282,11 @@ async fn a_duels_flag_is_created_before_the_challenge_names_it() {
     }
 }
 
-/// A client held by events between updates (a creature summoned beside it)
-/// isn't kept waiting for the update: at the end of the events, the
+/// A client held by an event between updates (a creature summoned beside it)
+/// isn't kept waiting for the update: at the end of the event, the
 /// creature is seen, and the client gets its create, then what waited.
 #[tokio::test]
-async fn a_client_held_between_updates_is_let_go_at_the_end_of_the_events() {
+async fn a_client_held_between_updates_is_let_go_at_the_end_of_the_event() {
     let (_realm, mut a, ga, map) = setup_with(data(), Class::Warrior).await;
     let (g, held, after, pending) = map
         .query(move |m| {
@@ -300,7 +300,7 @@ async fn a_client_held_between_updates_is_let_go_at_the_end_of_the_events() {
         .await
         .unwrap();
     assert!(held, "the message waits for the brute");
-    assert!(!after, "and goes at the end of the events");
+    assert!(!after, "and goes at the end of the event");
     assert!(!pending, "after the brute's create");
     told_first(
         &mut a,

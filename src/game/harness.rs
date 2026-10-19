@@ -537,7 +537,7 @@ fn objects(m: &ServerOpcodeMessage) -> &[Object] {
 }
 
 /// Wait until `map` has run an update from now. A client is told of what
-/// comes into the map at the end of the events that brought it, before an
+/// comes into the map at the end of the event that brought it, before an
 /// update has run its first turn (its spawned events): a test that wants
 /// those waits for this.
 pub async fn an_update(map: &crate::game::map::MapHandle) {
