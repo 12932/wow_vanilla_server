@@ -289,6 +289,21 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     keep mangos's.
   - **Left:** 241 rows, mostly bigger designs: movement counters and acks, Charge as server movement, cross-map and
     corpse-targeted resurrection, a game object's gossip option, quests' source spells, auto-rewarded event quests.
+- **6j, the core's other areas (0.1.22):** 46 rows, 9 fixes: one with an invitation pending can't invite (mangos's
+  `HandleGroupInviteOpcode`); a new guild charter ends the owner's older petition; addon auras' ids parsed right; a
+  duel's end takes off the harmful auras each side and its pet put on the other, and the combo points (an opponent's
+  DoT could kill the loser); the arbiter set at the challenge; a blow leaving exactly 1 health ends the duel; a
+  creature is the kill of the group it was tapped for (mangos's `SetLootRecipient`); a mind-controlled player's tap
+  is their controller's; a script's faction cleared over a respawn goes back to the creature's own; a refreshed
+  transform shows again. **My calls:**
+  - **A pet's harmful auras** come off at a duel's end too (Thistle Tea; mangos only the opponent's own).
+  - **A duel's end leaves the target** selected (mangos; Thistle Tea clears it).
+  - **A tap whose group has disbanded** rewards the tapper's current group (Thistle Tea; mangos the tapper alone).
+  - **Your own reflected spell** can kill you in a duel and interrupts it (mangos); Thistle Tea stops at 1 health.
+  - **No experience for killing any pet,** an NPC's included (mangos-classic's `XP::Gain`); Thistle Tea, after
+    vmangos, gives three quarters. `wrong-for-1.12` unless you take vmangos as the reference here.
+  - **Left:** about 539 rows in its wide area: pets (~70), creatures (~65), auras (~55), movement (~49), stats (34),
+    and movement acks (~20, a missing feature).
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -379,7 +394,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6h: creature AI | 74.5% | 4738983 |
 | 6i: entities in the world | 75.1% | cabc8d6 |
 | 7a: the player, round 7 | 75.7% | 5b07acc |
+| 6j: the core's other areas | 76.2% | dfcd6e7 |
 
-**Running now:** round 6 (6j) and round 7 (7b spells, 7c loaders, 7d combat, 7e the world).
+**Running now:** round 7 (7b spells, 7c loaders, 7d combat, 7e the world, 7f creature AI).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
