@@ -755,6 +755,13 @@ pub(super) fn turn_in(m: &mut Map, me: Guid, ender: Guid, quest: u32) -> bool {
     for (item, count) in q.required_items.into_iter().filter(|(i, _)| *i != 0) {
         crate::game::map::inventory::add_item(m, me, item, count, false).unwrap();
     }
+    // Its event's or place's part done too.
+    let data = m.realm.data.clone();
+    let p = m.players.get_mut(&me).unwrap();
+    if let Some(l) = p.journal.log.iter_mut().find(|l| l.quest == quest) {
+        l.explored = true;
+    }
+    quests::refresh_log(p, &data);
     quests::choose_reward(m, me, ender, quest, 0);
     m.players[&me].journal.rewarded.contains(&quest)
 }
@@ -1443,4 +1450,255 @@ async fn the_foodstuffs_call_grenka_and_her_flock() {
         .await
         .unwrap();
     assert_eq!(shown, (false, 0, true), "she shows herself and fights");
+}
+
+const TERENTHIS: u32 = 3693;
+const SELARIN: u32 = 3694;
+
+/// Either of Terenthis's escapes brings Sentinel Selarin, but not a
+/// second while she is still about (Thistle Tea's `terenthis`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn terenthis_calls_selarin_once_while_she_is_about() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map, terenthis) = hero_by(&realm, "Escapee", TERENTHIS).await;
+    let before = map.query(|m| living(m, SELARIN).len()).await.unwrap();
+    let mut seen = Vec::new();
+    for quest in [994, 995, 994] {
+        let n = map
+            .query(move |m| {
+                assert!(turn_in(m, me, terenthis, quest), "{quest} turned in");
+                hurry_runs(m, None, Duration::from_millis(100));
+                event_ai::update_despawns(m);
+                living(m, SELARIN).len()
+            })
+            .await
+            .unwrap();
+        seen.push(n - before);
+    }
+    assert_eq!(seen, [1, 1, 1], "called once, not again while she is about");
+}
+
+const SLIM: u32 = 4962;
+const SLIMS_FRIEND: u32 = 4971;
+const THE_MISSING_DIPLOMAT_SLIM: u32 = 1249;
+
+/// Tapoke "Slim" Jahn, fought: with no friend of his near he calls one,
+/// once, boasting only while he is on the run (the quest's event); at a
+/// fifth of his health he gives up, but only on the run: he and his
+/// friend stand down, friendly; he begs and tells what he knows; and
+/// twelve seconds on the player has the quest's credit, its event ends
+/// well, and he goes (Thistle Tea's `tapoke_slim_jahn`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn slim_calls_a_friend_once_and_gives_up_only_on_the_run() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, slim) = hero_by(&realm, "Diplomat", SLIM).await;
+    let friends = |m: &Map| living(m, SLIMS_FRIEND);
+    // Not on the run.
+    c.clear();
+    map.query(move |m| {
+        for f in friends(m) {
+            crate::game::map::scripts::despawn(m, f);
+        }
+        tough(m, slim);
+        crate::game::map::scripts::set_faction(m, slim, 14);
+        crate::game::map::ai::attacked(m, slim, me);
+    })
+    .await;
+    assert!(
+        cast_any_of(&mut c, slim, 16457, Duration::from_secs(2))
+            .await
+            .is_some(),
+        "a friend called"
+    );
+    assert_eq!(
+        heard(&mut c, slim, Duration::from_millis(500)).await,
+        None,
+        "no boast, not on the run"
+    );
+    let kept = map
+        .query(move |m| {
+            set_pct(m, slim, 15);
+            due(m, slim, 496201);
+            faction(m, slim)
+        })
+        .await
+        .unwrap();
+    assert_eq!(kept, 14, "no giving up, not on the run");
+    // On the run.
+    c.clear();
+    map.query(move |m| {
+        for f in friends(m) {
+            crate::game::map::scripts::despawn(m, f);
+        }
+        logs(m, me, THE_MISSING_DIPLOMAT_SLIM);
+        crate::game::map::map_events::start(
+            m,
+            THE_MISSING_DIPLOMAT_SLIM,
+            slim,
+            me,
+            Duration::from_secs(600),
+        );
+        if let Some(cr) = m.caster_mut(slim) {
+            cr.gcd_until = None;
+            cr.cooldowns.clear();
+        }
+        event_ai::aggro(m, slim, me);
+    })
+    .await;
+    assert!(
+        cast_any_of(&mut c, slim, 16457, Duration::from_secs(2))
+            .await
+            .is_some(),
+        "a friend called"
+    );
+    assert!(
+        hears(&mut c, &realm, slim, 5827).await,
+        "a boast, on the run"
+    );
+    // A friend near: none called.
+    let friend = map
+        .query(move |m| {
+            let at = m.position_of(slim).unwrap();
+            let f = friends(m)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| summon(m, SLIMS_FRIEND, off(at, 2.0, 0.0), 0.0));
+            crate::game::map::scripts::place(m, f, off(at, 2.0, 0.0), 0.0);
+            tough(m, f);
+            f
+        })
+        .await
+        .unwrap();
+    c.clear();
+    map.query(move |m| {
+        if let Some(cr) = m.caster_mut(slim) {
+            cr.gcd_until = None;
+            cr.cooldowns.clear();
+        }
+        event_ai::aggro(m, slim, me);
+    })
+    .await;
+    assert!(
+        cast_any_of(&mut c, slim, 16457, Duration::from_millis(800))
+            .await
+            .is_none(),
+        "once"
+    );
+    // He gives up.
+    c.clear();
+    let gave_up = map
+        .query(move |m| {
+            set_pct(m, slim, 15);
+            due(m, slim, 496201);
+            hurry_runs(m, None, Duration::from_millis(100));
+            (faction(m, slim), fighting(m, slim), faction(m, friend))
+        })
+        .await
+        .unwrap();
+    assert_eq!(gave_up, (35, false, 35), "he and his friend stand down");
+    assert!(
+        hears(&mut c, &realm, friend, 5828).await,
+        "more than he bargained for"
+    );
+    hurry_all(&map, 2.0).await;
+    assert!(hears(&mut c, &realm, slim, 1743).await, "he begs");
+    hurry_all(&map, 4.0).await;
+    assert!(hears(&mut c, &realm, slim, 1744).await, "what he knows");
+    let done = map
+        .query(move |m| {
+            hurry_runs(m, None, Duration::from_secs(6));
+            let explored = m.players[&me]
+                .journal
+                .log
+                .iter()
+                .find(|l| l.quest == THE_MISSING_DIPLOMAT_SLIM)
+                .is_some_and(|l| l.explored);
+            (
+                explored,
+                crate::game::map::map_events::active(m, THE_MISSING_DIPLOMAT_SLIM),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(done, (true, false), "the credit, the event over");
+    assert!(
+        until(&map, 3_000, move |m| m
+            .creature(slim)
+            .is_none_or(|c| !c.alive() || c.despawned))
+        .await,
+        "he goes"
+    );
+}
+
+/// Mikhail sends Slim out of the inn on The Missing Diplomat; left to run,
+/// Slim reaches the gate, and that fails the quest (Thistle Tea's
+/// `QuestEscort.Catalog` for 1249).
+#[tokio::test]
+#[ignore = "extended"]
+async fn slim_reaching_the_gate_fails_the_missing_diplomat() {
+    const MIKHAIL: u32 = 4963;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map, mikhail) = hero_by(&realm, "Pursuer", MIKHAIL).await;
+    let slim = map.query(|m| first(m, SLIM)).await.flatten().expect("Slim");
+    map.query(move |m| {
+        m.players
+            .get_mut(&me)
+            .unwrap()
+            .journal
+            .rewarded
+            .extend([1248, 1247, 1246, 1244, 1243, 1242, 1241]);
+        quests::accept(m, me, mikhail, THE_MISSING_DIPLOMAT_SLIM);
+        for e in m.escorts.iter_mut() {
+            e.skip_start();
+        }
+    })
+    .await;
+    assert!(
+        until(&map, 3_000, move |m| m.players[&me]
+            .journal
+            .has(THE_MISSING_DIPLOMAT_SLIM))
+        .await,
+        "taken"
+    );
+    let mut failed = false;
+    for _ in 0..1500 {
+        let (f, over) = map
+            .query(move |m| {
+                if let Some(c) = m.creature_mut(slim) {
+                    c.speeds.walk = 60.0;
+                    c.speeds.run = 60.0;
+                }
+                if let Some(at) = m.position_of(slim) {
+                    put(m, me, off(at, 1.0, 0.0));
+                }
+                let log = m.players[&me]
+                    .journal
+                    .log
+                    .iter()
+                    .find(|l| l.quest == THE_MISSING_DIPLOMAT_SLIM);
+                (
+                    log.is_some_and(|l| l.failed),
+                    !m.escorts
+                        .iter()
+                        .any(|e| e.quest == THE_MISSING_DIPLOMAT_SLIM),
+                )
+            })
+            .await
+            .unwrap();
+        if f {
+            failed = true;
+            break;
+        }
+        assert!(!over, "the escort ended without failing the quest");
+        sleep_ms(20).await;
+    }
+    assert!(failed, "the gate reached fails the quest");
 }
