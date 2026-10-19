@@ -95,6 +95,7 @@ pub fn spawn(
     map.grid.insert(g, cell);
     map.spells.dynamic.insert(g, d);
     map.visibility_dirty.insert(g);
+    map.hold_near(at);
     g
 }
 

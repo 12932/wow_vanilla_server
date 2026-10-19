@@ -223,6 +223,9 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
         .entry(observer)
         .or_default()
         .push_for(object, &block);
+    // What the map sends it from now on, about the object or not, follows
+    // the create.
+    map.hold(observer);
     if let Some(o) = map.observers_mut(object) {
         o.insert(observer);
     }
@@ -234,15 +237,14 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
         crate::game::map::tap::introduced(map, observer, object);
     }
     // A banner taken by attacking it starts each viewer afresh (Thistle
-    // Tea's `reset_banner_interaction`), once they have it.
+    // Tea's `reset_banner_interaction`), once they have it (the client is
+    // held).
     if guid::is_game_object(object)
         && crate::game::map::objects::resets_on_sight(map, object)
-        && let Some(frame) =
-            crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_RESET_STATE {
-                guid: object,
-            })
+        && let Some(p) = map.players.get(&observer)
     {
-        map.late_frames.push((observer, frame));
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_RESET_STATE { guid: object });
     }
 }
 

@@ -195,6 +195,7 @@ fn send_to_screen(map: &mut Map, g: Guid) {
         "{}: {g} couldn't be saved; they go as they were last saved",
         map.key
     );
+    let _ = catch(|| map.let_go(g));
     if let Some(p) = map.players.remove(&g) {
         // What `take_player` does once its own steps are past.
         map.grid.remove(g, p.cell);

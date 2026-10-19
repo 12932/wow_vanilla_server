@@ -558,7 +558,15 @@ fn attach(map: &mut Map, owner: Guid, pet: Guid) {
         p.fields.set_guid(UNIT_FIELD_SUMMON, pet);
         p.row.state.pets.active = true;
     }
-    send_spells(map, owner);
+    // An owner still loading the map gets it once there
+    // (`movement::worldport_ack`), after the pet's create.
+    if !map
+        .players
+        .get(&owner)
+        .is_some_and(|p| p.awaiting_worldport)
+    {
+        send_spells(map, owner);
+    }
     sync_record(map, owner);
 }
 

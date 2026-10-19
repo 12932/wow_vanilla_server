@@ -980,6 +980,7 @@ mod combat {
         let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
         let wolf = guid::unit(2000, 10);
         a.sees(wolf).await;
+        a.clear();
         let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
         map.call(move |m| {
             crate::game::map::visibility::part(m, ga, wolf);
@@ -988,39 +989,37 @@ mod combat {
                 c.fields.set_u32(UNIT_FIELD_HEALTH, 1);
             }
         });
-        let order = a
-            .wait_for("the update that forgets the wolf", move |m| match m {
-                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u)
-                    if u.objects.iter().any(|o| {
-                        matches!(&o.update_type,
-                            Object_UpdateType::OutOfRangeObjects { guids } if guids.contains(&wolf))
-                    }) =>
-                {
-                    Some(
-                        u.objects
-                            .iter()
-                            .filter_map(|o| match &o.update_type {
-                                Object_UpdateType::OutOfRangeObjects { guids }
-                                    if guids.contains(&wolf) =>
-                                {
-                                    Some("forget")
-                                }
-                                Object_UpdateType::CreateObject2 { guid3, .. }
-                                    if *guid3 == wolf =>
-                                {
-                                    Some("create")
-                                }
-                                Object_UpdateType::Values { guid1, .. } if *guid1 == wolf => {
-                                    Some("values")
-                                }
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                }
-                _ => None,
+        // The wolf's blocks, in the order they come: the forget and the
+        // create in one packet, its values in it or the one after (a client
+        // held for its creates gets them first, alone).
+        let blocks = move |m: &ServerOpcodeMessage| {
+            let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) = m else {
+                return None;
+            };
+            let found: Vec<&str> = u
+                .objects
+                .iter()
+                .filter_map(|o| match &o.update_type {
+                    Object_UpdateType::OutOfRangeObjects { guids } if guids.contains(&wolf) => {
+                        Some("forget")
+                    }
+                    Object_UpdateType::CreateObject2 { guid3, .. } if *guid3 == wolf => {
+                        Some("create")
+                    }
+                    Object_UpdateType::Values { guid1, .. } if *guid1 == wolf => Some("values"),
+                    _ => None,
+                })
+                .collect();
+            (!found.is_empty()).then_some(found)
+        };
+        let mut order = a
+            .wait_for("the update that forgets the wolf", |m| {
+                blocks(m).filter(|b| b.contains(&"forget"))
             })
             .await;
+        if order.len() < 3 {
+            order.extend(a.wait_for("the wolf's values", blocks).await);
+        }
         assert_eq!(order, ["forget", "create", "values"]);
     }
 
@@ -3795,6 +3794,8 @@ mod instances {
         let (_realm, mut a, mut b) = two_near_on(realm.clone()).await;
         let mut c = Client::connect(&realm, "C");
         c.enter("Carol", Race::Human, Class::Priest).await;
+        // Out here, where they start, Alice sees Carol.
+        a.sees(c.guid).await;
         a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
         b.wait_for("SMSG_GROUP_INVITE", |m| {
             matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())

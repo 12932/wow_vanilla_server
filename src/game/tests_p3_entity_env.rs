@@ -265,7 +265,15 @@ async fn an_event_is_judged_on_the_victim_and_a_step_on_its_target() {
 #[tokio::test]
 async fn an_attack_keeps_its_victim_when_the_selection_goes() {
     let (_realm, a, ga, map) = setup_with(world(), Class::Warrior).await;
-    let brute = on(&map, move |m| spawn(m, ga, BRUTE, 20, 2.0)).await;
+    // Alice outlasts the brute's blows while the test looks (its spawn
+    // holds her replies for an update).
+    let brute = on(&map, move |m| {
+        let f = &mut m.players.get_mut(&ga).unwrap().fields;
+        f.set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+        f.set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+        spawn(m, ga, BRUTE, 20, 2.0)
+    })
+    .await;
     a.send(CMSG_SET_SELECTION { target: brute }).await;
     a.send(CMSG_ATTACKSWING { guid: brute }).await;
     crate::game::tests_p3_entity_objects::until(&map, "Alice attacks", move |m| {

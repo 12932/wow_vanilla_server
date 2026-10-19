@@ -362,6 +362,24 @@ pub struct MapStats {
     pub restarts: u32,
 }
 
+/// Holds being released: any left when it goes (a step that panicked) are
+/// let go, so a client is never held for good.
+struct Held(Vec<(Guid, crate::game::conn::Outbound)>);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        for (_, out) in self.0.drain(..) {
+            out.release(Vec::new());
+        }
+    }
+}
+
+impl Drop for Map {
+    fn drop(&mut self) {
+        drop(Held(std::mem::take(&mut self.holding)));
+    }
+}
+
 pub struct Map {
     pub key: MapKey,
     pub realm: Arc<Realm>,
@@ -470,8 +488,8 @@ pub struct Map {
     pub arena: arena::Arena,
     /// Objects spells summoned, traps, rituals and quest objects.
     pub objects: objects::Objects,
-    /// Frames for after this update's create blocks: (observer, frame).
-    pub late_frames: Vec<(Guid, Arc<[u8]>)>,
+    /// The clients held ([`Map::hold`]) until their creates go.
+    pub holding: Vec<(Guid, crate::game::conn::Outbound)>,
     /// Scripted area triggers resting from their cooldown, until when.
     pub trigger_cooldowns: AHashMap<u32, Instant>,
     /// The leash clocks creatures in one fight share.
@@ -849,7 +867,7 @@ impl Map {
             rifts_checked_at: None,
             arena: Default::default(),
             objects: Default::default(),
-            late_frames: Vec::new(),
+            holding: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
             health: Default::default(),
@@ -958,7 +976,12 @@ impl Map {
                         None => p.row.state.dead = false,
                     }
                 }
+                let at = p.position();
                 self.insert_player(p);
+                // They and those about them are told of each other at the
+                // update's visibility; what names anyone there (their
+                // pet's bar) waits for it.
+                self.hold_near(at);
                 eviction::logged_in(self, guid);
                 spells::apply_passives(self, guid);
                 spell_areas::reconcile(self, guid);
@@ -1025,6 +1048,7 @@ impl Map {
             guid,
             wow_world_messages::vanilla::SMSG_TRADE_STATUS_TradeStatus::TargetLogout,
         );
+        self.let_go(guid);
         let mut p = self.players.remove(&guid)?;
         self.grid.remove(guid, p.cell);
         self.visibility_dirty.remove(&guid);
@@ -1293,9 +1317,9 @@ impl Map {
         self.step("visibility", visibility::refresh_dirty);
         self.step("quest objects", quests::update_objects);
         self.step("forgets", Map::flush_forgets);
+        self.step("held", Map::release_held);
         self.step("values", Map::flush_values);
         self.step("batches", Map::flush_batches);
-        self.step("late frames", Map::flush_late_frames);
         self.create_cache.clear();
 
         let took = started.elapsed();
@@ -1351,27 +1375,97 @@ impl Map {
     /// any create), and what it won't have at the end is dropped from its
     /// batch. One it learned of and lost within the update is neither.
     fn flush_forgets(&mut self) {
-        for (observer, guids) in self.forget.drain() {
-            let Some(p) = self.players.get(&observer) else {
-                continue;
-            };
-            let batch = self.batches.entry(observer).or_default();
-            let mut seen: Vec<Guid> = Vec::with_capacity(guids.len());
-            for &g in &guids {
-                if seen.contains(&g) {
-                    continue;
-                }
-                seen.push(g);
-                // Each forget took it from `known`, each create put it there.
-                let forgets = guids.iter().filter(|x| **x == g).count() as i64;
-                let creates = batch.creates_of(g) as i64;
-                let now = i64::from(p.known.contains(&g));
-                if now + forgets - creates > 0 {
-                    batch.forget(g);
-                }
-                batch.drop_for(g, now == 1);
-            }
+        let mut forget = std::mem::take(&mut self.forget);
+        for (observer, guids) in forget.drain() {
+            self.settle_forgets(observer, &guids);
         }
+        self.forget = forget;
+    }
+
+    /// [`Map::flush_forgets`] for one observer.
+    fn settle_forgets(&mut self, observer: Guid, guids: &[Guid]) {
+        let Some(p) = self.players.get(&observer) else {
+            return;
+        };
+        let batch = self.batches.entry(observer).or_default();
+        let mut seen: Vec<Guid> = Vec::with_capacity(guids.len());
+        for &g in guids {
+            if seen.contains(&g) {
+                continue;
+            }
+            seen.push(g);
+            // Each forget took it from `known`, each create put it there.
+            let forgets = guids.iter().filter(|x| **x == g).count() as i64;
+            let creates = batch.creates_of(g) as i64;
+            let now = i64::from(p.known.contains(&g));
+            if now + forgets - creates > 0 {
+                batch.forget(g);
+            }
+            batch.drop_for(g, now == 1);
+        }
+    }
+
+    /// From now until its creates go, what is sent to `observer`'s client
+    /// waits behind them: it is to be told of an object (it was just
+    /// introduced, or one has come into the map near it), so nothing
+    /// naming the object reaches it first. One awaiting a worldport gets
+    /// no creates, and what it is sent goes at once.
+    pub fn hold(&mut self, observer: Guid) {
+        if let Some(p) = self.players.get(&observer)
+            && !p.awaiting_worldport
+            && p.outbound.hold()
+        {
+            self.holding.push((observer, p.outbound.clone()));
+        }
+    }
+
+    /// [`Map::hold`] every client near `at`, where an object has come into
+    /// the map (or a player has come to): those the update's visibility
+    /// will tell of it.
+    pub fn hold_near(&mut self, at: wow_world_messages::vanilla::Vector3d) {
+        if self.players.is_empty() {
+            return;
+        }
+        let keep = visibility::radius(self) + visibility::MARGIN;
+        let near: Vec<Guid> = self
+            .grid
+            .around(at.x, at.y, keep)
+            .filter(|g| guid::is_player(*g))
+            .collect();
+        for g in near {
+            self.hold(g);
+        }
+    }
+
+    /// The held clients' creates (and forgets, first), then what waited for
+    /// them; their values follow in the update's batches, after, as for
+    /// everyone. A client nothing waited for keeps its blocks for the one
+    /// batch.
+    fn release_held(&mut self) {
+        let held = Held(std::mem::take(&mut self.holding));
+        for (g, out) in &held.0 {
+            let first = if out.has_held() {
+                self.batches
+                    .remove(g)
+                    .map(update::Batch::finish)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            out.release(first);
+        }
+    }
+
+    /// A player leaving the map: what waited for their creates goes now, so
+    /// that what the map sent them last (a transfer, a logout) isn't left
+    /// behind. The creates themselves are dropped with the map they were
+    /// of, as ever (the client forgets that map's objects).
+    pub(crate) fn let_go(&mut self, guid: Guid) {
+        let Some(i) = self.holding.iter().position(|(g, _)| *g == guid) else {
+            return;
+        };
+        let (_, out) = self.holding.swap_remove(i);
+        out.release(Vec::new());
     }
 
     fn flush_values(&mut self) {
@@ -1463,14 +1557,6 @@ impl Map {
         drop(z);
         for (g, all) in taps {
             tap::tell(self, g, all);
-        }
-    }
-
-    fn flush_late_frames(&mut self) {
-        for (g, frame) in std::mem::take(&mut self.late_frames) {
-            if let Some(p) = self.players.get(&g) {
-                p.outbound.send_frame(frame);
-            }
         }
     }
 
@@ -1629,10 +1715,14 @@ impl Map {
         if !c.auras.is_empty() {
             self.with_auras.insert(guid);
         }
+        let at = c.position;
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
+        // What names it (its summoner's bar, its first words) waits for
+        // its create, at the update's visibility.
+        self.hold_near(at);
         spawn_auras::apply(self, guid);
         guid
     }
@@ -1640,11 +1730,13 @@ impl Map {
     pub fn add_gameobject(&mut self, g: GameObject) -> Guid {
         let guid = g.guid;
         let cell = g.cell;
+        let at = g.position;
         let key = self.gameobjects.insert(g);
         self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
+        self.hold_near(at);
         guid
     }
 
