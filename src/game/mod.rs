@@ -781,6 +781,8 @@ mod tests_p8_combat_elemental;
 #[cfg(test)]
 mod tests_p8_combat_extra;
 #[cfg(test)]
+mod tests_p8_combat_heal;
+#[cfg(test)]
 mod tests_p8_combat_origin;
 #[cfg(test)]
 mod tests_p8_combat_posture;
