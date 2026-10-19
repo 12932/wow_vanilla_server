@@ -861,6 +861,16 @@ pub fn can_assist(map: &Map, a: Guid, b: Guid) -> bool {
     if ma == mb {
         return true;
     }
+    // One immune to players' side takes no help from it, though a
+    // creature's it takes (Thistle Tea's `can_assist?`; mangos's
+    // `CanAssist` helps no such NPC of a player's either).
+    if guid::is_player(ma)
+        && map
+            .unit_fields(b)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER))
+    {
+        return false;
+    }
     // The duel's arbiter and side: a duel's two sides help neither each
     // other nor anyone outside it (mangos's `PLAYER_DUEL_ARBITER` and
     // `PLAYER_DUEL_TEAM`).

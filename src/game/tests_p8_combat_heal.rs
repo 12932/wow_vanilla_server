@@ -232,3 +232,51 @@ async fn a_cure_takes_a_stack_of_a_healing_cut_and_leaves_its_end_be() {
     assert_eq!(after, Some((4, expires)), "a stack gone, its end kept");
     assert_eq!(cured, 120, "four tenths");
 }
+
+/// Thistle Tea's "player immunity also blocks helpful spells while NPC
+/// immunity does not": a friend immune to players (unit flag 0x100) takes
+/// no heal of Alice's, nor of her pet's, though a creature may help it;
+/// one immune to creatures alone (0x200) takes hers.
+#[tokio::test]
+async fn one_immune_to_players_takes_no_help_of_theirs() {
+    let (_realm, _a, ga, map) = p3::setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            p3::level(m, ga, 60);
+            let friend = p3::spawn(m, ga, HELPER, 60, 3.0);
+            let npc = p3::spawn(m, ga, HELPER, 60, 4.0);
+            let pet = p3::spawn(m, ga, HELPER, 60, 5.0);
+            m.creature_mut(pet).unwrap().owner = Some(ga);
+            let flags = |m: &mut Map, f: u32| {
+                m.unit_fields_mut(friend)
+                    .unwrap()
+                    .set_u32(UNIT_FIELD_FLAGS, f)
+            };
+            flags(m, 0x300);
+            let protected = (
+                combat::can_assist(m, ga, friend),
+                combat::can_assist(m, pet, friend),
+                combat::can_assist(m, npc, friend),
+                combat::can_assist(m, friend, ga),
+            );
+            set_health(m, friend, 1_000);
+            crate::game::tests_p3_spells_kit::cast_fresh(
+                m,
+                ga,
+                OTHER_HEAL,
+                crate::game::tests_p3_spells_kit::at(friend),
+            );
+            let healed = health(m, friend) > 1_000;
+            flags(m, 0x200);
+            (protected, healed, combat::can_assist(m, ga, friend))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        r.0,
+        (false, false, true, true),
+        "(Alice, her pet, a creature, it helping her)"
+    );
+    assert!(!r.1, "her heal refused");
+    assert!(r.2, "immune to creatures alone, hers it takes");
+}
