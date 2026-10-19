@@ -741,22 +741,8 @@ pub fn teaches(roll: u32) -> bool {
 /// learns to teach it to a pet. With the rolls fixed (the tests), it
 /// doesn't.
 pub fn used(map: &mut Map, pet: Guid, spell: u32) {
-    let Some(s) = state(map, pet).filter(|s| s.kind == Kind::Hunter) else {
-        return;
-    };
-    let owner = s.owner;
     if !map.unit_view(pet).is_some_and(|u| u.alive)
         || map.realm.data.spells.get(spell).is_none_or(|t| t.passive())
-    {
-        return;
-    }
-    let Some(teaching) = map.realm.data.pets.teaching.get(&spell).copied() else {
-        return;
-    };
-    if map
-        .players
-        .get(&owner)
-        .is_none_or(|p| p.spells.contains(&teaching))
     {
         return;
     }
@@ -767,6 +753,32 @@ pub fn used(map: &mut Map, pet: Guid, spell: u32) {
         100
     };
     if teaches(roll) {
+        teach_master(map, pet, spell);
+    }
+}
+
+/// A hunter's pet came with passive `spell`: its master learns to teach
+/// it, at once (mangos's `InitPetCreateSpells`, "learn passive skills
+/// when tamed"; Thistle Tea's `PetTraining.discover_passives`).
+pub fn discover_passive(map: &mut Map, pet: Guid, spell: u32) {
+    teach_master(map, pet, spell);
+}
+
+/// The master of hunter's pet `pet` learns to teach `spell`, if there is a
+/// teaching of it they lack.
+fn teach_master(map: &mut Map, pet: Guid, spell: u32) {
+    let Some(s) = state(map, pet).filter(|s| s.kind == Kind::Hunter) else {
+        return;
+    };
+    let owner = s.owner;
+    let Some(teaching) = map.realm.data.pets.teaching.get(&spell).copied() else {
+        return;
+    };
+    if map
+        .players
+        .get(&owner)
+        .is_some_and(|p| !p.spells.contains(&teaching))
+    {
         crate::game::map::spells::learn(map, owner, teaching);
     }
 }
@@ -893,22 +905,8 @@ pub fn train(map: &mut Map, hunter: Guid, teaching: &SpellTemplate) {
     }
     control::learn(map, pet, spell);
     // A passive takes hold at once.
-    if let Some(t) = data.spells.get(spell).filter(|t| t.passive()) {
-        let effects: Vec<(usize, i32)> = (0..3)
-            .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
-            .map(|i| (i, crate::game::map::spells::points(t, i, 1)))
-            .collect();
-        let _ = crate::game::map::auras::apply_spell(
-            map,
-            pet,
-            pet,
-            t,
-            &effects,
-            crate::game::map::auras::Context {
-                duration: Some(None),
-                ..Default::default()
-            },
-        );
+    if data.spells.get(spell).is_some_and(|t| t.passive()) {
+        summon::apply_passive(map, pet, spell);
     }
     if let Some(c) = map.creature_mut(pet) {
         show_training_points(c);

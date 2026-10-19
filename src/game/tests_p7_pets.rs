@@ -553,3 +553,105 @@ async fn only_a_living_hunters_pet_teaches_its_master_by_chance() {
         .unwrap();
     assert!(!demon, "an imp teaches nothing");
 }
+
+/// Thistle Tea's `PetSpellModifiers.sync` "rejects stale owners and
+/// respects spell family and mask" and "does not refresh temporary or
+/// externally cast auras": a hunter's boar has a health passive of the
+/// hunters' family (9) at nothing. Another hunter's modifier of it changes
+/// nothing of the boar's; nor do its master's of another family, or of a
+/// mask the passive's flags don't meet; one that touches it makes it 15,
+/// and the other hunter's 10% of the same family on the boar, timed,
+/// stays as it was (mangos's `ReapplyAffectedPassiveAuras`: the unit's own
+/// permanent passives only).
+#[tokio::test]
+async fn a_masters_modifiers_reach_only_their_pets_passives_they_touch() {
+    use crate::game::map::auras;
+    const PASSIVE: u32 = 990_710;
+    const TOUCHES: u32 = 990_711;
+    const OTHER_FAMILY: u32 = 990_712;
+    const OTHER_MASK: u32 = 990_713;
+    const TIMED: u32 = 990_714;
+    let mut d = revive_data();
+    let none = SpellEffect::default();
+    let mut health = tests_pets::effect(6, -1, 1);
+    health.aura = 133;
+    let mut passive = tests_pets::spell(PASSIVE, "Tamed Pet Passive", [health, none, none]);
+    passive.attributes[0] = 0x40;
+    passive.family_name = 9;
+    passive.family_flags = 1;
+    d.spells.spells.insert(PASSIVE, passive);
+    d.pets.abilities.insert(
+        270,
+        vec![crate::game::data::pets::PetAbility {
+            spell: PASSIVE,
+            skill: 270,
+            acquire: 2,
+            ..Default::default()
+        }],
+    );
+    for (id, family, mask) in [(TOUCHES, 9, 1), (OTHER_FAMILY, 5, 1), (OTHER_MASK, 9, 2)] {
+        let mut e = tests_pets::effect(6, 14, 1);
+        e.aura = auras::AURA_ADD_FLAT_MODIFIER;
+        e.misc_value = 8;
+        e.item_type = mask;
+        let mut s = tests_pets::spell(id, "Endurance Training", [e, none, none]);
+        s.family_name = family;
+        d.spells.spells.insert(id, s);
+    }
+    let mut timed = tests_pets::effect(6, 9, 1);
+    timed.aura = 133;
+    let mut t = tests_pets::spell(TIMED, "Timed", [timed, none, none]);
+    t.family_name = 9;
+    t.family_flags = 1;
+    t.duration_index = 4;
+    d.spells.spells.insert(TIMED, t);
+    let (realm, mut h, gh, map, pet, _wolf) = tamed_with(d).await;
+    h.sees(pet).await;
+    let (_o, go, _) = enter(&realm, "O", "Other", Race::Dwarf, Class::Hunter).await;
+    let amount = move |m: &crate::game::map::Map, spell: u32| {
+        auras::auras(m, pet).and_then(|a| {
+            a.holders
+                .iter()
+                .find(|h| h.spell == spell)
+                .map(|h| h.effects[0].amount)
+        })
+    };
+    let on = move |m: &mut crate::game::map::Map, who: Guid, spell: u32| {
+        let s = m.realm.data.spells.get(spell).cloned().unwrap();
+        let ctx = auras::Context {
+            duration: Some(None),
+            ..Default::default()
+        };
+        let _ = auras::apply_spell(m, who, who, &s, &[(0, 15)], ctx);
+    };
+    let out = map
+        .query(move |m| {
+            let first = amount(m, PASSIVE);
+            on(m, go, TOUCHES);
+            let another_hunters = amount(m, PASSIVE);
+            on(m, gh, OTHER_FAMILY);
+            on(m, gh, OTHER_MASK);
+            let missed = amount(m, PASSIVE);
+            let t = m.realm.data.spells.get(TIMED).cloned().unwrap();
+            let _ = auras::apply_spell(m, go, pet, &t, &[(0, 10)], Default::default());
+            on(m, gh, TOUCHES);
+            let count = auras::auras(m, pet).map_or(0, |a| {
+                a.holders.iter().filter(|h| h.spell == PASSIVE).count()
+            });
+            (
+                first,
+                another_hunters,
+                missed,
+                amount(m, PASSIVE),
+                count,
+                amount(m, TIMED),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, Some(0), "at nothing");
+    assert_eq!(out.1, Some(0), "another hunter's modifier");
+    assert_eq!(out.2, Some(0), "another family's, another mask's");
+    assert_eq!((out.3, out.4), (Some(15), 1), "its master's, once");
+    assert_eq!(out.5, Some(10), "the other's timed aura as it was");
+}

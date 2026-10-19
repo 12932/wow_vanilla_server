@@ -39,6 +39,7 @@ pub use hunter::{
     NPC_FLAG_STABLEMASTER, TAMER_SPELLS, beast_for, change_loyalty, give_pet, list_stable,
     pet_xp_to_level, untrain_offer,
 };
+pub use inherit::master_mods_changed;
 /// A family's passives, learned when tamed: for the tests.
 #[cfg(test)]
 pub(crate) use summon::family_passives;

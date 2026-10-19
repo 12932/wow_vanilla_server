@@ -523,30 +523,47 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     // Tea's `PetTraining.discover_passives`).
     if kind == Kind::Hunter {
         for spell in &passives {
-            hunter::used(map, g, *spell);
+            hunter::discover_passive(map, g, *spell);
         }
     }
     for spell in passives {
-        if let Some(t) = data.spells.get(spell) {
-            let effects: Vec<(usize, i32)> = (0..3)
-                .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
-                .map(|i| (i, crate::game::map::spells::points(t, i, u32::from(level))))
-                .collect();
-            let _ = crate::game::map::auras::apply_spell(
-                map,
-                g,
-                g,
-                t,
-                &effects,
-                crate::game::map::auras::Context {
-                    duration: Some(None),
-                    ..Default::default()
-                },
-            );
-        }
+        apply_passive(map, g, spell);
     }
     inherit::sync(map, g);
     Some(g)
+}
+
+/// Pet `g`'s passive `spell` takes hold, its amounts by its level and its
+/// master's modifiers (mangos's `CalculateSpellEffectValue` through
+/// `GetSpellModOwner`: Endurance Training on the tamed pets' health
+/// passive).
+pub(super) fn apply_passive(map: &mut Map, g: Guid, spell: u32) {
+    let data = map.realm.data.clone();
+    let Some(t) = data.spells.get(spell) else {
+        return;
+    };
+    let level = map.unit_view(g).map_or(1, |u| u.level);
+    let mods = crate::game::map::spells::mods::for_spell(map, g, t);
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
+        .map(|i| {
+            (
+                i,
+                mods.points(t, i, crate::game::map::spells::points(t, i, level)),
+            )
+        })
+        .collect();
+    let _ = crate::game::map::auras::apply_spell(
+        map,
+        g,
+        g,
+        t,
+        &effects,
+        crate::game::map::auras::Context {
+            duration: Some(None),
+            ..Default::default()
+        },
+    );
 }
 
 /// `pet` becomes `owner`'s: their summon field, and its bar to their

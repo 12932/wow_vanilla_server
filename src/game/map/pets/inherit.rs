@@ -138,3 +138,47 @@ pub fn sync(map: &mut Map, pet: Guid) {
         );
     }
 }
+
+/// A modifier of `master`'s (from `spell`, touching the spells of its
+/// family whose flags meet `mask`) came or went: their pet's and totems'
+/// own permanent passives it touches are put on again, their amounts as
+/// the modifiers now make them, one holder each (mangos's
+/// `Aura::ReapplyAffectedPassiveAuras` over `CONTROLLED_PET |
+/// CONTROLLED_TOTEMS`; Thistle Tea's `PetSpellModifiers.sync`). A dead
+/// pet's are too, and it stays dead.
+pub fn master_mods_changed(map: &mut Map, master: Guid, spell: u32, mask: u64) {
+    use crate::game::map::spells::mods::touches;
+    let data = map.realm.data.clone();
+    let Some(family) = data.spells.get(spell).map(|t| t.family_name) else {
+        return;
+    };
+    let Some(p) = map.players.get(&master) else {
+        return;
+    };
+    let units: Vec<Guid> = p
+        .owned
+        .pet
+        .into_iter()
+        .chain(p.owned.totems.iter().flatten().copied())
+        .collect();
+    for g in units {
+        let affected: Vec<u32> = crate::game::map::auras::auras(map, g)
+            .map(|a| {
+                a.holders
+                    .iter()
+                    .filter(|h| h.caster == g && h.passive && h.expires.is_none())
+                    .filter(|h| {
+                        data.spells
+                            .get(h.spell)
+                            .is_some_and(|t| t.passive() && touches(family, mask, t))
+                    })
+                    .map(|h| h.spell)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for s in affected {
+            crate::game::map::auras::remove_spell(map, g, s, Some(g));
+            summon::apply_passive(map, g, s);
+        }
+    }
+}
