@@ -221,7 +221,9 @@ fn aura_amount(
         return base;
     }
     match e.aura {
-        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH => {
+        // A funnel of health's too (mangos-classic's
+        // `HandlePeriodicHealthFunnel`, `SpellDamageBonusDone` as a DoT's).
+        AURA_PERIODIC_DAMAGE | AURA_PERIODIC_LEECH | AURA_PERIODIC_HEALTH_FUNNEL => {
             let mut d =
                 base as f32 + outcome::bonus(map, caster, target, s, index, Kind::Dot, &l.mods);
             d *= outcome::done_multiplier(map, caster, target, s);
