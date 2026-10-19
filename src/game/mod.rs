@@ -627,6 +627,8 @@ mod tests_p7_spell_scripts;
 #[cfg(test)]
 mod tests_p7_spell_teleport;
 #[cfg(test)]
+mod tests_p7_spell_totems;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
