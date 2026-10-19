@@ -618,25 +618,27 @@ async fn lady_jaina_fights_with_fire_frost_and_her_elementals() {
     // While she casts, her timers wait.
     let waited = map
         .query(move |m| {
-            ready(m, jaina, 496802);
-            let casting = m
-                .creature(jaina)
-                .is_some_and(|c| c.caster.casting.is_some());
-            if let Some(cr) = m.caster_mut(jaina) {
-                cr.gcd_until = None;
+            for _ in 0..40 {
+                ready(m, jaina, 496802);
+                if m.creature(jaina)
+                    .is_some_and(|c| c.caster.casting.is_some())
+                {
+                    if let Some(cr) = m.caster_mut(jaina) {
+                        cr.gcd_until = None;
+                    }
+                    due(m, jaina, 496802);
+                    return Some(left(m, jaina, 496802));
+                }
             }
-            due(m, jaina, 496802);
-            (casting, left(m, jaina, 496802))
+            None
         })
         .await
         .unwrap();
-    if waited.0 {
-        assert_eq!(
-            waited.1,
-            Some(Duration::ZERO),
-            "her spell waits on her cast"
-        );
-    }
+    assert_eq!(
+        waited,
+        Some(Some(Duration::ZERO)),
+        "her spell waits on her cast"
+    );
     // Her elementals, only while none are near.
     let mut called = false;
     for _ in 0..40 {
