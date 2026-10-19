@@ -458,3 +458,51 @@ async fn an_avoided_ability_gives_back_what_was_paid() {
     assert_eq!(points, Some(0), "no combo point on an immune target");
     assert_eq!(kept, Some((5, true)), "the finisher keeps its points");
 }
+
+/// A spell's diminishing returns group: its families' exceptions first
+/// (Kidney Shot, Blind none, the hunter's freezing traps, the warlock's
+/// fears and their curses none, Hamstring none, Entangling Roots, Pounce's
+/// visual none), across ranks by family flags; then the spell's and its
+/// effects' mechanics in vanilla's order, a stun before a root (Thistle
+/// Tea's `DiminishingReturns.group`, vmangos's).
+#[test]
+fn diminishing_groups_go_by_family_then_mechanic_in_order() {
+    use crate::game::map::spells::{Dr, dr_group};
+    let spell = |family: u32, flags: u64, mechanic: u32, effect_mechanic: u32| {
+        let mut s = SpellTemplate {
+            family_name: family,
+            family_flags: flags,
+            mechanic,
+            ..Default::default()
+        };
+        s.effects[0].mechanic = effect_mechanic;
+        s
+    };
+    assert_eq!(dr_group(&spell(0, 0, 17, 0)), Some(Dr::Polymorph));
+    assert_eq!(
+        dr_group(&spell(0, 0, 7, 12)),
+        Some(Dr::ControlledStun),
+        "a stun first"
+    );
+    assert_eq!(dr_group(&spell(0, 0, 0, 30)), Some(Dr::Knockout));
+    assert_eq!(dr_group(&spell(0, 0, 11, 0)), None);
+    assert_eq!(dr_group(&spell(8, 0x20_0000, 12, 0)), Some(Dr::KidneyShot));
+    assert_eq!(dr_group(&spell(8, 0x100_0000, 5, 0)), None, "Blind");
+    let mut pounce = spell(3, 0, 12, 0);
+    pounce.spell_visual = 4325;
+    assert_eq!(dr_group(&pounce), None);
+    assert_eq!(dr_group(&spell(9, 0x8, 0, 0)), Some(Dr::Freeze));
+    assert_eq!(
+        dr_group(&spell(11, 0x8000_0000, 0, 0)),
+        Some(Dr::ControlledRoot)
+    );
+    let mut seduction = spell(5, 0, 1, 0);
+    seduction.id = 6358;
+    assert_eq!(dr_group(&seduction), Some(Dr::WarlockFear));
+    assert_eq!(
+        dr_group(&spell(5, 0x8000_0000, 5, 0)),
+        Some(Dr::WarlockFear)
+    );
+    assert_eq!(dr_group(&spell(5, 0x8000_0000, 11, 0)), None, "a curse");
+    assert_eq!(dr_group(&spell(4, 0x2, 11, 0)), None, "Hamstring");
+}

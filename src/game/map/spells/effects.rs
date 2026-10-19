@@ -22,7 +22,7 @@ use super::*;
 /// Diminishing returns' groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-enum Dr {
+pub(crate) enum Dr {
     ControlledStun = 1,
     TriggeredStun,
     KidneyShot,
@@ -41,7 +41,7 @@ enum Dr {
 }
 
 /// A spell's diminishing returns group, as Thistle Tea follows vmangos.
-fn dr_group(s: &SpellTemplate) -> Option<Dr> {
+pub(crate) fn dr_group(s: &SpellTemplate) -> Option<Dr> {
     let flags = s.family_flags as u32;
     match (s.family_name, s.id) {
         (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),

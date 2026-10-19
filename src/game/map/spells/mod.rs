@@ -12,6 +12,8 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 
+#[cfg(test)]
+pub(crate) use effects::{Dr, dr_group};
 pub use effects::{
     add_combo_points, combo_duration, dr_aura_gone, release_retained_combo_points,
     retained_combo_points_expired, shown_power,

@@ -249,3 +249,136 @@ async fn a_ground_spell_wants_its_place_in_range_and_in_sight() {
     assert_eq!(walled, (Some(fail::LINE_OF_SIGHT), None), "a wall between");
     assert_eq!(with_place, None, "the unit's checks");
 }
+
+/// Ten-yard spells: a nova about the caster, one of another family mask,
+/// a blizzard on the ground; five yards and half again more radius, one
+/// charge of it; twenty yards less.
+const NOVA: u32 = 990_980;
+const OTHER_NOVA: u32 = 990_981;
+const BLIZZARD: u32 = 990_982;
+const BROADER: u32 = 990_983;
+const NARROWER: u32 = 990_984;
+const RADIUS_10: u32 = 950;
+
+fn radii(d: &mut GameData) {
+    use crate::game::map::auras::AURA_PERIODIC_DAMAGE;
+    data(d);
+    d.spells.radii.insert(RADIUS_10, 10.0);
+    let area = |id: u32, flags: u64, e: SpellEffect| {
+        let mut s = bare(id, 4);
+        s.family_name = 11;
+        s.family_flags = flags;
+        s.range_index = RANGE_30;
+        s.duration_index = LASTS_5S;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                radius_index: RADIUS_10,
+                ..e
+            },
+        );
+        s
+    };
+    let nova = SpellEffect {
+        target_a: 15,
+        ..damage(10)
+    };
+    let blizzard = SpellEffect {
+        effect: crate::game::map::spells::EFFECT_PERSISTENT_AREA_AURA,
+        amplitude: 1_000,
+        ..aura(AURA_PERIODIC_DAMAGE, 0, 10, 16)
+    };
+    let modifier = |id: u32, effects: &[(u32, i32)], charges: u32| {
+        let mut s = bare(id, 0);
+        s.family_name = 11;
+        s.duration_index = LASTS_LONG;
+        s.proc_charges = charges;
+        for (i, (kind, amount)) in effects.iter().enumerate() {
+            effect(
+                &mut s,
+                i,
+                SpellEffect {
+                    item_type: 0x1,
+                    ..aura(*kind, mods::OP_RADIUS as i32, *amount, 1)
+                },
+            );
+        }
+        s
+    };
+    let spells: Vec<SpellTemplate> = vec![
+        area(NOVA, 0x1, nova),
+        area(OTHER_NOVA, 0x2, nova),
+        area(BLIZZARD, 0x1, blizzard),
+        modifier(
+            BROADER,
+            &[(AURA_ADD_FLAT_MODIFIER, 5), (AURA_ADD_PCT_MODIFIER, 50)],
+            1,
+        ),
+        modifier(NARROWER, &[(AURA_ADD_FLAT_MODIFIER, -20)], 0),
+    ];
+    insert(d, spells);
+}
+
+/// An area's radius takes its family's flat then percent modifiers, ten
+/// yards to 22.5, and another mask's spell's doesn't; a radius cut below
+/// nothing is nothing; a ground spell keeps the radius its charged
+/// modifier gave it once the charge is spent (Thistle Tea's `Radius` and
+/// the area's snapshot; mangos's `SPELLMOD_RADIUS`).
+#[tokio::test]
+async fn a_radius_takes_its_modifiers_and_keeps_them_past_their_charge() {
+    let realm = fast_realm(radii);
+    let (_c, a, map) = human(&realm, "P6RD", "Wide", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[NOVA, OTHER_NOVA, BLIZZARD]);
+            let kobold = kit::dummy(m, a, 60, 20.0);
+            let struck = |m: &mut Map, spell: u32| {
+                kit::set_health(m, kobold, 1_000_000);
+                kit::cast_fresh(m, a, spell, Targets::default());
+                kit::health(m, kobold) < 1_000_000
+            };
+            let plain = struck(m, NOVA);
+            kit::apply(m, a, a, BROADER);
+            let other = struck(m, OTHER_NOVA);
+            let broadened = struck(m, NOVA);
+            let spent = kit::has(m, a, BROADER);
+            kit::apply(m, a, a, BROADER);
+            let ground = Targets {
+                dest: m.position_of(kobold),
+                ..Default::default()
+            };
+            kit::cast_fresh(m, a, BLIZZARD, ground);
+            let area = m
+                .spells
+                .areas
+                .iter()
+                .find(|x| x.spell == BLIZZARD)
+                .map(|x| x.radius);
+            let blizzard_spent = kit::has(m, a, BROADER);
+            kit::apply(m, a, a, NARROWER);
+            let s = m.realm.data.spells.get(NOVA).cloned().unwrap();
+            let narrowed =
+                crate::game::map::spells::targets::radius(m, &s, 0, &mods::for_spell(m, a, &s));
+            (
+                plain,
+                other,
+                broadened,
+                spent,
+                area,
+                blizzard_spent,
+                narrowed,
+            )
+        })
+        .await
+        .unwrap();
+    let (plain, other, broadened, spent, area, blizzard_spent, narrowed) = out;
+    assert!(!plain, "ten yards don't reach twenty");
+    assert!(!other, "another mask's");
+    assert!(broadened, "22.5 yards do");
+    assert!(!spent, "its charge spent");
+    assert_eq!(area, Some(22.5), "the blizzard's");
+    assert!(!blizzard_spent);
+    assert_eq!(narrowed, 0.0);
+}

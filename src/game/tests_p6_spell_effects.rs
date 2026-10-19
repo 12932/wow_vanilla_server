@@ -238,3 +238,122 @@ async fn a_teaching_spell_teaches_its_spells_and_steps_its_skill() {
     assert_eq!(taught, (true, Some(225)), "the trainer's pupil");
     assert_eq!(after_bad, Some(225), "a negative step teaches nothing");
 }
+
+/// A bandage channelled 8 s at 250 a second, of the bandage mechanic, and
+/// the lockout it leaves: a minute's immunity to that mechanic.
+const BANDAGE: u32 = 990_937;
+const LASTS_8S: u32 = 902;
+const LASTS_60S: u32 = 903;
+
+fn bandages(d: &mut GameData) {
+    use crate::game::data::spells::{ATTR_EX_CHANNELED, SpellDuration};
+    use crate::game::map::auras::{AURA_MECHANIC_IMMUNITY, AURA_PERIODIC_HEAL, INTERRUPT_DAMAGE};
+    for (i, ms) in [(LASTS_8S, 8_000), (LASTS_60S, 60_000)] {
+        d.spells.durations.insert(
+            i,
+            SpellDuration {
+                base: ms,
+                per_level: 0,
+                max: ms,
+            },
+        );
+    }
+    let mut bandage = bare(BANDAGE, 0);
+    bandage.script_name = "spell_first_aid".into();
+    bandage.mechanic = 16;
+    bandage.attributes[1] |= ATTR_EX_CHANNELED;
+    bandage.duration_index = LASTS_8S;
+    bandage.aura_interrupt_flags = INTERRUPT_DAMAGE;
+    effect(
+        &mut bandage,
+        0,
+        SpellEffect {
+            amplitude: 1_000,
+            ..aura(AURA_PERIODIC_HEAL, 0, 250, 21)
+        },
+    );
+    let mut lockout = bare(spells::class_scripts::RECENTLY_BANDAGED, 0);
+    lockout.duration_index = LASTS_60S;
+    effect(&mut lockout, 0, aura(AURA_MECHANIC_IMMUNITY, 16, 0, 21));
+    insert(d, [bandage, lockout]);
+}
+
+/// A bandage at a friend heals them each second of its channel, the
+/// lockout it leaves on them no bar to it, and the lockout stays when the
+/// bandage is done; damage ends the healing, not the lockout. While it
+/// lasts the friend can be bandaged by no one, themselves too
+/// (TARGET_AURASTATE), until it runs out; the bandager's own lockout is no
+/// bar to bandaging another (Thistle Tea's `FirstAid`; mangos's
+/// `spell_first_aid`, Recently Bandaged a mechanic immunity).
+#[tokio::test]
+async fn a_bandage_heals_through_its_lockout_which_bars_the_next() {
+    use crate::game::map::spells::class_scripts::RECENTLY_BANDAGED;
+    let realm = fast_realm(bandages);
+    let (_c, a, map) = human(&realm, "P6ED", "Medic", Class::Warrior).await;
+    let (_d, b, _) = human(&realm, "P6EE", "Patient", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[BANDAGE]);
+            kit::ready(m, b, 60, &[BANDAGE]);
+            let near = m.players[&a].position();
+            m.players.get_mut(&b).unwrap().movement.position = near;
+            for g in [a, b] {
+                if let Some(f) = m.unit_fields_mut(g) {
+                    f.set_u32(UNIT_FIELD_MAXHEALTH, 3_000);
+                }
+                set_health(m, g, 100);
+            }
+            let s = m.realm.data.spells.get(BANDAGE).cloned().unwrap();
+            kit::fresh(m, a);
+            let w = checks::check(m, a, &s, &at(b), None, false, &Mods::default());
+            assert!(cast_fresh(m, a, BANDAGE, at(b)), "{w:?}");
+            assert!(kit::has(m, b, BANDAGE), "{:?}", kit::casting(m, a));
+            let locked = kit::has(m, b, RECENTLY_BANDAGED);
+            let mut healed = Vec::new();
+            for _ in 0..8 {
+                kit::pass(m, 1_000);
+                healed.push(health(m, b));
+            }
+            let after = (kit::has(m, b, BANDAGE), kit::has(m, b, RECENTLY_BANDAGED));
+            let barred = {
+                let s = m.realm.data.spells.get(BANDAGE).cloned().unwrap();
+                let by = |m: &mut Map, g| {
+                    kit::fresh(m, g);
+                    checks::check(m, g, &s, &at(b), None, false, &Mods::default())
+                };
+                (by(m, a), by(m, b))
+            };
+            // The lockout's minute out; bandaged again, then struck.
+            crate::game::map::auras::remove_spell(m, b, RECENTLY_BANDAGED, None);
+            set_health(m, b, 100);
+            cast_fresh(m, a, BANDAGE, at(b));
+            crate::game::map::combat::deal_damage(m, a, b, 1);
+            kit::pass(m, 1_000);
+            let struck = (
+                health(m, b),
+                kit::has(m, b, BANDAGE),
+                kit::has(m, b, RECENTLY_BANDAGED),
+            );
+            // The medic locked out, the patient not.
+            crate::game::map::auras::remove_spell(m, b, RECENTLY_BANDAGED, None);
+            kit::apply(m, a, a, RECENTLY_BANDAGED);
+            kit::fresh(m, a);
+            let s = m.realm.data.spells.get(BANDAGE).cloned().unwrap();
+            let other = checks::check(m, a, &s, &at(b), None, false, &Mods::default());
+            (locked, healed, after, barred, struck, other)
+        })
+        .await
+        .unwrap();
+    let (locked, healed, after, barred, struck, other) = out;
+    assert!(locked, "the lockout at once");
+    assert_eq!(
+        healed,
+        [350, 600, 850, 1_100, 1_350, 1_600, 1_850, 2_100],
+        "healing through it"
+    );
+    assert_eq!(after, (false, true), "the bandage done, the lockout stays");
+    let aurastate = Some(fail::TARGET_AURASTATE);
+    assert_eq!(barred, (aurastate, aurastate), "by another, by themselves");
+    assert_eq!(struck, (99, false, true), "damage ends the healing");
+    assert_eq!(other, None, "the medic's lockout bars no one else");
+}
