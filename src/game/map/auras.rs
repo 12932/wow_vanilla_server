@@ -655,6 +655,21 @@ impl Auras {
 /// `SPELL_EFFECT_INSTAKILL`.
 const EFFECT_INSTAKILL: u32 = 1;
 
+/// Shadow Trance's and Netherwind Focus's.
+const ONE_CAST_MODIFIERS: [u32; 2] = [17_941, 22_008];
+
+/// The charges an aura of `spell` starts with: its own, but one for the
+/// modifiers spent by the next cast though their data has none (mangos's
+/// `HandleAddModifier`: Shadow Trance's instant Shadow Bolt, Netherwind
+/// Focus's instant spell).
+pub fn own_charges(spell: &SpellTemplate) -> u32 {
+    if ONE_CAST_MODIFIERS.contains(&spell.id) {
+        1
+    } else {
+        spell.proc_charges
+    }
+}
+
 pub fn positive(s: &SpellTemplate) -> bool {
     // vmangos's own word on it first, its positive over its negative (as
     // Thistle Tea's `harmful_instakill?`; no spell has both).
@@ -997,7 +1012,7 @@ pub fn apply_spell(
         positive: pos,
         passive,
         stacks: 1,
-        charges: ctx.charges.unwrap_or(spell.proc_charges),
+        charges: ctx.charges.unwrap_or_else(|| own_charges(spell)),
         expires: duration.map(|ms| now + Duration::from_millis(u64::from(ms))),
         duration,
         level,

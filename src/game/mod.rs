@@ -761,6 +761,8 @@ mod tests_p8_loader_combat;
 #[cfg(test)]
 mod tests_p8_loader_mods;
 #[cfg(test)]
+mod tests_p8_loader_procs;
+#[cfg(test)]
 mod tests_p8_loader_spells;
 #[cfg(test)]
 mod tests_parity_combat;
