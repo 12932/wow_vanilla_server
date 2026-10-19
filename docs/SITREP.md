@@ -120,6 +120,16 @@ hours), the crate version bumped with each merge.
   `[players] bones_hours` (18; 0 for none); not saved across a restart, as mangos never saves them. **mangos's own
   numbers:** an unclaimed corpse turns to bones after 3 days (checked every 20 minutes); bones last until their grid
   unloads, about 5 minutes with no one near. wvs has no 3-day expiry for unclaimed corpses yet.
+- **Raid AI, roles (0.1.7, peon `1bd7d04`):** each raider a tank, healer or damage from its seed (about 1 tank and
+  2.3 healers per 10: warriors tank 45%, druids tank 30% and heal 40%, priests heal 90%, shamans 80%, paladins tank
+  20% and heal 50%); warrior tanks in Defensive Stance with Taunt, Shield Block, Revenge, Sunder; druid tanks in bear
+  form; buffs out of a fight to whoever lacks them (healers any time), Battle Shout and totems in one; 1% strong
+  raiders (`--raid-strong`) in their class's tier 1 or 2 set at 60 (`.gear raid`), the best epics below; healers
+  pick a spot every 2 s that reaches the most wounded in sight, out of melee; hunters back off 12 yards from a foe
+  within 8, then shoot; druids in bear and cat form, leaving it below 30% to heal; hunters get a beast with a new
+  `.pet` (no beasts of their level near Stormwind to tame), warlocks a Voidwalker. **Left:** raiders aren't grouped,
+  so party buffs and totems reach only the caster; healers don't favour tanks; Shield Block needs `.gear` to hand a
+  warrior a shield.
 - **A possible client crash** the bones work's client check found (a heap overrun at `0x466816` when another
   player's values follow its create in one packet, as when a ghost rises in view): being settled now (`fix/crashcheck`).
 
