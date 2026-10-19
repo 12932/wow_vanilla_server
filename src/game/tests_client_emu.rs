@@ -27,14 +27,14 @@ use crate::game::data::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::MapKey;
 
-const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+pub(crate) const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 const BAT: u32 = 304;
 const GULL: u32 = 305;
 
 // The opcodes the checker knows; others it would only skip.
 const CHECKED: &[u16] = &[0x0A9, 0x1F6, 0x0DD, 0x24B];
 
-fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
+pub(crate) fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     CreatureTemplate {
         entry,
         name: name.into(),
@@ -50,7 +50,7 @@ fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     }
 }
 
-fn spawn(guid: u32, entry: u32, at: (f32, f32, f32)) -> CreatureSpawn {
+pub(crate) fn spawn(guid: u32, entry: u32, at: (f32, f32, f32)) -> CreatureSpawn {
     CreatureSpawn {
         guid,
         entries: vec![entry],
@@ -62,7 +62,11 @@ fn spawn(guid: u32, entry: u32, at: (f32, f32, f32)) -> CreatureSpawn {
     }
 }
 
-async fn enter(realm: &Arc<crate::game::Realm>, account: &str, name: &str) -> (Client, Guid) {
+pub(crate) async fn enter(
+    realm: &Arc<crate::game::Realm>,
+    account: &str,
+    name: &str,
+) -> (Client, Guid) {
     let mut c = Client::connect(realm, account);
     let g = c.enter(name, Race::Human, Class::Warrior).await;
     c.heartbeat(START.0, START.1, START.2).await;
@@ -630,7 +634,9 @@ async fn a_ghost_rising_before_a_stranger_passes_the_client() {
 
 /// Every frame `clients` received, of a kind the checker knows,
 /// deduplicated, back to back; and how many of each opcode.
-fn capture(clients: Vec<&mut Client>) -> (Vec<u8>, std::collections::BTreeMap<u16, u32>) {
+pub(crate) fn capture(
+    clients: Vec<&mut Client>,
+) -> (Vec<u8>, std::collections::BTreeMap<u16, u32>) {
     let mut seen = AHashSet::new();
     let mut capture = Vec::new();
     let mut counts = std::collections::BTreeMap::new();
@@ -649,7 +655,7 @@ fn capture(clients: Vec<&mut Client>) -> (Vec<u8>, std::collections::BTreeMap<u1
 
 /// Run a capture through the client's own parsers, failing if the client
 /// would.
-fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
+pub(crate) fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
     let path = std::env::temp_dir().join(format!("wvs-capture-{}.bin", std::process::id()));
     std::fs::File::create(&path)
         .and_then(|mut f| f.write_all(capture))
@@ -686,7 +692,7 @@ fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
 
 /// `check.py` and `WoW.exe`, or `None` with a reason logged, so a setup
 /// without them fails loudly rather than passing quietly.
-fn checker() -> Option<(PathBuf, PathBuf)> {
+pub(crate) fn checker() -> Option<(PathBuf, PathBuf)> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let check_py = manifest.join("tools/client_check/check.py");
     let wow_exe = manifest.join("tools/client_check/WoW.exe");

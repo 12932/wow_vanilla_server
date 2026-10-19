@@ -569,3 +569,136 @@ async fn insight_of_the_qiraji_goes_with_the_badge_of_the_swarmguard() {
         .unwrap();
     assert_eq!(out, ((true, true), true, false, false));
 }
+
+/// The client check (`tests_client_emu`) of what round 7's auras change in
+/// what is sent: a creature transformed (its transform's size, reach and
+/// weapons), grown and marked (`UNIT_DYNFLAG_TRACK_UNIT`), and a player
+/// transformed and grown, told to one who sees it happen and to one who
+/// comes after, then all as it was; the 1.12 client takes every frame.
+#[tokio::test]
+#[ignore = "extended"]
+async fn transformed_grown_and_marked_units_pass_the_client() {
+    use crate::game::data::spells::{CUSTOM_POSITIVE, SpellEffect, SpellTemplate};
+    use crate::game::data::{DisplayInfo, GameData, ItemTemplate};
+    use crate::game::tests_client_emu as emu;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    const BEAST: u32 = 97_900;
+    const LOOK: u32 = 97_901;
+    const GEAR: u32 = 97_902;
+    const BLADE: u32 = 97_903;
+    const TRANSFORM: u32 = 97_910;
+    const GROWTH: u32 = 97_911;
+    const MARK: u32 = 97_912;
+    let (check_py, wow_exe) = emu::checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let mut d = GameData::empty();
+    d.creature_templates
+        .insert(BEAST, emu::template(BEAST, "Beast", 7));
+    let mut look = emu::template(LOOK, "Look", 7);
+    look.display_ids = [856, 0, 0, 0];
+    look.display_scales = [1.5, 0.0, 0.0, 0.0];
+    look.equipment_id = GEAR;
+    d.creature_templates.insert(LOOK, look);
+    d.display_info.insert(
+        856,
+        DisplayInfo {
+            scale: 1.0,
+            bounding_radius: 0.5,
+            combat_reach: 2.0,
+            ..Default::default()
+        },
+    );
+    d.items.insert(
+        BLADE,
+        ItemTemplate {
+            entry: BLADE,
+            class: 2,
+            subclass: 7,
+            name: "Blade".into(),
+            display_id: 1000,
+            inventory_type: 13,
+            delay: 2000,
+            stackable: 1,
+            ..Default::default()
+        },
+    );
+    d.creature_equipment.insert(GEAR, [BLADE, 0, 0]);
+    for (id, aura, misc) in [
+        (TRANSFORM, auras::AURA_TRANSFORM, LOOK as i32),
+        (GROWTH, auras::AURA_MOD_SCALE, 0),
+        (MARK, auras::AURA_MOD_STALKED, 0),
+    ] {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Spell {id}"),
+            equipped_item_class: -1,
+            custom_flags: CUSTOM_POSITIVE,
+            ..Default::default()
+        };
+        s.effects[0] = SpellEffect {
+            effect: 6,
+            aura,
+            misc_value: misc,
+            target_a: 1,
+            ..Default::default()
+        };
+        d.spells.spells.insert(id, s);
+    }
+    d.creature_spawns.insert(
+        0,
+        vec![emu::spawn(
+            3,
+            BEAST,
+            (emu::START.0 + 6.0, emu::START.1, emu::START.2),
+        )],
+    );
+    let realm = harness::realm_with(d);
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    let (mut a, ga) = emu::enter(&realm, "A", "Alice").await;
+    let g = map
+        .query(|m| m.creatures.iter().map(|(_, c)| c.guid).next())
+        .await
+        .unwrap()
+        .expect("the beast");
+    a.sees(g).await;
+    let put_all = move |m: &mut Map| {
+        for (target, id, amount) in [
+            (g, TRANSFORM, 0),
+            (g, GROWTH, 50),
+            (g, MARK, 0),
+            (ga, TRANSFORM, 0),
+            (ga, GROWTH, 50),
+        ] {
+            let s = m.realm.data.spells.get(id).unwrap().clone();
+            let _ =
+                auras::apply_spell(m, ga, target, &s, &[(0, amount)], auras::Context::default());
+        }
+    };
+    map.query(put_all).await.unwrap();
+    a.wait_for("the beast's new look", |m| match m {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_)
+        | ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(_) => Some(()),
+        _ => None,
+    })
+    .await;
+    let (mut b, _gb) = emu::enter(&realm, "B", "Bea").await;
+    b.sees(g).await;
+    map.query(move |m| {
+        for target in [g, ga] {
+            auras::remove_where(m, target, |h| matches!(h.spell, TRANSFORM | GROWTH | MARK));
+        }
+    })
+    .await
+    .unwrap();
+    for _ in 0..6 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = emu::capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "its creates and values were captured"
+    );
+    emu::run_checker(&check_py, &wow_exe, &capture);
+}
