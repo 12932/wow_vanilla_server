@@ -497,3 +497,113 @@ async fn a_bind_sight_replaced_by_another_caster_hands_the_eyes_over() {
     assert_eq!(again, [zero, brute], "a refresh leaves them");
     assert_eq!(holders, 1);
 }
+
+/// Thistle Tea's `CasterModifiers` "power drains and burns retain their
+/// base resource conversion" and "periodic power burns retain resource
+/// consumption without caster damage amplification": a burn, a drain and
+/// a burn over time that ignore their caster's modifiers take their own
+/// amount of mana, and a burn deals what it burned, however their caster's
+/// spell modifiers, crit and damage done would have it (as a burn without
+/// the attribute shows).
+#[tokio::test]
+async fn burns_and_drains_that_ignore_their_caster_take_their_own_amount() {
+    use crate::game::data::spells::ATTR_EX3_IGNORE_CASTER_MODIFIERS;
+    use crate::game::map::spells::{EFFECT_POWER_BURN, EFFECT_POWER_DRAIN, mods};
+    const BURN: u32 = 97_440;
+    const DRAIN: u32 = 97_441;
+    const BURNING: u32 = 97_442;
+    const PLAIN_BURN: u32 = 97_443;
+    const MULTIPLIED: u32 = 97_444;
+    const CRITS: u32 = 97_445;
+    const STRONGER: u32 = 97_446;
+    let mut d = data();
+    let mage_spell = |id: u32, effect: u32, aura: u32, ignores: bool| {
+        let mut s = aura_spell(id, aura, 0, 100);
+        s.custom_flags = 0;
+        s.family_name = 3;
+        s.family_flags = 1;
+        s.school = 6;
+        s.range_index = 1;
+        s.effects[0].effect = effect;
+        s.effects[0].target_a = 6;
+        s.effects[0].multiple_value = 1.0;
+        s.effects[0].amplitude = 1000;
+        if ignores {
+            s.attributes[3] = ATTR_EX3_IGNORE_CASTER_MODIFIERS;
+        }
+        s
+    };
+    for s in [
+        mage_spell(BURN, EFFECT_POWER_BURN, 0, true),
+        mage_spell(DRAIN, EFFECT_POWER_DRAIN, 0, true),
+        mage_spell(BURNING, 6, auras::AURA_POWER_BURN_MANA, true),
+        mage_spell(PLAIN_BURN, EFFECT_POWER_BURN, 0, false),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    // The caster's: twice the multiplier on its family's spells, every
+    // spell a crit, a hundred percent more damage.
+    let mut multiplied = aura_spell(
+        MULTIPLIED,
+        auras::AURA_ADD_PCT_MODIFIER,
+        mods::OP_MULTIPLE_VALUE as i32,
+        100,
+    );
+    multiplied.family_name = 3;
+    multiplied.effects[0].item_type = 1;
+    d.spells.spells.insert(MULTIPLIED, multiplied);
+    d.spells.spells.insert(
+        CRITS,
+        aura_spell(CRITS, auras::AURA_MOD_SPELL_CRIT_CHANCE, 0, 100),
+    );
+    d.spells.spells.insert(
+        STRONGER,
+        aura_spell(STRONGER, auras::AURA_MOD_DAMAGE_PERCENT_DONE, 0x7F, 100),
+    );
+    let (_realm, _a, ga, map) = setup_with(d, Class::Mage).await;
+    let out = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 60);
+        for (id, amount) in [(MULTIPLIED, 100), (CRITS, 100), (STRONGER, 100)] {
+            let s = m.realm.data.spells.spells[&id].clone();
+            auras::apply_spell(m, ga, ga, &s, &[(0, amount)], auras::Context::default())
+                .expect("put on");
+        }
+        let fresh = |m: &mut Map| {
+            let brute = spawn(m, ga, BRUTE, 60, 5.0);
+            let f = m.unit_fields_mut(brute).unwrap();
+            f.set_byte(UNIT_FIELD_BYTES_0, 3, 0);
+            f.set_u32(UNIT_FIELD_MAXPOWER1, 500);
+            f.set_u32(UNIT_FIELD_POWER1, 500);
+            brute
+        };
+        let left = |m: &Map, g: Guid| {
+            let f = m.unit_fields(g).unwrap();
+            (
+                f.get_u32(UNIT_FIELD_POWER1),
+                100_000 - f.get_u32(UNIT_FIELD_HEALTH),
+            )
+        };
+        let mut seen = Vec::new();
+        for id in [BURN, DRAIN, PLAIN_BURN] {
+            let brute = fresh(m);
+            crate::game::map::spells::cast_triggered(m, ga, id, Some(brute));
+            seen.push(left(m, brute));
+        }
+        let brute = fresh(m);
+        let s = m.realm.data.spells.spells[&BURNING].clone();
+        auras::apply_spell(m, ga, brute, &s, &[(0, 100)], auras::Context::default())
+            .expect("put on");
+        crate::game::tests_p3_spells_kit::pass(m, 1000);
+        seen.push(left(m, brute));
+        seen
+    })
+    .await;
+    assert_eq!(out[0], (400, 100), "the burn: its own amount, as damage");
+    assert_eq!(out[1], (400, 0), "the drain: its own amount, no harm");
+    assert!(
+        out[2].0 == 400 && out[2].1 > 100,
+        "a plain burn's modified: {:?}",
+        out[2]
+    );
+    assert_eq!(out[3], (400, 100), "the burn over time");
+}
