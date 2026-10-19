@@ -1378,11 +1378,10 @@ async fn a_deleted_character_leaves_their_guild_mail_and_auctions() {
     let (realm, mut a) = setup().await;
     let g = a.guid;
     let counter = guid::counter(g);
-    a.send(CMSG_GUILD_CREATE {
-        guild_name: "Lonely".into(),
-    })
-    .await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // A member, not its leader: a leader can't be deleted (mangos's
+    // `HandleCharDeleteOpcode`).
+    let leader = guid::player(counter + 1_000);
+    crate::game::social::guilds::found(&realm, "Lonely", leader, &[g]).expect("founded");
     assert!(realm.social.guilds.lock().of(g).is_some());
     crate::game::social::mail::post(
         &realm,
@@ -1406,7 +1405,7 @@ async fn a_deleted_character_leaves_their_guild_mail_and_auctions() {
         })
         .await;
     assert_eq!(r, WorldResult::CharDeleteSuccess);
-    assert!(realm.social.guilds.lock().guilds.is_empty());
+    assert!(realm.social.guilds.lock().of(g).is_none());
     assert!(
         !realm
             .social

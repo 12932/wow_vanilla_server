@@ -427,9 +427,14 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         }
         C::CMSG_GUILD_DEL_RANK => guilds::edit_rank(&realm, &me, guilds::RankEdit::DeleteLowest),
         C::MSG_SAVE_GUILD_EMBLEM(m) => guilds::save_emblem(map, g, &m),
+        // At a tabard designer within reach alone (mangos's
+        // `HandleTabardVendorActivateOpcode`).
         C::MSG_TABARDVENDOR_ACTIVATE(m) => {
-            me.outbound
-                .send(&MSG_TABARDVENDOR_ACTIVATE { guid: m.guid });
+            let npc = crate::game::map::npc::NPC_FLAG_TABARDDESIGNER;
+            if crate::game::map::npc::npc_entry(map, g, m.guid, npc).is_some() {
+                me.outbound
+                    .send(&MSG_TABARDVENDOR_ACTIVATE { guid: m.guid });
+            }
         }
         // A charter's list and sale, from a guild master within reach
         // (mangos's `GetNPCIfCanInteractWith`, Thistle Tea's
@@ -441,7 +446,7 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         }
         C::CMSG_PETITION_BUY(m) => {
             if petitioner(map, g, m.npc) {
-                guilds::petition_buy(map, g, &m.name);
+                guilds::petition_buy(map, g, m.npc, &m.name);
             }
         }
         C::CMSG_PETITION_SHOW_SIGNATURES(m) => guilds::petition_signatures(&realm, &me, m.item),

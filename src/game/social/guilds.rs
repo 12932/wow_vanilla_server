@@ -1006,14 +1006,21 @@ pub fn chat(
     }
 }
 
-/// `MSG_SAVE_GUILD_EMBLEM`: the leader buys the guild an emblem.
+/// `MSG_SAVE_GUILD_EMBLEM`: the leader buys the guild an emblem at a
+/// tabard designer, and is told the guild as it is now (mangos's
+/// `HandleSaveGuildEmblemOpcode`, its checks in its order).
 pub fn save_emblem(map: &mut Map, g: Guid, m: &MSG_SAVE_GUILD_EMBLEM_Client) {
     let realm = map.realm.clone();
     let Some(money) = map.players.get(&g).map(|p| p.money()) else {
         return;
     };
+    let designer = crate::game::map::npc::NPC_FLAG_TABARDDESIGNER;
+    let at_designer = crate::game::map::npc::npc_entry(map, g, m.vendor, designer).is_some();
     let mut guilds = realm.social.guilds.lock();
+    let mut saved = None;
     let result = match guilds.of_mut(g) {
+        // 5, `ERR_GUILDEMBLEM_INVALIDVENDOR`.
+        _ if !at_designer => GuildEmblemResult::NoMessage,
         None => GuildEmblemResult::NoGuild,
         Some(guild) if guild.leader != guid::counter(g) => GuildEmblemResult::NotGuildMaster,
         Some(_) if money < EMBLEM_COST => GuildEmblemResult::NotEnoughMoney,
@@ -1034,12 +1041,16 @@ pub fn save_emblem(map: &mut Map, g: Guid, m: &MSG_SAVE_GUILD_EMBLEM_Client) {
             // The emblem and what it cost, together, under the guilds'
             // lock.
             map.save_together(&[g], records);
+            saved = Some(guild.id);
             GuildEmblemResult::Success
         }
     };
     drop(guilds);
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&MSG_SAVE_GUILD_EMBLEM_Server { result });
+        if let Some(id) = saved {
+            query(&realm, &p.online, id);
+        }
     }
 }
 
@@ -1116,7 +1127,7 @@ pub fn petition_showlist(map: &Map, g: Guid, npc: Guid) {
 }
 
 /// `CMSG_PETITION_BUY`: a charter for a guild of that name.
-pub fn petition_buy(map: &mut Map, g: Guid, name: &str) {
+pub fn petition_buy(map: &mut Map, g: Guid, npc: Guid, name: &str) {
     let realm = map.realm.clone();
     let Some(me) = realm.registry.online(g) else {
         return;
@@ -1140,7 +1151,14 @@ pub fn petition_buy(map: &mut Map, g: Guid, name: &str) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
+    // Short of money, told so as a vendor tells it (mangos's
+    // `HandlePetitionBuyOpcode`, `BUY_ERR_NOT_ENOUGHT_MONEY`).
     if p.money() < CHARTER_COST {
+        p.outbound.send(&SMSG_BUY_FAILED {
+            guid: npc,
+            item: CHARTER_ITEM,
+            result: BuyResult::NotEnoughtMoney,
+        });
         return;
     }
     let before: Vec<Guid> = p.items.iter().map(|i| i.guid).collect();
@@ -1256,6 +1274,19 @@ pub fn petition_offer(realm: &Realm, me: &Online, item: Guid, to: Guid) {
 pub fn petition_sign(realm: &Realm, me: &Online, item: Guid) {
     let mut guilds = realm.social.guilds.lock();
     let in_guild = guilds.of(me.guid).is_some();
+    // One invited to a guild signs no charter (mangos's
+    // `HandlePetitionSignOpcode`, `ERR_ALREADY_INVITED_TO_GUILD_S`).
+    if !in_guild && guilds.invites.contains_key(&me.guid) {
+        drop(guilds);
+        command_result(
+            realm,
+            me.guid,
+            GuildCommand::Invite,
+            &me.name,
+            GuildCommandResult::AlreadyInvitedToGuildS,
+        );
+        return;
+    }
     let Some(p) = guilds.petitions.get_mut(&guid::counter(item)) else {
         return;
     };
@@ -1435,15 +1466,16 @@ pub fn petition_turn_in(map: &mut Map, g: Guid, item: Guid) {
     );
 }
 
-/// Whether a character leads a guild with others in it: they may not be
-/// deleted.
-pub fn leads_others(realm: &Realm, counter: u32) -> bool {
+/// Whether a character leads a guild, even one of themselves alone: they
+/// may not be deleted (mangos's `HandleCharDeleteOpcode`,
+/// `CHAR_DELETE_FAILED_GUILD_LEADER`), but pass it on or disband it first.
+pub fn leads(realm: &Realm, counter: u32) -> bool {
     let guilds = realm.social.guilds.lock();
     guilds
         .of
         .get(&counter)
         .and_then(|id| guilds.guilds.get(id))
-        .is_some_and(|g| g.leader == counter && g.members.len() > 1)
+        .is_some_and(|g| g.leader == counter)
 }
 
 /// A character deleted: out of their guild (which goes if they were all of

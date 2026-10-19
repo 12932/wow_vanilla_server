@@ -507,8 +507,8 @@ impl Session {
         let counter = guid::counter(g);
         let result = if !guid::is_player(g) || self.realm.registry.online(g).is_some() {
             WorldResult::CharDeleteFailed
-        } else if crate::game::social::guilds::leads_others(&self.realm, counter) {
-            // A guild's leader passes it on first.
+        } else if crate::game::social::guilds::leads(&self.realm, counter) {
+            // A guild's leader passes it on, or disbands it, first.
             WorldResult::CharDeleteFailed
         } else if self.realm.store.delete(&self.account, counter).await {
             self.realm.registry.remove_name(g);

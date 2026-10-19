@@ -187,7 +187,8 @@ pub fn kill(map: &mut Map, g: Guid) {
     // the emote state and the posture).
     p.fields.set_u32(UNIT_NPC_EMOTESTATE, 0);
     p.set_stand_state(0);
-    p.logout_at = None;
+    // A logout's countdown goes on (mangos's session logs the dead out
+    // too); cancelled, it leaves them lying rooted.
     crate::game::map::misc::capture_self_res(map, g);
     crate::game::map::combat::leave_combat(map, g);
     // Creatures let go of the dead: their threat on them goes, and they

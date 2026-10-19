@@ -25,6 +25,7 @@ pub const NPC_FLAG_SPIRITGUIDE: u32 = 0x40;
 pub const NPC_FLAG_INNKEEPER: u32 = 0x80;
 pub const NPC_FLAG_BANKER: u32 = 0x100;
 pub const NPC_FLAG_PETITIONER: u32 = 0x200;
+pub const NPC_FLAG_TABARDDESIGNER: u32 = 0x400;
 pub const NPC_FLAG_BATTLEMASTER: u32 = 0x800;
 pub const NPC_FLAG_AUCTIONEER: u32 = 0x1000;
 
@@ -90,6 +91,16 @@ pub fn npc_entry(map: &Map, player: Guid, npc: Guid, flag: u32) -> Option<u32> {
     .iter()
     .any(|a| p.auras.has(*a));
     if p.flight.is_some() || held || crate::game::map::combat::hostile(map, npc, player) {
+        return None;
+    }
+    // Nor to one unfriendly or worse, either way: a standing of Unfriendly
+    // with its faction (mangos's `CanInteract`, both reactions above
+    // `REP_UNFRIENDLY`).
+    let unfriendly = |a: Guid, b: Guid| {
+        crate::game::map::reputation::reaction_rank(map, a, b)
+            .is_some_and(|r| r <= crate::game::data::misc::RANK_UNFRIENDLY)
+    };
+    if unfriendly(npc, player) || unfriendly(player, npc) {
         return None;
     }
     // Not one fighting, nor one charmed (mangos's `CanInteractNow`); a
