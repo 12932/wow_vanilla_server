@@ -655,6 +655,8 @@ mod tests_p7_combat_zone;
 #[cfg(test)]
 mod tests_p7_core;
 #[cfg(test)]
+mod tests_p7_core_auction;
+#[cfg(test)]
 mod tests_p7_core_bg;
 #[cfg(test)]
 mod tests_p7_core_loot;
