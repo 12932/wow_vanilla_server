@@ -561,7 +561,9 @@ pub fn edible_corpse(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
             && near(p.position())
             && foe(p.guid)
     }) || map.corpses.values().any(|c| {
-        near(c.position)
+        // Not bones (mangos's "ignore bones").
+        !c.is_bones()
+            && near(c.position)
             && map
                 .players
                 .get(&c.owner)

@@ -11,6 +11,7 @@ pub mod auras;
 pub mod battleground;
 #[cfg(all(feature = "world-bench", unix))]
 pub mod bench_probe;
+pub mod bones;
 pub mod boss_mechanics;
 pub mod captured;
 pub mod charge;
@@ -397,7 +398,10 @@ pub struct Map {
     /// update's flush: every change to one goes through
     /// `Map::gameobject_mut`, or comes with `Map::add_gameobject`.
     touched_objects: Vec<usize>,
+    /// Players' corpses, and the bones they turn to (`bones`).
     pub corpses: AHashMap<Guid, death::Corpse>,
+    /// The bones lying in `corpses`, and when each goes.
+    pub bones: Vec<(Instant, Guid)>,
     /// Creatures dead and waiting to decay or respawn.
     pub dead_creatures: Vec<Guid>,
     /// Vendors' limited stock: (vendor, item).
@@ -838,6 +842,7 @@ impl Map {
             gameobject_by_guid: AHashMap::new(),
             touched_objects: Vec::new(),
             corpses: AHashMap::new(),
+            bones: Vec::new(),
             dead_creatures: Vec::new(),
             vendor_stock: AHashMap::new(),
             nav: None,
@@ -1372,6 +1377,7 @@ impl Map {
         self.step("member stats", social::push_member_stats);
         self.step("duels", duel::update);
         self.step("battleground", battleground::update);
+        self.step("bones", bones::update);
         self.step("eviction", eviction::update);
         self.step("unloading", Map::unload_if_empty);
         self.step("pets", pets::update);

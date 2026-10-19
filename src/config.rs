@@ -472,7 +472,8 @@ settings! {
 }
 
 settings! {
-    /// New characters, the level cap, and the realm's type.
+    /// New characters, the level cap, the realm's type, and what is left
+    /// of the dead.
     pub struct PlayersConfig in "players" {
         /// The level new characters start at (no higher than `max_level`).
         start_level: u8 = 1, Clamp(1.0, 60.0), Live, "StartPlayerLevel";
@@ -488,6 +489,14 @@ settings! {
         /// Weapon skills and Defense at their caps, at login and each
         /// level, rather than raised by use from 1.
         always_max_skill_for_level: bool = false, Any, Live, "AlwaysMaxSkillForLevel";
+        /// Hours the bones a corpse turns to lie where it was, once its
+        /// player rises (reclaims it, is raised, or a spirit healer raises
+        /// them), seen by everyone; 0 leaves none. Bones aren't kept
+        /// across a restart, and go with a dungeon's copy. mangos-classic
+        /// has no time for them: its bones lie until their grid unloads,
+        /// and `Death.Bones.World` and `Death.Bones.Battleground` turn
+        /// them off.
+        bones_hours: u64 = 18, Clamp(0.0, 8_760.0), Live, "";
     }
 }
 

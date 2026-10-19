@@ -150,8 +150,6 @@ pub struct Match {
     pub ab: Option<ab::Ab>,
     pub av: Option<av::Av>,
     pub buffs: Vec<BuffSlot>,
-    /// Bones left by insignia taken, and when they go.
-    pub bones: Vec<(Instant, Guid)>,
 }
 
 impl Match {
@@ -173,7 +171,6 @@ impl Match {
             ab: (bg == BG_AB).then(ab::Ab::default),
             av: (bg == BG_AV).then(av::Av::new),
             buffs: Vec::new(),
-            bones: Vec::new(),
         }
     }
 
@@ -595,7 +592,6 @@ pub fn update(map: &mut Map) {
         _ => {}
     }
     run_timers(map);
-    insignia::update(map);
     if map.battleground.as_ref().is_some_and(|m| m.playing()) {
         match map.battleground.as_ref().map(|m| m.bg) {
             Some(BG_AB) => ab::update(map),

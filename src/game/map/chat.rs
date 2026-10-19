@@ -274,9 +274,35 @@ pub fn play_animation(map: &mut Map, g: Guid, emote: u32) {
     }
 }
 
+/// Whether a posture is sitting, on the ground or a chair (mangos's
+/// `IsSitState`).
+pub fn sitting(posture: u8) -> bool {
+    matches!(posture, 1 | 2 | 4..=6)
+}
+
+/// An aura that standing ends (food, drink) seats the living player it
+/// goes on, unless they sit already (on a chair too), and tells their
+/// client: mangos's `_AddSpellAuraHolder`, `SetStandState(SIT)`.
+pub fn sit_for_aura(map: &mut Map, g: Guid) {
+    use crate::game::map::player::STAND_STATE_SIT;
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if p.death != crate::game::map::death::Death::Alive || sitting(p.stand_state()) {
+        return;
+    }
+    p.set_stand_state(STAND_STATE_SIT);
+    p.outbound
+        .send(&wow_world_messages::vanilla::SMSG_STANDSTATE_UPDATE {
+            state: wow_world_messages::vanilla::UnitStandState::Sit,
+        });
+}
+
 /// `CMSG_STANDSTATECHANGE`: the postures a client may take (stand, sit,
-/// sleep, kneel), as Thistle Tea's `Emote.stand`; standing ends what
-/// needs one seated (food, drink).
+/// sleep, kneel), as Thistle Tea's `Emote.stand`; standing or lying down
+/// to sleep ends what needs one seated (food, drink), as mangos's
+/// `SetStandState` has it (`IsSeatedState`: neither standing nor
+/// sleeping).
 pub fn stand_state(map: &mut Map, g: Guid, state: wow_world_messages::vanilla::UnitStandState) {
     let posture = state.as_int();
     if !matches!(posture, 0 | 1 | 3 | 8) || !may_emote(map, g) {
@@ -292,7 +318,7 @@ pub fn stand_state(map: &mut Map, g: Guid, state: wow_world_messages::vanilla::U
     p.outbound
         .send(&wow_world_messages::vanilla::SMSG_STANDSTATE_UPDATE { state });
     animation_interrupts(map, g);
-    if posture == 0 {
+    if matches!(posture, 0 | 3) {
         crate::game::map::auras::interrupt(map, g, crate::game::map::auras::INTERRUPT_NOT_SEATED);
     }
 }
