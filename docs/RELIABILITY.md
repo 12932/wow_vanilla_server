@@ -113,8 +113,12 @@ At shutdown the maps have saved everyone already, so a session dropped then does
 login). A hung store hangs that client's character screen, with no timeout of its own. In the world, the session
 only forwards packets and does not wait.
 
-**Overload.** A client over its packet rate (`max_packets_per_sec`, a token bucket) is disconnected. The inbound
-channel holds 256 packets. When it is full, the reader waits, stops reading the socket, and TCP pushes back on the
+**Overload.** A client over its packet rate (`max_packets_per_sec`, a token bucket) is disconnected. The read-only
+queries a client asks of what it sees (names, creatures, game objects, items, quest givers, texts, times) count in a
+bucket of their own (`max_queries_per_sec`, ten times as many): one walking into a crowd asks after everyone in it at
+once, and a bot placed in Stormwind's Trade District sent 85 game object, 42 creature and 9 quest giver queries in a
+tenth of a second, besides a name query for each player it saw. A client cut off for its rate is logged, once, at
+`warn`, with what it sent in the last five seconds by kind (`session::Recent`). The inbound channel holds 256 packets. When it is full, the reader waits, stops reading the socket, and TCP pushes back on the
 client.
 
 ## Connections
