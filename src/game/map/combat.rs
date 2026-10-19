@@ -349,7 +349,9 @@ impl Roll {
 }
 
 fn bp(chance: f32) -> i32 {
-    (chance * 100.0) as i32
+    // To the nearest hundredth, as mangos's `chance_u` has it: 4.8% is 480,
+    // not the 479 its float would be cut to.
+    (chance * 100.0).round() as i32
 }
 
 /// Walk the table's steps with a roll in hundredths of a percent.
