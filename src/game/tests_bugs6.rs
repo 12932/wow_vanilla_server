@@ -156,18 +156,26 @@ async fn frost_nova_holds_a_wandering_young_wolf_which_chases_once_free() {
         _ => None,
     })
     .await;
-    c.wait_for("the frost on the wolf", |m| {
-        blocks(m).into_iter().find_map(|b| match b {
-            Block::Values(g, f)
-                if g == wolf
-                    && (0..48).any(|i| f.get(&(UNIT_FIELD_AURA + i)) == Some(&FROST_NOVA)) =>
-            {
-                Some(())
-            }
-            _ => None,
+    // Its frost alone about it in its packet: the tap Frost Nova took came
+    // in a second block about it, and the client, seeing that one's
+    // changes alone, showed no frost.
+    let about = c
+        .wait_for("the frost on the wolf", |m| {
+            let bs = blocks(m);
+            let frost = bs.iter().any(|b| {
+                matches!(b, Block::Values(g, f) if *g == wolf
+                    && (0..48).any(|i| f.get(&(UNIT_FIELD_AURA + i)) == Some(&FROST_NOVA)))
+            });
+            frost.then(|| {
+                bs.iter()
+                    .filter(
+                        |b| matches!(b, Block::Values(g, _) | Block::Create(g, _) if *g == wolf),
+                    )
+                    .count()
+            })
         })
-    })
-    .await;
+        .await;
+    assert_eq!(about, 1, "one block about the wolf in the frost's packet");
     let (rooted, fighting, target, moving) = map
         .query(move |m| {
             let c = m.creature(wolf).unwrap();
