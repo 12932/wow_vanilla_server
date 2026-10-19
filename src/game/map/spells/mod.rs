@@ -2045,6 +2045,11 @@ pub fn periodic_damage_of(
             Some(h.spell),
             s.channeled(),
         );
+        // A critter's escape runs on from each tick (Thistle Tea's DoT
+        // refreshing it).
+        if guid::is_unit(target) {
+            crate::game::map::creature_motion::critter_hit(map, target, h.caster);
+        }
         if (by_mods - 1.0).abs() > f32::EPSILON && map.creature(target).is_some_and(|c| c.alive()) {
             crate::game::map::ai::add_threat(map, target, h.caster, threat * (by_mods - 1.0));
         }

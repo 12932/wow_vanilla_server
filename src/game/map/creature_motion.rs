@@ -801,10 +801,13 @@ pub fn critter_hit(map: &mut Map, g: Guid, source: Guid) {
         called_at: None,
     });
     c.engagement.next_move_at = Some(now);
+    // Held from fleeing, its escape is kept but it doesn't run, nor show
+    // it, until it may (Thistle Tea's critter under prevent fleeing).
+    let held = c.auras.has(crate::game::map::auras::AURA_PREVENTS_FLEEING);
     c.fields.set_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::auras::UNIT_FLAG_FLEEING,
-        true,
+        !held,
     );
 }
 

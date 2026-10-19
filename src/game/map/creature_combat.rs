@@ -767,7 +767,11 @@ fn wanted_control(map: &Map, g: Guid) -> Option<Control> {
     if a.has(AURA_MOD_FEAR) && !a.has(AURA_PREVENTS_FLEEING) {
         return Some(Control::Fear);
     }
-    c.engagement.flee.map(|_| Control::Flee)
+    // A run waits while fleeing is prevented (mangos's `SetFleeing`).
+    c.engagement
+        .flee
+        .filter(|_| !a.has(AURA_PREVENTS_FLEEING))
+        .map(|_| Control::Flee)
 }
 
 /// Fear, confusion or a flight began or ended: the walk under way stops
