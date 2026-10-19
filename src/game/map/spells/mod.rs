@@ -587,13 +587,30 @@ pub fn spell_cost(map: &Map, caster: Guid, s: &SpellTemplate, m: &mods::Mods) ->
     }
     let a = auras::auras(map, caster);
     let mut cost = {
-        // The rank it is cast at goes no higher than its last level.
-        let rank = if s.max_level > 0 {
-            level.min(s.max_level)
-        } else {
-            level
+        // The rank it is cast at: a creature's level, a player's skill in
+        // the spell's line (none without one), no higher than its last
+        // level's; its cost per level by the rank's fifths past its first
+        // level (mangos's `CalculatePowerCost` and `GetSpellRank`, Thistle
+        // Tea's `CostScaling.base_cost`).
+        let rank = match map.players.get(&caster) {
+            Some(p) => map
+                .realm
+                .data
+                .spells
+                .spell_skills
+                .get(&s.id)
+                .map_or(0, |skill| {
+                    crate::game::map::skills::value_with_bonuses(p, *skill)
+                }),
+            None => level,
         };
-        let flat = s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level);
+        let rank = if s.max_level > 0 {
+            rank.min(s.max_level * 5)
+        } else {
+            rank
+        };
+        let flat = s.mana_cost as i32
+            + s.mana_cost_per_level as i32 * (rank as i32 / 5 - s.base_level as i32);
         // A share is on top of the flat cost (mangos's
         // `Spell::CalculatePowerCost`, Thistle Tea's `Resources`).
         let share = if s.mana_cost_percentage > 0 {
@@ -609,8 +626,8 @@ pub fn spell_cost(map: &Map, caster: Guid, s: &SpellTemplate, m: &mods::Mods) ->
         } else {
             0
         };
-        flat + share
-    } as i32;
+        flat + share as i32
+    };
     if let Some(a) = a {
         cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
     }
@@ -916,7 +933,13 @@ pub fn cast(
     // The global cooldown is the spell's start time with its modifiers:
     // none for one without (vmangos, mangos's `Player::AddGCD`, Thistle
     // Tea's `Cooldowns.gcd_duration`).
-    let gcd = m.apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time);
+    // A creature's is its spell's own (mangos's `GetSpellModOwner` is
+    // nobody for it, Thistle Tea's creatures keep their spells' timing).
+    let gcd = if guid::is_player(caster) {
+        m.apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time)
+    } else {
+        s.start_recovery_time
+    };
     if s.start_recovery_category != 0
         && gcd > 0
         && let Some(c) = map.caster_mut(caster)
