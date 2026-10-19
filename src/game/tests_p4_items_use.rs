@@ -433,9 +433,9 @@ async fn party_time_doesnt_dance_on_the_move() {
     ];
     for flags in moving {
         a.clear();
-        let f = flags.clone();
+        let f = flags;
         let kept = on_map(&realm, move |m| {
-            m.players.get_mut(&g).unwrap().movement.flags = f.clone();
+            m.players.get_mut(&g).unwrap().movement.flags = f;
             dance(m, g, 30);
             let p = &m.players[&g];
             (p.movement.flags == f, p.fields.get_u32(UNIT_NPC_EMOTESTATE))

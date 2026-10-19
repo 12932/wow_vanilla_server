@@ -349,7 +349,6 @@ async fn a_passengers_creates_pass_the_client() {
                             z: 2.0,
                         },
                         orientation: 0.0,
-                        timestamp: 0,
                     },
                 },
             ),
@@ -360,7 +359,7 @@ async fn a_passengers_creates_pass_the_client() {
                 z: START.2,
             },
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     })
     .await;

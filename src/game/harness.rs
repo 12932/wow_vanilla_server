@@ -273,14 +273,7 @@ impl Client {
         while let Some(frame) = self.rx.try_recv() {
             self.frames.push(frame.clone());
             self.captured.push(frame.clone());
-            // A unit aboard is in 1.12's layout, which wow_messages's
-            // isn't: read in wow_messages's.
-            let readable: Option<Arc<[u8]>> = crate::game::movement_wire::relay_from_client(&frame)
-                .map(Arc::from)
-                .or_else(|| crate::game::update::to_wow_messages(&frame));
-            let parsed =
-                ServerOpcodeMessage::read_unencrypted(readable.as_deref().unwrap_or(&frame));
-            match parsed {
+            match ServerOpcodeMessage::read_unencrypted(&frame[..]) {
                 Ok(m) => {
                     for g in creates(&m) {
                         *self.created.entry(g).or_default() += 1;
@@ -525,7 +518,7 @@ impl Client {
                 timestamp: 0,
                 position: Vector3d { x, y, z },
                 orientation: 0.0,
-                fall_time: 0.0,
+                fall_time: 0,
             },
         })
         .await;

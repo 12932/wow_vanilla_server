@@ -1177,14 +1177,14 @@ async fn movement_acknowledgements_reach_those_who_watch() {
             z: START.2,
         },
         orientation: 0.0,
-        fall_time: 0.0,
+        fall_time: 0,
     };
     // (A speed's acknowledgement isn't passed on: those watching were told
     // at the change, `tests_parity_misc`.)
     a.send(CMSG_MOVE_KNOCK_BACK_ACK {
         guid: ga,
         counter: 0,
-        info: info.clone(),
+        info,
     })
     .await;
     b.wait_frame("MSG_MOVE_KNOCK_BACK", 0x0F1, |_| true).await;

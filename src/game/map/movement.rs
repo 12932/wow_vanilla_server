@@ -36,10 +36,7 @@ macro_rules! relays {
         match $msg {
             $(ClientOpcodeMessage::$name(m) => Some((
                 &m.info,
-                (|guid, info| {
-                    encode(&$server { guid, info })
-                        .map(crate::game::movement_wire::relay_to_client)
-                }) as Relay,
+                (|guid, info| encode(&$server { guid, info })) as Relay,
             )),)*
             _ => None,
         }
@@ -74,7 +71,7 @@ pub fn movement_of(msg: ClientOpcodeMessage) -> Result<(MovementInfo, Relay), Cl
         MSG_MOVE_HEARTBEAT => MSG_MOVE_HEARTBEAT_Server,
     );
     match moved {
-        Some((info, relay)) => Ok((info.clone(), relay)),
+        Some((info, relay)) => Ok((*info, relay)),
         None => Err(msg),
     }
 }
@@ -166,7 +163,7 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
         || (info.orientation - p.movement.orientation).abs() > f32::EPSILON;
     let jumped = f.get_jumping().is_some();
     p.cell = new_cell;
-    p.movement = info.clone();
+    p.movement = info;
     let position = info.position;
     if crate::game::map::combat::dist(before, position) > 0.1 {
         crate::game::map::spells::moved(map, guid);
@@ -332,7 +329,7 @@ fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Opt
         (false, Some(top)) => {
             p.fall_from = None;
             let far = std::mem::take(&mut p.misc.fall_far);
-            let long = info.fall_time.to_bits() >= HURTING_FALL_MS;
+            let long = info.fall_time >= HURTING_FALL_MS;
             (far && long && p.misc.fall_transport == transport).then_some(top - z)
         }
         (false, None) => None,
@@ -393,14 +390,14 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.movement.position = position;
     p.movement.orientation = orientation;
     p.movement.flags = MovementInfo_MovementFlags::empty();
-    p.movement.fall_time = 0.0;
+    p.movement.fall_time = 0;
     p.teleport = Some(PendingTeleport { since: now });
     p.move_check = Some((position, now));
     p.fall_from = None;
     p.outbound.send(&MSG_MOVE_TELEPORT_ACK_Server {
         guid,
         movement_counter: 0,
-        info: p.movement.clone(),
+        info: p.movement,
     });
     let old_cell = p.cell;
     let new_cell = grid::cell_of(position.x, position.y);
@@ -417,7 +414,7 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     if let Some(p) = map.players.get(&guid)
         && let Some(frame) = encode(&MSG_MOVE_TELEPORT_Server {
             player: guid,
-            info: p.movement.clone(),
+            info: p.movement,
         })
     {
         map.send_to_observers(guid, &frame, false);

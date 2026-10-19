@@ -21,7 +21,7 @@ use crate::game::tests_p3_player2_ammo::handled;
 /// Whether `c` is sent a teleport within [`NONE_WITHIN`].
 async fn teleported(c: &mut Client) -> Option<MovementInfo> {
     c.gets(NONE_WITHIN, |m| match m {
-        ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.clone()),
+        ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info),
         _ => None,
     })
     .await
@@ -32,7 +32,7 @@ async fn release(c: &mut Client, g: Guid) -> MovementInfo {
     c.send(CMSG_REPOP_REQUEST {}).await;
     let info = c
         .wait_for("the teleport to the graveyard", |m| match m {
-            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.clone()),
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info),
             _ => None,
         })
         .await;

@@ -94,15 +94,12 @@ pub struct Summon {
     pub until: Instant,
 }
 
-/// The packed GUID and movement info of a movement packet, as 1.12 lays
-/// them out, for the packets wow_messages doesn't have.
+/// The packed GUID and movement info of a movement packet, for the packets
+/// wow_messages doesn't have.
 pub fn movement_bytes(guid: Guid, info: &MovementInfo) -> Vec<u8> {
-    let frame = encode(&MSG_MOVE_HEARTBEAT_Server {
-        guid,
-        info: info.clone(),
-    })
-    .expect("a heartbeat encodes");
-    crate::game::movement_wire::body_to_client(frame[4..].to_vec())
+    let frame =
+        encode(&MSG_MOVE_HEARTBEAT_Server { guid, info: *info }).expect("a heartbeat encodes");
+    frame[4..].to_vec()
 }
 
 fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
@@ -112,20 +109,20 @@ fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
     if p.movement.flags.get_root() == root {
         return;
     }
-    p.movement = info.clone();
+    p.movement = info;
     let frame = if root {
         encode(&MSG_MOVE_ROOT_Server { player: g, info })
     } else {
         encode(&MSG_MOVE_UNROOT_Server { player: g, info })
     };
-    if let Some(frame) = frame.map(crate::game::movement_wire::relay_to_client) {
+    if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
     }
 }
 
 fn relay(map: &mut Map, g: Guid, info: MovementInfo, opcode: u16, tail: &[u8]) {
     if let Some(p) = map.players.get_mut(&g) {
-        p.movement = info.clone();
+        p.movement = info;
     }
     let mut b = Body(movement_bytes(g, &info));
     b.0.extend_from_slice(tail);

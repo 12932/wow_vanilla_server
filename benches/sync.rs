@@ -410,7 +410,7 @@ mod channels {
                         z: 0.0,
                     },
                     orientation: 0.0,
-                    fall_time: 0.0,
+                    fall_time: 0,
                 },
             }),
         )

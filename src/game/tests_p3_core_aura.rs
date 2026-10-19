@@ -392,7 +392,7 @@ async fn a_root_running_out_frees_the_player_whatever_their_flags() {
             timestamp: 0,
             position: Vector3d { x, y, z },
             orientation: 0.0,
-            fall_time: 0.0,
+            fall_time: 0,
         },
     })
     .await;

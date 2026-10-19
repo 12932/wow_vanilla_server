@@ -4193,7 +4193,6 @@ pub(crate) mod transports {
                                 z: 0.0,
                             },
                             orientation: 0.0,
-                            timestamp: 0,
                         },
                     },
                 ),
@@ -4204,7 +4203,7 @@ pub(crate) mod transports {
                     z: START.2,
                 },
                 orientation: 0.0,
-                fall_time: 0.0,
+                fall_time: 0,
             },
         })
         .await;
@@ -4288,7 +4287,6 @@ pub(crate) mod transports {
                                 z: 3.0,
                             },
                             orientation: 0.5,
-                            timestamp: 0,
                         },
                     },
                 );
@@ -4357,14 +4355,13 @@ pub(crate) mod transports {
                             guid: boat,
                             position: deck,
                             orientation: 0.0,
-                            timestamp: 0,
                         },
                     },
                 ),
                 timestamp: 0,
                 position: world,
                 orientation: o,
-                fall_time: 0.0,
+                fall_time: 0,
             },
         })
         .await;
@@ -4802,7 +4799,7 @@ mod security {
                 orientation: 0.0,
                 // The client's fall time, in ms (a u32 wow_messages reads as a
                 // float): long enough to hurt.
-                fall_time: f32::from_bits(2000),
+                fall_time: 2000,
             },
         };
         a.send(at(START.2 + 30.0, true)).await;

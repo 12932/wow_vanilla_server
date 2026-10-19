@@ -497,7 +497,7 @@ async fn walk(mut placed: Vec<Placed>) {
                         timestamp: 0,
                         position: p.at,
                         orientation: p.heading,
-                        fall_time: 0.0,
+                        fall_time: 0,
                     },
                 }
                 .into(),

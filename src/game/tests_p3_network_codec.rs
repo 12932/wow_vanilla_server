@@ -162,7 +162,7 @@ fn removals_lead_and_what_precedes_a_create_goes() {
                 position: Vector3d::default(),
                 orientation: 0.0,
                 pitch: 0.0,
-                fall_time: 0.0,
+                fall_time: 0,
                 speeds: update::Speeds::default(),
                 spline: None,
                 transport: None,

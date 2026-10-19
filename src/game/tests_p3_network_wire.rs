@@ -275,6 +275,69 @@ fn movement(flags: u32, extra: &[u8]) -> Vec<u8> {
     v
 }
 
+/// The Maiden's Fancy, the Booty Bay boat.
+const BOAT: u64 = 0x1FC0_0000_0000_5148;
+
+/// A heartbeat on deck as the 1.12.1 client sends it: on a transport
+/// (`0x0200_0000`), the boat's whole GUID and the place and facing on
+/// deck after the world's, and no timestamp (its reader `0x47EBA0`,
+/// mangos-classic's `MovementInfo::Read`).
+fn aboard(fall_ms: u32) -> Vec<u8> {
+    let mut v = (0x0200_0000u32 | 0x1).to_le_bytes().to_vec();
+    v.extend_from_slice(&777u32.to_le_bytes());
+    for f in [-14_300.0f32, 600.0, 2.0, 1.5] {
+        v.extend_from_slice(&f.to_le_bytes());
+    }
+    v.extend_from_slice(&BOAT.to_le_bytes());
+    for f in [3.0f32, -1.0, 6.5, 0.25] {
+        v.extend_from_slice(&f.to_le_bytes());
+    }
+    v.extend_from_slice(&fall_ms.to_le_bytes());
+    v
+}
+
+/// A real client's movement aboard reads as aboard that boat, at that
+/// place on deck, with its fall time in milliseconds; an acknowledgement's
+/// too, with what follows it. And what is relayed of it to those who see
+/// the passenger is what the client sent. (wow_messages read it as on no
+/// transport until its 1.12 layout was fixed, and wvs translated it.)
+#[tokio::test]
+async fn the_reader_reads_a_passengers_movement_and_it_is_relayed_as_sent() {
+    let mut r = reader();
+    let real = aboard(1229);
+    let info = match r.msg(0xEE, &real).await {
+        ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(m) => m.info,
+        other => panic!("{other}"),
+    };
+    let t = info.flags.get_on_transport().expect("aboard").transport;
+    assert_eq!(t.guid, Guid::new(BOAT));
+    let deck = (t.position.x, t.position.y, t.position.z, t.orientation);
+    assert_eq!(deck, (3.0, -1.0, 6.5, 0.25));
+    assert!(info.flags.get_forward());
+    assert_eq!((info.position.x, info.orientation), (-14_300.0, 1.5));
+    assert_eq!(info.fall_time, 1229);
+    let mut ack = 7u64.to_le_bytes().to_vec();
+    ack.extend_from_slice(&1u32.to_le_bytes());
+    ack.extend_from_slice(&real);
+    ack.extend_from_slice(&7.0f32.to_le_bytes());
+    match r.msg(0x0E3, &ack).await {
+        ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(m) => {
+            assert_eq!(m.info, info);
+            assert_eq!(m.new_speed, 7.0);
+        }
+        other => panic!("{other}"),
+    }
+    let heartbeat = wow_world_messages::vanilla::MSG_MOVE_HEARTBEAT_Client { info };
+    let Ok((_, relay)) = crate::game::map::movement::movement_of(heartbeat.into()) else {
+        panic!("a heartbeat is relayed");
+    };
+    let frame = relay(Guid::new(42), info).expect("it encodes");
+    assert_eq!(u16::from_le_bytes([frame[2], frame[3]]), 0xEE);
+    // The packed GUID of 42, then exactly what the client sent.
+    assert_eq!(&frame[4..6], &[1, 42]);
+    assert_eq!(&frame[6..], &real[..]);
+}
+
 /// Thistle Tea's movement acknowledgement decoding: root and unroot,
 /// feather fall and water walk with the apply word build 5875 sends, and
 /// a spline's end with and without a swimmer's pitch.
