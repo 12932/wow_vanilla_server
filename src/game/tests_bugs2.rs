@@ -318,7 +318,10 @@ async fn plague_spreads_through_the_raid_it_is_on() {
         })
         .await
         .unwrap();
-    assert_eq!(hurt, (true, true, true), "the plagued and the one beside");
+    // The plagued spared: its effect is a harmful raid spell about them,
+    // which takes them out (mangos's `FillRaidOrPartyTargets` withcaster
+    // for a helpful spell only; Thistle Tea's raid spell target).
+    assert_eq!(hurt, (false, true, true), "the one beside, not the plagued");
 }
 
 #[tokio::test]

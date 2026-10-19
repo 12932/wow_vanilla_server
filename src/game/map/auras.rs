@@ -2621,6 +2621,11 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
     }
     let stacks = h.stacks.max(1) as i32;
     match a.kind {
+        // A drain of life or a funnel of it wants its caster alive here, or
+        // the tick does nothing (mangos's `PeriodicTick`, Thistle Tea's
+        // aura contexts); a mana drain's is below.
+        AURA_PERIODIC_LEECH | AURA_PERIODIC_HEALTH_FUNNEL
+            if !map.unit_view(h.caster).is_some_and(|u| u.alive) => {}
         AURA_PERIODIC_DAMAGE
         | AURA_PERIODIC_LEECH
         | AURA_PERIODIC_DAMAGE_PERCENT
