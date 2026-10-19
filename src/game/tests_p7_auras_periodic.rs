@@ -277,3 +277,62 @@ async fn a_tick_that_kills_heals_nothing_after_it() {
     let (mana, health, after, on_her) = out;
     assert_eq!((health, after, on_her), (0, mana, false));
 }
+
+/// Thistle Tea's `GolemaggsTrust` "dead and foreign casters never refresh
+/// the buff": Golemagg's Trust pulses the Core Ragers' buff only from
+/// Golemagg's own aura, while he lives and fights; another's on him, or
+/// his on him dead, gives nothing.
+#[tokio::test]
+async fn golemaggs_trust_pulses_only_from_his_own_aura_while_he_lives() {
+    const GOLEMAGG: u32 = 11988;
+    const CORE_RAGER: u32 = 11672;
+    const TRUST: u32 = 20556;
+    const TRUST_BUFF: u32 = 20553;
+    let mut d = data();
+    for entry in [GOLEMAGG, CORE_RAGER] {
+        d.creature_templates
+            .insert(entry, crate::game::tests_p3_combat::template(entry, 7));
+    }
+    let mut trust = spell(
+        TRUST,
+        &[effect(
+            auras::AURA_PERIODIC_TRIGGER_SPELL,
+            0,
+            1000,
+            TRUST_BUFF,
+        )],
+    );
+    trust.custom_flags = CUSTOM_POSITIVE;
+    let mut buff = spell(TRUST_BUFF, &[effect(auras::AURA_MOD_DAMAGE_DONE, 1, 0, 0)]);
+    buff.custom_flags = CUSTOM_POSITIVE;
+    for s in [trust, buff] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let golemagg = spawn(m, ga, GOLEMAGG, 63, 5.0);
+        let rager = spawn(m, ga, CORE_RAGER, 60, 8.0);
+        m.unit_fields_mut(golemagg).unwrap().set_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            true,
+        );
+        let pulse = |m: &mut Map, caster: Guid| {
+            auras::remove_where(m, rager, |h| h.spell == TRUST_BUFF);
+            put(m, caster, golemagg, TRUST, 0, auras::Context::default());
+            pass(m, 1000);
+            let buffed = has(m, rager, TRUST_BUFF);
+            auras::remove_where(m, golemagg, |h| h.spell == TRUST);
+            buffed
+        };
+        let foreign = pulse(m, ga);
+        let own = pulse(m, golemagg);
+        put(m, golemagg, golemagg, TRUST, 0, auras::Context::default());
+        combat::kill(m, ga, golemagg);
+        auras::remove_where(m, rager, |h| h.spell == TRUST_BUFF);
+        pass(m, 1000);
+        (foreign, own, has(m, rager, TRUST_BUFF))
+    })
+    .await;
+    assert_eq!(out, (false, true, false), "(another's, his own, his dead)");
+}

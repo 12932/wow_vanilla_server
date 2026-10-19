@@ -382,3 +382,78 @@ async fn mana_recovery_restores_a_cat_druids_mana_not_its_energy() {
     assert_eq!(mana, 100 + max / 10, "a tenth of its mana");
     assert_eq!(energy, 20, "its energy as it was");
 }
+
+/// Thistle Tea's `PercentStat` "death-persistent penalties survive release
+/// and resurrection until their original expiry": a sickness that lasts
+/// through death (Resurrection Sickness's kind) can't be cancelled, stays
+/// through dying, the release and the resurrection, and gives the stats
+/// back at the end it always had, the health as it was.
+#[tokio::test]
+async fn a_sickness_lasts_through_death_and_release_to_its_own_end() {
+    use crate::game::data::spells::{ATTR_CANT_CANCEL, ATTR_EX3_DEATH_PERSISTENT};
+    const SICKNESS: u32 = 97_420;
+    let mut d = data();
+    let mut sickness = aura_spell(SICKNESS, auras::AURA_MOD_PERCENT_STAT, -1, -75);
+    sickness.custom_flags = crate::game::data::spells::CUSTOM_NEGATIVE;
+    sickness.attributes[0] = ATTR_CANT_CANCEL;
+    sickness.attributes[3] = ATTR_EX3_DEATH_PERSISTENT;
+    d.spells.spells.insert(SICKNESS, sickness);
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 60);
+        let stamina = |m: &Map| m.players[&ga].fields.get_u32(UNIT_FIELD_STAT0 + 2);
+        let own = stamina(m);
+        let s = m.realm.data.spells.spells[&SICKNESS].clone();
+        let ten = auras::Context {
+            duration: Some(Some(10_000)),
+            ..Default::default()
+        };
+        auras::apply_spell(m, ga, ga, &s, &[(0, -75)], ten).expect("put on");
+        let sick = stamina(m);
+        auras::cancel(m, ga, SICKNESS);
+        let after_cancel = has(m, ga, SICKNESS);
+        crate::game::map::death::kill(m, ga);
+        let dead = (has(m, ga, SICKNESS), stamina(m));
+        crate::game::map::death::release(m, ga);
+        let released = has(m, ga, SICKNESS);
+        crate::game::map::death::resurrect(m, ga, 0.5);
+        let health = m.players[&ga].fields.get_u32(UNIT_FIELD_HEALTH);
+        let raised = (has(m, ga, SICKNESS), stamina(m), health > 0);
+        crate::game::tests_p3_spells_kit::pass(m, 9_999);
+        let before_end = has(m, ga, SICKNESS);
+        crate::game::tests_p3_spells_kit::pass(m, 1);
+        let ended = (
+            has(m, ga, SICKNESS),
+            stamina(m),
+            m.players[&ga].fields.get_u32(UNIT_FIELD_HEALTH),
+        );
+        (
+            own,
+            sick,
+            after_cancel,
+            dead,
+            released,
+            raised,
+            health,
+            before_end,
+            ended,
+        )
+    })
+    .await;
+    let (own, sick, after_cancel, dead, released, raised, health, before_end, ended) = out;
+    assert_eq!(sick, own / 4, "a quarter of its stamina");
+    assert!(after_cancel, "not cancelled");
+    assert_eq!(dead, (true, sick), "through death");
+    assert!(released, "through the release");
+    assert_eq!(raised, (true, sick, true), "through the resurrection");
+    assert!(before_end, "to its own end");
+    assert_eq!(
+        ended,
+        (false, own, health),
+        "the stats back, the health as it was"
+    );
+}
+
+fn has(m: &Map, g: Guid, id: u32) -> bool {
+    auras::auras(m, g).is_some_and(|a| a.has_spell(id))
+}
