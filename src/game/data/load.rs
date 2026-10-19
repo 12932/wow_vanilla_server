@@ -800,6 +800,18 @@ pub fn creature_health(base: u32, multiplier: f32) -> u32 {
 
 /// The unit flags a template's static flags give (as Thistle Tea maps
 /// them, after vmangos).
+/// A `game_weather` chance as it is used: a percent over 100 (or under
+/// 0, an unsigned column's wrap) is 25 (mangos's `LoadWeatherZoneChances`,
+/// Thistle Tea's seed repair).
+pub(crate) fn weather_chance(v: i64) -> u32 {
+    if (0..=100).contains(&v) {
+        v as u32
+    } else {
+        warn!("game data: a game_weather chance of {v} is over 100%; 25 it is");
+        25
+    }
+}
+
 pub(crate) fn unit_flags(static1: u32) -> u32 {
     let mut flags = 0;
     for (stat, unit) in [
@@ -1520,11 +1532,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     for (zone, chances) in rows(db, "SELECT * FROM game_weather", |c| {
         let season = |s: &str| {
-            [
-                c.u32(&format!("{s}_rain_chance")),
-                c.u32(&format!("{s}_snow_chance")),
-                c.u32(&format!("{s}_storm_chance")),
-            ]
+            ["rain", "snow", "storm"].map(|w| weather_chance(c.i64(&format!("{s}_{w}_chance"))))
         };
         (
             c.u32("zone"),

@@ -1198,13 +1198,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         .players
         .get(&player)
         .map_or(0, |p| skill_value(p, SKILL_FISHING));
-    let zone_skill = data
-        .crafts
-        .fishing_skill
-        .get(&b.area)
-        .or_else(|| data.crafts.fishing_skill.get(&b.zone))
-        .copied()
-        .unwrap_or(0);
+    let zone_skill = fishing_skill_at(&data, b.area, b.zone);
     let roll = rand::rng().random_range(1..=100);
     if !catch_landed(skill, zone_skill, roll) {
         if let Some(p) = map.players.get(&player) {
@@ -1260,29 +1254,45 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
             }
             l
         }
-        None => {
-            let table = data
-                .loot
-                .fishing
-                .get(&b.area)
-                .or_else(|| data.loot.fishing.get(&b.zone))
-                .cloned()
-                .unwrap_or_default();
-            loot::personal(
-                &data,
-                &table,
-                player,
-                &wanted,
-                LootKind::Fishing,
-                &map.cfg.rates,
-            )
-        }
+        None => loot::personal(
+            &data,
+            fishing_loot_at(&data, b.area, b.zone),
+            player,
+            &wanted,
+            LootKind::Fishing,
+            &map.cfg.rates,
+        ),
     };
     if let Some(o) = map.gameobject_mut(object) {
         o.loot = Some(loot);
     }
     loot::show(map, player, object);
     true
+}
+
+/// The fishing skill an area's water asks for: the area's own, else its
+/// zone's (`skill_fishing_base_level`, Thistle Tea's `Fishing.base_skill`).
+pub fn fishing_skill_at(data: &crate::game::data::GameData, area: u32, zone: u32) -> i32 {
+    let skills = &data.crafts.fishing_skill;
+    skills
+        .get(&area)
+        .or_else(|| skills.get(&zone))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// What is fished from an area's water away from a school: the area's
+/// table, else its zone's (`fishing_loot_template`).
+pub fn fishing_loot_at(
+    data: &crate::game::data::GameData,
+    area: u32,
+    zone: u32,
+) -> &[crate::game::data::LootEntry] {
+    let tables = &data.loot.fishing;
+    tables
+        .get(&area)
+        .or_else(|| tables.get(&zone))
+        .map_or(&[], Vec::as_slice)
 }
 
 /// A school of fish near the bobber, and its loot table.

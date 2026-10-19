@@ -43,5 +43,8 @@ fn a_lists_slots_of_no_spell_are_no_entries() {
     let lists = &d.spells.creature_spells;
     assert!(!lists.is_empty());
     assert!(lists.values().flatten().all(|e| e.spell != 0));
-    assert!(lists.values().any(|l| l.len() < 8), "some lists have empty slots");
+    assert!(
+        lists.values().any(|l| l.len() < 8),
+        "some lists have empty slots"
+    );
 }

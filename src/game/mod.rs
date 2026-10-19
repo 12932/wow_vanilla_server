@@ -617,6 +617,8 @@ mod tests_p6_wspell_units;
 #[cfg(test)]
 mod tests_p7_loader_items;
 #[cfg(test)]
+mod tests_p7_loader_world;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
