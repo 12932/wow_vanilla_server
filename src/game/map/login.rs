@@ -370,8 +370,7 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         p.set_stand_state(STAND_STATE_SIT);
     }
     p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED, true);
-    p.outbound
-        .send_frame(crate::game::map::movement::root_frame(guid, true));
+    crate::game::map::movement::root_to(&p.outbound, guid, true);
 }
 
 /// The logout's posture and root undone, as far as it made them.
@@ -396,8 +395,7 @@ fn undo_logout(p: &mut crate::game::map::player::Player) {
     }
     let lying = matches!(p.death, crate::game::map::death::Death::Dead { .. });
     if !stunned && !p.auras.has(AURA_MOD_ROOT) && !lying {
-        p.outbound
-            .send_frame(crate::game::map::movement::root_frame(p.guid, false));
+        crate::game::map::movement::root_to(&p.outbound, p.guid, false);
     }
 }
 

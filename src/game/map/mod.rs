@@ -43,7 +43,7 @@ pub mod gm_dev;
 pub mod grid;
 pub mod guards;
 pub mod handlers;
-mod instance_adapters;
+pub(crate) mod instance_adapters;
 pub mod instance_script;
 pub mod intoxication;
 pub mod inventory;

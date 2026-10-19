@@ -498,7 +498,9 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         owner: tapped.then_some(tapper),
         ..Default::default()
     };
-    if group.len() > 1 {
+    // A kill that leaves nothing to loot sets no group's rules on it, nor
+    // turns round robin on (Thistle Tea's `prepare_loot`: no session).
+    if group.len() > 1 && allowed {
         setup_group(map, &mut loot, creature, tapper, tap_group, group);
     }
     let lootable = !loot.is_empty() || loot.items.iter().any(|s| s.quest);

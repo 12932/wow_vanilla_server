@@ -178,8 +178,7 @@ pub fn kill(map: &mut Map, g: Guid) {
     p.death = Death::Dead { since: now };
     // The dead lie where they fell until they release or rise: rooted,
     // as mangos's `KillPlayer` roots them (`SendMoveRoot`).
-    p.outbound
-        .send_frame(crate::game::map::movement::root_frame(g, true));
+    crate::game::map::movement::root_to(&p.outbound, g, true);
     crate::game::map::corpses::died(p, crate::game::map::corpses::unix_ms());
     p.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
@@ -216,8 +215,7 @@ pub fn release(map: &mut Map, g: Guid) {
         return;
     }
     // A ghost walks (mangos's `BuildPlayerRepop` unroots).
-    p.outbound
-        .send_frame(crate::game::map::movement::root_frame(g, false));
+    crate::game::map::movement::root_to(&p.outbound, g, false);
     let corpse = Corpse::new(&map.realm.data, p, p.position(), p.movement.orientation);
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
@@ -279,18 +277,18 @@ pub fn become_ghost(p: &mut Player, now: Instant) {
     p.speeds.swim = 4.722_222 * speed;
     p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
         guid: p.guid,
-        move_event: 0,
+        move_event: p.outbound.next_order(),
         speed: p.speeds.run,
     });
     p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
         guid: p.guid,
-        move_event: 0,
+        move_event: p.outbound.next_order(),
         speed: p.speeds.swim,
     });
     // A ghost walks on water (mangos's `HandleAuraGhost`: `SetWaterWalk`).
     p.outbound.send(&SMSG_MOVE_WATER_WALK {
         guid: p.guid,
-        counter: 0,
+        counter: p.outbound.next_order(),
     });
     let left = crate::game::map::corpses::remaining_ms(p, unix);
     if left > 0 {
@@ -323,8 +321,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     // Risen where they fell, they may walk again (mangos's
     // `ResurrectPlayer` unroots).
     if !was_ghost {
-        p.outbound
-            .send_frame(crate::game::map::movement::root_frame(g, false));
+        crate::game::map::movement::root_to(&p.outbound, g, false);
     }
     p.death = Death::Alive;
     // An offer from before is spent.
@@ -365,12 +362,12 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
         p.speeds.swim = 4.722_222;
         p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
             guid: g,
-            move_event: 0,
+            move_event: p.outbound.next_order(),
             speed: p.speeds.run,
         });
         p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
             guid: g,
-            move_event: 0,
+            move_event: p.outbound.next_order(),
             speed: p.speeds.swim,
         });
     }
@@ -383,7 +380,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
         {
             p.outbound.send(&SMSG_MOVE_LAND_WALK {
                 guid: g,
-                counter: 0,
+                counter: p.outbound.next_order(),
             });
         }
     }
@@ -463,7 +460,7 @@ pub fn resend_water_walk(map: &Map, g: Guid) {
     {
         p.outbound.send(&SMSG_MOVE_WATER_WALK {
             guid: g,
-            counter: 0,
+            counter: p.outbound.next_order(),
         });
     }
 }

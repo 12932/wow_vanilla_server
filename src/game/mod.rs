@@ -653,6 +653,14 @@ mod tests_p7_combat_rewards;
 #[cfg(test)]
 mod tests_p7_combat_zone;
 #[cfg(test)]
+mod tests_p7_entity;
+#[cfg(test)]
+mod tests_p7_entity_loot;
+#[cfg(test)]
+mod tests_p7_entity_mob;
+#[cfg(test)]
+mod tests_p7_entity_objects;
+#[cfg(test)]
 mod tests_p7_loader_effects;
 #[cfg(test)]
 mod tests_p7_loader_items;

@@ -1576,7 +1576,7 @@ fn knock_back(map: &mut Map, caster: Guid, target: Guid, horizontal: i32, vertic
     if let Some(p) = mover.and_then(|g| map.players.get(&g)) {
         let mut b = crate::game::data::items::Body::default();
         crate::game::update::write_packed_guid(&mut b.0, target);
-        b.u32(0)
+        b.u32(p.outbound.next_order())
             .f32(angle.cos())
             .f32(angle.sin())
             .f32(speed_xy)

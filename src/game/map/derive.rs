@@ -1089,7 +1089,7 @@ fn speed(map: &mut Map, g: Guid) {
             p.speeds.run = speed;
             p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
                 guid: g,
-                move_event: 0,
+                move_event: p.outbound.next_order(),
                 speed,
             });
             told.push((MSG_MOVE_SET_RUN_SPEED, speed));
@@ -1100,7 +1100,7 @@ fn speed(map: &mut Map, g: Guid) {
             p.speeds.run_back = back;
             p.outbound.send(&SMSG_FORCE_RUN_BACK_SPEED_CHANGE {
                 guid: g,
-                move_event: 0,
+                move_event: p.outbound.next_order(),
                 speed: back,
             });
             told.push((MSG_MOVE_SET_RUN_BACK_SPEED, back));
@@ -1109,7 +1109,7 @@ fn speed(map: &mut Map, g: Guid) {
             p.speeds.swim_back = 2.5;
             p.outbound.send(&SMSG_FORCE_SWIM_BACK_SPEED_CHANGE {
                 guid: g,
-                move_event: 0,
+                move_event: p.outbound.next_order(),
                 speed: 2.5,
             });
             told.push((MSG_MOVE_SET_SWIM_BACK_SPEED, 2.5));
@@ -1121,7 +1121,7 @@ fn speed(map: &mut Map, g: Guid) {
             p.speeds.swim = swim;
             p.outbound.send(&SMSG_FORCE_SWIM_SPEED_CHANGE {
                 guid: g,
-                move_event: 0,
+                move_event: p.outbound.next_order(),
                 speed: swim,
             });
             told.push((MSG_MOVE_SET_SWIM_SPEED, swim));
@@ -1161,7 +1161,7 @@ fn speed(map: &mut Map, g: Guid) {
             Some(p) => {
                 p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
                     guid: g,
-                    move_event: 0,
+                    move_event: p.outbound.next_order(),
                     speed,
                 });
             }
