@@ -924,7 +924,10 @@ pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
     ] {
         c.fields.set_u32(field, fresh.fields.get_u32(field));
     }
-    c.fields.set_f32(OBJECT_FIELD_SCALE_X, scale);
+    // Its size, as its scale auras make it (they divide it back as they
+    // go: Thistle Tea's `CreatureEntry.apply` recomputes it through them).
+    let grown = c.auras.product(crate::game::map::auras::AURA_MOD_SCALE);
+    c.fields.set_f32(OBJECT_FIELD_SCALE_X, scale * grown);
     for field in [UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_COMBATREACH] {
         c.fields.set_f32(field, fresh.fields.get_f32(field));
     }
@@ -940,10 +943,18 @@ pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
     let dynamic = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
     c.fields
         .set_u32(UNIT_DYNAMIC_FLAGS, dynamic | t.dynamic_flags);
+    // Its walk at once; its run from the new base through its auras and
+    // wounds below. Those who see it are told both (mangos's
+    // `SetBaseWalkSpeed` and `SetBaseRunSpeed` at `InitEntry`, Thistle
+    // Tea's `MovementSpeedChanged`).
+    let walk = (fresh.speeds.walk - c.speeds.walk).abs() > 0.01;
     c.speeds.walk = fresh.speeds.walk;
-    c.speeds.run = fresh.speeds.run;
+    // In the air as the new template has it, a script's flight kept.
+    let scripted_fly = c.scripted.as_deref().is_some_and(|s| s.fly);
     if crate::game::map::creature_motion::template_flies(t) {
         c.move_flags |= FLIGHT_FLAGS;
+    } else if !scripted_fly {
+        c.move_flags &= !FLIGHT_FLAGS;
     }
     c.base = base;
     crate::game::map::derive::creature(c);
@@ -980,7 +991,22 @@ pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
     s.temp_faction = None;
     s.invincible_hp = None;
     s.base_spell_list = (!new_list && old_list != 0).then_some(old_list);
+    // A list of its own replaces one a script gave it, its timers anew
+    // (mangos's `SetSpellList` at `UpdateEntry`, Thistle Tea's cleared
+    // list and timers).
+    if new_list {
+        s.spell_list = None;
+    }
     map.visibility_dirty.insert(g);
+    if walk {
+        let speed = map.creature(g).map_or(2.5, |c| c.speeds.walk);
+        if let Some(frame) =
+            crate::game::conn::encode(&SMSG_SPLINE_SET_WALK_SPEED { guid: g, speed })
+        {
+            map.send_to_observers(g, &frame, false);
+        }
+    }
+    crate::game::map::derive::unit(map, g);
     true
 }
 
