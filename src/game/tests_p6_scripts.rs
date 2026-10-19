@@ -1224,3 +1224,223 @@ async fn an_andorhal_watchtower_credits_a_scout_by_a_beacon_torch() {
             .unwrap()
     );
 }
+
+const TRIAGE: u32 = 6624;
+const ALLIANCE_DOCTOR: u32 = 12939;
+const PATIENTS: [u32; 3] = [12938, 12936, 12937];
+
+/// The patients here, alive.
+fn patients(m: &Map) -> Vec<Guid> {
+    PATIENTS.iter().flat_map(|e| living(m, *e)).collect()
+}
+
+/// Creature `g`'s out-of-combat timers held off an hour (a patient's
+/// bleeding).
+fn stanch(m: &mut Map, g: Guid) {
+    let later = m.now + Duration::from_secs(3600);
+    let Some(entry) = m.creature(g).map(|c| c.entry) else {
+        return;
+    };
+    let bleeds: Vec<usize> = m.realm.data.scripts.ai_events[&entry]
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == crate::game::data::scripts::EVENT_TIMER_OOC)
+        .map(|(i, _)| i)
+        .collect();
+    if let Some(s) = event_ai::scripted_mut(m, g) {
+        for i in bleeds {
+            s.timers[i] = Some(later);
+        }
+    }
+}
+
+/// Triage: the doctor lays a patient in a free bunk every ten seconds,
+/// and none while every bunk is taken; a patient arrives lying down at
+/// its injury's health (75, 50 or 25 percent), doesn't regenerate, and is
+/// one of the quest's event's; it bleeds 50 a second, and its death
+/// counts toward the six that fail it (Thistle Tea's `triage`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn triages_doctor_fills_his_bunks_and_his_patients_bleed() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map, doctor) = hero_by(&realm, "Medic", ALLIANCE_DOCTOR).await;
+    map.query(move |m| {
+        let p = m.players.get_mut(&me).unwrap();
+        crate::game::map::skills::learn_skill(p, 129, 4);
+        crate::game::map::skills::set_value(p, 129, 225);
+        quests::accept(m, me, doctor, TRIAGE);
+    })
+    .await;
+    assert!(
+        until(&map, 3_000, move |m| m.players[&me].journal.has(TRIAGE)
+            && event_ai::phase(m, doctor) == 1)
+        .await,
+        "taken, the doctor at work"
+    );
+    assert!(
+        map.query(|m| crate::game::map::map_events::active(m, TRIAGE))
+            .await
+            .unwrap()
+    );
+    // A patient each time, until his seven bunks are full; then none.
+    let mut counts = Vec::new();
+    for _ in 0..10 {
+        let n = map
+            .query(move |m| {
+                for p in patients(m) {
+                    stanch(m, p);
+                }
+                due(m, doctor, 1293901);
+                event_ai::update_despawns(m);
+                for p in patients(m) {
+                    stanch(m, p);
+                }
+                patients(m).len()
+            })
+            .await
+            .unwrap();
+        counts.push(n);
+    }
+    assert_eq!(
+        counts,
+        [1, 2, 3, 4, 5, 6, 7, 7, 7, 7],
+        "a bunk each, while one is free"
+    );
+    // As each lies.
+    let lying = map
+        .query(move |m| {
+            let targets = crate::game::map::map_events::targets(m, TRIAGE);
+            patients(m)
+                .into_iter()
+                .map(|p| {
+                    let entry = m.creature(p).unwrap().entry;
+                    let (hp, max) = health(m, p);
+                    (
+                        entry,
+                        hp * 100 / max,
+                        stand_state(m, p),
+                        crate::game::map::creature_combat::regenerates_health(m, p),
+                        targets.contains(&p),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap();
+    for (entry, pct, stand, regenerates, target) in lying {
+        let want = match entry {
+            12938 => 75,
+            12936 => 50,
+            _ => 25,
+        };
+        assert!(pct.abs_diff(want) <= 1, "{entry} at {pct}, not {want}");
+        assert_eq!((stand, regenerates, target), (7, false, true), "{entry}");
+    }
+    // One bleeds out, and counts.
+    let p = map.query(|m| patients(m)[0]).await.unwrap();
+    let (bled, died) = map
+        .query(move |m| {
+            if let Some(f) = m.unit_fields_mut(p) {
+                f.set_u32(UNIT_FIELD_HEALTH, 120);
+            }
+            let id = m.creature(p).unwrap().entry * 100 + 2;
+            due(m, p, id);
+            let bled = health(m, p).0;
+            due(m, p, id);
+            due(m, p, id);
+            hurry_runs(m, Some(p), Duration::from_millis(100));
+            (bled, crate::game::map::map_events::data(m, TRIAGE, 1))
+        })
+        .await
+        .unwrap();
+    assert_eq!(bled, 70, "50 a second");
+    assert_eq!(died, Some(1), "its death counted");
+    assert!(
+        until(&map, 2_000, move |m| m
+            .creature(p)
+            .is_none_or(|c| !c.alive()))
+        .await
+    );
+}
+
+const GRENKA: u32 = 4490;
+const HARPY: u32 = 4100;
+
+/// Test of Endurance: the foodstuffs (event 747) call Grenka, hidden,
+/// unless one is near already; her flock comes in three waves, one harpy
+/// five seconds on, two at twenty, one at thirty-five, when she shows
+/// herself, may be fought and joins the fight (Thistle Tea's
+/// `test_of_endurance`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_foodstuffs_call_grenka_and_her_flock() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, _) = hero(&realm, "Enduring").await;
+    // By the ledge in Thousand Needles, where the foodstuffs are set out.
+    let ledge = Vector3d {
+        x: -5589.63,
+        y: -1575.89,
+        z: 11.75,
+    };
+    let map = travel(&realm, &mut c, 1, off(ledge, 10.0, 0.0)).await;
+    let call = move |m: &mut Map| {
+        crate::game::map::scripts::start(
+            m,
+            crate::game::data::scripts::ScriptTable::Event,
+            747,
+            me,
+            me,
+        );
+        hurry_runs(m, None, Duration::from_millis(100));
+        event_ai::update_despawns(m);
+        living(m, GRENKA)
+    };
+    let grenka = map.query(call).await.unwrap();
+    assert_eq!(grenka.len(), 1, "Grenka called");
+    let g = grenka[0];
+    let hidden = map
+        .query(move |m| {
+            (
+                event_ai::scripted(m, g).is_some_and(|s| s.concealed),
+                unit_flags(m, g) & 0x300,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(hidden, (true, 0x300), "hidden, not to be fought");
+    assert_eq!(
+        map.query(call).await.unwrap().len(),
+        1,
+        "not again while she is near"
+    );
+    let mut harpies = Vec::new();
+    for secs in [5.0, 15.0, 15.0] {
+        hurry_all(&map, secs).await;
+        harpies.push(
+            map.query(move |m| {
+                living(m, HARPY)
+                    .into_iter()
+                    .filter(|h| event_ai::scripted(m, *h).is_some_and(|s| s.summoner == Some(g)))
+                    .count()
+            })
+            .await
+            .unwrap(),
+        );
+    }
+    assert_eq!(harpies, [1, 3, 4], "one, two and one");
+    let shown = map
+        .query(move |m| {
+            (
+                event_ai::scripted(m, g).is_some_and(|s| s.concealed),
+                unit_flags(m, g) & 0x300,
+                fighting(m, g),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(shown, (false, 0, true), "she shows herself and fights");
+}
