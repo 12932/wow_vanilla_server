@@ -384,10 +384,11 @@ impl NpcData {
         out
     }
 
-    /// A broadcast text's line for a speaker of `gender`.
+    /// A broadcast text's line for a speaker of `gender`; the other
+    /// gender's where it has only that one (Ysida's 11816, female only).
     pub fn broadcast_line(&self, id: u32, female: bool) -> Option<&str> {
         let b = self.broadcast_texts.get(&id)?;
-        let line = if female && !b.female.is_empty() {
+        let line = if (female || b.male.is_empty()) && !b.female.is_empty() {
             &b.female
         } else {
             &b.male

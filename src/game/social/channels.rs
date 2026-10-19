@@ -74,7 +74,7 @@ const BUILT_IN: [(u32, u32, &str); 6] = [
 ];
 
 /// The built-in channel a name is one of: its id and channel flags.
-fn built_in(name: &str) -> Option<(u32, u8)> {
+pub(crate) fn built_in(name: &str) -> Option<(u32, u8)> {
     let (id, dbc, _) = BUILT_IN.iter().find(|(_, _, prefix)| {
         name.eq_ignore_ascii_case(prefix)
             || name
