@@ -9,6 +9,7 @@ pub mod arena;
 pub mod assistance;
 pub mod auction;
 pub mod auras;
+pub mod bank;
 pub mod battleground;
 #[cfg(all(feature = "world-bench", unix))]
 pub mod bench_probe;
@@ -1061,6 +1062,9 @@ impl Map {
     fn insert_player(&mut self, mut p: Player) {
         p.known.clear();
         p.observers.clear();
+        // A bank opened in another world is shut (Thistle Tea's
+        // worldport).
+        p.misc.banker = None;
         p.cell = grid::cell_of(p.position().x, p.position().y);
         p.vis_anchor = p.position();
         // The client's first move is checked from where it came in.

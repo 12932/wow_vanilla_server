@@ -185,7 +185,7 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
             return taxi_nodes(map, player, npc);
         }
         if flags & NPC_FLAG_BANKER != 0 {
-            return send(map, player, &SMSG_SHOW_BANK { guid: npc });
+            return crate::game::map::bank::show(map, player, npc);
         }
         if flags & NPC_FLAG_AUCTIONEER != 0 {
             return auction_hello(map, player, npc);
@@ -407,7 +407,7 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             crate::game::map::death::spirit_healer_hello(map, player, npc);
         }
         8 => send(map, player, &SMSG_BINDER_CONFIRM { guid: npc }),
-        9 => send(map, player, &SMSG_SHOW_BANK { guid: npc }),
+        9 => crate::game::map::bank::show(map, player, npc),
         12 => battlemaster_hello(map, player, npc),
         13 => auction_hello(map, player, npc),
         14 => crate::game::map::pets::list_stable(map, player, npc),
@@ -846,7 +846,9 @@ pub fn bind_home(map: &mut Map, player: Guid, binder: Guid) {
 /// `CMSG_BANKER_ACTIVATE`.
 pub fn banker(map: &mut Map, player: Guid, npc: Guid) {
     if npc_entry(map, player, npc, NPC_FLAG_BANKER).is_some() {
-        send(map, player, &SMSG_SHOW_BANK { guid: npc });
+        crate::game::map::bank::show(map, player, npc);
+    } else {
+        crate::game::map::bank::close(map, player);
     }
 }
 
@@ -856,6 +858,9 @@ pub const MAX_BANK_BAG_SLOTS: u8 = 6;
 
 pub fn buy_bank_slot(map: &mut Map, player: Guid, npc: Guid) {
     let banker = npc_entry(map, player, npc, NPC_FLAG_BANKER).is_some();
+    if !banker {
+        crate::game::map::bank::close(map, player);
+    }
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -937,7 +942,7 @@ fn node_at(map: &Map, npc: Guid, player: Guid) -> Option<u32> {
 
 /// Whether `mask` holds `node`. wvs keeps node N at bit N; the client
 /// counts from one, node N at bit N - 1 ([`client_mask`]).
-fn knows_node(mask: &[u32], node: u32) -> bool {
+pub(crate) fn knows_node(mask: &[u32], node: u32) -> bool {
     mask.get((node / 32) as usize)
         .is_some_and(|w| w & (1 << (node % 32)) != 0)
 }
@@ -973,7 +978,7 @@ pub fn mask_from_client(words: &[u32]) -> Vec<u32> {
     out
 }
 
-fn learn_node(mask: &mut Vec<u32>, node: u32) -> bool {
+pub(crate) fn learn_node(mask: &mut Vec<u32>, node: u32) -> bool {
     let i = (node / 32) as usize;
     if mask.len() <= i {
         mask.resize(i + 1, 0);
@@ -1102,14 +1107,30 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     crate::game::map::spells::interrupts::taking_flight(map, player);
+    // A cast under way ends (Thistle Tea's flight start); a spell that
+    // sends one is done casting by its effect.
+    if map.caster(player).is_some_and(|c| c.casting.is_some()) {
+        crate::game::map::spells::interrupt(map, player);
+    }
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
+    // From a node with a mount for neither side, no mount: mangos's
+    // `ActivateTaxiPathTo` lets a spell's route fly on a model of 0.
+    let unmounted = data
+        .npc
+        .taxi_nodes
+        .get(&from)
+        .is_some_and(|n| n.mounts == [0, 0]);
     let mount_creature = taxi_mount(&data, from, p.team);
     let mount = data
         .creature_template(mount_creature)
         .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
-        .unwrap_or(if p.team == Team::Alliance { 1149 } else { 295 });
+        .unwrap_or(match (unmounted, p.team) {
+            (true, _) => 0,
+            (false, Team::Alliance) => 1149,
+            (false, _) => 295,
+        });
     p.fields.set_u32(UNIT_FIELD_MOUNTDISPLAYID, mount);
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,

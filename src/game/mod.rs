@@ -791,6 +791,24 @@ mod tests_p8_loader_rogue;
 #[cfg(test)]
 mod tests_p8_loader_spells;
 #[cfg(test)]
+mod tests_p8_player_bank;
+#[cfg(test)]
+mod tests_p8_player_gear;
+#[cfg(test)]
+mod tests_p8_player_login;
+#[cfg(test)]
+mod tests_p8_player_pets;
+#[cfg(test)]
+mod tests_p8_player_quests;
+#[cfg(test)]
+mod tests_p8_player_reputation;
+#[cfg(test)]
+mod tests_p8_player_session;
+#[cfg(test)]
+mod tests_p8_player_taxi;
+#[cfg(test)]
+mod tests_p8_player_vendor;
+#[cfg(test)]
 mod tests_p8_spell_amounts;
 #[cfg(test)]
 mod tests_p8_spell_effects;

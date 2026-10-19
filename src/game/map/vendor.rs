@@ -415,11 +415,18 @@ pub fn sell(map: &mut Map, player: Guid, npc: Guid, item: Guid, amount: u8) {
         return;
     };
     let it = &p.items[i];
-    // Carried, and a bag only empty.
+    // Carried or worn (mangos's `GetItemByGuid`; the client drags gear off
+    // its paper doll onto the vendor), not the bank's; a bag only empty;
+    // not the item whose loot is open (mangos's `GetLootGuid`), nor while
+    // the client moves another unit (Thistle Tea's remote control).
+    let worn = it.bag == BAG_PLAYER && it.slot < EQUIPMENT_END;
     let full_bag = it.bag == BAG_PLAYER
         && (BAG_START..BAG_END).contains(&it.slot)
         && p.items.iter().any(|x| x.bag == it.slot);
-    if !carried(it) || full_bag {
+    let looted =
+        p.looting == Some(item) || p.misc.item_loot.as_ref().is_some_and(|(x, _)| *x == item);
+    let remote = p.owned.mover.is_some_and(|m| m != player);
+    if !(carried(it) || worn) || full_bag || looted || remote {
         reply(map, SellItemResult::CantSellItem);
         return;
     }
@@ -502,6 +509,12 @@ pub fn sell(map: &mut Map, player: Guid, npc: Guid, item: Guid, amount: u8) {
     );
     p.buyback_next = (slot - BUYBACK_START + 1).min(BUYBACK_END - BUYBACK_START - 1);
     p.refresh_inventory(&data);
+    // A cast under way ends (mangos's `InterruptNonMeleeSpells` at a
+    // sale), and the quests that wanted it count again.
+    if map.caster(player).is_some_and(|c| c.casting.is_some()) {
+        crate::game::map::spells::interrupt(map, player);
+    }
+    crate::game::map::quests::items_changed(map, player, entry);
 }
 
 /// The buyback slot a sale goes to (Thistle Tea's `available_slot`): the
@@ -683,7 +696,7 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
     for (i, _, max) in costs {
         p.items[i].fields.set_u32(ITEM_FIELD_DURABILITY, max);
     }
-    p.gear_dirty = true;
+    broke(p, &data);
 }
 
 /// Wear on everything worn: `fraction` of each item's full durability, at
@@ -713,7 +726,7 @@ fn wear_where(map: &mut Map, player: Guid, fraction: f32, pick: impl Fn(&Item) -
         it.fields
             .set_u32(ITEM_FIELD_DURABILITY, now.saturating_sub(loss));
     }
-    p.gear_dirty = true;
+    broke(p, &map.realm.data);
 }
 
 /// An item's durability after a spell's wear of `amount` (Thistle Tea's
@@ -777,7 +790,15 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
         }
         it.fields.set_u32(ITEM_FIELD_DURABILITY, now - 1);
         if now == 1 {
-            p.gear_dirty = true;
+            broke(p, &map.realm.data);
         }
     }
+}
+
+/// Gear worn or mended where it is: what it gives is worked out again,
+/// its stats and a weapon's talents (mangos's `_ApplyItemMods` at breaking
+/// and repairing), and its auras at the next update.
+fn broke(p: &mut crate::game::map::player::Player, data: &GameData) {
+    p.apply_stats(data);
+    p.gear_dirty = true;
 }

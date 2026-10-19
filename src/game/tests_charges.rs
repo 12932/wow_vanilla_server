@@ -298,6 +298,7 @@ async fn charges_are_kept_through_a_relog_carried_in_a_bag_and_banked() {
         Some([0, -4, 0, 0, 0]),
     )
     .await;
+    harness::open_bank(&realm.maps.get(&realm, MapKey::world(0)), g).await;
     a.send(CMSG_AUTOBANK_ITEM {
         bag_index: BAG_PLAYER,
         slot_index: PACK_START + 1,

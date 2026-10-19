@@ -443,7 +443,10 @@ fn wrap(map: &mut Map, g: Guid, paper: (u8, u8), what: (u8, u8)) {
         fail(p, InventoryResult::YouAreDead, Guid::zero());
         return;
     }
-    if p.caster.casting.is_some() || p.flight.is_some() {
+    // Nor while the client moves another unit (Thistle Tea's remote
+    // control).
+    let remote = p.owned.mover.is_some_and(|m| m != g);
+    if p.caster.casting.is_some() || p.flight.is_some() || remote {
         fail(p, InventoryResult::CantDoRightNow, Guid::zero());
         return;
     }

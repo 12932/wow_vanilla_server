@@ -81,6 +81,8 @@ pub struct PlayerMisc {
     /// When it last cast a heal: a Stormwind Elite Guard's Charge goes for
     /// a healer who healed lately (`map/elites.rs`).
     pub healed_at: Option<Instant>,
+    /// The banker whose bank the player opened (`map/bank.rs`).
+    pub banker: Option<Guid>,
 }
 
 /// A summons: to the summoner's side.

@@ -180,6 +180,43 @@ pub fn test_config() -> RealmConfig {
     }
 }
 
+/// A banker at `g`'s side and the bank opened at it, as
+/// `CMSG_BANKER_ACTIVATE` opens it: for a test that moves things into or
+/// out of the bank (`map/bank.rs`). The banker's guid.
+pub async fn open_bank(map: &crate::game::map::MapHandle, g: Guid) -> Guid {
+    map.query(move |m| {
+        let template = crate::game::data::CreatureTemplate {
+            entry: 2455,
+            name: "Olivia Burnside".into(),
+            npc_flags: crate::game::map::npc::NPC_FLAG_BANKER,
+            // Friendly to all.
+            faction: 35,
+            health_max: 100,
+            ..Default::default()
+        };
+        let p = &m.players[&g];
+        let at = Vector3d {
+            x: p.position().x + 1.0,
+            ..p.position()
+        };
+        let counter = m.next_creature_counter;
+        m.next_creature_counter += 1;
+        let c = crate::game::map::creature::Creature::new(
+            crate::game::guid::unit(template.entry, counter | 0x80_0000),
+            &template,
+            30,
+            at,
+            0.0,
+        );
+        let banker = m.add_creature(c);
+        crate::game::map::npc::banker(m, g, banker);
+        assert_eq!(m.players[&g].misc.banker, Some(banker), "the bank opens");
+        banker
+    })
+    .await
+    .expect("the map answers")
+}
+
 pub fn realm_with(data: GameData) -> Arc<Realm> {
     let (store, startup) = Store::open(":memory:").expect("an in-memory store");
     Realm::new(test_config(), store, startup, data, None)
