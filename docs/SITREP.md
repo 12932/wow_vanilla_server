@@ -462,6 +462,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   dismounts again. **My calls:** a cast now ends Feign Death too (its flags include ACTION, mangos); a harmful spell
   at a dead target still rolls to hit (mangos). **Found:** a cast at a corpse with a destination is misread
   (`CMSG_CAST_SPELL`'s targets), queued for the fork.
+- **8c, loaders, round 8:** aura amounts with percent modifiers in whole numbers (Bonescythe made Slice and Dice's
+  30 into 32; mangos's `ApplySpellMod<int32>` gives 31); a spell's two ground areas join one aura holder, so Flare
+  removes invisibility and keeps stealth off; target 22 (the caster's own spot) is neutral, so 244 spells (Healing
+  Auras, totem pulses) are helpful as in mangos; Shadow Trance and Netherwind Focus are spent on use (every Shadow
+  Bolt had stayed instant); Pick Pocket rolls to hit (7m, 8b and 8c all fixed it; 7m's and 8b's kept). **My calls:**
+  modifiers in whole numbers (mangos; Thistle Tea keeps 31.8); Arcane Intellect procs the Blue Dragon (mangos);
+  cat form ends Water Walking and Moonkin keeps it (Thistle Tea; mangos ends it on every form). **Found on master**
+  (round 7 and 8's merges, untested together): two of 7j's size tests against 7k's transforms, and Symbol of Life
+  no longer reviving Henze Faulk; `fix/master1019` is on them, with the two flaky tests.
 
 ## Answered
 - **#10** keep swinging on arrival.
