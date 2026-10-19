@@ -1752,3 +1752,76 @@ async fn a_creature_charmed_mage_casts_her_best_at_its_foe_or_strikes_it() {
     .await;
     assert!(control_update(&mut a, ga).await, "hers again");
 }
+
+/// Thistle Tea's `Empathy` "sync preserves other flags and clears stale
+/// information", "refresh extends access until the new expiry", "removing
+/// one source retains the other caster's information" and "death revokes
+/// access through normal aura cleanup": Beast Lore on a beast sets its
+/// special information flag beside the others it has; cast again, it
+/// lasts from the new cast; two hunters' on it, one's going leaves the
+/// flag for the other's, and the last's takes it, the other flags kept;
+/// and the beast's death ends it (mangos's `HandleAuraEmpathy`).
+#[tokio::test]
+async fn beast_lore_shows_a_beast_while_any_hunters_lasts_and_not_past_its_death() {
+    use crate::game::map::auras;
+    const BEAST_LORE: u32 = 1462;
+    let realm = crate::game::harness::realm_with(crate::game::tests_pets2::more());
+    let (_a, ga, map) = enter(&realm, "A", "Hunter", Race::Dwarf, Class::Hunter).await;
+    let (_b, gb, _) = enter(&realm, "B", "Other", Race::Dwarf, Class::Hunter).await;
+    let boar = place(&map, ga, BOAR, 0x70_0070, 6.0).await;
+    let out = map
+        .query(move |m| {
+            const OTHER: u32 = 0x4;
+            let flags = |m: &crate::game::map::Map| {
+                m.creature(boar)
+                    .map_or(0, |c| c.fields.get_u32(UNIT_DYNAMIC_FLAGS))
+            };
+            m.creature_mut(boar)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_DYNAMIC_FLAGS, OTHER);
+            let lore = m.realm.data.spells.get(BEAST_LORE).cloned().unwrap();
+            let expiry = |m: &crate::game::map::Map, caster: Guid| {
+                auras::auras(m, boar).and_then(|a| {
+                    a.holders
+                        .iter()
+                        .find(|h| h.spell == BEAST_LORE && h.caster == caster)
+                        .and_then(|h| h.expires)
+                })
+            };
+            let _ = auras::apply_spell(m, ga, boar, &lore, &[(0, 0)], Default::default());
+            let on = flags(m);
+            let first = expiry(m, ga);
+            m.now += Duration::from_secs(10);
+            let _ = auras::apply_spell(m, ga, boar, &lore, &[(0, 0)], Default::default());
+            let refreshed = expiry(m, ga).zip(first).map(|(b, a)| b - a);
+            let _ = auras::apply_spell(m, gb, boar, &lore, &[(0, 0)], Default::default());
+            auras::remove_spell(m, boar, BEAST_LORE, Some(ga));
+            let one_left = flags(m);
+            auras::remove_spell(m, boar, BEAST_LORE, Some(gb));
+            let none_left = flags(m);
+            let _ = auras::apply_spell(m, ga, boar, &lore, &[(0, 0)], Default::default());
+            crate::game::map::combat::kill(m, ga, boar);
+            let dead = flags(m) & pets::DYNFLAG_SPECIALINFO;
+            (on, refreshed, one_left, none_left, dead)
+        })
+        .await
+        .unwrap();
+    let (on, refreshed, one_left, none_left, dead) = out;
+    assert_eq!(on, 0x4 | pets::DYNFLAG_SPECIALINFO, "on, beside the other");
+    assert_eq!(
+        refreshed,
+        Some(Duration::from_secs(10)),
+        "from the new cast"
+    );
+    assert_eq!(
+        one_left & pets::DYNFLAG_SPECIALINFO,
+        pets::DYNFLAG_SPECIALINFO,
+        "the other's holds it"
+    );
+    assert_eq!(
+        none_left, 0x4,
+        "the last's going takes it, not the other flag"
+    );
+    assert_eq!(dead, 0, "not past its death");
+}
