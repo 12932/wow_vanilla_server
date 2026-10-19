@@ -447,6 +447,15 @@ pub fn effect(
                 return;
             }
             let entry = e.misc_value.max(0) as u32;
+            // At a place its effect names (the database's, the caster's
+            // own, a unit's), the first there and the rest about it within
+            // the radius; else beside the caster (mangos-classic's
+            // `EffectSummonGuardian` by `TARGET_FLAG_DEST_LOCATION`).
+            let place = matches!(e.target_a, 17 | 18 | 53 | 63)
+                .then(|| wild::destination(map, caster, s, index, t))
+                .flatten();
+            let radius = map.realm.data.spells.radius(e.radius_index);
+            let at = |i: usize| place.map(|p| if i == 0 { p } else { wild::about(p, radius) });
             // A player's guardian: a second cast of their own sends those
             // of its entry away, and summons none again unless the spell
             // has a time and a category (mangos-classic's
@@ -463,13 +472,13 @@ pub fn effect(
                         return;
                     }
                 }
-                for _ in 0..count {
-                    totems::summon_guardian(map, caster, entry, s, false);
+                for i in 0..count {
+                    totems::summon_guardian(map, caster, entry, s, false, at(i));
                 }
                 return;
             }
             for i in 0..count {
-                totems::summon_guardian(map, caster, entry, s, i == 0);
+                totems::summon_guardian(map, caster, entry, s, i == 0, at(i));
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),

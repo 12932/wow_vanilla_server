@@ -384,9 +384,16 @@ pub fn lift_auras(map: &mut Map, g: Guid) {
     }
 }
 
-/// A guardian of `entry` for `owner`, for the spell's time: it fights
-/// what its summoner fights.
-pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate, replace: bool) {
+/// A guardian of `entry` for `owner`, for the spell's time, at `at` (else
+/// before its owner): it fights what its summoner fights.
+pub fn summon_guardian(
+    map: &mut Map,
+    owner: Guid,
+    entry: u32,
+    s: &SpellTemplate,
+    replace: bool,
+    at: Option<Vector3d>,
+) {
     if entry == 0 {
         return;
     }
@@ -419,8 +426,16 @@ pub fn summon_guardian(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate
         data.creature_template(entry)
             .map_or(1, |t| t.level_max.max(1))
     };
-    let (at, o) = before(map, owner, 2.0);
-    let g = summon::spawn(map, owner, entry, Kind::Guardian, level, at, o);
+    let (beside, o) = before(map, owner, 2.0);
+    let g = summon::spawn(
+        map,
+        owner,
+        entry,
+        Kind::Guardian,
+        level,
+        at.unwrap_or(beside),
+        o,
+    );
     let duration = data.spells.duration(s, u32::from(level));
     if let Some(c) = map.creature_mut(g) {
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
