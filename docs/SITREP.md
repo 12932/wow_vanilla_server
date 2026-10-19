@@ -317,6 +317,31 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **Any facing change** is a turn; mangos allows 0.1 radians, and more for channels that track their target.
   - **Left:** Thistle Tea's proc origins (spells triggered by auras don't proc), deferred cooldowns, summons by
     compass offset, traps and the Transporter.
+- **7c, the loaders, round 7 (0.1.25, with 7d):** 71 rows. Fixes: a weather chance over 100% or below 0 is 25, as mangos's
+  `LoadWeatherZoneChances` repairs it; a flag quest (0x400) is rewarded when its event happens (the Naxxramas
+  attunement, mangos's `AreaExploredOrEventHappens`); a quest's source spell is cast on accepting it (a druid taking
+  Moonglade learns its teleport; round 6c had tried and dropped both); a swing ends the attacker's auras that
+  attacking interrupts (Honorless Target, Shadowmeld; mangos's `AttackerStateUpdate`). **My calls:**
+  - **Miran's raiders** say mangos's line (512, "Get him!") as they attack; Thistle Tea's first raider says 1936.
+  - **A soulstone's health** is capped at the player's maximum (mangos).
+  - **vmangos's `spell_effect_mod`** stays applied: 396 wild summons where the client's data has 372, and Summon
+    Doomguard a wild summon.
+  - **Left:** 104 rows: proc rules, spell modifiers, combat-control attributes wvs doesn't read, pets' helpful
+    autocast, dispel resistance (Vile Poisons), Plagueheart's critical threat, captures by muzzle and collar.
+- **7d, combat, round 7 (0.1.25):** 65 rows. **Feign Death:** a believed one hides the hunter from creatures' notice
+  and picks (mangos's `CanAttackOnSight`, `IsOfflineTarget`), interrupts casts at her, stops Auto Shot either way;
+  a pet's blows no longer pull a dead or feigning master back in. **Kill credit:** a creature a player controlled
+  is worth nothing (its death had freed it before the reward). **Leashes:** a summon fighting before its summoner
+  joins the summoner's clock. **Fleeing for help:** shows no target while it runs, ends when its victim changes or
+  goes, stops for a distraction, runs on at once when a root ends, and isn't stalled by a speed change. **My calls**
+  (mangos's):
+  - **Feign Death with a pet fighting** ends the hunter's fight, and she can't be pulled back in; Thistle Tea holds
+    her in it 6 s (`wrong-for-1.12`). **A creature's Feign Death** still ends its fight (Thistle Tea's; mangos keeps
+    it).
+  - **A fleeing creature** stops every cast (mangos); Thistle Tea only those movement breaks.
+  - **A passive creature** joins a dungeon-wide pulse (mangos has no passive check).
+  - **Left:** 55 rows (damage origin, posture, pet combat, disarm, extra attacks, elemental swings); fleeing with no
+    navmesh path runs straight.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -409,7 +434,9 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7a: the player, round 7 | 75.7% | 5b07acc |
 | 6j: the core's other areas | 76.2% | dfcd6e7 |
 | 7b: spells, round 7 | 76.9% | a69e06e |
+| 7c: the loaders, round 7 | merged | 2df117c |
+| 7d: combat, round 7 | 78.5% | 5890d1f |
 
-**Running now:** round 7 (7c loaders, 7d combat, 7e the world, 7f creature AI, 7g creature scripts).
+**Running now:** round 7 (7e the world, 7f creature AI, 7g creature scripts, 7h entities, 7i pets).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
