@@ -655,7 +655,13 @@ fn spawn_creature_with(
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
         lie_dead_if_spawned_so(map, g, spawn);
-        if let Some(t) = faction {
+        if let Some(mut t) = faction {
+            // Cleared, it is its respawned self's again (mangos's
+            // `ClearTemporaryFaction`, the template's): not the faction it
+            // had under an entry a script changed.
+            if let Some(c) = map.creature(g) {
+                t.original = c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
+            }
             if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
                 s.temp_faction = Some(t);
             }
