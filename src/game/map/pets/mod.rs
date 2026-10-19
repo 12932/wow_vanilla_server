@@ -36,7 +36,8 @@ pub(crate) use ai::breakable_cc;
 pub use ai::{attack as attack_target, stop as stop_where};
 pub use control::{button, handle, learn, send_spells};
 pub use hunter::{
-    NPC_FLAG_STABLEMASTER, change_loyalty, list_stable, pet_xp_to_level, untrain_offer,
+    NPC_FLAG_STABLEMASTER, TAMER_SPELLS, beast_for, change_loyalty, give_pet, list_stable,
+    pet_xp_to_level, untrain_offer,
 };
 pub use summon::{dismiss, spellbook, unsummon};
 pub use wild::remove_guardians;

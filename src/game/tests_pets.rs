@@ -526,6 +526,49 @@ async fn a_pet_comes_back_after_a_logout_and_with_call_pet() {
     assert!(number_kept, "the same pet");
 }
 
+/// `.pet`: a hunter given a tamed beast at their level, out at their side,
+/// with Call Pet and Dismiss Pet; a second `.pet` lets the first go; no
+/// beast that isn't tameable, and no pet for a mage.
+#[tokio::test]
+async fn the_pet_command_gives_a_hunter_a_tamed_beast() {
+    let realm = harness::realm_with(data());
+    let (mut h, gh, map) = enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    h.say(".pet 2000").await;
+    h.system_message("Wolf isn't tameable.").await;
+    h.say(".pet").await;
+    let said = h.system_message("Tamed").await;
+    assert_eq!(said, "Tamed Tame Boar, level 1.");
+    let first = pet_bar(&mut h).await;
+    assert!(!first.is_zero(), "the boar's bar");
+    let (kind, summon, current, knows) = map
+        .query(move |m| {
+            let p = &m.players[&gh];
+            (
+                pet_kind(m, first),
+                p.fields.get_guid(UNIT_FIELD_SUMMON),
+                p.row.state.pets.current.as_ref().map(|r| r.entry),
+                [CALL_PET, DISMISS_PET].map(|s| p.spells.contains(&s)),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(kind, Some(Kind::Hunter));
+    assert_eq!((summon, current), (first, Some(BOAR)));
+    assert_eq!(knows, [true, true], "Call Pet and Dismiss Pet");
+    h.say(".pet 3000").await;
+    h.system_message("Tamed").await;
+    let (gone, out) = map
+        .query(move |m| (m.creature(first).is_none(), m.players[&gh].owned.pet))
+        .await
+        .unwrap();
+    assert!(gone, "the first pet is let go");
+    assert!(out.is_some_and(|p| p != first), "another is out");
+
+    let (mut mage, _, _) = enter(&realm, "M", "Mage", Race::Gnome, Class::Mage).await;
+    mage.say(".pet 3000").await;
+    mage.system_message("Only a hunter has a pet.").await;
+}
+
 #[tokio::test]
 async fn a_warlocks_imp_casts_firebolt() {
     let realm = harness::realm_with(data());

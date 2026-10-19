@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear [raid [1|2]], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [raid [1|2]], .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -28,11 +28,10 @@ pub fn needed_level(name: &str) -> Option<u8> {
     use crate::accounts::{GAME_MASTER, MODERATOR};
     Some(match name {
         "guid" | "pos" | "threat" => MODERATOR,
-        "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "damage" | "kill"
-        | "respawn" | "move" | "modify" | "rested" | "start" | "talents" | "tgm" | "weather"
-        | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion" | "event" => {
-            GAME_MASTER
-        }
+        "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
+        | "kill" | "respawn" | "move" | "modify" | "rested" | "start" | "talents" | "tgm"
+        | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
+        | "event" => GAME_MASTER,
         _ => return None,
     })
 }
@@ -49,6 +48,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
             Ok(pick) => gear(map, g, pick),
             Err(usage) => Some(usage.into()),
         },
+        "pet" => pet(map, g, args),
         "damage" => damage(map, g, args),
         "kill" => kill(map, g),
         "respawn" => respawn(map, g),
@@ -253,6 +253,29 @@ fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     p.fields.set_u32(PLAYER_XP, 0);
     map.realm.registry.set_level(to, level);
     Some(format!("Level {level}."))
+}
+
+/// `.pet [creature]`: the selected player, or the GM, a hunter, given a
+/// tamed beast of that creature template (by default a cat or a wolf of
+/// their level) at their level, out at their side, the pet before let go;
+/// with the tamer's spells (Tame Beast, Call Pet, Dismiss Pet, Revive Pet,
+/// Feed Pet) they lack, which 1.12 teaches by quest.
+fn pet(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    let to = player_target(map, g);
+    let level = map.players.get(&to)?.level();
+    let entry = match args.first() {
+        None => crate::game::map::pets::beast_for(&map.realm.data, level),
+        Some(_) if args.len() == 1 => num::<u32>(args.first()),
+        Some(_) => None,
+    };
+    let Some(entry) = entry else {
+        return Some("Usage: .pet [creature entry]".into());
+    };
+    Some(
+        match crate::game::map::pets::give_pet(map, to, entry, level) {
+            Ok(said) | Err(said) => said,
+        },
+    )
 }
 
 /// The weapon proficiency spells, by weapon subclass: axes, bows, guns,
