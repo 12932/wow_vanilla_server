@@ -51,6 +51,9 @@ pub struct Derived {
     pub spell_power: [i32; 7],
     pub healing_power: i32,
     pub weapon_skill: u32,
+    /// The off hand's weapon's skill: its white swings roll with it
+    /// (mangos's `GetWeaponSkillValue(OFF_ATTACK)`).
+    pub offhand_skill: u32,
     pub ranged_skill: u32,
     pub defense: u32,
     pub dual_wield: bool,
@@ -529,6 +532,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         _ => g.main.filter(|_| !disarmed),
     };
     let weapon_skill = skill_of(main_hand.as_ref());
+    let offhand_skill = skill_of(g.off.as_ref());
     let ranged_skill = skill_of(g.ranged.as_ref());
     let defense = crate::game::map::skills::value(p, SKILL_DEFENSE).unwrap_or(level * 5)
         + p.auras
@@ -854,6 +858,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         spell_power,
         healing_power,
         weapon_skill,
+        offhand_skill,
         ranged_skill,
         defense,
         dual_wield,
@@ -954,6 +959,7 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
         spell_power: std::array::from_fn(|i| a.sum_mask(AURA_MOD_DAMAGE_DONE, 1 << i)),
         healing_power: a.sum(AURA_MOD_HEALING_DONE),
         weapon_skill: level * 5,
+        offhand_skill: level * 5,
         ranged_skill: level * 5,
         defense: level * 5,
         dual_wield: false,
