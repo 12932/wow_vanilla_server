@@ -653,7 +653,13 @@ pub fn positive(s: &SpellTemplate) -> bool {
     if s.attr(0, sd::ATTR_DEBUFF) {
         return false;
     }
-    !s.effects.iter().any(|e| {
+    !s.effects.iter().any(|e| harmful_effect(s, e))
+}
+
+/// Whether effect `e` of `s` harms: damage, a harmful aura, a buff's
+/// aura turned against its target, a hostile target, an instant kill.
+pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEffect) -> bool {
+    {
         matches!(e.effect, 2 | 9 | 17 | 31 | 58 | 62 | 121)
             || matches!(
                 e.aura,
@@ -710,7 +716,7 @@ pub fn positive(s: &SpellTemplate) -> bool {
             || e.effect == EFFECT_INSTAKILL
                 && !(e.target_a == 1 && e.target_b == 0)
                 && !(s.family_name == 5 && s.family_flags & 0x0200_0000 != 0)
-    })
+    }
 }
 
 /// The auras of `g`, mutably.

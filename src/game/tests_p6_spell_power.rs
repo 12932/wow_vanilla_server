@@ -729,3 +729,131 @@ async fn spell_threat_multiplies_its_school_and_family_and_skips_absorbs() {
         "{high:?}"
     );
 }
+
+/// A third rank of a buff at a friend, of spell level 48, alone in its
+/// chain; the same for any level.
+const BLESSING: u32 = 991_030;
+const LOW_BLESSING: u32 = 991_031;
+
+fn blessings(d: &mut GameData) {
+    use crate::game::data::spells::SpellRank;
+    use crate::game::map::auras::AURA_MOD_STAT;
+    let blessing = |id: u32| {
+        let mut s = bare(id, 1);
+        s.spell_level = 48;
+        s.duration_index = LASTS_LONG;
+        effect(&mut s, 0, aura(AURA_MOD_STAT, 0, 10, 21));
+        s
+    };
+    let mut low = blessing(LOW_BLESSING);
+    low.attributes[2] |= 0x8;
+    insert(d, [blessing(BLESSING), low]);
+    // A human's side and the kobold's, made friends.
+    let faction = |id: u32, ours: u32| crate::game::data::FactionTemplate {
+        id,
+        faction: id,
+        ours,
+        friend_mask: 0x2,
+        enemy_mask: 0x8,
+        ..Default::default()
+    };
+    d.faction_templates.insert(1, faction(1, 0x3));
+    d.faction_templates.insert(7, faction(7, 0x2));
+    for id in [BLESSING, LOW_BLESSING] {
+        d.spells.ranks.insert(
+            id,
+            SpellRank {
+                prev: 0,
+                first: id,
+                rank: 3,
+                req: 0,
+            },
+        );
+    }
+}
+
+/// A ranked buff at a friend goes on no one more than ten levels below its
+/// spell level, 38 for one of 48; unranked, passive, at the caster, not an
+/// aura, of a harmful amount, at an enemy or marked harmful, it has no
+/// floor; a helpful aura effect beside a harmful one keeps it, and a
+/// party's aura has it though aimed at the caster (Thistle Tea's
+/// `AuraRank.select` and `minimum_level`; mangos's
+/// `SelectAuraRankForLevel`, by each effect).
+#[test]
+fn a_ranked_buffs_floor_and_what_has_none() {
+    use crate::game::map::spells::aura_rank::minimum_level;
+    let d = data_with(blessings);
+    let base = d.spells.get(BLESSING).cloned().unwrap();
+    let with = |f: &dyn Fn(&mut SpellTemplate)| {
+        let mut s = base.clone();
+        f(&mut s);
+        s
+    };
+    assert_eq!(minimum_level(&d, &base), 38);
+    let exempt = [
+        with(&|s| s.id = 1),
+        with(&|s| s.attributes[0] |= crate::game::data::spells::ATTR_PASSIVE),
+        with(&|s| s.effects[0].target_a = 1),
+        with(&|s| s.effects[0].effect = 10),
+        with(&|s| s.effects[0].base_points = -11),
+        with(&|s| s.effects[0].target_a = 6),
+        with(&|s| s.custom_flags = crate::game::data::spells::CUSTOM_NEGATIVE),
+    ];
+    for (i, s) in exempt.iter().enumerate() {
+        assert_eq!(minimum_level(&d, s), 0, "exempt {i}");
+    }
+    let mixed = with(&|s| s.effects[1] = damage(10));
+    assert_eq!(minimum_level(&d, &mixed), 38, "a buff beside a blow");
+    let party = with(&|s| {
+        s.effects[0].effect = crate::game::map::spells::EFFECT_APPLY_AREA_AURA_PARTY;
+        s.effects[0].target_a = 1;
+    });
+    assert_eq!(minimum_level(&d, &party), 38, "a party's aura");
+}
+
+/// A player's buff with no rank low enough is refused LOWLEVEL at one of
+/// 37 and goes on one of 38 and on its caster; triggered, a creature's,
+/// or allowing low levels, it goes on the one of 37 (Thistle Tea's
+/// `AuraRank.validate`; mangos's `CheckCast` LOWLEVEL).
+#[tokio::test]
+async fn a_buff_too_high_for_its_target_is_refused_but_where_excepted() {
+    let realm = fast_realm(blessings);
+    let (_c, a, map) = human(&realm, "P6PG", "Blesser", Class::Paladin).await;
+    let (_d, b, _) = human(&realm, "P6PH", "Blessed", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[BLESSING, LOW_BLESSING]);
+            let near = m.players[&a].position();
+            m.players.get_mut(&b).unwrap().movement.position = near;
+            let on = |m: &mut crate::game::map::Map,
+                      level: u8,
+                      f: &dyn Fn(&mut crate::game::map::Map)| {
+                crate::game::map::auras::remove_spell(m, b, BLESSING, None);
+                crate::game::map::auras::remove_spell(m, b, LOW_BLESSING, None);
+                kit::ready(m, b, level, &[]);
+                f(m);
+                has(m, b, BLESSING) || has(m, b, LOW_BLESSING)
+            };
+            let low = on(m, 37, &|m| {
+                cast_fresh(m, a, BLESSING, at(b));
+            });
+            let boundary = on(m, 38, &|m| {
+                cast_fresh(m, a, BLESSING, at(b));
+            });
+            cast_fresh(m, a, BLESSING, at(a));
+            let own = has(m, a, BLESSING);
+            let triggered = on(m, 37, &|m| spells::cast_triggered(m, a, BLESSING, Some(b)));
+            let kobold = kit::dummy(m, a, 60, 2.0);
+            let creature = on(m, 37, &|m| {
+                kit::fresh(m, kobold);
+                spells::cast(m, kobold, BLESSING, at(b), None);
+            });
+            let allowed = on(m, 37, &|m| {
+                cast_fresh(m, a, LOW_BLESSING, at(b));
+            });
+            (low, boundary, own, triggered, creature, allowed)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (false, true, true, true, true, true));
+}

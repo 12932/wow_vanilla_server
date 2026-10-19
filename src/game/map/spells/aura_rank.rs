@@ -24,13 +24,18 @@ pub fn minimum_level(data: &GameData, s: &SpellTemplate) -> u32 {
     if s.passive()
         || s.attr(2, ATTR_EX2_ALLOW_LOW_LEVEL_BUFF)
         || !data.spells.ranks.get(&s.id).is_some_and(|r| r.rank > 0)
-        || !auras::positive(s)
+        || s.custom(crate::game::data::spells::CUSTOM_NEGATIVE)
+        || s.attr(0, crate::game::data::spells::ATTR_DEBUFF)
     {
         return 0;
     }
+    // A helpful aura effect at a friend, or a party's aura, ranks it, though
+    // another effect harms (mangos's `SelectAuraRankForLevel`, by each
+    // effect's positivity; Thistle Tea's `AuraRank.minimum_level`).
     let buff = s.effects.iter().any(|e| {
-        e.effect == EFFECT_APPLY_AREA_AURA_PARTY
-            || (e.effect == EFFECT_APPLY_AURA && e.aura != 0 && FRIENDLY.contains(&e.target_a))
+        (e.effect == EFFECT_APPLY_AREA_AURA_PARTY
+            || (e.effect == EFFECT_APPLY_AURA && e.aura != 0 && FRIENDLY.contains(&e.target_a)))
+            && !auras::harmful_effect(s, e)
     });
     if buff {
         s.spell_level.saturating_sub(10)
