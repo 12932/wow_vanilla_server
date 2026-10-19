@@ -84,6 +84,71 @@ fn beside(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     }
 }
 
+// ---- #43: fears break by chance -----------------------------------------
+
+const FEAR: u32 = 994_300;
+const FLAGLESS_FEAR: u32 = 994_301;
+const BOLT: u32 = 994_302;
+/// Every damage taken, as Psychic Scream's and Fear's `procFlags` (0xA22A8).
+const TAKEN_DAMAGE: u32 = 0x000A_22A8;
+
+fn fear_kit(d: &mut GameData) {
+    let mut fear = bare(FEAR, 5);
+    fear.duration_index = LASTS_15S;
+    fear.proc_flags = TAKEN_DAMAGE;
+    fear.proc_chance = 100;
+    effect(&mut fear, 0, aura(auras::AURA_MOD_FEAR, 0, 0, 6));
+    let mut flagless = fear.clone();
+    flagless.id = FLAGLESS_FEAR;
+    flagless.proc_flags = 0;
+    let mut bolt = bare(BOLT, 2);
+    effect(&mut bolt, 0, damage(100));
+    insert(d, [fear, flagless, bolt]);
+}
+
+/// mangos-classic's chance that a blow breaks a fear: the damage over 25 a
+/// level less 150 past level 8, else over 50 (`HandleRemoveByDamageChanceProc`).
+#[test]
+fn a_fears_break_chance_is_the_blow_over_its_bearers_level() {
+    use crate::game::map::procs::fear_break_chance;
+    assert_eq!(fear_break_chance(60, 135), 10.0, "1,350 at 60");
+    assert_eq!(fear_break_chance(10, 50), 50.0, "100 at 10");
+    assert_eq!(fear_break_chance(5, 25), 50.0, "50 below 9");
+    assert!(fear_break_chance(60, 1350) >= 100.0, "sure");
+    assert_eq!(fear_break_chance(60, 0), 0.0);
+}
+
+/// A fear without the damage-break flag breaks by chance at a blow its
+/// spell's `procFlags` name, as mangos-classic has it (the user's #43; Thistle
+/// Tea keeps it): 100 damage on a level-10 unit is a sure break. One whose
+/// spell names no blow keeps on.
+#[tokio::test]
+async fn a_fear_breaks_by_chance_at_a_blow_its_spell_names() {
+    let realm = fast_realm(fear_kit);
+    let (_c, mage, map) = human(&realm, "FEARS", "Fearer", Class::Mage).await;
+    let got = on(&map, move |m| {
+        ready(m, mage, 60, &[BOLT]);
+        let feared = |m: &mut Map, spell: u32| {
+            let k = dummy(m, mage, 10, 5.0);
+            let s = m.realm.data.spells.get(spell).cloned().unwrap();
+            auras::apply_spell(m, mage, k, &s, &[(0, 0)], auras::Context::default())
+                .expect("the fear takes");
+            let on_before = auras::auras(m, k).is_some_and(|a| a.has_spell(spell));
+            spells::cast_triggered(m, mage, BOLT, Some(k));
+            let hurt = m.unit_fields(k).unwrap().get_u32(UNIT_FIELD_HEALTH) < 1_000_000;
+            (
+                on_before,
+                hurt,
+                auras::auras(m, k).is_some_and(|a| a.has_spell(spell)),
+            )
+        };
+        (feared(m, FEAR), feared(m, FLAGLESS_FEAR))
+    })
+    .await;
+    assert_eq!(got.0, (true, true, false), "broken by the blow");
+    assert_eq!(got.1, (true, true, true), "no blow named, it stays");
+}
+
 // ---- #30: attack-speed slows multiply ------------------------------------
 
 const SLOW_20: u32 = 993_000;
