@@ -416,6 +416,17 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **`NO_SPELL_DEFENSE`** as Thistle Tea (mangos names the flag but never reads it).
   - **Left:** Lunar Festival fireworks (a feature to port); scale auras grow a creature's size but not its reach;
     an entry change doesn't update a creature's maximum mana.
+- **7k, auras, round 7:** a transform takes its creature's size, reach and weapons, a growth grows the reach too,
+  and the unit's own come back after; a marked unit is tracked (`UNIT_DYNFLAG_TRACK_UNIT`); a buff refreshed at the
+  limit counts as the newest, so the next new one pushes out the next-oldest (the refreshed one was pushed out);
+  Golemagg's Trust pulses only from his own aura; a lasting aura triggered by a timed one goes with it (Insight of
+  the Qiraji with the Badge of the Swarmguard); dispel resistance is its flat chance scaled by its percent (mangos's
+  `ApplySpellMod`). **My calls:**
+  - **A form keeps the unit's own size** (mangos); Thistle Tea shrinks Ghost Wolf, cat, travel and aquatic to 0.8.
+  - **Stacked transforms:** taking off a later one puts the earlier one's weapons back (Thistle Tea); a transform's
+    size is its own even at 1.0; several growths multiply (Thistle Tea; mangos adds them).
+  - **Left:** ground areas deal their damage from the area, not through auras on those inside (four rows);
+    Thistle Tea's 1 s of no detection after Vanish isn't in wvs or mangos.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -516,6 +527,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7g: creature scripts, round 7 | merged | 1a96144 |
 | 7i: pets, round 7 | 81.5% | 296f744 |
 | 7j: creatures, round 7 | 82.1% | 63a5e39 |
+| 7k: auras, round 7 | 82.6% | 462b7fb |
 
 **Running now:** round 7 (7g creature scripts, 7i pets, 7j creatures, 7k auras, 7l movement and the network), and the extended suite (19:40, at 0.1.27).
 
