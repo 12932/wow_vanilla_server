@@ -108,8 +108,10 @@ hours), the crate version bumped with each merge.
   and the crossing left them behind. wvs now converts the real layout at its edges (`movement_wire`), and crosses as
   mangos does (`SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` with the deck offset, the boat added before its
   passengers and removed after); passengers' server positions follow the deck; every two-map route crosses both
-  ways. **My call:** fix the fork's vanilla movement layout too, as we did its spell misses, so `movement_wire` can
-  go (queued). Left: logging in on a boat doesn't attach you to it; the Grom'Gol-Undercity zeppelin's in-map jump
+  ways. **Then (0.1.10):** the fork's vanilla movement is now 1.12's (`0f646a2`: the on-transport flag 0x02000000
+  with the whole GUID and no timestamp, in both `MovementInfo` and the create's `MovementBlock`; and a u32 fall time,
+  where it had a float: peon's landings had been telling servers about 1.1 billion ms), checked against the client's
+  reader; `movement_wire` is gone, and wvs, peon and rustigator all pin the fork there. Left: logging in on a boat doesn't attach you to it; the Grom'Gol-Undercity zeppelin's in-map jump
   sends no near teleport.
 - **Flight view (0.1.5):** `[visibility] flight_yards` 400, only on a flight master's mount, measured on the ground;
   others see the flier at their own distance.
