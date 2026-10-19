@@ -551,13 +551,90 @@ impl Session {
         self.realm.store.set_account_data(&k, kind, now, data);
     }
 
+    /// Log a character in. One still in the world from another connection
+    /// is taken over where they are; one leaving it (their client gone a
+    /// moment ago, or between maps) is waited for, so that the row read
+    /// is the one their leaving saved. Their row is read only once nobody
+    /// of the account is online: a session's save is queued in the store
+    /// before it goes offline, and the store reads after what was queued
+    /// before.
     async fn login(&mut self, g: Guid) {
-        let fail = |out: &Outbound, result| {
-            out.send(&SMSG_CHARACTER_LOGIN_FAILED { result });
-        };
         if !guid::is_player(g) {
-            return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
+            return login_failed(&self.outbound, WorldResult::CharLoginNoCharacter);
         }
+        let Some(name) = self.realm.registry.name(g) else {
+            return login_failed(&self.outbound, WorldResult::CharLoginNoCharacter);
+        };
+        if *name.account != *self.account {
+            return login_failed(&self.outbound, WorldResult::CharLoginNoCharacter);
+        }
+        let started = tokio::time::Instant::now();
+        loop {
+            let existing = self
+                .realm
+                .registry
+                .online(g)
+                .or_else(|| self.realm.registry.online_for_account(&self.account));
+            let Some(existing) = existing else {
+                match self.enter(g, &name).await {
+                    Entered::Done => return,
+                    // Another login of the account went online meanwhile.
+                    Entered::Raced => continue,
+                }
+            };
+            if existing.guid == g {
+                // Still in the world from another connection: this one
+                // takes them over where they are, their state kept, and
+                // the other goes (mangos's `HandlePlayerReconnect`, the
+                // user's #35).
+                let new = Arc::new(Online::new(
+                    &name,
+                    self.gm_level(),
+                    self.outbound.clone(),
+                    self.control.clone(),
+                    existing.map(),
+                ));
+                let old = existing.clone();
+                let taken = existing
+                    .map()
+                    .query(move |m| crate::game::map::login::take_over(m, g, &old, new))
+                    .await;
+                if let Some(Some(map)) = taken {
+                    self.last_character = Some(guid::counter(g));
+                    self.state = State::InWorld { guid: g, map };
+                    return;
+                }
+                // Leaving the world, to be saved, or between maps: wait
+                // for them to go or arrive. One whose session has gone
+                // has its leaving queued already: if it hasn't gone soon,
+                // it is a ghost.
+                let wait = if existing.session.is_closed() {
+                    GHOST_WAIT
+                } else {
+                    LOGIN_WAIT
+                };
+                if started.elapsed() < wait {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    continue;
+                }
+            }
+            // Another of the account's characters, or one that neither
+            // went nor arrived: that connection goes, and this client can
+            // try again.
+            if existing.session.send(Control::Kick).is_err() {
+                reap(&self.realm, existing);
+            }
+            return login_failed(&self.outbound, WorldResult::CharLoginDuplicateCharacter);
+        }
+    }
+
+    /// Read the character's row and bring them into the world, once nobody
+    /// of the account is online.
+    async fn enter(&mut self, g: Guid, name: &Arc<NameEntry>) -> Entered {
+        let fail = |out: &Outbound, result| {
+            login_failed(out, result);
+            Entered::Done
+        };
         let Some(mut row) = self.realm.store.load(guid::counter(g)).await else {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
         };
@@ -598,42 +675,18 @@ impl Session {
         if let Some(t) = tutorials {
             row.state.tutorials = t;
         }
-        let Some(name) = self.realm.registry.name(g) else {
-            return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
-        };
         let key = MapKey::world(row.map);
         let map = self.realm.maps.get(&self.realm, key);
         let gm_level = self.gm_level();
         let online = Arc::new(Online::new(
-            &name,
+            name,
             gm_level,
             self.outbound.clone(),
             self.control.clone(),
             map.clone(),
         ));
-        if let Err(existing) = self.realm.registry.go_online(online.clone()) {
-            // The character is still in the world from another connection:
-            // this one takes them over where they are, their state kept,
-            // and the other goes (mangos's `HandlePlayerReconnect`, the
-            // user's #35).
-            if existing.guid == g {
-                let old = existing.clone();
-                let new = online.clone();
-                let taken = existing
-                    .map()
-                    .query(move |m| crate::game::map::login::take_over(m, g, &old, new))
-                    .await;
-                if let Some(Some(map)) = taken {
-                    self.state = State::InWorld { guid: g, map };
-                    return;
-                }
-            }
-            // Another of the account's characters, or one between maps:
-            // that connection goes, and this client can try again.
-            if existing.session.send(Control::Kick).is_err() {
-                reap(&self.realm, existing);
-            }
-            return fail(&self.outbound, WorldResult::CharLoginDuplicateCharacter);
+        if self.realm.registry.go_online(online.clone()).is_err() {
+            return Entered::Raced;
         }
         // Logged out in a dungeon or raid: back into their copy, or, if it
         // won't have them, home. In a battleground: back into the match
@@ -672,7 +725,28 @@ impl Session {
             return fail(&self.outbound, WorldResult::CharLoginNoWorld);
         }
         self.state = State::InWorld { guid: g, map };
+        Entered::Done
     }
+}
+
+/// How long a login waits for the character to finish leaving the world
+/// (their old client's save) or arriving on a map, before it lets that
+/// session go and fails, for the client to try again.
+const LOGIN_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// [`LOGIN_WAIT`], for a character whose session has gone.
+const GHOST_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// What [`Session::enter`] came to.
+enum Entered {
+    /// In the world, or failed and told.
+    Done,
+    /// Another login of the account went online between the check and
+    /// this one: look again.
+    Raced,
+}
+
+fn login_failed(out: &Outbound, result: WorldResult) {
+    out.send(&SMSG_CHARACTER_LOGIN_FAILED { result });
 }
 
 /// Pass a player a map has let go of to their session, to route to their
