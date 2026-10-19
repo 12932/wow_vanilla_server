@@ -524,6 +524,14 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   spells wait for a victim within 30 yards, Balinda's casting spot needs sight, a ritual needs its living invoker;
   the cavalry, infantry, lords and wing commanders tested. **My calls:** the temporary war is Thistle Tea's (mangos
   has none), without the leak; `$r` and `$c` stay as written for a creature (mangos gives no rule).
+- **8i, pets, round 8:** a master who can't join (unattackable, unselectable, flying) or owns a summon with
+  vmangos's `NO_OWNER_THREAT` (Eye of Kilrogg, Sentry Totem) isn't drawn into its fight; a blow at an evading
+  creature stops; **a creature whose victim (a pet) died turns to the next on its threat list** (it had stood idle,
+  keeping the hunter in combat); a creature-charmed caster keeps her foe; **the engineers' Target Dummies** stand,
+  answer no blow and fall at 15 seconds (vmangos's `npc_target_dummy`; they had followed and fought for good); a
+  charm of many (aura 177, Chains of Kel'Thuzad) charms. **My calls** (mangos's): a creature taking on a pet brings
+  its master in at once (Thistle Tea waits for a blow); the master is held in by his own threat entry; at the pet's
+  death the foe turns on the master.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
