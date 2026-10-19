@@ -456,7 +456,14 @@ pub fn check(
         if held(&[AURA_MOD_CONFUSE]) {
             return Some(fail::CONFUSED);
         }
-        if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
+        // A charm's own AI casts for the one it holds (a creature's charm
+        // of a player: Thistle Tea's `PlayerCharm`); nothing else does.
+        let charm_ai = map
+            .players
+            .get(&caster)
+            .and_then(|p| p.owned.possessed_by)
+            .is_some_and(|pos| !pos.manual);
+        if (a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM)) && !charm_ai {
             return Some(fail::NOT_IN_CONTROL);
         }
     }

@@ -1558,3 +1558,197 @@ async fn a_held_player_plays_nothing_but_talks_and_a_charm_moves_no_one() {
         .unwrap();
     assert_eq!(mover, (Some(demon), None), "enslaved, moving no one");
 }
+
+/// Thistle Tea's `PlayerCharm`: "spells/1 chooses the highest learned
+/// harmful rank and excludes unsuitable abilities", "casts a learned
+/// ability at the controller's enemy", "out of mana casters approach for
+/// melee", "never attacks another unit charmed by the same controller",
+/// "stuns suspend the charm AI", "fear expiry cannot restore control while
+/// charm remains", and `Charm.maintain` "controller death, combat end ...
+/// release the charm": a mage a wolf charms has, of her spells, only her
+/// Fireball's second rank to cast (not its first, nor one of no class,
+/// a passive, a hidden one, one the AI mustn't cast, one a blow breaks,
+/// or a heal), and casts it at the wolf's foe; stunned she does nothing;
+/// out of mana she closes to strike it. Another the wolf charms is no foe
+/// of hers. A fear on her ending gives her no control while the charm
+/// holds; the wolf's fight over, the charm ends and she has it.
+#[tokio::test]
+async fn a_creature_charmed_mage_casts_her_best_at_its_foe_or_strikes_it() {
+    use crate::game::data::spells::SpellRank;
+    use crate::game::map::auras;
+    use crate::game::tests_pets2::{bring, control_update, more};
+    const CHARM: u32 = 9060;
+    const FB1: u32 = 990_790;
+    const FB2: u32 = 990_791;
+    const PLAIN: u32 = 990_792;
+    const PASSIVE: u32 = 990_793;
+    const HIDDEN: u32 = 990_794;
+    const NO_AI: u32 = 990_795;
+    const BREAKS: u32 = 990_796;
+    const HEAL: u32 = 990_797;
+    const STUN: u32 = 990_798;
+    const FEAR: u32 = 990_799;
+    let mut d = more();
+    let none = SpellEffect::default();
+    let bolt = |id: u32, level: u32| {
+        let mut s = tests_pets::spell(id, "Fireball", [tests_pets::effect(2, 9, 6), none, none]);
+        s.family_name = 3;
+        s.spell_level = level;
+        s.mana_cost = 10;
+        s.school = 2;
+        s
+    };
+    let mut plain = bolt(PLAIN, 1);
+    plain.family_name = 0;
+    plain.name = "Shoot".into();
+    let mut passive = bolt(PASSIVE, 1);
+    passive.attributes[0] |= 0x40;
+    passive.name = "Passive".into();
+    let mut hidden = bolt(HIDDEN, 1);
+    hidden.attributes[0] |= crate::game::data::spells::ATTR_HIDDEN;
+    hidden.name = "Hidden".into();
+    let mut no_ai = bolt(NO_AI, 1);
+    no_ai.attributes[1] |= 0x2_0000;
+    no_ai.name = "Manual".into();
+    let mut breaks = bolt(BREAKS, 1);
+    breaks.aura_interrupt_flags = auras::INTERRUPT_DAMAGE;
+    breaks.name = "Polymorph".into();
+    let mut heal = bolt(HEAL, 1);
+    heal.effects[0] = tests_pets::effect(10, 9, 21);
+    heal.name = "Heal".into();
+    let aura_spell = |id: u32, aura: u32| {
+        let mut e = tests_pets::effect(6, 0, 6);
+        e.aura = aura;
+        let mut s = tests_pets::spell(id, "Hold", [e, none, none]);
+        s.duration_index = 4;
+        s
+    };
+    for s in [
+        bolt(FB1, 1),
+        bolt(FB2, 10),
+        plain,
+        passive,
+        hidden,
+        no_ai,
+        breaks,
+        heal,
+        aura_spell(STUN, auras::AURA_MOD_STUN),
+        aura_spell(FEAR, auras::AURA_MOD_FEAR),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d.spells.ranks.insert(
+        FB2,
+        SpellRank {
+            prev: FB1,
+            first: FB1,
+            rank: 2,
+            req: 0,
+        },
+    );
+    d.spells.ranks.insert(
+        FB1,
+        SpellRank {
+            first: FB1,
+            rank: 1,
+            ..Default::default()
+        },
+    );
+    let realm = crate::game::harness::realm_with(d);
+    let (mut a, ga, map) = enter(&realm, "A", "Mage", Race::Human, Class::Mage).await;
+    let (_b, gb, _) = enter(&realm, "B", "Foe", Race::Human, Class::Warrior).await;
+    let (_c, gc, _) = enter(&realm, "C", "Fellow", Race::Human, Class::Warrior).await;
+    bring(&map, gb, ga, 15.0).await;
+    bring(&map, gc, ga, 4.0).await;
+    let wolf = place(&map, ga, tests_pets::WOLF, 0x70_0060, 6.0).await;
+    let spells = map
+        .query(move |m| {
+            m.players
+                .get_mut(&ga)
+                .unwrap()
+                .spells
+                .extend([FB1, FB2, PLAIN, PASSIVE, HIDDEN, NO_AI, BREAKS, HEAL]);
+            crate::game::map::pets::possess::charm_spells(m, ga)
+        })
+        .await
+        .unwrap();
+    assert_eq!(spells, vec![FB2], "only her best harmful rank");
+    // The wolf fights her friend B, and charms her and C.
+    map.query(move |m| {
+        crate::game::map::ai::attacked(m, wolf, gb);
+        crate::game::map::spells::cast_triggered(m, wolf, CHARM, Some(gc));
+        crate::game::map::spells::cast_triggered(m, wolf, CHARM, Some(ga));
+        crate::game::map::ai::add_threat(m, wolf, gc, 1000.0);
+        let p = m.players.get_mut(&ga).unwrap();
+        p.fields.set_u32(UNIT_FIELD_MAXPOWER1, 1000);
+        p.fields.set_u32(UNIT_FIELD_POWER1, 1000);
+    })
+    .await;
+    assert!(!control_update(&mut a, ga).await, "charmed: no control");
+    a.wait_for("her Fireball at the wolf's foe", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == ga && s.spell == FB2 => Some(()),
+        _ => None,
+    })
+    .await;
+    let on_fellow = map
+        .query(move |m| m.combat(ga).is_some_and(|c| c.attacking && c.victim == gc))
+        .await
+        .unwrap();
+    assert!(!on_fellow, "not on another of the wolf's");
+    // Stunned: nothing.
+    map.query(move |m| {
+        crate::game::map::spells::interrupt(m, ga);
+        let s = m.realm.data.spells.get(STUN).cloned().unwrap();
+        let _ = auras::apply_spell(m, gb, ga, &s, &[(0, 0)], Default::default());
+    })
+    .await;
+    a.clear();
+    let cast_stunned = a
+        .gets(Duration::from_millis(1700), |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == ga => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(cast_stunned.is_none(), "stunned, she does nothing");
+    // No mana: she closes to strike.
+    map.query(move |m| {
+        auras::remove_spell(m, ga, STUN, None);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_POWER1, 0);
+    })
+    .await;
+    a.wait_for("her swing at the foe", |m| match m {
+        ServerOpcodeMessage::SMSG_ATTACKSTART(x) if x.attacker == ga && x.victim == gb => Some(()),
+        _ => None,
+    })
+    .await;
+    // A fear ending under the charm gives her nothing back.
+    a.clear();
+    map.query(move |m| {
+        let s = m.realm.data.spells.get(FEAR).cloned().unwrap();
+        let _ = auras::apply_spell(m, gb, ga, &s, &[(0, 0)], Default::default());
+        auras::remove_spell(m, ga, FEAR, None);
+    })
+    .await;
+    let back = a
+        .gets(Duration::from_millis(200), |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid == ga && u.allow_movement =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(back.is_none(), "no control while the charm holds");
+    // The wolf's fight over: the charm ends.
+    map.query(move |m| {
+        crate::game::map::combat::leave_combat(m, wolf);
+        crate::game::map::ai::forget(m, gb);
+    })
+    .await;
+    assert!(control_update(&mut a, ga).await, "hers again");
+}

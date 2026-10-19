@@ -51,8 +51,9 @@ fn holding_spell(map: &Map, master: Guid, unit: Guid) -> Option<u32> {
 }
 
 /// The spells a charmed player is given to cast: their harmful class
-/// spells, each at its best rank (Thistle Tea's `PlayerCharm.spells`).
-fn charm_spells(map: &Map, player: Guid) -> Vec<u32> {
+/// spells shown in the spellbook, each at its best rank (Thistle Tea's
+/// `PlayerCharm.spells`).
+pub(crate) fn charm_spells(map: &Map, player: Guid) -> Vec<u32> {
     let data = &map.realm.data;
     let Some(p) = map.players.get(&player) else {
         return Vec::new();
@@ -62,6 +63,7 @@ fn charm_spells(map: &Map, player: Guid) -> Vec<u32> {
         let usable = s.family_name != 0
             && !crate::game::map::auras::positive(s)
             && !s.passive()
+            && !s.attr(0, crate::game::data::spells::ATTR_HIDDEN)
             && s.aura_interrupt_flags & crate::game::map::auras::INTERRUPT_DAMAGE == 0
             && s.attributes[1] & 0x2_0000 == 0;
         if !usable {
@@ -339,6 +341,14 @@ fn charm_target(map: &Map, victim: Guid, master: Guid, t: Guid) -> bool {
 /// its blade till the next try. With no foe it follows.
 fn fight(map: &mut Map, victim: Guid, master: Guid) {
     let now = map.now;
+    // Stunned, it does nothing (Thistle Tea's "stuns suspend the charm
+    // AI").
+    if crate::game::map::auras::auras(map, victim)
+        .is_some_and(|a| a.has(crate::game::map::auras::AURA_MOD_STUN))
+    {
+        crate::game::map::combat::stop_attack(map, victim);
+        return;
+    }
     let current = map
         .combat(victim)
         .filter(|c| c.attacking)
