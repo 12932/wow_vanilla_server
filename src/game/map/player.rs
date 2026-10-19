@@ -264,6 +264,9 @@ pub struct Player {
     pub caster: crate::game::map::spells::Caster,
     /// A resurrection offered: by whom, and with what health and mana.
     pub resurrect_offer: Option<(Guid, u32, u32)>,
+    /// Where the caster stood as they offered it: where it brings one
+    /// (mangos's `setResurrectRequestData`).
+    pub resurrect_at: Option<Vector3d>,
     pub trade: Option<crate::game::map::trade::Trade>,
     pub duel: Option<crate::game::map::duel::Duel>,
     /// Where a player in a battleground came from.
@@ -370,6 +373,7 @@ impl Player {
             auras: Default::default(),
             caster: Default::default(),
             resurrect_offer: None,
+            resurrect_at: None,
             trade: None,
             duel: None,
             bg_return: None,

@@ -312,3 +312,65 @@ async fn a_professions_ranks_in_any_order_keep_its_progress_slot_and_highest_cap
     assert_eq!(after, expert, "the lower rank after changes nothing");
     assert_eq!(enchanting_after, enchanting, "nor another skill");
 }
+
+/// A made-up Resurrection: seventy percent back.
+const RAISE: u32 = 997_704;
+const RAISE_TOO: u32 = 997_705;
+
+fn raising(d: &mut GameData) {
+    for id in [RAISE, RAISE_TOO] {
+        let mut s = bare(id, 1);
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                effect: spells::EFFECT_RESURRECT,
+                base_points: 69,
+                base_dice: 1,
+                target_a: 6,
+                ..Default::default()
+            },
+        );
+        insert(d, [s]);
+    }
+}
+
+/// Thistle Tea's `Resurrection.offer/5` "keeps the first offer and its
+/// cast position": a second resurrection offered over the first changes
+/// nothing, and taken, the first brings the dead to where its caster stood
+/// as they cast it, not where they went after (mangos's
+/// `setResurrectRequestData` and `ResurrectUsingRequestData`).
+#[tokio::test]
+async fn a_resurrection_taken_brings_the_dead_where_its_caster_stood_as_they_cast() {
+    let realm = fast_realm(raising);
+    let (a, alice, map) = human(&realm, "P7C5", "Fallen", Class::Warrior).await;
+    let (_b, bob, _) = human(&realm, "P7C6", "Raiser", Class::Priest).await;
+    let (_c, cid, _) = human(&realm, "P7C7", "Other", Class::Priest).await;
+    let cast_at = on(&map, move |m| {
+        crate::game::map::death::kill(m, alice);
+        spells::cast_triggered(m, bob, RAISE, Some(alice));
+        let at = m.players[&bob].position();
+        // Bob walks off; Cid offers too.
+        if let Some(p) = m.players.get_mut(&bob) {
+            p.movement.position.x += 20.0;
+        }
+        spells::cast_triggered(m, cid, RAISE_TOO, Some(alice));
+        (at, m.players[&alice].resurrect_offer.map(|o| o.0))
+    })
+    .await;
+    let (at, offer) = cast_at;
+    assert_eq!(offer, Some(bob), "the first offer kept");
+    a.send(CMSG_RESURRECT_RESPONSE {
+        guid: bob,
+        status: 1,
+    })
+    .await;
+    until(&map, "Alice up where Bob cast", move |m| {
+        let p = &m.players[&alice];
+        let here = p.position();
+        p.death == crate::game::map::death::Death::Alive
+            && (here.x - at.x).abs() < 0.5
+            && (here.y - at.y).abs() < 0.5
+    })
+    .await;
+}

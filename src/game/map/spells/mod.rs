@@ -2720,6 +2720,7 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
     let Some((caster, health, mana)) = p.resurrect_offer else {
         return;
     };
+    let offered_at = p.resurrect_at;
     // Declined, it is gone; accepted, it must be the one offered (Thistle
     // Tea's `Resurrection.respond`).
     if !accept {
@@ -2729,7 +2730,9 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
     if caster != from {
         return;
     }
-    let to = map.position_of(caster);
+    // Where the caster stood as they cast it, not where they are now
+    // (mangos's `ResurrectUsingRequestData`, Thistle Tea's offer).
+    let to = map.position_of(caster).or(offered_at);
     if crate::game::map::death::resurrect_with(map, player, health, mana)
         && let Some(pos) = to
     {

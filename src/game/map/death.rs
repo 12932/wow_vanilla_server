@@ -327,6 +327,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     p.death = Death::Alive;
     // An offer from before is spent.
     p.resurrect_offer = None;
+    p.resurrect_at = None;
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
