@@ -607,3 +607,44 @@ async fn burns_and_drains_that_ignore_their_caster_take_their_own_amount() {
     );
     assert_eq!(out[3], (400, 100), "the burn over time");
 }
+
+/// Thistle Tea's `ModifierSync` "resends retained aura totals after
+/// pending login changes": a spell modifier aura a player logged out with
+/// comes back with them, and their client is told its total again
+/// (`SMSG_SET_FLAT_SPELL_MODIFIER`: the family bit, the operation, the
+/// sum).
+#[tokio::test]
+async fn a_modifier_kept_through_a_relog_is_told_again() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    const QUICKER: u32 = 97_450;
+    let op = crate::game::map::spells::mods::OP_CASTING_TIME;
+    let mut d = data();
+    let mut quicker = aura_spell(QUICKER, auras::AURA_ADD_FLAT_MODIFIER, op as i32, -100);
+    quicker.family_name = 3;
+    quicker.effects[0].item_type = 1 << 5;
+    d.spells.spells.insert(QUICKER, quicker);
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Mage).await;
+    on(&map, move |m| {
+        let s = m.realm.data.spells.spells[&QUICKER].clone();
+        let minute = auras::Context {
+            duration: Some(Some(60_000)),
+            ..Default::default()
+        };
+        auras::apply_spell(m, ga, ga, &s, &[(0, -100)], minute).expect("put on");
+    })
+    .await;
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    a.clear();
+    a.login(ga).await;
+    let told = [&[5u8, op as u8][..], &(-100i32).to_le_bytes()].concat();
+    let frame = a
+        .wait_frame("SMSG_SET_FLAT_SPELL_MODIFIER", 0x266, |b| {
+            b[..2] == [5, op as u8]
+        })
+        .await;
+    assert_eq!(frame, told);
+}
