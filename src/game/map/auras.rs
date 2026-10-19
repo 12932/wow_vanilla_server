@@ -1927,6 +1927,13 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
         }
+        // Hunter's Mark, Mind Vision: the unit is tracked (mangos's
+        // `HandleAuraModStalked`, Thistle Tea's `StealthSync`).
+        AURA_MOD_STALKED => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_TRACK_UNIT, true);
+            }
+        }
         AURA_GHOST => {}
         // A player's own protection from every school drops what
         // invulnerability ends (a flag, silithyst); one's own is helpful,
@@ -2139,6 +2146,11 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 );
             }
         }
+        AURA_MOD_STALKED if !still(map, AURA_MOD_STALKED) => {
+            if let Some(f) = map.unit_fields_mut(target) {
+                f.set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_TRACK_UNIT, false);
+            }
+        }
         _ => {}
     }
 }
@@ -2245,6 +2257,9 @@ const VIS_FLAG_UNTRACKABLE: u8 = 0x04;
 /// `PLAYER_FIELD_BYTES2`'s second byte: stealthed, and invisible.
 const BYTE2_STEALTH: u8 = 0x20;
 const BYTE2_INVISIBILITY_GLOW: u8 = 0x40;
+
+/// `UNIT_DYNAMIC_FLAGS`'s tracked unit (`UNIT_DYNFLAG_TRACK_UNIT`).
+pub const DYNFLAG_TRACK_UNIT: u32 = 0x2;
 
 pub const UNIT_FLAG_SILENCED: u32 = 0x0000_2000;
 pub const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
