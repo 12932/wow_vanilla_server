@@ -153,6 +153,57 @@ async fn a_pets_name_and_stance_last_through_the_stable_and_a_logout() {
     assert_eq!(kept.1, 50, "experience");
 }
 
+/// Thistle Tea's `PossessionOwner.reconcile` "controller process loss
+/// removes the aura and restores the victim", and `State.suspend_companion`
+/// "clears the possession camera and mover before retaining the
+/// character": a priest mind-controlling a player goes away (their
+/// client gone); the victim is let go at once, the aura off, their side
+/// and control their own again; and the priest, back, holds no one and
+/// moves only themselves.
+#[tokio::test]
+async fn a_mind_controlled_player_is_let_go_when_the_priest_goes() {
+    use crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE;
+    use crate::game::tests_pets2::{MIND_CONTROL, bring, control_update, flag_pvp, more};
+    let realm = harness::realm_with(more());
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    bring(&map, gb, ga, 8.0).await;
+    a.sees(gb).await;
+    flag_pvp(&map, vec![ga, gb]);
+    let before = map
+        .query(move |m| m.players[&gb].fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+        .await
+        .unwrap();
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(!control_update(&mut b, gb).await, "the victim lets go");
+    assert!(control_update(&mut a, gb).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: gb }).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    a.disconnect();
+    assert!(control_update(&mut b, gb).await, "control back");
+    let victim = map
+        .query(move |m| {
+            let p = &m.players[&gb];
+            (
+                p.auras.has_spell(MIND_CONTROL),
+                p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+                p.owned.possessed_by.is_some(),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(victim, (false, before, false), "let go");
+    let mut a = Client::connect(&realm, "A");
+    a.login(ga).await;
+    a.sees(ga).await;
+    let priest = map
+        .query(move |m| m.players.get(&ga).map(|p| (p.owned.charm, p.owned.mover)))
+        .await
+        .unwrap();
+    assert_eq!(priest, Some((None, None)), "holding no one");
+}
+
 /// Thistle Tea's taming "forwards the wild creature's level to its new
 /// owner": a hunter of 10 tames a beast of 8, and has a pet of 8.
 #[tokio::test]
