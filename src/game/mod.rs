@@ -557,7 +557,11 @@ mod tests_p6_misc;
 #[cfg(test)]
 mod tests_p6_misc_ai;
 #[cfg(test)]
+mod tests_p6_misc_auras;
+#[cfg(test)]
 mod tests_p6_misc_duel;
+#[cfg(test)]
+mod tests_p6_misc_pets;
 #[cfg(test)]
 mod tests_p6_misc_rewards;
 #[cfg(test)]
