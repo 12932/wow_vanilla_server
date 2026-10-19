@@ -159,7 +159,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 [AI5_GAPS.md](AI5_GAPS.md) lists each by its number; in short:
 
 - **Movement:**
-  - Distract stops and turns only creatures; Thistle Tea turns players too.
   - A monster move's intermediate point within about 0.7 yards of the destination is left out, as mangos-classic
     leaves it; Thistle Tea nudges its height instead.
 - **Scripts:**

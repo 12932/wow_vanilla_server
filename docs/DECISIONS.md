@@ -284,7 +284,7 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
    - **Points:** a move's points are offsets from its destination, which the old code got wrong for 1.12.
      Intermediate points within 0.7 yards of the destination are left out, as mangos-classic does.
    - **Flyers' splines** are hand-encoded, in whole points.
-   - **Distract** affects creatures only.
+   - **Distract** affects creatures only. **Overridden 2026-10-20:** it turns players too (your call, mangos's `EffectDistract`).
    - **Charge:** a rooted player mid-charge gets the root at once; Thistle Tea defers it to arrival.
    - **Pools:** an event change re-picks a pool, removing members that are out even mid-fight, as Thistle Tea does.
    - **Healing on leashing:** a creature heals as it leashes, and only if it regenerates, rather than on getting

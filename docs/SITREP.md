@@ -532,6 +532,12 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   charm of many (aura 177, Chains of Kel'Thuzad) charms. **My calls** (mangos's): a creature taking on a pet brings
   its master in at once (Thistle Tea waits for a blow); the master is held in by his own threat entry; at the pet's
   death the foe turns on the master.
+- **Your two answers (fix/userdec):** an emote (and a posture change) is refused while feigning, Feign Death
+  staying (mangos's `UNIT_FLAG_PREVENT_ANIM`); Distract turns a player to its point with a facing move to them and
+  their watchers, no control change and no pause, except in a fight, stunned, feigning, logging out, moved by the
+  server, flying or aboard a transport (mangos's `!IsInCombat` and `UNIT_STAT_CAN_NOT_REACT`; aboard would need a
+  transport-relative move). Client check passed. **Left:** mangos sets the same flag from 97 other spells' attribute
+  (stuns, Polymorph, Sap, Sleep), refusing emotes under them too; wvs only for Feign Death, queued.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
