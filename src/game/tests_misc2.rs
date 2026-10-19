@@ -516,7 +516,9 @@ async fn debug_commands_reset_cooldowns_and_unlock_the_world() {
     })
     .await;
     assert_eq!(state.0, u32::MAX);
-    assert_eq!(state.1, Some(u32::MAX));
+    // `.debug taxi` teaches the world's nodes, and this one has none
+    // (tests_p8_player_taxi has them taught).
+    assert_eq!(state.1, None);
     assert!(state.2);
     assert_eq!(state.3, 9000);
     assert_eq!(state.4, Some(120));
