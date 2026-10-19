@@ -1971,7 +1971,18 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             } else {
                 d1
             };
+            // On itself, past the floor a script or its template keeps it
+            // above (Thistle Tea's `lose_health`; vmangos's necropolis
+            // health dies to its third zap however invincible).
+            let floor = (source == target)
+                .then(|| event_ai::scripted_mut(map, source).map(|s| s.invincible_hp.replace(0)))
+                .flatten();
             crate::game::map::combat::deal_damage(map, source, target, amount);
+            if let Some(kept) = floor
+                && let Some(s) = event_ai::scripted_mut(map, source)
+            {
+                s.invincible_hp = kept;
+            }
             true
         }
         // Its dungeon fights it, at once (datalong: those fighting
