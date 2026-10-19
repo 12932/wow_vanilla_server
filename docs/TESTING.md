@@ -107,11 +107,13 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
   block to the renderer. The checks drive the *parse*: the create pass (which reads every block), the movement
   reader and its spline, and the spline copy into a unit, which is where the `0x6194DD` crash was.
 - **The checks** (`check.py` routes a frame by opcode): `SMSG_UPDATE_OBJECT` and `SMSG_COMPRESSED_UPDATE_OBJECT`
-  (the whole create pass, plus each create's movement run through the unit copy, `movement.py`); and
+  (the whole create pass, plus each create's movement run through the unit copy, `movement.py`);
   `SMSG_MONSTER_MOVE` / `..._TRANSPORT` (`monster_move.py`, the spline reader a flyer's hand-built move goes
-  through). Adding a check for another handler means finding its address (the registration table at `0x465140` /
-  `0x6035C0`, or `tools/client_check` notes), driving it from a `Client`, and stubbing what it reaches outside the
-  parse.
+  through); and `SMSG_SPELLLOGMISS` (`spell_log_miss.py`, the handler `0x5E7E00`, which must read the packet
+  exactly: a target is its GUID and a byte, two floats more when the packet's own byte is set). Adding a check for another handler means finding its address (the registration table at `0x465140` /
+  `0x6035C0`, or `tools/client_check` notes; each handler is registered as `mov edx, handler; mov ecx, opcode;
+  call 0x5AB650`, so the opcode's `B9` and its four bytes find it), driving it from a `Client`, and stubbing what it
+  reaches outside the parse.
 - **Its limits.** It drives parsing, not the renderer or the world, so it catches faults, over-reads, absurd counts
   and the spline copy, not a field wrongly applied. It does not model a fully initialised object, so a self-player
   create's private field groups are read short of the packet's end; an under-read is therefore a note, not a
@@ -134,7 +136,8 @@ one. `crash-analysis`' `upd.py` and friends carve a packet out of a `.dmp` for `
 ### The extended test
 
 `tests_client_emu::the_packets_wvs_sends_pass_the_client` plays out a scenario with movement in it — flyers on
-their paths, a crowd of players coming into view at once (so a create batch arrives compressed), one leaving — keeps
+their paths, a spell missing one every way one can, a crowd of players coming into view at once (so a create batch
+arrives compressed), one leaving — keeps
 every frame its clients receive (`Client::captured`), and runs the checker over them, failing if the client would.
 It is `#[ignore = "extended"]` (it emulates x86 through `uv`, so it is slow) but needs no real world: it builds its
 own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than passing quietly.

@@ -21,6 +21,7 @@ uv run ... python -I check.py --raw packet.bin        # opcode-first body
 | `update.py` | `SMSG_UPDATE_OBJECT` / `SMSG_COMPRESSED_UPDATE_OBJECT`: the create pass, whole |
 | `movement.py` | a create's movement block and its spline, and the copy into a unit (the `0x6194DD` crash) |
 | `monster_move.py` | `SMSG_MONSTER_MOVE` / `..._TRANSPORT`: the spline reader |
+| `spell_log_miss.py` | `SMSG_SPELLLOGMISS`: the handler, read exactly (a target is a GUID and a byte) |
 | `check.py` | the command line: route each frame of a capture to its check |
 | `selftest.py` | the proof against the spline crash, with no outside files |
 

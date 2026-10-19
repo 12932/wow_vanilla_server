@@ -31,7 +31,7 @@ const BAT: u32 = 304;
 const GULL: u32 = 305;
 
 // The opcodes the checker knows; others it would only skip.
-const CHECKED: &[u16] = &[0x0A9, 0x1F6, 0x0DD];
+const CHECKED: &[u16] = &[0x0A9, 0x1F6, 0x0DD, 0x24B];
 
 fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     CreatureTemplate {
@@ -117,10 +117,32 @@ async fn the_packets_wvs_sends_pass_the_client() {
 
     // The first player sees the flyers and watches them fly for a while:
     // the create blocks (with splines) and SMSG_MONSTER_MOVE.
-    let (mut a, _ga) = enter(&realm, "A", "Alice").await;
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
     for b in &bats {
         a.sees(*b).await;
     }
+    // Her spells missing a flyer every way one can (SMSG_SPELLLOGMISS, laid
+    // out by hand as mangos-classic's `SendSpellMiss`: wow_messages reads a
+    // target's reason as a u32).
+    let bat = bats[0];
+    map.query(move |m| {
+        use crate::game::map::spells::outcome::{Hit, send_miss};
+        for hit in [
+            Hit::Miss,
+            Hit::Resist,
+            Hit::Dodge,
+            Hit::Parry,
+            Hit::Evade,
+            Hit::Immune,
+            Hit::Deflect,
+            Hit::Absorb,
+            Hit::Reflect,
+        ] {
+            send_miss(m, ga, bat, 133, hit);
+        }
+    })
+    .await
+    .unwrap();
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         a.captured();
@@ -178,6 +200,11 @@ async fn the_packets_wvs_sends_pass_the_client() {
     assert!(
         counts.get(&0x0DD).copied().unwrap_or(0) > 0,
         "some movement frames were captured (the flyers)"
+    );
+    assert_eq!(
+        counts.get(&0x24B).copied().unwrap_or(0),
+        9,
+        "every spell miss was captured"
     );
     eprintln!("captured {} unique frame(s): {counts:?}", seen.len());
 
