@@ -48,6 +48,7 @@ pub fn stealth_changed(map: &mut Map, g: Guid) {
 }
 
 pub fn refresh_dirty(map: &mut Map) {
+    map.fresh.clear();
     if map.visibility_dirty.is_empty() {
         return;
     }

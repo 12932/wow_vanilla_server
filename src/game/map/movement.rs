@@ -395,6 +395,7 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     map.visibility_dirty.insert(guid);
     // Where they land, what names what is there waits for its create.
     map.hold(guid);
+    map.fresh.push(guid);
     // Observers still in range see the player there at once:
     // `MSG_MOVE_TELEPORT`, the packed GUID and the movement, as mangos's
     // SendTeleportPacket and Thistle Tea send it (a heartbeat would have
@@ -430,7 +431,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
     let at = p.position();
     visibility::send_self(map, guid);
     // What follows waits for the world around them.
-    map.hold_near(at);
+    map.hold_near(guid, at);
     // The pet that came along, its bar now that it can be shown.
     if map
         .players

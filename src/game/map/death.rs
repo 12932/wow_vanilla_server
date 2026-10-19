@@ -141,7 +141,7 @@ impl Map {
         self.grid.insert(g, cell);
         self.corpses.insert(g, c);
         self.visibility_dirty.insert(g);
-        self.hold_near(at);
+        self.hold_near(g, at);
     }
 
     pub fn remove_corpse(&mut self, g: Guid) {

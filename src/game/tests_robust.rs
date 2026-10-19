@@ -421,6 +421,7 @@ async fn an_update_step_that_panics_costs_only_itself() {
     let before = panics(&map).await;
     let (mut b, _, _) = in_world(&realm, "BOB", "Bob").await;
     b.sees(wolf(20)).await;
+    crate::game::harness::an_update(&map).await;
     assert!(panics(&map).await > before, "the step went on panicking");
 }
 

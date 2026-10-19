@@ -18,6 +18,10 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - a watchdog thread reports a map that hangs or can't keep up.
 - **The update's hooks:** the update looks only at creatures a player sees or that are fighting, and at what
   changed. New code goes through the hooks ([PERFORMANCE.md](PERFORMANCE.md)); debug builds assert it.
+- **Packet order:** a client gets an object's create before anything that names it. A client the map has queued
+  creates for is held (`Outbound::hold`): what it is sent waits, in order, until the update's "held" step sends its
+  creates and forgets, then what waited; its values follow in the update's batch. It is held as an object is
+  introduced to it, as one comes into the map near it, and as it arrives or lands from a teleport.
 
 ## Running it
 - **Data:** `cargo run --release --bin wvs-setup` builds the navmesh and terrain from a 1.12.1 client. The databases

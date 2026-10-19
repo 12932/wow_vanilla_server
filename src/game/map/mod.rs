@@ -490,6 +490,9 @@ pub struct Map {
     pub objects: objects::Objects,
     /// The clients held ([`Map::hold`]) until their creates go.
     pub holding: Vec<(Guid, crate::game::conn::Outbound)>,
+    /// What came into the map (or was placed in it) since the update's
+    /// visibility, near players ([`Map::hold_near`]).
+    pub fresh: Vec<Guid>,
     /// Scripted area triggers resting from their cooldown, until when.
     pub trigger_cooldowns: AHashMap<u32, Instant>,
     /// The leash clocks creatures in one fight share.
@@ -748,6 +751,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                         Err(_) => break,
                     }
                 }
+                guarded(&mut map, "after events", Map::after_events);
             }
             _ = ticker.tick() => {
                 guarded(&mut map, "the update", Map::update);
@@ -868,6 +872,7 @@ impl Map {
             arena: Default::default(),
             objects: Default::default(),
             holding: Vec::new(),
+            fresh: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
             health: Default::default(),
@@ -981,7 +986,7 @@ impl Map {
                 // They and those about them are told of each other at the
                 // update's visibility; what names anyone there (their
                 // pet's bar) waits for it.
-                self.hold_near(at);
+                self.hold_near(guid, at);
                 eviction::logged_in(self, guid);
                 spells::apply_passives(self, guid);
                 spell_areas::reconcile(self, guid);
@@ -1382,7 +1387,7 @@ impl Map {
         self.forget = forget;
     }
 
-    /// [`Map::flush_forgets`] for one observer.
+    /// [`Map::flush_forgets`] for one observer, whose blocks go now.
     fn settle_forgets(&mut self, observer: Guid, guids: &[Guid]) {
         let Some(p) = self.players.get(&observer) else {
             return;
@@ -1419,13 +1424,15 @@ impl Map {
         }
     }
 
-    /// [`Map::hold`] every client near `at`, where an object has come into
-    /// the map (or a player has come to): those the update's visibility
-    /// will tell of it.
-    pub fn hold_near(&mut self, at: wow_world_messages::vanilla::Vector3d) {
+    /// [`Map::hold`] every client near `at`, where `object` has come into
+    /// the map (or a player has come to): those its visibility will tell of
+    /// it, at the end of the events at hand ([`Map::after_events`]) or at
+    /// the update's.
+    pub fn hold_near(&mut self, object: Guid, at: wow_world_messages::vanilla::Vector3d) {
         if self.players.is_empty() {
             return;
         }
+        self.fresh.push(object);
         let keep = visibility::radius(self) + visibility::MARGIN;
         let near: Vec<Guid> = self
             .grid
@@ -1453,6 +1460,56 @@ impl Map {
                 Vec::new()
             };
             out.release(first);
+        }
+    }
+
+    /// After a run of events (packets, calls) between updates: a client
+    /// they held needn't wait for the update. The objects they brought into
+    /// the map (or the players they placed) are seen now, whole, as the
+    /// events left them, and each held client that has something waiting
+    /// gets its creates and forgets, then what waited. One with nothing
+    /// waiting, or near a creature yet to have its first turn, stays held,
+    /// its blocks for the update.
+    pub(crate) fn after_events(&mut self) {
+        if self.holding.is_empty() {
+            return;
+        }
+        let _z = crate::zone!("held after events");
+        // A creature whose first turn (its spawned events) is still to come
+        // is seen at the update, after it, so that no one can start on it
+        // before; those near it wait for that.
+        let mut waiting = ahash::AHashSet::new();
+        for g in std::mem::take(&mut self.fresh) {
+            if self.ai_spawned.contains(&g) {
+                if let Some(at) = self.position_of(g) {
+                    let keep = visibility::radius(self) + visibility::MARGIN;
+                    waiting.extend(
+                        self.grid
+                            .around(at.x, at.y, keep)
+                            .filter(|o| guid::is_player(*o)),
+                    );
+                }
+                self.fresh.push(g);
+            } else if self.visibility_dirty.remove(&g) {
+                visibility::refresh(self, g);
+            }
+        }
+        let mut pending = Held(std::mem::take(&mut self.holding));
+        while let Some((g, out)) = pending.0.pop() {
+            if !out.has_held() || waiting.contains(&g) {
+                self.holding.push((g, out));
+                continue;
+            }
+            let one = Held(vec![(g, out)]);
+            if let Some(guids) = self.forget.remove(&g) {
+                self.settle_forgets(g, &guids);
+            }
+            let first = self
+                .batches
+                .remove(&g)
+                .map(update::Batch::finish)
+                .unwrap_or_default();
+            one.0[0].1.release(first);
         }
     }
 
@@ -1722,7 +1779,7 @@ impl Map {
         self.visibility_dirty.insert(guid);
         // What names it (its summoner's bar, its first words) waits for
         // its create, at the update's visibility.
-        self.hold_near(at);
+        self.hold_near(guid, at);
         spawn_auras::apply(self, guid);
         guid
     }
@@ -1736,7 +1793,7 @@ impl Map {
         self.gameobject_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
-        self.hold_near(at);
+        self.hold_near(guid, at);
         guid
     }
 

@@ -281,3 +281,32 @@ async fn a_duels_flag_is_created_before_the_challenge_names_it() {
         .await;
     }
 }
+
+/// A client held by events between updates (a creature summoned beside it)
+/// isn't kept waiting for the update: at the end of the events, the
+/// creature is seen, and the client gets its create, then what waited.
+#[tokio::test]
+async fn a_client_held_between_updates_is_let_go_at_the_end_of_the_events() {
+    let (_realm, mut a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let (g, held, after, pending) = map
+        .query(move |m| {
+            let g = spawn(m, ga, BRUTE, 20, 10.0);
+            m.system_message(ga, "after the brute");
+            let held = m.players[&ga].outbound.has_held();
+            m.after_events();
+            let after = m.players[&ga].outbound.has_held();
+            (g, held, after, m.batches.contains_key(&ga))
+        })
+        .await
+        .unwrap();
+    assert!(held, "the message waits for the brute");
+    assert!(!after, "and goes at the end of the events");
+    assert!(!pending, "after the brute's create");
+    told_first(
+        &mut a,
+        g,
+        "the message",
+        |m| matches!(m, ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == "after the brute"),
+    )
+    .await;
+}
