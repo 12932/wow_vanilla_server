@@ -41,7 +41,10 @@ pub struct Derived {
     pub parry: f32,
     pub block: f32,
     pub spell_crit: [f32; 7],
+    /// Each hand's hit chance from auras: the main hand's, the off hand's
+    /// and the ranged weapon's.
     pub hit: f32,
+    pub off_hit: f32,
     pub ranged_hit: f32,
     pub spell_hit: f32,
     pub block_value: u32,
@@ -50,9 +53,16 @@ pub struct Derived {
     /// Spell power by school, and healing power.
     pub spell_power: [i32; 7],
     pub healing_power: i32,
+    /// Each hand's weapon skill and the defense skill, with their bonuses,
+    /// as a blow takes them; and against a player (at least their caps).
     pub weapon_skill: u32,
+    pub off_skill: u32,
     pub ranged_skill: u32,
     pub defense: u32,
+    pub pvp_weapon_skill: u32,
+    pub pvp_off_skill: u32,
+    pub pvp_ranged_skill: u32,
+    pub pvp_defense: u32,
     pub dual_wield: bool,
 }
 
@@ -208,6 +218,15 @@ pub fn gear(p: &Player, data: &GameData) -> Gear {
         crate::game::map::enchant::add_to_gear(data, item, &mut g);
     }
     g
+}
+
+/// Whether a shapeshift form puts the weapons away: cat, travel, aquatic,
+/// bear and dire bear form (`SHAPESHIFT_FLAG_DONT_USE_WEAPON` in
+/// `SpellShapeshiftForm.dbc`, mangos's `IsNoWeaponShapeShift`). In a
+/// stance, Stealth, Shadowform, Moonkin Form or Ghost Wolf, they stay in
+/// hand: two are wielded and a blow is parried.
+pub fn no_weapon_form(form: u8) -> bool {
+    matches!(form, 1 | 3 | 4 | 5 | 8)
 }
 
 /// Whether an aura with a weapon restriction applies to `w`.
@@ -518,25 +537,49 @@ pub fn player(p: &mut Player, data: &GameData) {
     let g = gear(p, data);
     let form = p.fields.get_byte(UNIT_FIELD_BYTES_1, 2);
     let disarmed = p.auras.has(AURA_MOD_DISARM);
-    let skill_of = |w: Option<&Weapon>| {
-        let skill = w.map_or(162, |w| weapon_skill(w.subclass));
-        crate::game::map::skills::value(p, skill).unwrap_or(level * 5)
-            + p.auras.sum_misc(AURA_MOD_SKILL, skill as i32).max(0) as u32
-            + p.auras.sum_misc(AURA_MOD_SKILL_TALENT, skill as i32).max(0) as u32
+    // A skill as a blow takes it, with its bonuses, a negative one too, to
+    // no less than 0 (mangos's `GetSkillValue`); and against a player, no
+    // less than its cap with them (`GetWeaponSkillValue` and
+    // `GetDefenseSkillValue` in PvP).
+    let skill_values = |skill: u32| {
+        let bonus = p.auras.sum_misc(AURA_MOD_SKILL, skill as i32)
+            + p.auras.sum_misc(AURA_MOD_SKILL_TALENT, skill as i32);
+        let value = crate::game::map::skills::value(p, skill).unwrap_or(level * 5) as i32 + bonus;
+        let max = crate::game::map::skills::max_value(p, skill).unwrap_or(level * 5) as i32 + bonus;
+        (value.max(0) as u32, value.max(max).max(0) as u32)
     };
-    let main_hand = match (class, form) {
-        (DRUID, auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR) => None,
-        _ => g.main.filter(|_| !disarmed),
+    let skill_of = |w: Option<&Weapon>| skill_values(w.map_or(162, |w| weapon_skill(w.subclass)));
+    let feral = class == DRUID
+        && matches!(
+            form,
+            auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
+        );
+    // In cat or bear form the paws fight at the level's cap; an off hand or
+    // a ranged slot without a weapon has no skill (`GetWeaponSkillValue`).
+    let (weapon_skill, pvp_weapon_skill) = if feral {
+        (level * 5, level * 5)
+    } else {
+        skill_of(g.main.filter(|_| !disarmed).as_ref())
     };
-    let weapon_skill = skill_of(main_hand.as_ref());
-    let ranged_skill = skill_of(g.ranged.as_ref());
-    let defense = crate::game::map::skills::value(p, SKILL_DEFENSE).unwrap_or(level * 5)
-        + p.auras
-            .sum_misc(AURA_MOD_SKILL, SKILL_DEFENSE as i32)
-            .max(0) as u32
-        + p.auras
-            .sum_misc(AURA_MOD_SKILL_TALENT, SKILL_DEFENSE as i32)
-            .max(0) as u32;
+    let (off_skill, pvp_off_skill) = g.off.map_or((0, 0), |w| skill_of(Some(&w)));
+    let (ranged_skill, pvp_ranged_skill) = g.ranged.map_or((0, 0), |w| skill_of(Some(&w)));
+    let (defense, pvp_defense) = skill_values(SKILL_DEFENSE);
+    // The weapons in the hands, broken, disarmed or in a form or not: the
+    // hit chances that want a weapon go by them (mangos's
+    // `UpdateWeaponHitChances`, `GetWeaponForAttack` of any).
+    let held = |slot: u8| {
+        p.items
+            .iter()
+            .find(|i| i.bag == crate::game::store::BAG_PLAYER && i.slot == slot)
+            .and_then(|i| data.item(i.entry))
+            .filter(|t| t.class == 2 && t.delay > 0)
+            .map(|t| Weapon {
+                entry: t.entry,
+                subclass: t.subclass,
+                ..Default::default()
+            })
+    };
+    let held = [held(15), held(16), held(17)];
     // Any spell of Parry's or Block's effect teaches it (mangos's
     // `EffectParry` and `EffectBlock`, Thistle Tea's `Proficiency`).
     let knows = |id: u32, effect: u32| {
@@ -683,7 +726,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         UNIT_FIELD_BASEATTACKTIME,
         ((main_delay as f32 * haste) as u32).max(100),
     );
-    let dual_wield = knows_dual_wield && g.off.is_some() && form == 0;
+    let dual_wield = knows_dual_wield && g.off.is_some() && !no_weapon_form(form);
     match g.off.filter(|_| dual_wield) {
         Some(w) => {
             let bonus = ap / 14.0 * w.delay as f32 / 1000.0;
@@ -791,7 +834,7 @@ pub fn player(p: &mut Player, data: &GameData) {
     // Parrying wants a melee weapon in a hand (mangos's
     // `CanParryInCombat`, Thistle Tea's `parry_chance`).
     let armed = g.main.is_some() || g.off.is_some();
-    let can_parry = knows_parry && !disarmed && form == 0 && armed;
+    let can_parry = knows_parry && !disarmed && !no_weapon_form(form) && armed;
     let parry = if can_parry {
         (5.0 + a.sum(AURA_MOD_PARRY_PERCENT) as f32 + defense_bonus).max(0.0)
     } else {
@@ -845,8 +888,9 @@ pub fn player(p: &mut Player, data: &GameData) {
         parry,
         block,
         spell_crit,
-        hit: sum_for(a, AURA_MOD_HIT_CHANCE, main.as_ref()),
-        ranged_hit: sum_for(a, AURA_MOD_HIT_CHANCE, g.ranged.as_ref()),
+        hit: sum_for(a, AURA_MOD_HIT_CHANCE, held[0].as_ref()),
+        off_hit: sum_for(a, AURA_MOD_HIT_CHANCE, held[1].as_ref()),
+        ranged_hit: sum_for(a, AURA_MOD_HIT_CHANCE, held[2].as_ref()),
         spell_hit: a.sum(AURA_MOD_SPELL_HIT_CHANCE) as f32,
         block_value,
         attack_power: ap as u32,
@@ -854,8 +898,13 @@ pub fn player(p: &mut Player, data: &GameData) {
         spell_power,
         healing_power,
         weapon_skill,
+        off_skill,
         ranged_skill,
         defense,
+        pvp_weapon_skill,
+        pvp_off_skill,
+        pvp_ranged_skill,
+        pvp_defense,
         dual_wield,
     };
 }
@@ -946,6 +995,7 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
             .max(0) as f32
         }),
         hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
+        off_hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
         ranged_hit: a.sum(AURA_MOD_HIT_CHANCE) as f32,
         spell_hit: a.sum(AURA_MOD_SPELL_HIT_CHANCE) as f32,
         block_value: level / 2,
@@ -954,8 +1004,13 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
         spell_power: std::array::from_fn(|i| a.sum_mask(AURA_MOD_DAMAGE_DONE, 1 << i)),
         healing_power: a.sum(AURA_MOD_HEALING_DONE),
         weapon_skill: level * 5,
+        off_skill: level * 5,
         ranged_skill: level * 5,
         defense: level * 5,
+        pvp_weapon_skill: level * 5,
+        pvp_off_skill: level * 5,
+        pvp_ranged_skill: level * 5,
+        pvp_defense: level * 5,
         dual_wield: false,
     };
 }

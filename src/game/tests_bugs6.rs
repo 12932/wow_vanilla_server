@@ -21,7 +21,7 @@ const YOUNG_WOLF: u32 = 299;
 
 /// The fields an update's mask carries, by index: wow_messages keeps them
 /// to itself but for its `Debug` (`values: {index: value, ...}`).
-fn fields(mask: &UpdateMask) -> BTreeMap<u16, u32> {
+pub(crate) fn fields(mask: &UpdateMask) -> BTreeMap<u16, u32> {
     let s = format!("{mask:?}");
     let Some(i) = s.find("values: {") else {
         return BTreeMap::new();

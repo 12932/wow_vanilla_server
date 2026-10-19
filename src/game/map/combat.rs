@@ -1310,28 +1310,44 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         .players
         .get(&victim)
         .is_some_and(|p| p.fields.get_byte(UNIT_FIELD_BYTES_2, 0) == 0);
+    // Each hand's own skill; against a player, a player's skills are at
+    // least their caps (mangos's `GetWeaponSkillValue` and
+    // `GetDefenseSkillValue`). A player's skill is as it is, 0 too.
+    let pvp = va.is_player && vb.is_player;
+    let skill = match (hand, pvp) {
+        (Hand::Main, false) => da.weapon_skill,
+        (Hand::Main, true) => da.pvp_weapon_skill,
+        (Hand::Off, false) => da.off_skill,
+        (Hand::Off, true) => da.pvp_off_skill,
+        (Hand::Ranged, false) => da.ranged_skill,
+        (Hand::Ranged, true) => da.pvp_ranged_skill,
+    };
+    let defense = if pvp { dv.pvp_defense } else { dv.defense };
     Some(Roll {
-        attacker_skill: or_level(
-            if ranged {
-                da.ranged_skill
-            } else {
-                da.weapon_skill
-            },
-            va.level,
-        ),
+        attacker_skill: if va.is_player {
+            skill as i32
+        } else {
+            or_level(skill, va.level)
+        },
         // A creature without defense meets every blow with none (Thistle
         // Tea's `Skills.defense_value`).
         victim_defense: if static_flags(map, victim) & STATIC_NO_DEFENSE != 0 {
             0
+        } else if vb.is_player {
+            defense as i32
         } else {
-            or_level(dv.defense, vb.level)
+            or_level(defense, vb.level)
         },
         attacker_is_player: va.is_player,
         victim_is_player: vb.is_player,
         attacker_level: va.level as i32,
         victim_level: vb.level as i32,
         crit: if ranged { da.ranged_crit } else { da.crit } + attacker_crit,
-        hit: if ranged { da.ranged_hit } else { da.hit },
+        hit: match hand {
+            Hand::Main => da.hit,
+            Hand::Off => da.off_hit,
+            Hand::Ranged => da.ranged_hit,
+        },
         dodge: dv.dodge,
         parry: dv.parry,
         block: dv.block,
@@ -2334,6 +2350,9 @@ pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: 
 /// A critter's creature type.
 pub const CREATURE_TYPE_CRITTER: u32 = 8;
 
+/// A fishing pole's weapon subclass.
+pub const SUBCLASS_FISHING_POLE: u32 = 20;
+
 /// A melee or ranged ability that hit, or was missed, dodged, parried or
 /// blocked, trains the skill of the weapon it was made with and the
 /// target's defense, once, as a swing does (mangos's
@@ -2390,7 +2409,9 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
             )
         });
         let usable = !feral && !(hand == Hand::Main && disarmed);
+        // A fishing pole trains nothing (mangos's `UpdateWeaponSkill`).
         let skill = match hand_weapon(map, attacker, hand).filter(|_| usable) {
+            Some(w) if w.subclass == SUBCLASS_FISHING_POLE => None,
             Some(w) => Some(crate::game::map::derive::weapon_skill(w.subclass)),
             None if hand == Hand::Main => Some(162),
             None => None,

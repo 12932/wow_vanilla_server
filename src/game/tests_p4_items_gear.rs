@@ -613,7 +613,7 @@ async fn worn_gear_and_bags_give_their_spells_but_not_broken_carried_or_banked_g
 }
 
 /// Thistle Tea's identical passives: the same crit from two rings stands
-/// twice, melee and ranged, and each ring takes its own off.
+/// twice, and each ring takes its own off.
 #[tokio::test]
 async fn the_same_passive_from_two_items_stacks_and_goes_with_each() {
     let (realm, _a, g) = setup().await;
@@ -636,10 +636,12 @@ async fn the_same_passive_from_two_items_stacks_and_goes_with_each() {
     })
     .await;
     let (bare, both, again, one, none, _r1, r2) = got;
-    assert!(
-        close(both.0.0, bare.0 + 4.0) && close(both.0.1, bare.1 + 4.0),
-        "{both:?}"
-    );
+    assert!(close(both.0.0, bare.0 + 4.0), "{both:?}");
+    // Without a ranged weapon there is no ranged skill, and the ranged
+    // crit shown is no less than 0 (mangos's `GetWeaponSkillValue`,
+    // Thistle Tea's "missing ranged weapons and low skills clamp
+    // displayed crit to zero").
+    assert_eq!((bare.1, both.0.1), (0.0, 0.0), "no bow, no ranged crit");
     assert_eq!(both.1, 2);
     assert!(close(both.2, both.0.0), "the combat table's crit");
     assert_eq!(
