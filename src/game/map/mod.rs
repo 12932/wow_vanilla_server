@@ -1658,9 +1658,6 @@ impl Map {
         drop(z);
         // Every creature, for its dirty flag.
         let z = crate::zone!("values: creatures");
-        // Creatures whose tap their observers see anew: taken or gone, or
-        // their flags sent again to those outside it.
-        let mut taps = Vec::new();
         for (_, c) in self.creatures.iter_mut() {
             let tap_changed = c.tapped_by != c.tap_told;
             if !c.fields.is_dirty() && !tap_changed {
@@ -1670,23 +1667,21 @@ impl Map {
                 .fields
                 .dirty()
                 .get(crate::game::fields::UNIT_DYNAMIC_FLAGS);
-            if !c.observers.is_empty()
+            // Its tap seen anew (taken or gone), or its flags sent again
+            // to those outside it: each observer's own block.
+            if !c.observers.is_empty() && (tap_changed || (flags_sent && c.tapped_by.is_some())) {
+                tap::tell(realm, batches, c, tap_changed);
+            } else if !c.observers.is_empty()
                 && let Some(block) = update::values_block(c.guid, &c.fields, Visibility::Public)
             {
                 for o in &c.observers {
                     batches.entry(*o).or_default().push(&block);
                 }
             }
-            if !c.observers.is_empty() && (tap_changed || (flags_sent && c.tapped_by.is_some())) {
-                taps.push((c.guid, tap_changed));
-            }
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
         drop(z);
-        for (g, all) in taps {
-            tap::tell(self, g, all);
-        }
     }
 
     fn flush_batches(&mut self) {

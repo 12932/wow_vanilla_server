@@ -398,6 +398,14 @@ impl Fields {
         }
     }
 
+    /// Mark a field dirty as it is, so the next values block carries it.
+    pub fn touch(&mut self, index: u16) {
+        if usize::from(index) < self.values.len() {
+            self.dirty.set(index);
+            self.any_dirty = true;
+        }
+    }
+
     /// What follows from `index`'s change.
     #[inline]
     fn changed(&mut self, index: u16) {

@@ -224,3 +224,108 @@ async fn frost_nova_holds_a_wandering_young_wolf_which_chases_once_free() {
     })
     .await;
 }
+
+const RABBIT: u32 = 721;
+
+/// The update packets `c` is told within `within`, as blocks about `of`
+/// (a packet with none left out).
+async fn packets_about(c: &mut harness::Client, of: Guid, within: Duration) -> Vec<Vec<Block>> {
+    let mut out = Vec::new();
+    let deadline = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < deadline {
+        if let Some(bs) = c
+            .gets(Duration::from_millis(20), |m| {
+                let bs: Vec<Block> = blocks(m)
+                    .into_iter()
+                    .filter(|b| match b {
+                        Block::Create(g, _) | Block::Values(g, _) | Block::Forget(g) => *g == of,
+                    })
+                    .collect();
+                (!bs.is_empty()).then_some(bs)
+            })
+            .await
+        {
+            out.push(bs);
+        }
+    }
+    out
+}
+
+/// What a death tells `c` of `creature`: it must be one values block in
+/// its packet, with no health, and nothing makes it anew or forgets it.
+async fn sees_it_die(c: &mut harness::Client, creature: Guid, how: &str) {
+    let packets = packets_about(c, creature, Duration::from_millis(1500)).await;
+    let died = packets.iter().position(|p| {
+        p.iter()
+            .any(|b| matches!(b, Block::Values(_, f) if f.get(&UNIT_FIELD_HEALTH) == Some(&0)))
+    });
+    assert!(
+        died.is_some(),
+        "{how}: no values update with its death: {packets:?}"
+    );
+    for p in &packets {
+        assert_eq!(p.len(), 1, "{how}: one block about it a packet: {p:?}");
+        assert!(
+            matches!(p[0], Block::Values(..)),
+            "{how}: its death is no create or forget: {packets:?}"
+        );
+    }
+}
+
+/// A Rabbit's death, by a GM's `.kill` or a warrior's blow, is a values
+/// update the client sees happen, at once: its health at none, alone in
+/// its packet. Its tap, taken by the same blow, came in a second values
+/// block about it in the same packet, and the client, though it kept the
+/// health, neither played the death nor moved the target's frame from
+/// full health (mangos-classic and Thistle Tea give each viewer its tap
+/// in the one block).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_rabbits_death_is_one_values_update_the_client_sees() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, me, map) = player(&realm, "B6RB", "Rabbiter", Race::Human, Class::Warrior).await;
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let (first, second) = map
+        .query(move |m| {
+            ready(m, me, 10, &[]);
+            (
+                spawned_near(m, me, RABBIT, 2.0, 0x7F_0002),
+                spawned_near(m, me, RABBIT, 2.5, 0x7F_0003),
+            )
+        })
+        .await
+        .unwrap();
+    c.sees_on(&map, first).await;
+    c.sees_on(&map, second).await;
+    harness::an_update(&map).await;
+    c.clear();
+    c.send(CMSG_SET_SELECTION { target: first }).await;
+    c.say(".kill").await;
+    sees_it_die(&mut c, first, ".kill").await;
+    // A warrior's blow, sure to land, at one standing before her.
+    map.query(move |m| {
+        combat::FORCED_OUTCOME.with(|f| f.set(Some(combat::Outcome::Hit)));
+        let p = &m.players[&me];
+        let (at, o) = (p.position(), p.movement.orientation);
+        let before = Vector3d {
+            x: at.x + 2.0 * o.cos(),
+            y: at.y + 2.0 * o.sin(),
+            z: at.z,
+        };
+        let c = m.creature_mut(second).unwrap();
+        c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+        crate::game::map::scripts::place(m, second, before, o + std::f32::consts::PI);
+    })
+    .await
+    .unwrap();
+    c.clear();
+    c.send(CMSG_SET_SELECTION { target: second }).await;
+    c.send(CMSG_ATTACKSWING { guid: second }).await;
+    sees_it_die(&mut c, second, "a blow").await;
+    map.query(|_| combat::FORCED_OUTCOME.with(|f| f.set(None)))
+        .await
+        .unwrap();
+}

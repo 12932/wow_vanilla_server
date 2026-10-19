@@ -221,6 +221,9 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
                 crate::game::fields::Visibility::Group,
             )))
         }
+        // A creature tapped by another: its grey view in its create.
+        _ if guid::is_unit(object) => crate::game::map::tap::create_for(map, observer, object)
+            .or_else(|| map.public_create(object)),
         _ => map.public_create(object),
     };
     let Some(block) = block else {
@@ -248,9 +251,6 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
         map.awake.insert(object);
     }
     crate::game::map::conditions::locate(map, object, false);
-    if guid::is_unit(object) {
-        crate::game::map::tap::introduced(map, observer, object);
-    }
     // A banner taken by attacking it starts each viewer afresh (Thistle
     // Tea's `reset_banner_interaction`), once they have it (the client is
     // held).
