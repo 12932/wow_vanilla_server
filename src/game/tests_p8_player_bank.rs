@@ -18,6 +18,7 @@ const THING: u32 = 20_000;
 const STACK: u32 = 20_002;
 const TRINKET: u32 = 20_001;
 const PACK: (u8, u8) = (BAG_PLAYER, PACK_START);
+const PACK2: (u8, u8) = (BAG_PLAYER, PACK_START + 1);
 const BANK1: (u8, u8) = (BAG_PLAYER, BANK_START);
 const BANK2: (u8, u8) = (BAG_PLAYER, BANK_START + 1);
 const BANK3: (u8, u8) = (BAG_PLAYER, BANK_START + 2);
@@ -297,4 +298,82 @@ async fn a_worldport_shuts_the_bank() {
         kalimdor.query(move |m| banker_of(m, g)).await.unwrap(),
         None
     );
+}
+
+const PAPER: u32 = 5042;
+const GIFT: u32 = 5043;
+
+/// Thistle Tea's gifts_test "rejects bank access, remote control, death and
+/// invalid paper without consuming items": an item in the bank isn't
+/// wrapped with no bank open (too far from the bank), nor anything while
+/// the client moves another unit; the paper and the item are kept, and
+/// once both are put right it wraps.
+#[tokio::test]
+async fn wrapping_wants_the_bank_open_and_the_player_in_control() {
+    let mut d = data();
+    for (entry, stack) in [(PAPER, 10), (GIFT, 1)] {
+        d.items.insert(
+            entry,
+            ItemTemplate {
+                entry,
+                name: format!("Item {entry}"),
+                class: 15,
+                flags: crate::game::map::items_misc::ITEM_FLAG_WRAPPER,
+                stackable: stack,
+                allowable_class: -1,
+                allowable_race: -1,
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        p.items.clear();
+        p.refresh_inventory(&d);
+    })
+    .await
+    .unwrap();
+    let paper = give(&map, g, PAPER, 3, PACK).await;
+    let thing = give(&map, g, THING, 1, BANK1).await;
+    a.clear();
+    let wrap = |item: (u8, u8)| CMSG_WRAP_ITEM {
+        gift_bag_index: PACK.0,
+        gift_slot: PACK.1,
+        item_bag_index: item.0,
+        item_slot: item.1,
+    };
+    let kept = async |map: &MapHandle| {
+        (
+            at(map, g, paper).await.map(|x| x.2),
+            map.query(move |m| m.players[&g].count_of(GIFT))
+                .await
+                .unwrap(),
+        )
+    };
+    a.send(wrap(BANK1)).await;
+    assert_eq!(refusal(&mut a).await.as_deref(), Some(TOO_FAR), "banked");
+    assert_eq!(kept(&map).await, (Some(3), 0));
+    // Out of the bank, but moving another unit.
+    map.query(move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.item_by_guid(thing).unwrap();
+        (p.items[i].bag, p.items[i].slot) = PACK2;
+        p.owned.mover = Some(crate::game::guid::unit(1, 9));
+    })
+    .await
+    .unwrap();
+    a.send(wrap(PACK2)).await;
+    assert_eq!(refusal(&mut a).await.as_deref(), Some("CantDoRightNow"));
+    assert_eq!(kept(&map).await, (Some(3), 0));
+    map.query(move |m| m.players.get_mut(&g).unwrap().owned.mover = None)
+        .await
+        .unwrap();
+    a.send(wrap(PACK2)).await;
+    assert_eq!(refusal(&mut a).await, None);
+    assert_eq!(kept(&map).await, (Some(2), 1), "wrapped");
 }
