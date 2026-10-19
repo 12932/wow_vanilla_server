@@ -173,6 +173,7 @@ pub fn test_config() -> RealmConfig {
             always_max_skill_for_level: true,
             ..Default::default()
         },
+        quests: Default::default(),
         anticheat: Default::default(),
         gm: Default::default(),
     }
