@@ -448,7 +448,7 @@ pub fn npc_text(map: &Map, player: Guid, text_id: u32) {
 }
 
 /// The professions a player may have two of.
-const PRIMARY_PROFESSIONS: [u32; 9] = [164, 165, 171, 182, 186, 197, 202, 333, 393];
+pub(crate) const PRIMARY_PROFESSIONS: [u32; 9] = [164, 165, 171, 182, 186, 197, 202, 333, 393];
 const EFFECT_SKILL_STEP: u32 = 44;
 
 /// What a trainer's spell is to a player, as Thistle Tea's `Trainer`
