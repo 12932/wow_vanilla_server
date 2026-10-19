@@ -497,6 +497,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   with `datalong2` 0 stays open (the Emberseer, Chromaggus and Mur'Alzzin doors use it; mangos would close it after
   15 s); a retreat reaches its point within 0.5 yards (navmesh ends; Thistle Tea 0.1); a script's follower evades in
   place (Thistle Tea; mangos walks it back).
+- **8d, combat, round 8** (its session ended before its report; from its commits): **a spell's procs go off once a
+  target, after its effects** (mangos; they had run once per damaging effect, 6d's leftover); a creature's cast not
+  for a fight stops as an attack puts it in one (mangos's `SetInCombatState`); pacify holds a unit's blows without
+  ending its fight; an elemental's blow is resisted in part by its school's resistance less penetration; a soul
+  shard only from a creature that was mostly the players' kill (Thistle Tea's damage share); the attack table's
+  chances rounded to the hundredth (mangos's `chance_u`), not cut; a player logging in under a fifth of her health
+  keeps it (mangos); a weapon cast disarmed or without its weapon as it ends fails; a player's owed attacks land
+  within 1.4 yards whatever her facing (Thistle Tea's overlap); a unit immune to players takes no help from them
+  (mangos's `CanAssist`).
 
 ## Answered
 - **#10** keep swinging on arrival.
