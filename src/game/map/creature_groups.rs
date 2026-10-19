@@ -592,7 +592,9 @@ fn place(at: Vector3d, heading: f32, distance: f32, angle: f32) -> Vector3d {
 /// yards or more from its leader is brought up to it at once.
 pub fn leader_walked(map: &mut Map, leader: Guid) {
     let now = map.now;
-    let Some(c) = map.creature(leader) else {
+    // One fighting leads no one where it chases (Thistle Tea's
+    // `leader_ready?`).
+    let Some(c) = map.creature(leader).filter(|c| !c.combat.attacking) else {
         return;
     };
     let crate::game::map::creature::Motion::Moving(w) = &c.motion else {

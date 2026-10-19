@@ -909,6 +909,7 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
             crate::game::map::world::step_creature_key(map, key);
         }
     }
+    crate::game::map::event_ai::retreat_step(map, g);
     let (moving, follows, fighting) = map
         .creature(g)
         .map(|c| {
@@ -1729,33 +1730,32 @@ pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
     crate::game::map::assistance::call_friends(map, g, enemy, radius);
 }
 
-/// Run from `enemy` (for a while: one run here, whatever the time).
-pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, _for: Option<Duration>) {
+/// Run from `enemy` in fear for `run_for` (seven seconds without),
+/// whatever its fight, as a script's movement 10 has it (Thistle Tea's
+/// `flee_from` and `flee_until`): it runs as a fear runs, one way then
+/// another, until its time is up or the one it runs from is dead or gone.
+pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, run_for: Option<Duration>) {
     let now = map.now;
-    let spline_id = map.next_spline_id;
-    let Some(c) = map.creature(g) else {
+    if !map.creature(g).is_some_and(|c| c.alive()) || map.unit_view(enemy).is_none() {
+        return;
+    }
+    map.rare.flee = true;
+    let Some(c) = map.creature_mut(g) else {
         return;
     };
-    let from = c.position;
-    let away = map
-        .position_of(enemy)
-        .map(|v| (from.y - v.y).atan2(from.x - v.x))
-        .unwrap_or(c.orientation);
-    let to = Vector3d {
-        x: from.x + 15.0 * away.cos(),
-        y: from.y + 15.0 * away.sin(),
-        z: from.z,
-    };
-    let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
-        None => vec![from, to],
-    };
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    if let Some(c) = map.creature_mut(g)
-        && let Some(frame) = c.walk(path, false, now, spline_id)
-    {
-        map.send_to_observers(g, &frame, false);
-    }
+    c.engagement.flee = Some(crate::game::map::creature_combat::Flee {
+        from: enemy,
+        until: now + run_for.unwrap_or(crate::game::map::creature_combat::FLEE_FOR),
+        helper: None,
+        called_at: None,
+        scripted: true,
+    });
+    c.engagement.next_move_at = Some(now);
+    c.fields.set_flag(
+        UNIT_FIELD_FLAGS,
+        crate::game::map::auras::UNIT_FLAG_FLEEING,
+        true,
+    );
 }
 
 /// Give up the fight and run home.
@@ -1779,7 +1779,14 @@ fn evade(map: &mut Map, g: Guid) {
     // evade).
     // A flyer flies home, as it chased (Thistle Tea's airborne home
     // movement).
-    let (path, fly) = if crate::game::map::creature_motion::sessile(map, g) {
+    // So does one a script set following someone, who follows on from
+    // there (Thistle Tea's follower's reset after combat).
+    let follows = c
+        .scripted
+        .as_deref()
+        .and_then(|s| s.follow)
+        .is_some_and(|(leader, _, _)| map.unit_view(leader).is_some_and(|u| u.alive));
+    let (path, fly) = if follows || crate::game::map::creature_motion::sessile(map, g) {
         (vec![from], false)
     } else if crate::game::map::creature_motion::habitat(map, g).fly {
         match crate::game::map::creature_motion::route(map, g, from, home) {

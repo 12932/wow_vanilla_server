@@ -220,6 +220,18 @@ fn attempt(map: &mut Map, g: Guid, victim: Guid, i: usize, e: &CreatureSpell) ->
     if instant && e.script != 0 {
         crate::game::map::scripts::start(map, ScriptTable::CreatureSpells, e.script, g, target);
     }
+    // A cast that takes time is cast standing, faced at its target: a
+    // walk under way stops where it is (Thistle Tea's `try_cast`
+    // stopping its spline and facing its victim).
+    if !instant && target != g {
+        if map
+            .creature(g)
+            .is_some_and(|c| matches!(c.motion, crate::game::map::creature::Motion::Moving(_)))
+        {
+            crate::game::map::ai::halt(map, g);
+        }
+        crate::game::map::ai::face(map, g, target);
+    }
     if super::cast(map, g, e.spell, targets, None) && !instant && e.script != 0 {
         crate::game::map::scripts::start(map, ScriptTable::CreatureSpells, e.script, g, target);
     }
@@ -410,11 +422,11 @@ pub fn flags_allow(map: &Map, caster: Guid, flags: u32, spell: u32, target: Guid
 /// Whether a creature is running to keep its distance (movement 19).
 pub fn distancing(map: &Map, g: Guid) -> bool {
     map.creature(g).is_some_and(|c| {
-        matches!(c.motion, crate::game::map::creature::Motion::Moving(_))
-            && c.scripted
-                .as_deref()
-                .and_then(|s| s.scripted_move)
-                .is_some_and(|m| m.distancing)
+        let Some(m) = c.scripted.as_deref().and_then(|s| s.scripted_move) else {
+            return false;
+        };
+        m.distancing.is_some()
+            && matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if w.spline_id == m.spline_id)
     })
 }
 

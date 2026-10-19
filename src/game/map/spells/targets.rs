@@ -101,7 +101,9 @@ pub fn radius(map: &Map, s: &SpellTemplate, index: usize, m: &Mods) -> f32 {
     m.apply(mods::OP_RADIUS, r).max(0.0)
 }
 
-fn members(map: &Map, g: Guid, raid_wide: bool) -> Vec<Guid> {
+/// `g`'s group: its subgroup in a raid (all of it `raid_wide`), or `g`
+/// alone.
+pub(crate) fn members(map: &Map, g: Guid, raid_wide: bool) -> Vec<Guid> {
     let groups = map.realm.social.groups.lock();
     match groups.group_of(g) {
         Some(gr) => {

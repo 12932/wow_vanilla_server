@@ -205,12 +205,30 @@ fn advance(map: &mut Map, i: usize) {
                 }
             }
         }
+        // Its source gone to another map (or gone): the rest of it is
+        // dropped (Thistle Tea's run left behind by a world change).
+        if (guid::is_player(run.source) || guid::is_unit(run.source)) && !present(map, run.source) {
+            map.scripts.runs[i].next = usize::MAX;
+            return;
+        }
         if !execute(map, step, run.source, run.target)
             && let Some(r) = map.scripts.runs.get_mut(i)
         {
             r.next = usize::MAX;
             if let Some((g, event)) = r.checked {
                 event_ai::retry(map, g, event);
+            }
+            // Ended, it ends every run of the same script from the same
+            // source on the same target (vmangos's `Map::TerminateScript`,
+            // Thistle Tea's matching invocations); others go on.
+            for r in map.scripts.runs.iter_mut() {
+                if r.table == run.table
+                    && r.id == run.id
+                    && r.source == run.source
+                    && r.target == run.target
+                {
+                    r.next = usize::MAX;
+                }
             }
             return;
         }
@@ -1222,7 +1240,25 @@ pub struct Move {
     pub home: bool,
     /// Distancing from its target (movement 19): while it runs, only a
     /// spell cast with 0x04 (force) goes.
-    pub distancing: bool,
+    pub distancing: Option<event_ai::Retreat>,
+}
+
+/// How near (flat) a retreat's path must end to its point (Thistle Tea's
+/// `NavigationIntent.reached?` takes 0.1; a navmesh's end may be a little
+/// off the point asked for).
+const RETREAT_REACHED: f32 = 0.5;
+
+/// A cast under way that moving breaks (`interrupt_flags` 0x1) is given
+/// up; another goes on (Thistle Tea's `Distancing.interrupt_cast`).
+fn interrupt_moving_cast(map: &mut Map, g: Guid) {
+    let breaks = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .and_then(|c| map.realm.data.spells.get(c.spell))
+        .is_some_and(|s| s.interrupt_flags & 0x1 != 0);
+    if breaks {
+        crate::game::map::spells::interrupt(map, g);
+    }
 }
 
 /// Move a creature as `how` says, remembering the move so its arrival
@@ -1282,6 +1318,15 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
 
 /// The bounding radius Thistle Tea takes for a unit with none.
 const DEFAULT_BOUNDING_RADIUS: f32 = 0.389;
+
+/// Half a map's width, and the highest a point may be (mangos's
+/// `MAP_HALFSIZE` and `MAX_HEIGHT`).
+const MAP_HALF_SIZE: f32 = 32.0 * 533.333_3;
+const MAX_HEIGHT: f32 = 100_000.0;
+
+/// A script door's least time before it goes back (mangos-classic's
+/// `SCRIPT_COMMAND_OPEN_DOOR`).
+const DOOR_RESET_LEAST: u32 = 15;
 
 /// `UNIT_FLAG_PACIFIED`: a master so can't send its pet in.
 const UNIT_FLAG_PACIFIED_SCRIPT: u32 = 0x0002_0000;
@@ -1477,6 +1522,16 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // The source teleports: a player to map datalong, a creature where
         // it is (a creature's script that wants its player sent swaps).
         6 => {
+            // Nowhere on a map, nothing (mangos's `IsValidMapCoord` at
+            // load, Thistle Tea's malformed payload).
+            let valid = |v: f32, bound: f32| v.is_finite() && v.abs() <= bound;
+            if !(valid(pos.x, MAP_HALF_SIZE)
+                && valid(pos.y, MAP_HALF_SIZE)
+                && valid(pos.z, MAX_HEIGHT)
+                && step.o.is_finite())
+            {
+                return false;
+            }
             if guid::is_player(source) && map.players.contains_key(&source) {
                 map.teleport(source, MapKey::world(d1), pos, step.o);
                 return true;
@@ -1599,11 +1654,26 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             let Some(door) = door else {
                 return false;
             };
-            set_object_state(map, door, if step.command == 11 { 0 } else { 1 });
+            // One already as it would be is left as it is, its time to go
+            // back too (mangos's open of an open door).
+            let want = if step.command == 11 { 0 } else { 1 };
+            if map
+                .gameobject(door)
+                .is_some_and(|o| o.fields.get_u32(GAMEOBJECT_STATE) == want)
+            {
+                return true;
+            }
+            set_object_state(map, door, want);
+            // Back after datalong2 seconds, fifteen at least; with none it
+            // stays (the rows that open a boss's door for good).
             if d2 > 0 {
-                let back = if step.command == 11 { 1 } else { 0 };
-                map.object_resets
-                    .push((map.now + Duration::from_secs(u64::from(d2)), door, back));
+                let back = 1 - want;
+                let after = d2.max(DOOR_RESET_LEAST);
+                map.object_resets.push((
+                    map.now + Duration::from_secs(u64::from(after)),
+                    door,
+                    back,
+                ));
             }
             true
         }
@@ -3208,9 +3278,10 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
             event_ai::follow_step(map, source);
         }
         // Distancing, as Thistle Tea's `Distancing.start`: from the step's
-        // target, to x yards past its edge, running, the cast under way
-        // given up (with datalong3, only at that share of mana or more; a
-        // unit with none has none). Held or feigning, it stays.
+        // target, to x yards past its edge, running, a cast that moving
+        // breaks given up (with datalong3, only at that share of mana or
+        // more; a unit with none has none). Held, rooted, fleeing or
+        // feigning, it stays.
         19 => {
             let mana_ok = d3 == 0
                 || map.unit_fields(source).is_some_and(|f| {
@@ -3223,9 +3294,7 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 || from.is_zero()
                 || from == source
                 || !alive(map, from)
-                || crate::game::map::auras::held(map, source, false)
-                || crate::game::map::auras::auras(map, source)
-                    .is_some_and(|a| a.has(crate::game::map::auras::AURA_FEIGN_DEATH))
+                || !event_ai::may_retreat(map, source)
             {
                 return true;
             }
@@ -3239,12 +3308,47 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                     .filter(|r| *r > 0.0)
                     .unwrap_or(DEFAULT_BOUNDING_RADIUS);
             let angle = (here.y - them.y).atan2(here.x - them.x);
-            let to = Vector3d {
+            let mut to = Vector3d {
                 x: them.x + radius * angle.cos(),
                 y: them.y + radius * angle.sin(),
                 z: them.z,
             };
-            crate::game::map::spells::interrupt(map, source);
+            // Thistle Tea's `DistancingNavigation`: the point on the ground
+            // (for one that neither flies nor swims there), no more than
+            // ten yards above it, somewhere else, in sight of the one it
+            // backs from, and a path that reaches it; else its cast and
+            // its movement are left as they were.
+            let flies = crate::game::map::creature_motion::habitat(map, source).fly;
+            if !flies
+                && crate::game::map::creature_motion::water(map, to).is_none()
+                && let Some(z) = map.nav.as_mut().and_then(|n| n.ground(to.x, to.y, to.z))
+            {
+                to.z = z;
+            }
+            if to.z > here.z + 10.0
+                || dist(here, to) <= 0.1
+                || !crate::game::map::spells::checks::line_of_sight(map, them, to)
+            {
+                return true;
+            }
+            let reaches = match map.nav.as_mut() {
+                Some(nav) if !flies => nav
+                    .path(here, to)
+                    .and_then(|p| p.last().copied())
+                    .is_some_and(|end| {
+                        (end.x - to.x).hypot(end.y - to.y) <= RETREAT_REACHED
+                            && (end.z - to.z).abs() <= 1.5
+                    }),
+                _ => true,
+            };
+            if !reaches {
+                return true;
+            }
+            let (victim, fighting) = map
+                .creature(source)
+                .map(|c| (c.combat.victim, c.combat.attacking))
+                .unwrap_or_default();
+            interrupt_moving_cast(map, source);
             move_with(
                 map,
                 source,
@@ -3252,7 +3356,11 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
                 Move {
                     run: true,
                     pathfind: true,
-                    distancing: true,
+                    distancing: Some(event_ai::Retreat {
+                        from,
+                        victim,
+                        fighting,
+                    }),
                     ..Default::default()
                 },
             );
