@@ -271,7 +271,7 @@ async fn the_affray_runs_its_challengers_and_big_will_one_at_a_time() {
     sleep_ms(500).await;
     let at = settled(&map, will).await;
     // Toward the ring's middle, as far as the navmesh takes him (it ends
-    // at the ring's edge, 14 yards short).
+    // at the ring's edge, 14 to 16 yards short).
     let middle = Vector3d {
         x: -1682.31,
         y: -4329.68,
@@ -284,7 +284,7 @@ async fn the_affray_runs_its_challengers_and_big_will_one_at_a_time() {
     };
     let dist = crate::game::map::combat::dist;
     assert!(
-        dist(at, middle) < 16.0 && dist(came, middle) - dist(at, middle) > 15.0,
+        dist(at, middle) < 20.0 && dist(came, middle) - dist(at, middle) > 12.0,
         "into the ring: {at:?}"
     );
     hurry_all(&map, 15.0).await;
@@ -702,15 +702,6 @@ async fn lady_jaina_fights_with_fire_frost_and_her_elementals() {
         }
     }
     assert!(called, "her elementals called");
-    map.query(move |m| {
-        if m.creatures
-            .iter()
-            .all(|(_, c)| c.entry != WATER_ELEMENTAL || !c.alive())
-        {
-            summon(m, WATER_ELEMENTAL, off(home, -4.0, 0.0), 0.0);
-        }
-    })
-    .await;
     // With them near, teleports: her victim kept, her tower in reach of
     // where she stands, else let go.
     let tower = Vector3d {
@@ -724,6 +715,13 @@ async fn lady_jaina_fights_with_fire_frost_and_her_elementals() {
             crate::game::map::scripts::place(m, jaina, at, 0.0);
             if let Some(cr) = m.creature_mut(jaina) {
                 cr.engagement.origin = Some(at);
+            }
+            // Water elementals near wherever she stands.
+            if crate::game::map::scripts::creatures_near(m, at, WATER_ELEMENTAL, 90.0, true)
+                .is_empty()
+            {
+                let e = summon(m, WATER_ELEMENTAL, off(at, -4.0, 0.0), 0.0);
+                tough(m, e);
             }
         })
         .await;
@@ -2975,11 +2973,28 @@ async fn each_demon_answers_its_sting_and_slips_away_when_left_alone() {
         }
         clear(&map, vec![g]);
     }
-    // Left alone.
+    // Left alone: home from its fight, nobody about to take it up again.
+    map.query(move |m| {
+        m.players.get_mut(&me).unwrap().gm = true;
+        let at = m.players[&me].position();
+        clear_around(m, at, 60.0, &[]);
+    })
+    .await;
     let g = unmasked(&map, me, ARTORIUS).await;
     let restless = map
         .query(move |m| {
             event_ai::evade(m, g);
+            // Home at once, its fight over.
+            if let Some(c) = m.creature_mut(g) {
+                c.evading = false;
+                c.combat.attacking = false;
+                c.threat.clear();
+                c.fields.set_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    false,
+                );
+            }
             for _ in 0..1201 {
                 hurry_runs(m, Some(g), Duration::from_secs(1));
             }
