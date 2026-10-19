@@ -356,3 +356,53 @@ async fn a_removed_object_stays_gone_but_for_a_scripts_while() {
         "there; removed, and not back at its time; out for ten seconds; gone again for good"
     );
 }
+
+/// Thistle Tea's `World.players_in_zone/2` "finds the players whose area
+/// lies in the zone": a script for everyone in Elwynn Forest (92) runs on
+/// Alice in the forest and on Bob in Goldshire, an area of it, and not on
+/// Carol in Westfall (the script command for everyone in a zone, by the
+/// zone each player is in, not their area).
+#[tokio::test]
+async fn a_script_for_a_zone_runs_on_those_in_its_areas_only() {
+    use crate::game::fields::UNIT_NPC_EMOTESTATE;
+    const ZONE_SCRIPT: u32 = 997_858;
+    const ELWYNN: u32 = 12;
+    const GOLDSHIRE: u32 = 87;
+    const WESTFALL: u32 = 40;
+    let mut d = world();
+    d.scripts.generic.insert(
+        ZONE_SCRIPT,
+        vec![step(2, [u32::from(UNIT_NPC_EMOTESTATE), 7, 0, 0])],
+    );
+    let realm = realm_of(d);
+    let (_a, ga, map) = player(&realm, "Alice").await;
+    let (_b, gb, _) = player(&realm, "Bob").await;
+    let (_c, gc, _) = player(&realm, "Carol").await;
+    let out = map
+        .query(move |m| {
+            for (g, zone, area) in [
+                (ga, ELWYNN, ELWYNN),
+                (gb, ELWYNN, GOLDSHIRE),
+                (gc, WESTFALL, WESTFALL),
+            ] {
+                let p = m.players.get_mut(&g).unwrap();
+                p.zone = zone;
+                p.area = area;
+            }
+            assert!(scripts::execute(
+                m,
+                &step(92, [ZONE_SCRIPT, ELWYNN, 0, 0]),
+                ga,
+                ga
+            ));
+            scripts::update(m);
+            [ga, gb, gc].map(|g| m.players[&g].fields.get_u32(UNIT_NPC_EMOTESTATE))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        [7, 7, 0],
+        "the forest's and Goldshire's, not Westfall's"
+    );
+}
