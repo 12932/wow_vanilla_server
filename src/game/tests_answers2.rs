@@ -412,3 +412,153 @@ async fn the_grey_exclamations_gap_is_a_setting() {
     assert_eq!(shown[1], [Nothing, Nothing, Nothing], "none");
     assert_eq!(shown[2], [Grey, Grey, Nothing], "eight");
 }
+
+// ---- #10: a talent's trained ranks at a trainer ---------------------------
+
+const WARRIOR_TRAINER: u32 = 9600;
+/// Mortal Strike's talent spell, and the rank a trainer teaches after it.
+const MORTAL_STRIKE: u32 = 996_000;
+const MORTAL_STRIKE_2: u32 = 996_001;
+const MS_TALENT: u32 = 135;
+
+fn trainer_data() -> GameData {
+    let mut d = GameData::empty();
+    let mut t = npc(WARRIOR_TRAINER, 0x10);
+    t.trainer_type = 0;
+    t.trainer_class = 1;
+    d.creature_templates.insert(WARRIOR_TRAINER, t);
+    d.creature_spawns
+        .insert(0, vec![beside(960, WARRIOR_TRAINER, 2.0)]);
+    let spell = |id: u32| SpellTemplate {
+        id,
+        name: format!("Mortal Strike {id}"),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    insert(&mut d, [spell(MORTAL_STRIKE), spell(MORTAL_STRIKE_2)]);
+    d.spells.talents.insert(
+        MS_TALENT,
+        TalentInfo {
+            id: MS_TALENT,
+            ranks: [MORTAL_STRIKE, 0, 0, 0, 0],
+            ..Default::default()
+        },
+    );
+    // The skill line chains the talent's spell to the trained rank, as the
+    // client's SkillLineAbility does; vmangos's spell_chain has no row.
+    d.spells.skill_abilities.insert(
+        MORTAL_STRIKE,
+        vec![SkillAbility {
+            skill: 26,
+            spell: MORTAL_STRIKE,
+            superseded_by: MORTAL_STRIKE_2,
+            ..Default::default()
+        }],
+    );
+    d.spells.index_talent_lines();
+    d.npc.trainers.insert(
+        WARRIOR_TRAINER,
+        vec![crate::game::data::npc::TrainerSpell {
+            spell: MORTAL_STRIKE_2,
+            cost: 0,
+            required_level: 1,
+            ..Default::default()
+        }],
+    );
+    d
+}
+
+async fn trainer_list(a: &mut Client, trainer: Guid) -> Vec<TrainerSpell> {
+    a.clear();
+    a.send(CMSG_TRAINER_LIST { guid: trainer }).await;
+    a.wait_for("SMSG_TRAINER_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_TRAINER_LIST(l) => Some(l.spells.clone()),
+        _ => None,
+    })
+    .await
+}
+
+/// A talent's trained rank (Mortal Strike's second) is red at a trainer to
+/// a warrior without the talent, and asks for it, as mangos-classic's
+/// `GetTrainerSpellState` wants the rank before by its chain; with the
+/// talent it is green. Before, vmangos's spell_chain left the rank with no
+/// rank before, so it was green to anyone, and could be bought.
+#[tokio::test]
+async fn a_trainer_offers_a_talents_trained_rank_only_with_the_talent() {
+    let realm = harness::realm_with(trainer_data());
+    let mut a = Client::connect(&realm, "TRAINS");
+    let g = a.enter("Trainee", Race::Human, Class::Warrior).await;
+    let trainer = guid::unit(WARRIOR_TRAINER, 960);
+    a.sees(trainer).await;
+    let row = |list: Vec<TrainerSpell>| {
+        list.into_iter()
+            .find(|s| s.spell == MORTAL_STRIKE_2)
+            .map(|s| (s.state, s.required_spells[0]))
+    };
+    let without = row(trainer_list(&mut a, trainer).await);
+    assert_eq!(
+        without,
+        Some((TrainerSpellState::Red, MORTAL_STRIKE)),
+        "red, wanting the talent"
+    );
+    a.send(CMSG_TRAINER_BUY_SPELL {
+        guid: trainer,
+        id: MORTAL_STRIKE_2,
+    })
+    .await;
+    a.wait_for("SMSG_TRAINER_BUY_FAILED", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(_)).then_some(())
+    })
+    .await;
+    let map = map_of(&realm, g);
+    on(&map, move |m| {
+        m.players.get_mut(&g).unwrap().spells.push(MORTAL_STRIKE)
+    })
+    .await;
+    let with = row(trainer_list(&mut a, trainer).await);
+    assert_eq!(with, Some((TrainerSpellState::Green, MORTAL_STRIKE)));
+}
+
+/// The real warrior trainers: Mortal Strike's second rank (21551) is red,
+/// asking for the talent (12294), to a level-48 warrior without it, and
+/// green with it.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_real_trainers_offer_mortal_strikes_ranks_only_with_the_talent() {
+    use super::tests_p3_spells_kit::{have_data, player, realm as real_realm, spawn};
+    if !have_data() {
+        return;
+    }
+    let realm = real_realm();
+    let (mut a, g, map) = player(
+        &realm,
+        "TRAINREAL",
+        "Realtrainee",
+        Race::Human,
+        Class::Warrior,
+    )
+    .await;
+    let trainer = on(&map, move |m| {
+        ready(m, g, 48, &[]);
+        // Ander Germaine, Stormwind's warrior trainer.
+        spawn(m, g, 914, 60, 3.0)
+    })
+    .await;
+    let row = |list: Vec<TrainerSpell>| {
+        list.into_iter()
+            .find(|s| crate::game::map::spells::learns(&realm.data, s.spell) == 21_551)
+            .map(|s| (s.state, s.required_spells[0]))
+    };
+    let without = row(trainer_list(&mut a, trainer).await);
+    assert_eq!(
+        without,
+        Some((TrainerSpellState::Red, 12_294)),
+        "red, wanting the talent"
+    );
+    on(&map, move |m| {
+        m.players.get_mut(&g).unwrap().spells.push(12_294)
+    })
+    .await;
+    let with = row(trainer_list(&mut a, trainer).await);
+    assert_eq!(with.map(|w| w.0), Some(TrainerSpellState::Green));
+}
