@@ -1268,6 +1268,7 @@ fn execute(
     // Each target: the hit, then the effects.
     let mut chain = [1.0f32; 3];
     let mut landed_on_main = false;
+    let mut main_missed = false;
     // A meteor's damage is shared among those it falls on (Thistle Tea's
     // `SharedDamage`).
     let shared = if s.script_name == "spell_meteor" {
@@ -1318,11 +1319,24 @@ fn execute(
             });
             continue;
         }
-        if land(map, caster, s, target, effects, &mut chain, &launch)
-            && Some(target) == launch.targets.unit
-        {
+        let landed = land(map, caster, s, target, effects, &mut chain, &launch);
+        if landed && Some(target) == launch.targets.unit {
             landed_on_main = true;
         }
+        main_missed |= !landed && Some(target) == launch.targets.unit && target != caster;
+    }
+    // A channel whose unit target resisted it, reflected it or was immune
+    // to all of it stops at once: mangos-classic's `m_duration = 0` for a
+    // channel's missed unit target (`WriteSpellGoTargets`), Thistle Tea's
+    // "stops a target-dependent channel when its only target resists". One
+    // whose selection it didn't aim at (a self aura's) goes on.
+    if s.channeled()
+        && main_missed
+        && let Some(casting) = map
+            .caster_mut(caster)
+            .and_then(|c| c.casting.take_if(|c| c.spell == s.id))
+    {
+        end_channel(map, caster, &casting);
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.

@@ -19,6 +19,10 @@ use crate::game::map::{Map, MapHandle};
 /// and the same that a turn breaks (its channel interrupt flags' turning).
 const DRAIN: u32 = 997_501;
 const STARE: u32 = 997_502;
+/// A channel of an aura on its caster (a self-aura's), and what keeps a
+/// target from every school.
+const SELF_CHANNEL: u32 = 997_503;
+const UNTOUCHABLE: u32 = 997_504;
 const RANGE_20: u32 = 997;
 
 fn data(d: &mut GameData) {
@@ -38,7 +42,17 @@ fn data(d: &mut GameData) {
     let mut stare = drain.clone();
     stare.id = STARE;
     stare.channel_interrupt_flags = 0x10;
-    insert(d, [drain, stare]);
+    let mut own = drain.clone();
+    own.id = SELF_CHANNEL;
+    own.effects[0] = SpellEffect {
+        amplitude: 1_000,
+        ..aura(AURA_PERIODIC_HEAL, 0, 10, 1)
+    };
+    own.effects[0].bonus_coefficient = -1.0;
+    let mut untouchable = bare(UNTOUCHABLE, 0);
+    untouchable.duration_index = LASTS_LONG;
+    effect(&mut untouchable, 0, aura(AURA_SCHOOL_IMMUNITY, 127, 0, 1));
+    insert(d, [drain, stare, own, untouchable]);
 }
 
 /// A channel at an enemy goes on while it is within half its range again
@@ -156,4 +170,31 @@ async fn a_jump_ends_a_channel_and_a_turn_one_that_says_so() {
     let info = movement(&map, a, MovementInfo_MovementFlags::empty(), 2.0).await;
     c.send(MSG_MOVE_SET_FACING_Client { info }).await;
     assert_eq!(faced(&map, a, 2.0).await, None, "a turn: off");
+}
+
+/// A channel whose target is immune to it (or resists it) stops as it
+/// begins, its aura nowhere; one whose aura is its caster's goes on with
+/// that target selected (mangos-classic's `WriteSpellGoTargets` ending a
+/// channel at a missed unit target; Thistle Tea's "stops a
+/// target-dependent channel when its only target resists" and "keeps a
+/// self-aura channel active when its selected enemy is not an impact
+/// target").
+#[tokio::test]
+async fn a_channel_its_target_avoids_stops_but_a_self_auras_goes_on() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P7CH3", "Shrugged", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[DRAIN, SELF_CHANNEL]);
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            kit::apply(m, kobold, kobold, UNTOUCHABLE);
+            let began = cast_fresh(m, a, DRAIN, at(kobold));
+            let avoided = (began, casting(m, a), kit::has(m, kobold, DRAIN));
+            cast_fresh(m, a, SELF_CHANNEL, at(kobold));
+            pass(m, 100);
+            (avoided, casting(m, a), kit::has(m, a, SELF_CHANNEL))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, ((true, None, false), Some(SELF_CHANNEL), true));
 }
