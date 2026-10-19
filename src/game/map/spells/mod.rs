@@ -1843,6 +1843,10 @@ const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 /// as well as one striking (`combat::struck`); and a helpful spell landing
 /// on one in a fight puts its caster in it (`combat::assisted`), unless it
 /// makes no threat (mangos's `CasterHitTargetWithSpell`).
+///
+/// A harmful one that starts a fight between two players' sides, or that
+/// is PvP-enabling (Hunter's Mark) and seen, flags them as a blow does,
+/// a pet's spell its master (`combat::hostile_spell_pvp`).
 fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Launch, hit: bool) {
     if target == caster
         || !(guid::is_unit(target) || guid::is_player(target))
@@ -1878,6 +1882,11 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
         let breaks = s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH);
         (seen || breaks) && (breaks || (own && !s.attr(1, ATTR_EX_NO_THREAT)))
     };
+    let enabling = s.attr(3, sd::ATTR_EX3_PVP_ENABLING)
+        && (seen || (!hit && s.attr(1, ATTR_EX_FAILURE_BREAKS_STEALTH)));
+    if fights || enabling {
+        combat::hostile_spell_pvp(map, caster, target);
+    }
     // Caught at it (a resisted Pick Pocket), the caster's stealth ends
     // (mangos's `CasterHitTargetWithSpell`: `RemoveAurasWithDispelType
     // (DISPEL_STEALTH)` for `SPELL_ATTR_EX_FAILURE_BREAKS_STEALTH`).
