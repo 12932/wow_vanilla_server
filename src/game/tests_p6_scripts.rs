@@ -2352,15 +2352,12 @@ async fn obsidion_rises_as_dorius_unmasks_and_fights_with_smash_and_knockback() 
     .await;
 }
 
-/// `g`'s timed casts in its fight with `d`, each as [`timed_cast`] has it:
-/// its event, spell, first and repeat windows, and whether at `d`.
-pub(super) async fn kit_on(
-    c: &mut Client,
-    map: &MapHandle,
-    g: Guid,
-    d: Guid,
-    casts: &[(u32, u32, (f32, f32), (f32, f32), bool)],
-) {
+/// A timed cast of a creature's kit: its event, spell, first and repeat
+/// windows in seconds, and whether it goes at its victim.
+pub(super) type Timed = (u32, u32, (f32, f32), (f32, f32), bool);
+
+/// `g`'s timed casts in its fight with `d`, each as [`timed_cast`] has it.
+pub(super) async fn kit_on(c: &mut Client, map: &MapHandle, g: Guid, d: Guid, casts: &[Timed]) {
     for (id, spell, first, repeat, at_victim) in casts.iter().copied() {
         timed_cast(c, map, g, id, spell, first, repeat, at_victim.then_some(d)).await;
     }
@@ -3075,7 +3072,7 @@ async fn the_scourge_invasion_climbs_its_chain_and_its_mouth_speaks() {
     // The Mouth.
     let mouth = summon_near(&map, MOUTH, off(at, 4.0, 0.0)).await;
     c.sees(mouth).await;
-    map.query(move |m| event_ai::update_despawns(m)).await;
+    map.query(event_ai::update_despawns).await;
     assert!(
         between(timer(&map, mouth, 1699501).await, 150.0, 3600.0),
         "now and then"
