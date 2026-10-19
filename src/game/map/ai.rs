@@ -133,9 +133,12 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     }
     // The player it fights is in the fight too, as it begins and as it
     // goes on (mangos's `EngageInCombatWith`, `SetInCombatWithVictim`).
-    // Not a pet's master lying in a believed Feign Death, though.
+    // Not a pet's master who can't join it, though (lying in a believed
+    // Feign Death, out of every fight: [`pets::drawn_in`]).
     let master = crate::game::map::pets::master(map, attacker);
-    if guid::is_player(master) && (master == attacker || !combat::feigning(map, master)) {
+    if guid::is_player(master)
+        && (master == attacker || crate::game::map::pets::drawn_in(map, attacker) == Some(master))
+    {
         combat::enter(map, master, false);
     }
     let realm = map.realm.clone();
@@ -311,6 +314,23 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             }
             None => evade(map, c),
         }
+    }
+}
+
+/// `g`'s victim died (its attack stopped with it): a creature fights on
+/// with the next on its list it may fight, as mangos's
+/// `SelectHostileTarget` has it at its next update (one that killed a pet
+/// turns on its master, his entry on its list). With none, its next turn
+/// sees its fight over. A pet's own AI takes up its next.
+pub fn victim_died(map: &mut Map, g: Guid) {
+    if !map
+        .creature(g)
+        .is_some_and(|c| c.pet.is_none() && c.alive() && !c.combat.attacking && !c.evading)
+    {
+        return;
+    }
+    if let Some(t) = pick_victim(map, g) {
+        assist(map, g, t);
     }
 }
 
