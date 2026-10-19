@@ -118,3 +118,36 @@ async fn feline_swiftness_brings_its_hidden_passive() {
     .await;
     assert_eq!(out, [true, true, true]);
 }
+
+/// Thistle Tea's controlled summons (`controlled_pet_dbc_test.exs`): the
+/// creatures' pet summons (3612's 698, 3621's 756, 11939's 12922) stay
+/// until dismissed, and the elementals (513's 329, 895's 575) a minute;
+/// Summon Doomguard (22865, 14385) is a wild summon by vmangos's
+/// `spell_effect_mod`, as wvs applies it.
+#[test]
+#[ignore = "extended"]
+fn creature_pets_stay_and_elementals_last_a_minute() {
+    let Some(d) = real() else {
+        return;
+    };
+    for (id, entry, duration, effect) in [
+        (3612, 698, -1, 28),
+        (3621, 756, -1, 28),
+        (11_939, 12_922, -1, 28),
+        (22_865, 14_385, -1, 41),
+        (513, 329, 60_000, 28),
+        (895, 575, 60_000, 28),
+    ] {
+        let s = d.spells.get(id).unwrap();
+        let e = &s.effects[0];
+        assert_eq!((e.effect, e.misc_value), (effect, entry), "{id}");
+        assert_eq!(
+            d.spells
+                .durations
+                .get(&s.duration_index)
+                .map_or(-1, |x| x.base),
+            duration,
+            "{id}"
+        );
+    }
+}
