@@ -25,7 +25,6 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::fields::*;
-use crate::game::guid;
 use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
 use crate::game::map::{Map, MapKey};
 
@@ -255,8 +254,14 @@ fn arrive(map: &mut Map, near: Vector3d, foe: Guid) {
         "{}: Jaina Proudmoore arrives at ({:.1}, {:.1}, {:.1})",
         map.key, spot.x, spot.y, spot.z
     );
-    let fights = guid::is_player(foe) && map.players.contains_key(&foe)
-        || map.creature(foe).is_some_and(|c| c.alive());
+    // At home her template takes no one on sight (`flags_extra`'s
+    // no-aggro); come to defend the city, she does, and after each kill
+    // takes the next. (The user saw her stand before 80 Horde: the one she
+    // came for had died.)
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
+        s.reaction = Some(crate::game::map::assistance::Reaction::Aggressive);
+    }
+    let fights = map.unit_view(foe).is_some_and(|u| u.alive);
     if fights && crate::game::map::combat::can_attack(map, g, foe) {
         crate::game::map::ai::attacked(map, g, foe);
     }
