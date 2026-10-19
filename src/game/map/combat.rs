@@ -3452,13 +3452,20 @@ fn leave_finished_fights(map: &mut Map) {
             })
             .collect()
     };
+    let data = map.realm.data.clone();
     for g in due {
         let Some(p) = map.players.get_mut(&g) else {
             continue;
         };
         p.combat.next_check = Some(now + COMBAT_CHECK);
         if !p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT) {
-            p.combat.next_check = None;
+            // Out of combat, with a war a creature's fight began (it took
+            // them on its list, and never fought them): over once none
+            // holds them.
+            if p.temporary_war.is_empty() || !held.contains(&g) {
+                p.combat.next_check = None;
+                crate::game::map::reputation::end_temporary_war(p, &data);
+            }
             continue;
         }
         let timed = p.combat.combat_until.is_some_and(|t| t > now);

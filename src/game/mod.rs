@@ -845,6 +845,12 @@ mod tests_p8_player_taxi;
 #[cfg(test)]
 mod tests_p8_player_vendor;
 #[cfg(test)]
+mod tests_p8_scripts;
+#[cfg(test)]
+mod tests_p8_scripts_av;
+#[cfg(test)]
+mod tests_p8_scripts_av2;
+#[cfg(test)]
 mod tests_p8_spell_amounts;
 #[cfg(test)]
 mod tests_p8_spell_effects;

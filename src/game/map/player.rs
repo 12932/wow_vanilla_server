@@ -702,6 +702,7 @@ impl Player {
                 mount: f.mount,
             }
         });
+        row.state.reputation = crate::game::map::reputation::kept(self);
         row.state.quests = self.journal.clone();
         row.state.auras = crate::game::map::spells::cooldowns::saved_auras(self, now);
         row.state.cooldowns = crate::game::map::spells::cooldowns::saved_cooldowns(self, now);

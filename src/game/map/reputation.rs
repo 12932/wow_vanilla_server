@@ -536,6 +536,7 @@ pub fn temporary_war(map: &mut Map, player: Guid, creature: Guid) {
 /// [`temporary_war`], with the creature's faction.
 pub fn temporary_war_with(map: &mut Map, player: Guid, faction: u32) {
     let data = map.realm.data.clone();
+    let now = map.now;
     let Some(def) = data.misc.faction(faction) else {
         return;
     };
@@ -552,6 +553,24 @@ pub fn temporary_war_with(map: &mut Map, player: Guid, faction: u32) {
     s.flags |= FLAG_AT_WAR;
     p.temporary_war.push(faction);
     p.outbound.send_frame(at_war_frame(def.index, true));
+    // Looked at with the player's fight: one its creature never fought
+    // (a blow that put them on its list and killed it) ends too, once no
+    // creature holds them.
+    p.combat.next_check.get_or_insert(now);
+}
+
+/// A player's standings as they are kept: a fight's war is the fight's,
+/// and not saved with them (else a save mid-fight would leave them at war
+/// for good, the next login knowing nothing of the fight).
+pub fn kept(p: &Player) -> Vec<Standing> {
+    let mut out = p.row.state.reputation.clone();
+    for s in out
+        .iter_mut()
+        .filter(|s| p.temporary_war.contains(&s.faction))
+    {
+        s.flags &= !FLAG_AT_WAR;
+    }
+    out
 }
 
 /// Out of the fight: the factions at war only for it are at peace again,
