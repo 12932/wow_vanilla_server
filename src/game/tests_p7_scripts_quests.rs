@@ -125,15 +125,21 @@ async fn kindal_takes_up_the_trial_follows_and_cries_out_when_attacked() {
         .await,
         "three seconds on, she follows"
     );
-    // Attacked.
-    let cries: Vec<String> = (4122..=4125).map(|t| line(&realm, t)).collect();
+    // Attacked, she names her foe.
     c.clear();
-    map.query(move |m| {
-        let at = m.position_of(kindal).unwrap();
-        let foe = dummy(m, off(at, 2.0, 0.0));
-        crate::game::map::ai::attacked(m, kindal, foe);
-    })
-    .await;
+    let foe = map
+        .query(move |m| {
+            let at = m.position_of(kindal).unwrap();
+            let foe = dummy(m, off(at, 2.0, 0.0));
+            crate::game::map::ai::attacked(m, kindal, foe);
+            let entry = m.creature(foe).unwrap().entry;
+            m.realm.data.creature_template(entry).unwrap().name.clone()
+        })
+        .await
+        .unwrap();
+    let cries: Vec<String> = (4122..=4125)
+        .map(|t| line(&realm, t).replace("$n", &foe))
+        .collect();
     let said = heard(&mut c, kindal, Duration::from_secs(2)).await;
     assert!(
         said.as_ref().is_some_and(|s| cries.contains(s)),

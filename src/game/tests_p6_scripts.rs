@@ -1890,14 +1890,11 @@ async fn shakes_sounds_the_alarm_and_fails_if_he_dies_or_the_player_strays() {
         let taken = map
             .query(move |m| {
                 put(m, me, off(home, 2.0, 0.0));
-                // On speaking terms with his cove, whatever this hero's
-                // standing there.
-                crate::game::map::scripts::set_faction(m, shakes, 35);
                 take_again(m, me, shakes, DEATH_FROM_BELOW, &[670])
             })
             .await
             .unwrap();
-        assert!(taken);
+        assert!(taken, "stray {stray}");
         assert!(hears(&mut c, &realm, shakes, 6372).await, "battle stations");
         let standing = map
             .query(move |m| (event_ai::phase(m, shakes), npc_flags(m, shakes) & 0x2))
@@ -1927,6 +1924,20 @@ async fn shakes_sounds_the_alarm_and_fails_if_he_dies_or_the_player_strays() {
             }))
             .await,
             "stray {stray}: he is back"
+        );
+        // The war his death made with his cove is over with the fight:
+        // a moment after nothing holds the hero.
+        assert!(
+            until(&map, 3_000, move |m| {
+                let data = m.realm.data.clone();
+                first(m, SHAKES)
+                    .and_then(|g| crate::game::map::reputation::faction_of(m, g))
+                    .is_some_and(|f| {
+                        !crate::game::map::reputation::at_war(&m.players[&me], &data, f)
+                    })
+            })
+            .await,
+            "stray {stray}: at peace with his cove"
         );
     }
 }

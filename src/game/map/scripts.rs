@@ -635,13 +635,24 @@ fn speaker_name(map: &Map, g: Guid) -> String {
         .unwrap_or_default()
 }
 
-/// `$N` and the like in a line, for its target.
+/// `$N` and the like in a line, for its target. A creature's is its name
+/// alone (a pet's its own): mangos sends its name with its guid, a
+/// player's as well, and `$r` and `$c` are a player's.
 fn fill(map: &Map, text: &str, target: Guid) -> String {
     if !text.contains('$') {
         return text.to_owned();
     }
     let Some(p) = map.players.get(&target) else {
-        return text.to_owned();
+        let Some(c) = map.creature(target) else {
+            return text.to_owned();
+        };
+        let name = c
+            .pet
+            .as_deref()
+            .map(|s| s.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| speaker_name(map, target));
+        return text.replace("$N", &name).replace("$n", &name);
     };
     let race = match p.row.race {
         1 => "Human",
