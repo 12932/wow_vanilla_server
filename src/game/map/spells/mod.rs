@@ -205,6 +205,10 @@ pub struct Caster {
 pub struct MapSpells {
     /// Override for rolling outcomes; `None` takes the realm's setting.
     pub rolls: Option<bool>,
+    /// Rolls a test lines up for the outcomes' chances, in hundredths of a
+    /// percent (0 to 9,999), each taken once before any other.
+    #[cfg(test)]
+    pub queued_rolls: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i32>>>,
     /// Walls that block line of sight, beside the navmesh's (for tests).
     pub walls: Vec<(Vector3d, Vector3d)>,
     /// Persistent area auras: Blizzard, Rain of Fire, Consecration.

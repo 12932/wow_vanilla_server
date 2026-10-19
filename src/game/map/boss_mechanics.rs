@@ -82,8 +82,12 @@ pub fn periodic_trigger(map: &mut Map, target: Guid, h: &Holder, a: &Aura) -> bo
     // The count of this tick, from one.
     let n = a.ticks as usize + 1;
     match h.spell {
+        // His own, on himself: another's does nothing (Thistle Tea's
+        // `GolemaggsTrust`, mangos's script on its caster).
         GOLEMAGGS_TRUST => {
-            golemaggs_trust(map, target);
+            if h.caster == target {
+                golemaggs_trust(map, target);
+            }
             true
         }
         INFERNO => {

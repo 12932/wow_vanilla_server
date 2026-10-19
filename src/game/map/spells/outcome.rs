@@ -109,6 +109,16 @@ pub fn rolling(map: &Map) -> bool {
 
 /// A roll from 0 to 9,999, hundredths of a percent.
 fn roll(map: &Map) -> i32 {
+    #[cfg(test)]
+    if let Some(r) = map
+        .spells
+        .queued_rolls
+        .lock()
+        .ok()
+        .and_then(|mut q| q.pop_front())
+    {
+        return r;
+    }
     if rolling(map) {
         rand::rng().random_range(0..10_000)
     } else {
@@ -1030,8 +1040,7 @@ pub fn partial_resist(
     if tick {
         c *= 0.1;
     }
-    let roll = rand::rng().random_range(0..10_000);
-    (damage as f32 * resist_fraction(c, roll)) as u32
+    (damage as f32 * resist_fraction(c, roll(map))) as u32
 }
 
 /// Healing of `base` from `s` to `target`: the healing bonus, done and

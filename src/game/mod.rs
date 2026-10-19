@@ -639,6 +639,16 @@ mod tests_p7_ai_pets;
 #[cfg(test)]
 mod tests_p7_ai_scripts;
 #[cfg(test)]
+mod tests_p7_auras;
+#[cfg(test)]
+mod tests_p7_auras_periodic;
+#[cfg(test)]
+mod tests_p7_auras_real;
+#[cfg(test)]
+mod tests_p7_auras_rolls;
+#[cfg(test)]
+mod tests_p7_auras_stealth;
+#[cfg(test)]
 mod tests_p7_combat;
 #[cfg(test)]
 mod tests_p7_combat_engage;

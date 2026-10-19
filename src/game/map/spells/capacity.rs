@@ -150,8 +150,10 @@ fn adjust(p: u8, s: &SpellTemplate, h: &Holder) -> u8 {
 }
 
 /// The holder of `target`'s that gives way when one more of its kind
-/// (`positive`) would show: the least worth, the oldest of those; it may be
-/// the newcomer at `index` itself.
+/// (`positive`) would show: the least worth, the oldest of those (a
+/// refresh makes one new, as Thistle Tea's "refreshing at capacity ...
+/// protects the refreshed aura"; those put on at once in their order); it
+/// may be the newcomer at `index` itself.
 pub fn gives_way(map: &Map, target: Guid, positive: bool, index: usize) -> Option<usize> {
     let a = auras::auras(map, target)?;
     let data = &map.realm.data;
@@ -159,6 +161,6 @@ pub fn gives_way(map: &Map, target: Guid, positive: bool, index: usize) -> Optio
         .iter()
         .enumerate()
         .filter(|(i, h)| h.positive == positive && (h.slot.is_some() || *i == index))
-        .min_by_key(|(i, h)| (worth(data, target, h), *i, h.spell))
+        .min_by_key(|(i, h)| (worth(data, target, h), h.applied, *i, h.spell))
         .map(|(i, _)| i)
 }

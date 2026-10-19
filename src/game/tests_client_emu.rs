@@ -27,14 +27,14 @@ use crate::game::data::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::MapKey;
 
-const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+pub(crate) const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 const BAT: u32 = 304;
 const GULL: u32 = 305;
 
 // The opcodes the checker knows; others it would only skip.
 const CHECKED: &[u16] = &[0x0A9, 0x1F6, 0x0DD, 0x24B];
 
-fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
+pub(crate) fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     CreatureTemplate {
         entry,
         name: name.into(),
@@ -50,7 +50,7 @@ fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     }
 }
 
-fn spawn(guid: u32, entry: u32, at: (f32, f32, f32)) -> CreatureSpawn {
+pub(crate) fn spawn(guid: u32, entry: u32, at: (f32, f32, f32)) -> CreatureSpawn {
     CreatureSpawn {
         guid,
         entries: vec![entry],
@@ -62,7 +62,11 @@ fn spawn(guid: u32, entry: u32, at: (f32, f32, f32)) -> CreatureSpawn {
     }
 }
 
-async fn enter(realm: &Arc<crate::game::Realm>, account: &str, name: &str) -> (Client, Guid) {
+pub(crate) async fn enter(
+    realm: &Arc<crate::game::Realm>,
+    account: &str,
+    name: &str,
+) -> (Client, Guid) {
     let mut c = Client::connect(realm, account);
     let g = c.enter(name, Race::Human, Class::Warrior).await;
     c.heartbeat(START.0, START.1, START.2).await;
