@@ -69,6 +69,13 @@ impl Mods {
         self.apply(op, base as f32).max(0.0) as u32
     }
 
+    /// The chance, in percent, that an aura these modifiers (its
+    /// caster's) hold on resists a dispel: the flat chance by the percent,
+    /// from none to certain.
+    pub fn dispel_resistance(&self) -> f32 {
+        self.apply(OP_RESIST_DISPEL_CHANCE, 0.0).clamp(0.0, 100.0)
+    }
+
     pub fn any(&self, op: usize) -> bool {
         self.flat[op] != 0 || self.pct[op] != 0
     }

@@ -1249,12 +1249,14 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
         } else {
             candidates.remove(i);
         }
-        // An aura its caster's talents hold on may resist (Thistle Tea's
+        // An aura its caster's talents hold on may resist: their flat
+        // chance by their percent, from none to certain (mangos's
+        // `ApplySpellMod` on a miss chance of 0, Thistle Tea's
         // `DispelResistance`).
-        let resist = data.spells.get(spell).map_or(0, |t| {
-            super::mods::for_spell(map, by, t).flat[super::mods::OP_RESIST_DISPEL_CHANCE]
+        let resist = data.spells.get(spell).map_or(0.0, |t| {
+            super::mods::for_spell(map, by, t).dispel_resistance()
         });
-        if resist > 0 && outcome::chance(map, resist as f32) {
+        if resist > 0.0 && outcome::chance(map, resist) {
             held.push(spell);
             continue;
         }

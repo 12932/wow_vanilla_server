@@ -639,6 +639,8 @@ mod tests_p7_auras_periodic;
 #[cfg(test)]
 mod tests_p7_auras_real;
 #[cfg(test)]
+mod tests_p7_auras_rolls;
+#[cfg(test)]
 mod tests_p7_auras_stealth;
 #[cfg(test)]
 mod tests_p7_combat;
