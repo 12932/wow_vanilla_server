@@ -64,7 +64,8 @@ fn data(d: &mut GameData) {
     effect(&mut sap, 0, aura(AURA_MOD_STUN, 0, 0, 6));
     let mut stealth = bare(STEALTH, 0);
     stealth.duration_index = LASTS_LONG;
-    stealth.aura_interrupt_flags = INTERRUPT_CAST;
+    // 1.12 Stealth's: a hostile action and a cast's launch break it.
+    stealth.aura_interrupt_flags = INTERRUPT_CAST | INTERRUPT_ACTION_COMPLETE;
     effect(&mut stealth, 0, aura(AURA_MOD_STEALTH, 0, 5, 1));
     insert(d, [mount, duel, consecrate, bolt, sap, stealth]);
 }

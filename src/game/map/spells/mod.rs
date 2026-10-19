@@ -978,8 +978,11 @@ pub fn cast(
         execute(map, caster, s, targets, item, false);
         return true;
     }
-    // Casting breaks what casting breaks (Stealth, Invisibility).
-    auras::interrupt(map, caster, auras::INTERRUPT_CAST);
+    // Beginning a cast breaks what an action breaks at once; 1.12's Stealth
+    // and Invisibility go only at its launch (mangos-classic's
+    // `AURA_INTERRUPT_FLAG_ACTION` at `Spell::prepare`).
+    let stealthy = class_scripts::allows_stealth(s);
+    action_breaks(map, caster, s, auras::INTERRUPT_ACTION, stealthy);
     if let Some(c) = map.caster_mut(caster) {
         c.casting = Some(Casting {
             spell,
@@ -1359,21 +1362,59 @@ fn execute(
     }
     if !triggered {
         mods::spend(map, caster, &m);
-        // Casting breaks what casting breaks, but the spell's own aura (and
-        // stealth, for what stealth allows and a lucky Improved Sap).
+        // Casting breaks what an action breaks, late or at once (an
+        // instant's start and its launch are one), but what the spell
+        // allows: stealth for a lucky Improved Sap too (mangos-classic's
+        // `AURA_INTERRUPT_FLAG_ACTION_LATE` at `Spell::cast`).
         let stealthy = class_scripts::keeps_stealth(map, caster, s);
-        let breaks = |h: &auras::Holder| {
-            h.spell != s.id
-                && h.interrupt_flags & auras::INTERRUPT_CAST != 0
-                && !(stealthy && h.has(auras::AURA_MOD_STEALTH))
-        };
-        if auras::auras(map, caster).is_some_and(|a| a.holders.iter().any(breaks)) {
-            auras::remove_where(map, caster, breaks);
+        action_breaks(
+            map,
+            caster,
+            s,
+            auras::INTERRUPT_ACTION | auras::INTERRUPT_ACTION_COMPLETE,
+            stealthy,
+        );
+        // A failure of one that says so breaks stealth whatever it allows
+        // (Pick Pocket's; mangos-classic's `FAILURE_BREAKS_STEALTH` in
+        // `CasterHitTargetWithSpell`).
+        if main_missed && s.attr(1, sd::ATTR_EX_FAILURE_BREAKS_STEALTH) {
+            auras::remove_where(map, caster, |h| h.has(auras::AURA_MOD_STEALTH));
         }
     }
     cast_end_procs(map, caster, s, &targets, item, triggered);
     crate::game::map::combat::spell_launched(map, caster, s, triggered);
 }
+
+/// What `caster`'s action of casting `s` breaks: its auras whose interrupt
+/// flags meet `flags`, but its own of `s`, stealth if `stealthy`, and an
+/// invisibility if `s` allows that; nothing for a spell that is no action
+/// (mangos-classic's `RemoveAurasOnCast`, `SPELL_ATTR_EX2_NOT_AN_ACTION`;
+/// Thistle Tea's "an invisibility-compatible cast preserves early and late
+/// invisibility").
+fn action_breaks(map: &mut Map, caster: Guid, s: &SpellTemplate, flags: u32, stealthy: bool) {
+    if s.attr(2, sd::ATTR_EX2_NOT_AN_ACTION) {
+        return;
+    }
+    let invisible = s.attr(2, sd::ATTR_EX2_ALLOW_WHILE_INVISIBLE);
+    let data = map.realm.data.clone();
+    let breaks = |h: &auras::Holder| {
+        h.interrupt_flags & flags != 0
+            && !(h.spell == s.id && h.caster == caster)
+            && !(stealthy && h.has(auras::AURA_MOD_STEALTH))
+            && !(invisible
+                && (h.has(auras::AURA_MOD_INVISIBILITY)
+                    || data
+                        .spells
+                        .get(h.spell)
+                        .is_some_and(|t| t.dispel == DISPEL_INVISIBILITY)))
+    };
+    if auras::auras(map, caster).is_some_and(|a| a.holders.iter().any(breaks)) {
+        auras::remove_where(map, caster, breaks);
+    }
+}
+
+/// `DISPEL_INVISIBILITY`, a spell's dispel type.
+const DISPEL_INVISIBILITY: u32 = 6;
 
 /// The cast's end, once, after whatever it landed on (vmangos's
 /// `PROC_EX_CAST_END`, Thistle Tea's `cast_complete_procs`): what procs on

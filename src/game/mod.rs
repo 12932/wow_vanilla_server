@@ -753,6 +753,8 @@ mod tests_p8_spell_funnel;
 #[cfg(test)]
 mod tests_p8_spell_resists;
 #[cfg(test)]
+mod tests_p8_spell_stealth;
+#[cfg(test)]
 mod tests_p8_spell_wounds;
 #[cfg(test)]
 mod tests_parity_combat;
