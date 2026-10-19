@@ -1128,8 +1128,20 @@ fn execute(
         .caster(caster)
         .filter(|c| s.finisher() && targets.unit == Some(c.combo_target))
         .map_or(0, |c| c.combo_points);
+    let aimed = targets.unit;
     let targets = magnet(map, caster, s, targets);
     let resolved = resolve(map, caster, s, &targets, &m);
+    // A spell a magnet took stops there: a chain jumps on to no one from
+    // it (mangos's `CheckAndAddMagnetTarget`, Thistle Tea's resolver), and
+    // what the spell does to its caster stays with the caster.
+    let resolved = if targets.unit != aimed {
+        resolved
+            .into_iter()
+            .filter(|(g, _)| Some(*g) == targets.unit || *g == caster)
+            .collect()
+    } else {
+        resolved
+    };
     let resolved = if !triggered && item.is_none() && map.players.contains_key(&caster) {
         aura_rank::recipients(map, caster, s, &targets, resolved)
     } else {

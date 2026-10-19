@@ -350,3 +350,155 @@ async fn a_gms_weather_held_for_good_lasts_until_let_go() {
         "rolled again, the next roll in ten minutes: {rolled:?}"
     );
 }
+
+const GROUNDING: u32 = 96_400;
+const CHAIN_BOLT: u32 = 96_401;
+const TOTEM: u32 = 3_830;
+
+fn magnets() -> crate::game::data::GameData {
+    use crate::game::data::spells::{ATTR_EX3_ALWAYS_HIT, SpellDuration, SpellEffect};
+    use crate::game::tests_p3_entity::{aura_effect, spell};
+    let mut d = crate::game::tests_p3_combat::data();
+    let mut totem = crate::game::tests_p3_combat::template(TOTEM, 11);
+    totem.faction = crate::game::tests_p3_combat::HUMANS;
+    d.creature_templates.insert(TOTEM, totem);
+    let mut grounding = spell(
+        GROUNDING,
+        &[aura_effect(
+            crate::game::map::auras::AURA_SPELL_MAGNET,
+            0,
+            0,
+            1,
+        )],
+    );
+    grounding.duration_index = 9;
+    // A magic bolt that jumps to two more.
+    let mut bolt = spell(
+        CHAIN_BOLT,
+        &[SpellEffect {
+            effect: 2,
+            base_points: 99,
+            base_dice: 1,
+            die_sides: 1,
+            target_a: 6,
+            chain_target: 3,
+            ..Default::default()
+        }],
+    );
+    bolt.dmg_class = 1;
+    bolt.attributes[3] |= ATTR_EX3_ALWAYS_HIT;
+    for s in [grounding, bolt] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d.spells.durations.insert(
+        9,
+        SpellDuration {
+            base: 60_000,
+            ..Default::default()
+        },
+    );
+    d
+}
+
+/// Thistle Tea's spell magnets "an intercepted chain stops at the magnet",
+/// "launch packets and delivery use the redirected target" and "source
+/// process exit retires protection": a chain bolt at Alice under a
+/// grounding totem goes to the totem and jumps on to no one, Alice beside
+/// it whole (mangos's `CheckAndAddMagnetTarget`); the spell's go names the
+/// totem alone. A totem gone from the world grounds nothing: the next
+/// lands on her.
+#[tokio::test]
+async fn a_grounded_chain_stops_at_its_magnet_and_a_gone_magnet_grounds_nothing() {
+    use crate::game::fields::{UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH};
+    use crate::game::map::Map;
+    use crate::game::tests_p3_combat::{BRUTE, setup_with, spawn};
+    let (_realm, mut a, ga, map) = setup_with(magnets(), Class::Warrior).await;
+    let hardy = |m: &mut Map, g: Guid| {
+        let f = &mut m.players.get_mut(&g).unwrap().fields;
+        f.set_u32(UNIT_FIELD_MAXHEALTH, 100_000_000);
+        f.set_u32(UNIT_FIELD_HEALTH, 100_000_000);
+    };
+    let whole = |m: &Map, g: Guid| {
+        let f = m.unit_fields(g).unwrap();
+        f.get_u32(UNIT_FIELD_HEALTH) == f.get_u32(UNIT_FIELD_MAXHEALTH)
+    };
+    let ground = move |m: &mut Map, totem: Guid| {
+        let s = m.realm.data.spells.get(GROUNDING).cloned().unwrap();
+        for on in [ga, totem] {
+            crate::game::map::auras::apply(m, totem, on, &s, 0, 0);
+        }
+        hardy(m, ga);
+    };
+    let (brute, totem) = on(&map, move |m| {
+        hardy(m, ga);
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        let totem = spawn(m, ga, TOTEM, 20, 1.0);
+        ground(m, totem);
+        (brute, totem)
+    })
+    .await;
+    a.sees(totem).await;
+    a.clear();
+    let r = on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, brute, CHAIN_BOLT, Some(ga));
+        (whole(m, ga), whole(m, totem))
+    })
+    .await;
+    assert_eq!(
+        r,
+        (true, false),
+        "the totem took it, and it went no further"
+    );
+    let hits = a
+        .wait_for("the chain's go", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == CHAIN_BOLT => Some(s.hits.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(hits, [totem]);
+    let landed = on(&map, move |m| {
+        let gone = spawn(m, ga, TOTEM, 20, 1.5);
+        ground(m, gone);
+        m.remove_creature(gone);
+        crate::game::map::spells::cast_triggered(m, brute, CHAIN_BOLT, Some(ga));
+        !whole(m, ga)
+    })
+    .await;
+    assert!(landed, "a gone totem grounds nothing");
+}
+
+/// Thistle Tea's item store "allocates unique item guids" and "stores the
+/// created item": two items made for Alice have GUIDs of their own, of
+/// the item kind, and each is hers, owned and held by her, as its fields
+/// say.
+#[tokio::test]
+async fn items_made_have_guids_of_their_own_and_are_their_owners() {
+    use crate::game::fields::{ITEM_FIELD_CONTAINED, ITEM_FIELD_OWNER};
+    use crate::game::tests_p3_combat::{SWORD, setup_with};
+    let (_realm, _a, ga, map) =
+        setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    let made = on(&map, move |m| {
+        for _ in 0..2 {
+            crate::game::map::inventory::add_item(m, ga, SWORD, 1, false).expect("room");
+        }
+        m.players[&ga]
+            .items
+            .iter()
+            .filter(|i| i.entry == SWORD)
+            .map(|i| {
+                (
+                    i.guid,
+                    i.fields.get_guid(ITEM_FIELD_OWNER),
+                    i.fields.get_guid(ITEM_FIELD_CONTAINED),
+                )
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    assert_eq!(made.len(), 2);
+    assert_ne!(made[0].0, made[1].0, "a GUID each");
+    for (g, owner, contained) in made {
+        assert_eq!(g.guid() >> 48, 0x4000, "of the item kind: {g}");
+        assert_eq!((owner, contained), (ga, ga));
+    }
+}
