@@ -39,6 +39,9 @@ pub use hunter::{
     NPC_FLAG_STABLEMASTER, TAMER_SPELLS, beast_for, change_loyalty, give_pet, list_stable,
     pet_xp_to_level, untrain_offer,
 };
+/// A family's passives, learned when tamed: for the tests.
+#[cfg(test)]
+pub(crate) use summon::family_passives;
 pub use summon::{dismiss, spellbook, unsummon, unsummon_refunding};
 pub use wild::remove_guardians;
 

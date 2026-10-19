@@ -633,6 +633,20 @@ mod tests_p6_wspell_requirements;
 #[cfg(test)]
 mod tests_p6_wspell_units;
 #[cfg(test)]
+mod tests_p7_loader_effects;
+#[cfg(test)]
+mod tests_p7_loader_items;
+#[cfg(test)]
+mod tests_p7_loader_pets;
+#[cfg(test)]
+mod tests_p7_loader_quests;
+#[cfg(test)]
+mod tests_p7_loader_scripts;
+#[cfg(test)]
+mod tests_p7_loader_spells;
+#[cfg(test)]
+mod tests_p7_loader_world;
+#[cfg(test)]
 mod tests_p7_player;
 #[cfg(test)]
 mod tests_p7_player_bgs;
