@@ -611,6 +611,8 @@ mod tests_p7_spell_caster;
 #[cfg(test)]
 mod tests_p7_spell_channel;
 #[cfg(test)]
+mod tests_p7_spell_checks;
+#[cfg(test)]
 mod tests_p7_spell_effects;
 #[cfg(test)]
 mod tests_p7_spell_proc_sides;
