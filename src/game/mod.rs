@@ -761,7 +761,10 @@ pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 pub struct Realm {
     /// The live settings; read them through [`Realm::config`], or in a map
     /// through `Map::cfg`.
-    config: arc_swap::ArcSwap<RealmConfig>,
+    config: parking_lot::RwLock<Arc<RealmConfig>>,
+    /// Bumped at each reload, after the settings are in: a map's update
+    /// looks at it (one atomic load) and takes the lock only when it moved.
+    config_generation: std::sync::atomic::AtomicU64,
     /// The config file's settings the live ones came from, for a reload's
     /// comparison.
     source: parking_lot::Mutex<crate::config::ServerConfig>,
@@ -804,7 +807,8 @@ impl Realm {
             });
         }
         let realm = Arc::new(Self {
-            config: arc_swap::ArcSwap::from_pointee(config),
+            config: parking_lot::RwLock::new(Arc::new(config)),
+            config_generation: std::sync::atomic::AtomicU64::new(0),
             source: parking_lot::Mutex::new(crate::config::ServerConfig::default()),
             store,
             data: Arc::new(data),
@@ -821,15 +825,17 @@ impl Realm {
         realm
     }
 
-    /// The live settings (an atomic load: a map takes them once an update
-    /// instead).
-    pub fn config(&self) -> arc_swap::Guard<Arc<RealmConfig>> {
-        self.config.load()
+    /// The live settings (a read lock and an `Arc` clone: a map takes them
+    /// once an update instead, when [`Realm::config_generation`] moved).
+    pub fn config(&self) -> Arc<RealmConfig> {
+        self.config.read().clone()
     }
 
-    /// The live settings, to keep.
-    pub fn config_arc(&self) -> Arc<RealmConfig> {
-        self.config.load_full()
+    /// How many reloads there have been: read before [`Realm::config`],
+    /// a map's settings are never older than the generation it keeps.
+    pub fn config_generation(&self) -> u64 {
+        self.config_generation
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// The config file's settings the live ones came from.
@@ -845,7 +851,9 @@ impl Realm {
         let changes = crate::config::changes(&source, &loaded.config);
         let applied = crate::config::live_part(&source, &loaded.config);
         let next = self.config().reloaded(&applied);
-        self.config.store(Arc::new(next));
+        *self.config.write() = Arc::new(next);
+        self.config_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         *source = applied;
         let mut report = ReloadReport {
             warnings: loaded.warnings,

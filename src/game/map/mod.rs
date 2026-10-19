@@ -379,6 +379,8 @@ pub struct Map {
     /// The realm's settings, taken at the start of each update: a reload
     /// is seen whole, between updates, never mid-step.
     pub cfg: Arc<crate::game::RealmConfig>,
+    /// The reload `cfg` is of ([`crate::game::Realm::config_generation`]).
+    cfg_generation: u64,
     pub handle: MapHandle,
     pub players: AHashMap<Guid, Player>,
     pub creatures: Slab<Creature>,
@@ -816,7 +818,9 @@ impl Map {
         let profile = MapProfile::new(key, &realm);
         Self {
             key,
-            cfg: realm.config_arc(),
+            // The generation first: a reload in between is taken again.
+            cfg_generation: realm.config_generation(),
+            cfg: realm.config(),
             realm,
             handle,
             players: AHashMap::new(),
@@ -1305,10 +1309,12 @@ impl Map {
         let started = Instant::now();
         self.now = started;
         self.stats.updates += 1;
-        // A reload's settings, if there was one: one pointer load.
-        let cfg = self.realm.config();
-        if !Arc::ptr_eq(&cfg, &self.cfg) {
-            self.cfg = arc_swap::Guard::into_inner(cfg);
+        // A reload's settings, if there was one: one atomic load, and the
+        // lock only after a reload.
+        let generation = self.realm.config_generation();
+        if generation != self.cfg_generation {
+            self.cfg_generation = generation;
+            self.cfg = self.realm.config();
         }
         #[cfg(all(feature = "world-bench", unix))]
         let probe = bench_probe::enabled().then(bench_probe::start);

@@ -65,9 +65,10 @@ process. A config that doesn't load is reported and changes nothing. Otherwise:
 
 - **What changes live:** every key marked *live* below takes its new value. These are the rates, distances, timers,
   the MOTD, new characters' settings, the battleground, anticheat and GM settings.
-- **How:** the realm keeps its settings behind an atomically swapped pointer (`arc-swap`). A map takes the pointer
-  once, at the start of each update (`Map::cfg`), so a reload is seen whole, between updates, never mid-step. Code
-  outside a map reads `Realm::config()`, one atomic load.
+- **How:** the realm keeps its settings as an `Arc` behind a lock, with a counter a reload bumps. A map looks at the
+  counter at the start of each update (one atomic load) and takes the settings again only when it moved
+  (`Map::cfg`), so a reload is seen whole, between updates, never mid-step. Code outside a map reads
+  `Realm::config()`, a read lock and an `Arc` clone.
 - **What needs a restart:** keys marked *restart*: the network's limits, the paths, the character store, the
   accounts, the level cap, the PvP realm type, the honor week, the start position and the arena. A reload leaves
   them as they run.
