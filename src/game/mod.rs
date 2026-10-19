@@ -535,6 +535,8 @@ mod tests_p5_spell_targets;
 #[cfg(test)]
 mod tests_p5_spell_warlock;
 #[cfg(test)]
+mod tests_p6_combat_procs;
+#[cfg(test)]
 mod tests_p6_spell;
 #[cfg(test)]
 mod tests_p6_spell_cast;

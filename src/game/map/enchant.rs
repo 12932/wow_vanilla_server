@@ -395,10 +395,51 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// A weapon's procs for a hit: its enchantments' combat spells (with their
-/// chance, or procs a minute), and its own chance-on-hit spells. A
+/// The chance, in percent, of an item's chance-on-hit spell: its procs a
+/// minute at the weapon's own speed (`delay`), else the spell's chance,
+/// one a minute for a chance over 100 (mangos's `CastItemCombatSpell`,
+/// Thistle Tea's `WeaponProcs.chance`).
+pub fn item_spell_chance(ppm_rate: f32, proc_chance: u32, delay: u32) -> f32 {
+    use crate::game::map::procs::ppm_chance;
+    if ppm_rate > 0.0 {
+        ppm_chance(ppm_rate, delay)
+    } else if proc_chance > 100 {
+        ppm_chance(1.0, delay)
+    } else {
+        proc_chance as f32
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's roll for a weapon's procs, in percent, in place of the
+    /// dice.
+    pub static FORCED_PROC_ROLL: std::cell::Cell<Option<f32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn proc_roll() -> f32 {
+    #[cfg(test)]
+    if let Some(r) = FORCED_PROC_ROLL.with(|f| f.get()) {
+        return r;
+    }
+    rand::rng().random_range(0.0f32..100.0)
+}
+
+/// Whether a spell's blow sets off its caster's weapon procs: one that
+/// wants a weapon and doesn't stop the attack (mangos's
+/// `ProcDamageAndSpell`: Sinister Strike and Aimed Shot do, Sap and
+/// Fireball don't).
+pub fn spell_procs_weapon(s: &crate::game::data::spells::SpellTemplate) -> bool {
+    s.equipped_item_class == 2 && !s.attr(0, crate::game::data::spells::ATTR_CANCELS_AUTO_ATTACK)
+}
+
+/// A weapon's procs for a hit: its own chance-on-hit spells, then its
+/// enchantments' combat spells (with their chance, or procs a minute). A
 /// temporary enchantment spends a charge each time; with none left it
-/// goes.
+/// goes. Only a blow that hit procs them, a partly blocked one too, not a
+/// whole block (mangos's `ProcDamageAndSpell`, `PROC_EX_NORMAL_HIT` or
+/// `PROC_EX_CRITICAL_HIT`).
 pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     use crate::game::map::procs::*;
     const EFFECT_ADD_EXTRA_ATTACKS: u32 = 19;
@@ -410,7 +451,7 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
             | PROC_DONE_MELEE_SPELL
             | PROC_DONE_RANGED_SPELL)
         == 0
-        || e.ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT | EX_BLOCK) == 0
+        || e.ex & (EX_NORMAL_HIT | EX_CRITICAL_HIT) == 0
         || e.actor == e.target
         || !map.unit_view(e.target).is_some_and(|u| u.alive)
     {
@@ -418,7 +459,7 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     }
     // Abilities with the weapon proc it too; spells don't.
     if let Some(s) = e.spell.and_then(|id| data.spells.get(id))
-        && s.equipped_item_class != 2
+        && !spell_procs_weapon(s)
     {
         return;
     }
@@ -449,22 +490,50 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     }
     let item_guid = item.guid;
     let delay = data.item(item.entry).map_or(2000, |t| t.delay.max(1));
-    // An extra attack doesn't bring more extra attacks.
-    let wanted = |spell: u32| {
-        !(e.extra_attack
-            && data
-                .spells
-                .get(spell)
-                .is_some_and(|s| s.has_effect(EFFECT_ADD_EXTRA_ATTACKS)))
+    // Extra attacks owed, or being swung, bring no more extra attacks
+    // (mangos's `m_extraAttacks`).
+    let owed = e.extra_attack
+        || map
+            .combat(e.actor)
+            .is_some_and(|c| c.extra_attacks > 0 || c.held_extra_attacks > 0);
+    let extra = |spell: u32| {
+        data.spells
+            .get(spell)
+            .is_some_and(|s| s.has_effect(EFFECT_ADD_EXTRA_ATTACKS))
     };
-    let mut rng = rand::rng();
     let mut casts: Vec<(u32, Option<usize>)> = Vec::new();
-    for (s, en) in active(item) {
+    // The weapon's own chance-on-hit spells first. One under its global
+    // cooldown or its own, or one of extra attacks while they are owed,
+    // stops the weapon's procs there, its enchantments' too (mangos's
+    // `CastItemCombatSpell` returns).
+    let now = map.now;
+    let caster = map.caster(e.actor);
+    let mut stopped = false;
+    if let Some(t) = data.item(item.entry) {
+        for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == 2) {
+            let Some(spell) = data.spells.get(s.id) else {
+                continue;
+            };
+            let cooling = caster.is_some_and(|c| {
+                crate::game::map::spells::on_gcd(c, spell.start_recovery_category, now)
+                    || c.cooldowns.get(&s.id).is_some_and(|t| *t > now)
+            });
+            if cooling || (owed && extra(s.id)) {
+                stopped = true;
+                break;
+            }
+            let chance = item_spell_chance(s.ppm_rate, spell.proc_chance, t.delay);
+            if chance >= 100.0 || proc_roll() < chance {
+                casts.push((s.id, None));
+            }
+        }
+    }
+    for (s, en) in active(item).filter(|_| !stopped) {
         let Some(def) = data.spells.enchantments.get(&en.id) else {
             continue;
         };
         for (kind, amount, _, spell) in def.effects {
-            if kind != TYPE_COMBAT_SPELL || spell == 0 || !wanted(spell) {
+            if kind != TYPE_COMBAT_SPELL || spell == 0 || (owed && extra(spell)) {
                 continue;
             }
             // vmangos: procs a minute if the spell has a rate, else the
@@ -480,28 +549,8 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
                 crate::game::map::spells::mods::for_spell(map, e.actor, s)
                     .apply(crate::game::map::spells::mods::OP_CHANCE_OF_SUCCESS, chance)
             });
-            if rng.random_range(0.0f32..100.0) < chance {
+            if proc_roll() < chance {
                 casts.push((spell, (s == TEMP_SLOT && en.charges > 0).then_some(s)));
-            }
-        }
-    }
-    if let Some(t) = data.item(item.entry) {
-        for s in t
-            .spells
-            .iter()
-            .filter(|s| s.id != 0 && s.trigger == 2 && wanted(s.id))
-        {
-            let chance = if s.ppm_rate > 0.0 {
-                ppm_chance(s.ppm_rate, delay)
-            } else {
-                match data.spells.get(s.id) {
-                    Some(x) if x.proc_chance > 100 => ppm_chance(1.0, delay),
-                    Some(x) => x.proc_chance as f32,
-                    None => 0.0,
-                }
-            };
-            if chance >= 100.0 || rng.random_range(0.0f32..100.0) < chance {
-                casts.push((s.id, None));
             }
         }
     }
