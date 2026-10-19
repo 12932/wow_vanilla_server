@@ -122,6 +122,15 @@ hours), the crate version bumped with each merge.
   `[players] bones_hours` (18; 0 for none); not saved across a restart, as mangos never saves them. **mangos's own
   numbers:** an unclaimed corpse turns to bones after 3 days (checked every 20 minutes); bones last until their grid
   unloads, about 5 minutes with no one near. wvs has no 3-day expiry for unclaimed corpses yet.
+- **Raid movement (peon `cec3e2a`):** raiders jump, side-step, back up, pause, turn with a reaction delay and walk off
+  the exact path line, each at its own seeded rhythm (`--raid-liveliness`, 0 for the old straight lines); none
+  flagged by the speed check in 100-raider runs. **The auction house wall:** the bake has its walls and the door is
+  the only way in, but its auctioneers stand on a dais the navmesh doesn't join to the floor, so the path failed and
+  peon ran a straight line through the wall; now it goes as near as the navmesh does and never runs a line where the
+  navmesh has no way. **Found for rustigator and the fork** (being fixed, `navfix`): the map builder doesn't shrink
+  walkable areas by the agent's radius (polygons reach into walls; a re-bake will be needed), a few spots where the
+  collision and the navmesh disagree (a stair foot at (-8783, 638)), and the fork's `clear_*` flag helpers wiping
+  every flag.
 - **Four in-game bugs (0.1.8):** the 1.12 client, within one update packet, runs a field's display handlers only for
   the last values block of an object (it compares each block with a copy taken before it), and wvs sent a creature's
   tap in a second block: so a dead Rabbit's frame stayed at 100% with no animation, and Frost Nova's ring never
