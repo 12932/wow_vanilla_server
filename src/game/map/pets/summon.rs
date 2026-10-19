@@ -878,12 +878,42 @@ pub fn must_go(p: &Player) -> bool {
         || p.flight.is_some()
 }
 
-/// A player's pet goes for a while, or comes back.
+/// How far a teleport within the map may take a player from their pet
+/// before it goes for a while (mangos's `TeleportTo`, 50 yards).
+const TELEPORT_LEAVES_PET: f32 = 50.0;
+
+/// A teleport within the map takes `owner` to `to`: a pet left more than
+/// 50 yards behind goes for a while, as mangos's `TeleportTo` has it
+/// (`UnsummonPetTemporaryIfAny`), and comes back at their side once the
+/// client has acknowledged the teleport (its
+/// `ResummonPetTemporaryUnSummonedIfAny`, Thistle Tea's restoration after
+/// the matching acknowledgement): see [`temporary`].
+pub fn teleporting(map: &mut Map, owner: Guid, to: Vector3d) {
+    let Some(pet) = map.players.get(&owner).and_then(|p| p.owned.pet) else {
+        return;
+    };
+    let near = map
+        .position_of(pet)
+        .is_some_and(|at| crate::game::map::combat::dist(at, to) <= TELEPORT_LEAVES_PET);
+    if near || !map.unit_view(pet).is_some_and(|u| u.alive) {
+        return;
+    }
+    sync_record(map, owner);
+    remove(map, pet);
+    if let Some(p) = map.players.get_mut(&owner) {
+        p.owned.unsummoned = true;
+        p.row.state.pets.active = true;
+    }
+}
+
+/// A player's pet goes for a while, or comes back: not while a teleport
+/// is unacknowledged.
 pub fn temporary(map: &mut Map, owner: Guid) {
     let Some(p) = map.players.get(&owner) else {
         return;
     };
     let away = must_go(p);
+    let back = !away && p.teleport.is_none();
     match (p.owned.pet, p.owned.unsummoned) {
         (Some(pet), _) if away => {
             let alive = map.unit_view(pet).is_some_and(|u| u.alive);
@@ -897,7 +927,7 @@ pub fn temporary(map: &mut Map, owner: Guid) {
                 p.row.state.pets.active = true;
             }
         }
-        (None, true) if !away => {
+        (None, true) if back => {
             if let Some(p) = map.players.get_mut(&owner) {
                 p.owned.unsummoned = false;
             }

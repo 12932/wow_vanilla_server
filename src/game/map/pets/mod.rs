@@ -42,7 +42,7 @@ pub use hunter::{
 /// A family's passives, learned when tamed: for the tests.
 #[cfg(test)]
 pub(crate) use summon::family_passives;
-pub use summon::{dismiss, spellbook, unsummon, unsummon_refunding};
+pub use summon::{dismiss, spellbook, teleporting, unsummon, unsummon_refunding};
 pub use wild::remove_guardians;
 
 // Spell effects that make or touch pets.

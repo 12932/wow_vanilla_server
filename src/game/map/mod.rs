@@ -1322,6 +1322,7 @@ impl Map {
             crate::game::map::spells::interrupt(self, guid);
         }
         if key == self.key {
+            pets::teleporting(self, guid, position);
             movement::teleport_within(self, guid, position, orientation);
             return;
         }
