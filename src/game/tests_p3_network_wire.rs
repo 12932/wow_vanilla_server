@@ -4,7 +4,6 @@
 //! header and all, and what comes out is what the session would get. A
 //! packet wow_messages can't read is skipped, and the next one still read.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncWriteExt, DuplexStream, duplex};
@@ -20,7 +19,7 @@ struct Reader {
     to: DuplexStream,
     encrypter: EncrypterHalf,
     rx: mpsc::Receiver<Inbound>,
-    out: kanal::Receiver<Arc<[u8]>>,
+    out: conn::Frames,
 }
 
 /// wvs's reader on one end of a pipe, the client's encryption on the other.
@@ -103,7 +102,7 @@ async fn the_reader_answers_pings_and_skips_what_it_cant_read() {
     r.send(0x1DC, &ping).await;
     let pong = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Ok(Some(f)) = r.out.try_recv() {
+            if let Some(f) = r.out.try_recv() {
                 break f;
             }
             tokio::time::sleep(Duration::from_millis(2)).await;

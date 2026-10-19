@@ -16,6 +16,7 @@ use ahash::AHashMap;
 use glam::Vec3;
 use rustigator_pathfind::PathfindMap;
 use rustigator_pathfind::format::NavFile;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use wow_world_messages::vanilla::Vector3d;
 
@@ -60,8 +61,8 @@ struct Tile {
 type Arrival = ((i32, i32), Option<NavFile>);
 
 struct Background {
-    tx: kanal::Sender<Arrival>,
-    rx: kanal::Receiver<Arrival>,
+    tx: mpsc::UnboundedSender<Arrival>,
+    rx: mpsc::UnboundedReceiver<Arrival>,
     /// Arrived and not yet taken in.
     arrived: VecDeque<Arrival>,
 }
@@ -155,7 +156,7 @@ impl Nav {
     /// From now its tiles are read off the map's thread, and taken in at
     /// [`Nav::receive`].
     pub fn in_background(&mut self) {
-        let (tx, rx) = kanal::unbounded();
+        let (tx, rx) = mpsc::unbounded_channel();
         self.background = Some(Background {
             tx,
             rx,
@@ -263,7 +264,7 @@ impl Nav {
             return 0;
         };
         b.arrived
-            .extend(std::iter::from_fn(|| b.rx.try_recv().ok().flatten()));
+            .extend(std::iter::from_fn(|| b.rx.try_recv().ok()));
         let started = Instant::now();
         let mut n = 0;
         while n == 0 || started.elapsed() < TAKE_BUDGET {

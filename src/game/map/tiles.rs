@@ -11,10 +11,12 @@
 //! `terrain.rs`). The tests read tiles at once, as they are asked for
 //! (`RealmConfig::tiles_in_background`).
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use smallvec::SmallVec;
+use tokio::sync::mpsc;
 
 use wow_world_messages::vanilla::Vector3d;
 
@@ -37,15 +39,21 @@ type Job = Box<dyn FnOnce() + Send>;
 
 /// Read a tile on the readers' threads (started at the first read).
 pub fn read(job: impl FnOnce() + Send + 'static) {
-    static READERS_TX: OnceLock<kanal::Sender<Job>> = OnceLock::new();
+    static READERS_TX: OnceLock<mpsc::UnboundedSender<Job>> = OnceLock::new();
     let tx = READERS_TX.get_or_init(|| {
-        let (tx, rx) = kanal::unbounded::<Job>();
+        // tokio's `mpsc` has one receiver: the readers share it, the one
+        // holding the lock waiting for the next job.
+        let (tx, rx) = mpsc::unbounded_channel::<Job>();
+        let rx = Arc::new(Mutex::new(rx));
         for i in 0..READERS {
             let rx = rx.clone();
             let spawned = std::thread::Builder::new()
                 .name(format!("tiles {i}"))
                 .spawn(move || {
-                    while let Ok(job) = rx.recv() {
+                    loop {
+                        // The lock is let go before the job runs.
+                        let next = rx.lock().blocking_recv();
+                        let Some(job) = next else { break };
                         // A tile that panics to read costs itself: the map
                         // goes on without it.
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));

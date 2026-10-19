@@ -231,8 +231,8 @@ mod channels {
         ) -> impl Future<Output = bool> + Send;
     }
 
-    /// wvs today: kanal's `unbounded_async`, sent to with `try_send`,
-    /// drained with a sync clone's `try_recv`.
+    /// wvs before `chore/channels`: kanal's `unbounded_async`, sent to
+    /// with `try_send`, drained with a sync clone's `try_recv`.
     impl OutboundQueue for Kanal {
         type Tx = kanal::AsyncSender<Frame>;
         type Rx = (kanal::AsyncReceiver<Frame>, kanal::Receiver<Frame>);
@@ -259,7 +259,7 @@ mod channels {
         }
     }
 
-    /// tokio's `unbounded_channel`, drained as `run_writer` drains kanal's.
+    /// tokio's `unbounded_channel`, drained as `run_writer` drained kanal's.
     impl OutboundQueue for Tokio {
         type Tx = mpsc::UnboundedSender<Frame>;
         type Rx = mpsc::UnboundedReceiver<Frame>;
@@ -284,7 +284,7 @@ mod channels {
         }
     }
 
-    /// tokio's `unbounded_channel`, drained with `recv_many`.
+    /// wvs today: tokio's `unbounded_channel`, drained with `recv_many`.
     impl OutboundQueue for TokioRecvMany {
         type Tx = mpsc::UnboundedSender<Frame>;
         type Rx = mpsc::UnboundedReceiver<Frame>;
@@ -616,7 +616,7 @@ mod channels {
         fn recv(rx: &Self::Rx) -> Option<Job>;
     }
 
-    /// wvs today: kanal's `unbounded`, MPMC.
+    /// wvs before `chore/channels`: kanal's `unbounded`, MPMC.
     impl TileQueue for Kanal {
         type Tx = kanal::Sender<Job>;
         type Rx = kanal::Receiver<Job>;
@@ -691,9 +691,9 @@ mod channels {
         }
     }
 
-    /// tokio's option: its `mpsc` has one receiver, so the readers share
-    /// it behind a lock (parking_lot's, wvs's), the one holding it waiting
-    /// in `blocking_recv`.
+    /// wvs today: tokio's `mpsc` has one receiver, so the readers share it
+    /// behind a lock (parking_lot's, wvs's), the one holding it waiting in
+    /// `blocking_recv`.
     impl TileQueue for Tokio {
         type Tx = mpsc::UnboundedSender<Job>;
         type Rx = Arc<parking_lot::Mutex<mpsc::UnboundedReceiver<Job>>>;
@@ -783,7 +783,7 @@ mod channels {
         fn try_recv(rx: &mut Self::Rx) -> Option<Request>;
     }
 
-    /// wvs today: `std::sync::mpsc`.
+    /// wvs before `chore/channels`: `std::sync::mpsc`.
     impl StoreQueue for Std {
         type Tx = std_mpsc::Sender<Request>;
         type Rx = std_mpsc::Receiver<Request>;
@@ -801,7 +801,7 @@ mod channels {
         }
     }
 
-    /// tokio's `unbounded_channel`, the thread receiving with
+    /// wvs today: tokio's `unbounded_channel`, the thread receiving with
     /// `blocking_recv`.
     impl StoreQueue for Tokio {
         type Tx = mpsc::UnboundedSender<Request>;

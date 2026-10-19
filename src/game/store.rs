@@ -13,12 +13,11 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc as std_mpsc;
 use std::thread;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
 use crate::game::supervisor::catch;
@@ -456,7 +455,8 @@ impl Records {
 /// A handle to the store's thread.
 #[derive(Clone)]
 pub struct Store {
-    tx: std_mpsc::Sender<Request>,
+    /// tokio's unbounded `mpsc`, its thread waiting in `blocking_recv`.
+    tx: mpsc::UnboundedSender<Request>,
     /// Requests sent and not yet taken by the thread.
     queued: Arc<AtomicUsize>,
 }
@@ -483,7 +483,7 @@ impl Store {
             path.as_ref().display(),
             startup.names.len()
         );
-        let (tx, rx) = std_mpsc::channel();
+        let (tx, rx) = mpsc::unbounded_channel();
         let queued = Arc::new(AtomicUsize::new(0));
         {
             let queued = queued.clone();
@@ -679,17 +679,21 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
 
 /// The store's thread. It outlives a panic in what it does: that request
 /// is lost (its caller hears nothing), not every save after it.
-fn run(mut conn: Connection, rx: std_mpsc::Receiver<Request>, queued: &AtomicUsize) {
+fn run(mut conn: Connection, mut rx: mpsc::UnboundedReceiver<Request>, queued: &AtomicUsize) {
     loop {
-        match catch(|| serve_all(&mut conn, &rx, queued)) {
+        match catch(|| serve_all(&mut conn, &mut rx, queued)) {
             Ok(()) => return,
             Err(e) => error!("the store panicked: {e}; going on"),
         }
     }
 }
 
-fn serve_all(conn: &mut Connection, rx: &std_mpsc::Receiver<Request>, queued: &AtomicUsize) {
-    while let Ok(first) = rx.recv() {
+fn serve_all(
+    conn: &mut Connection,
+    rx: &mut mpsc::UnboundedReceiver<Request>,
+    queued: &AtomicUsize,
+) {
+    while let Some(first) = rx.blocking_recv() {
         // Saves queued together go in one transaction.
         let mut batch = vec![first];
         while let Ok(more) = rx.try_recv() {
