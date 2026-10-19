@@ -186,10 +186,12 @@ pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
             0,
         ),
     };
+    // The spell itself waits the longer of the two.
+    let longer = recovery.max(category_recovery);
     if let Some(c) = map.caster_mut(target) {
-        if recovery > 0 {
+        if longer > 0 {
             c.cooldowns
-                .insert(spell, now + Duration::from_millis(u64::from(recovery)));
+                .insert(spell, now + Duration::from_millis(u64::from(longer)));
         }
         if category != 0 && category_recovery > 0 {
             c.category_cooldowns.insert(
