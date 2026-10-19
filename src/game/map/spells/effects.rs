@@ -22,7 +22,7 @@ use super::*;
 /// Diminishing returns' groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-enum Dr {
+pub(crate) enum Dr {
     ControlledStun = 1,
     TriggeredStun,
     KidneyShot,
@@ -41,7 +41,7 @@ enum Dr {
 }
 
 /// A spell's diminishing returns group, as Thistle Tea follows vmangos.
-fn dr_group(s: &SpellTemplate) -> Option<Dr> {
+pub(crate) fn dr_group(s: &SpellTemplate) -> Option<Dr> {
     let flags = s.family_flags as u32;
     match (s.family_name, s.id) {
         (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),
@@ -391,7 +391,7 @@ pub fn run(
         // An aura's threat: half a point a level for a helpful one, or the
         // spell's own for a harmful.
         if !auras::positive(s) {
-            super::threat(map, caster, target, s, 0.0, &l.mods);
+            super::threat(map, caster, target, s, 0.0, &l.mods, false);
         }
     }
 }
@@ -1082,9 +1082,11 @@ fn effect(
                 ));
             }
         }
-        EFFECT_SKILL | EFFECT_SKILL_STEP => {
+        // A step that isn't one teaches nothing (mangos's `EffectLearnSkill`
+        // returns for a negative step; no spell of 1.12 has a zero one).
+        EFFECT_SKILL | EFFECT_SKILL_STEP if amount > 0 => {
             let skill = e.misc_value.max(0) as u32;
-            let step = amount.max(1) as u32;
+            let step = amount as u32;
             if let Some(p) = map.players.get_mut(&target) {
                 crate::game::map::skills::learn_skill(p, skill, step);
             }

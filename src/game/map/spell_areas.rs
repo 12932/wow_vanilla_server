@@ -99,5 +99,20 @@ pub fn allowed(map: &Map, g: Guid, spell: u32) -> bool {
         .iter()
         .filter(|r| r.spell == spell)
         .collect();
-    rules.is_empty() || !crate::game::guid::is_player(g) || rules.iter().any(|r| matches(map, g, r))
+    if rules.is_empty() {
+        return true;
+    }
+    if !crate::game::guid::is_player(g) {
+        // No player to hold to a race, gender, quest or aura: a rule asking
+        // one fails, as mangos's `SpellArea::IsFitToRequirements` without a
+        // player and Thistle Tea's `Area.matches?` have it. (A creature's
+        // place isn't worked out here; its area is taken to hold.)
+        return rules.iter().any(|r| !wants_player(r));
+    }
+    rules.iter().any(|r| matches(map, g, r))
+}
+
+/// Whether a rule asks something only a player has.
+fn wants_player(r: &SpellArea) -> bool {
+    r.gender != 2 || r.race_mask != 0 || r.quest_start != 0 || r.quest_end != 0 || r.aura_spell != 0
 }

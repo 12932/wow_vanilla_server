@@ -12,6 +12,8 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 
+#[cfg(test)]
+pub(crate) use effects::{Dr, dr_group};
 pub use effects::{
     add_combo_points, combo_duration, dr_aura_gone, release_retained_combo_points,
     retained_combo_points_expired, shown_power,
@@ -587,13 +589,30 @@ pub fn spell_cost(map: &Map, caster: Guid, s: &SpellTemplate, m: &mods::Mods) ->
     }
     let a = auras::auras(map, caster);
     let mut cost = {
-        // The rank it is cast at goes no higher than its last level.
-        let rank = if s.max_level > 0 {
-            level.min(s.max_level)
-        } else {
-            level
+        // The rank it is cast at: a creature's level, a player's skill in
+        // the spell's line (none without one), no higher than its last
+        // level's; its cost per level by the rank's fifths past its first
+        // level (mangos's `CalculatePowerCost` and `GetSpellRank`, Thistle
+        // Tea's `CostScaling.base_cost`).
+        let rank = match map.players.get(&caster) {
+            Some(p) => map
+                .realm
+                .data
+                .spells
+                .spell_skills
+                .get(&s.id)
+                .map_or(0, |skill| {
+                    crate::game::map::skills::value_with_bonuses(p, *skill)
+                }),
+            None => level,
         };
-        let flat = s.mana_cost + s.mana_cost_per_level * rank.saturating_sub(s.base_level);
+        let rank = if s.max_level > 0 {
+            rank.min(s.max_level * 5)
+        } else {
+            rank
+        };
+        let flat = s.mana_cost as i32
+            + s.mana_cost_per_level as i32 * (rank as i32 / 5 - s.base_level as i32);
         // A share is on top of the flat cost (mangos's
         // `Spell::CalculatePowerCost`, Thistle Tea's `Resources`).
         let share = if s.mana_cost_percentage > 0 {
@@ -609,8 +628,8 @@ pub fn spell_cost(map: &Map, caster: Guid, s: &SpellTemplate, m: &mods::Mods) ->
         } else {
             0
         };
-        flat + share
-    } as i32;
+        flat + share as i32
+    };
     if let Some(a) = a {
         cost += a.sum_mask(auras::AURA_MOD_POWER_COST_SCHOOL, s.school_mask());
     }
@@ -916,7 +935,13 @@ pub fn cast(
     // The global cooldown is the spell's start time with its modifiers:
     // none for one without (vmangos, mangos's `Player::AddGCD`, Thistle
     // Tea's `Cooldowns.gcd_duration`).
-    let gcd = m.apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time);
+    // A creature's is its spell's own (mangos's `GetSpellModOwner` is
+    // nobody for it, Thistle Tea's creatures keep their spells' timing).
+    let gcd = if guid::is_player(caster) {
+        m.apply_ms(mods::OP_GLOBAL_COOLDOWN, s.start_recovery_time)
+    } else {
+        s.start_recovery_time
+    };
     if s.start_recovery_category != 0
         && gcd > 0
         && let Some(c) = map.caster_mut(caster)
@@ -1111,6 +1136,11 @@ fn execute(
         resolved
     };
     let hits: Vec<Guid> = resolved.iter().map(|(g, _)| *g).collect();
+    // The cast's result before its go, as mangos's `Spell::cast` sends them
+    // (and Thistle Tea queues them).
+    if !triggered {
+        send_cast_result(map, caster, s.id, None);
+    }
     let mut flags = SMSG_SPELL_GO_CastFlags::empty();
     if let Some((display, inventory_type)) = ranged_ammo(map, caster, s) {
         flags = flags.set_ammo(SMSG_SPELL_GO_CastFlags_Ammo {
@@ -1130,7 +1160,6 @@ fn execute(
         map.send_to_observers(caster, &frame, true);
     }
     if !triggered {
-        send_cast_result(map, caster, s.id, None);
         // A heal cast: an Elite Guard's Charge looks for healers.
         if heals(s)
             && let Some(p) = map.players.get_mut(&caster)
@@ -1268,8 +1297,8 @@ fn execute(
         if auras::auras(map, caster).is_some_and(|a| a.holders.iter().any(breaks)) {
             auras::remove_where(map, caster, breaks);
         }
-        crate::game::map::combat::spell_launched(map, caster, s);
     }
+    crate::game::map::combat::spell_launched(map, caster, s, triggered);
 }
 
 /// A mechanic immunity with charges kept `s` off `target`: a charge of it
@@ -1745,10 +1774,27 @@ pub fn clear_combo_points(map: &mut Map, caster: Guid) {
 /// made (its school's threat auras on it, `deal_damage`'s): its
 /// `spell_threat`, the threat modifiers, the auras on those too, as Thistle
 /// Tea's `SpellThreat.multiplier` has it.
-pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, damage: f32, m: &Mods) {
+pub fn threat(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    damage: f32,
+    m: &Mods,
+    crit: bool,
+) {
     if !guid::is_unit(target) || s.attr(1, sd::ATTR_EX_NO_THREAT) {
         return;
     }
+    // A critical hit's threat by its school's critical threat auras
+    // (mangos's `CalcThreat`, `SPELL_AURA_MOD_CRITICAL_THREAT`).
+    let critical = if crit {
+        auras::auras(map, caster).map_or(1.0, |a| {
+            a.product_mask(auras::AURA_MOD_CRITICAL_THREAT, s.school_mask())
+        })
+    } else {
+        1.0
+    };
     let (flat, mult) = map
         .realm
         .data
@@ -1759,7 +1805,9 @@ pub fn threat(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, dama
         .unwrap_or((0, 1.0));
     let auras = crate::game::map::combat::threat_multiplier(map, caster, s.school_mask());
     let pct = m.pct[mods::OP_THREAT];
-    let total = (damage * mult.max(0.0) + flat as f32) * auras * (100 + pct).max(0) as f32 / 100.0;
+    let total =
+        (damage * mult.max(0.0) + flat as f32) * auras * critical * (100 + pct).max(0) as f32
+            / 100.0;
     let extra = total - damage * auras;
     if extra.abs() > 0.01 {
         crate::game::map::ai::add_threat(map, target, caster, extra);
@@ -1867,8 +1915,12 @@ pub fn periodic_damage_of(
     if left > 0 {
         auras::interrupt(map, target, auras::INTERRUPT_DAMAGE);
         // Its threat is of its school, and has the spell's threat
-        // modifiers (Shadow Affinity), as Thistle Tea's periodic damage's.
-        let by_mods = mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0;
+        // modifiers (Shadow Affinity) and its `spell_threat` multiplier, as
+        // Thistle Tea's periodic damage's and mangos's `DealDamage` for a
+        // DOT (`GetSpellThreatMultiplier`, then `CalcThreat`).
+        let multiplier = data.spells.threat.get(&s.id).map_or(1.0, |t| t.1.max(0.0));
+        let by_mods =
+            mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0 * multiplier;
         let threat = left as f32 * combat::threat_multiplier(map, h.caster, h.school);
         combat::deal_periodic_damage(
             map,

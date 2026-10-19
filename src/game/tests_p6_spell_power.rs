@@ -1,0 +1,859 @@
+//! Phase 3, round 6, against Thistle Tea's `spell_refunds_test.exs`: what
+//! an avoided ability gives back of what it cost.
+
+use wow_world_messages::vanilla::*;
+
+use super::tests_p3_cast_kit::*;
+use super::tests_p3_spells_kit::{self as kit, at, cast_fresh, has, power, set_power};
+use crate::game::data::GameData;
+use crate::game::data::spells::{
+    ATTR_EX_DISCOUNT_POWER_ON_MISS, ATTR_EX_REQ_COMBO_POINTS, SpellEffect, SpellTemplate,
+};
+use crate::game::fields::*;
+use crate::game::map::auras::{
+    AURA_ADD_FLAT_MODIFIER, AURA_ADD_PCT_MODIFIER, AURA_SCHOOL_IMMUNITY,
+};
+use crate::game::map::spells::{self, mods};
+
+/// A rogue's strike for 45 energy given back on a miss; one that adds a
+/// combo point beside; a finisher for 35 that gives nothing back.
+const STRIKE: u32 = 990_940;
+const POINTED: u32 = 990_941;
+const FINISHER: u32 = 990_942;
+/// Five less energy for the next strike, then none, each one charge; a
+/// shield of the physical school.
+const THRIFT: u32 = 990_943;
+const FREE: u32 = 990_944;
+const SHIELD: u32 = 990_945;
+
+fn rogue(d: &mut GameData) {
+    let ability = |id: u32, cost: u32| {
+        let mut s = bare(id, 0);
+        s.dmg_class = 2;
+        s.power_type = 3;
+        s.mana_cost = cost;
+        s.family_name = 8;
+        s.family_flags = 0x1;
+        s.attributes[1] |= ATTR_EX_DISCOUNT_POWER_ON_MISS;
+        effect(&mut s, 0, damage(10));
+        s
+    };
+    let mut pointed = ability(POINTED, 45);
+    effect(
+        &mut pointed,
+        1,
+        SpellEffect {
+            effect: spells::EFFECT_ADD_COMBO_POINTS,
+            base_points: 0,
+            base_dice: 1,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
+    let mut finisher = ability(FINISHER, 35);
+    finisher.attributes[1] = ATTR_EX_REQ_COMBO_POINTS;
+    let modifier = |id: u32, kind: u32, amount: i32| {
+        let mut s = bare(id, 0);
+        s.family_name = 8;
+        s.duration_index = LASTS_LONG;
+        s.proc_charges = 1;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                item_type: 0x1,
+                ..aura(kind, mods::OP_COST as i32, amount, 1)
+            },
+        );
+        s
+    };
+    let mut shield = bare(SHIELD, 1);
+    shield.duration_index = LASTS_LONG;
+    effect(&mut shield, 0, aura(AURA_SCHOOL_IMMUNITY, 1, 0, 1));
+    let spells: Vec<SpellTemplate> = vec![
+        ability(STRIKE, 45),
+        pointed,
+        finisher,
+        modifier(THRIFT, AURA_ADD_FLAT_MODIFIER, -5),
+        modifier(FREE, AURA_ADD_PCT_MODIFIER, -100),
+        shield,
+    ];
+    insert(d, spells);
+}
+
+/// Spells on the global cooldown: 1.5 s of cast, an instant, one of the
+/// category with no time of its own, one of neither; a modifier of 0.1 s
+/// less, one of 0.1 s more, and one of a charge.
+const SLOW: u32 = 990_950;
+const QUICK: u32 = 990_951;
+const CATEGORY_ONLY: u32 = 990_952;
+const NEITHER: u32 = 990_953;
+const SHORTER: u32 = 990_954;
+const LONGER: u32 = 990_955;
+const ONCE_SHORTER: u32 = 990_956;
+const CAST_1500: u32 = 904;
+
+fn cooldowns(d: &mut GameData) {
+    d.spells.cast_times.insert(CAST_1500, 1_500);
+    let on_gcd = |id: u32, cast: u32, category: u32, ms: u32| {
+        let mut s = bare(id, 1);
+        s.family_name = 6;
+        s.family_flags = 0x1;
+        s.casting_time_index = cast;
+        s.start_recovery_category = category;
+        s.start_recovery_time = ms;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                effect: 10,
+                base_points: 9,
+                base_dice: 1,
+                target_a: 1,
+                ..Default::default()
+            },
+        );
+        s
+    };
+    let modifier = |id: u32, amount: i32, charges: u32| {
+        let mut s = bare(id, 0);
+        s.family_name = 6;
+        s.duration_index = LASTS_LONG;
+        s.proc_charges = charges;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                item_type: 0x1,
+                ..aura(
+                    AURA_ADD_FLAT_MODIFIER,
+                    mods::OP_GLOBAL_COOLDOWN as i32,
+                    amount,
+                    1,
+                )
+            },
+        );
+        s
+    };
+    let spells: Vec<SpellTemplate> = vec![
+        on_gcd(SLOW, CAST_1500, 133, 1_500),
+        on_gcd(QUICK, INSTANT, 133, 1_500),
+        on_gcd(CATEGORY_ONLY, INSTANT, 133, 0),
+        on_gcd(NEITHER, INSTANT, 0, 0),
+        modifier(SHORTER, -100, 0),
+        modifier(LONGER, 100, 0),
+        modifier(ONCE_SHORTER, -100, 1),
+    ];
+    insert(d, spells);
+}
+
+/// The global cooldown is its spell's own time with its caster's
+/// modifiers: a cast hastened by a third ends before it, at 1127 ms, and
+/// it runs its 1.5 s; a creature's takes no modifiers; a spell of the
+/// category with no time of its own takes a modifier's, one of no category
+/// none; a charged modifier stays on a cast cancelled and goes with one
+/// completed (Thistle Tea's `Cooldowns.gcd_duration` and `complete/2`;
+/// mangos's `Player::AddGCD` and `GetSpellModOwner`).
+#[tokio::test]
+async fn the_global_cooldown_is_the_spells_own_with_a_players_modifiers() {
+    use std::time::Duration;
+    let realm = fast_realm(cooldowns);
+    let (_c, a, map) = human(&realm, "P6PB", "Hasted", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[SLOW, QUICK, CATEGORY_ONLY, NEITHER]);
+            let gcd = |m: &crate::game::map::Map, g| {
+                let now = m.now;
+                m.caster(g)
+                    .and_then(|c| c.gcd_until)
+                    .map(|t| t.saturating_duration_since(now).as_millis() as u64)
+            };
+            if let Some(f) = m.unit_fields_mut(a) {
+                f.set_f32(UNIT_MOD_CAST_SPEED, 1.0 / 1.33);
+            }
+            cast_fresh(m, a, SLOW, at(a));
+            let cast_ms = m
+                .caster(a)
+                .and_then(|c| c.casting.as_ref())
+                .map(|c| c.duration);
+            kit::pass(m, 1_127);
+            let after_cast = (kit::casting(m, a), gcd(m, a));
+            if let Some(f) = m.unit_fields_mut(a) {
+                f.set_f32(UNIT_MOD_CAST_SPEED, 1.0);
+            }
+            // A creature under the same modifier as the player.
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            kit::apply(m, kobold, kobold, SHORTER);
+            kit::apply(m, a, a, SHORTER);
+            kit::fresh(m, kobold);
+            spells::cast(m, kobold, QUICK, at(kobold), None);
+            cast_fresh(m, a, QUICK, at(a));
+            let modified = (gcd(m, kobold), gcd(m, a));
+            crate::game::map::auras::remove_spell(m, a, SHORTER, None);
+            kit::apply(m, a, a, LONGER);
+            cast_fresh(m, a, CATEGORY_ONLY, at(a));
+            let category_only = gcd(m, a);
+            cast_fresh(m, a, NEITHER, at(a));
+            let neither = gcd(m, a);
+            crate::game::map::auras::remove_spell(m, a, LONGER, None);
+            kit::apply(m, a, a, ONCE_SHORTER);
+            cast_fresh(m, a, SLOW, at(a));
+            m.now += Duration::from_millis(500);
+            spells::interrupt(m, a);
+            let kept = has(m, a, ONCE_SHORTER);
+            cast_fresh(m, a, SLOW, at(a));
+            kit::pass(m, 1_500);
+            (
+                cast_ms,
+                after_cast,
+                modified,
+                category_only,
+                neither,
+                kept,
+                has(m, a, ONCE_SHORTER),
+            )
+        })
+        .await
+        .unwrap();
+    let (cast_ms, after_cast, modified, category_only, neither, kept, spent) = out;
+    assert_eq!(cast_ms, Some(1_127), "hastened by a third");
+    assert_eq!(
+        after_cast,
+        (None, Some(373)),
+        "cast, its cooldown still running"
+    );
+    assert_eq!(
+        modified,
+        (Some(1_500), Some(1_400)),
+        "a creature's, a player's"
+    );
+    assert_eq!(category_only, Some(100), "a modifier's time");
+    assert_eq!(neither, None);
+    assert!(kept, "kept through a cancelled cast");
+    assert!(!spent, "spent by a completed one");
+}
+
+/// A fire spell of 100 mana and 5 a level from its fifth, of the Fire
+/// line; the same of no line; one of 100 and 5% of base mana, scaling with
+/// its caster's level; one of 3; their modifiers.
+const COSTLY: u32 = 990_960;
+const LINELESS: u32 = 990_961;
+const SHARED: u32 = 990_962;
+const CHEAP: u32 = 990_963;
+const COST_AURAS: u32 = 990_964;
+const TENTH_OFF: u32 = 990_965;
+const SKILL_UP: u32 = 990_966;
+const TENTH_CHEAPER: u32 = 990_967;
+const FIRE: u32 = 8;
+
+fn costs(d: &mut GameData) {
+    use crate::game::data::spells::ATTR_LEVEL_DAMAGE_CALCULATION;
+    use crate::game::map::auras::{
+        AURA_MOD_POWER_COST_SCHOOL, AURA_MOD_POWER_COST_SCHOOL_PCT, AURA_MOD_SKILL,
+    };
+    let fire = |id: u32, cost: u32, per_level: u32| {
+        let mut s = bare(id, 2);
+        s.mana_cost = cost;
+        s.mana_cost_per_level = per_level;
+        s.base_level = 5;
+        s.family_name = 3;
+        s.family_flags = 0x1;
+        effect(&mut s, 0, damage(10));
+        s
+    };
+    let mut shared = fire(SHARED, 100, 0);
+    shared.mana_cost_percentage = 5;
+    shared.spell_level = 20;
+    shared.attributes[0] |= ATTR_LEVEL_DAMAGE_CALCULATION;
+    let mut cost_auras = bare(COST_AURAS, 0);
+    cost_auras.family_name = 3;
+    cost_auras.duration_index = LASTS_LONG;
+    let family = |kind: u32, amount: i32| SpellEffect {
+        item_type: 0x1,
+        ..aura(kind, mods::OP_COST as i32, amount, 1)
+    };
+    effect(
+        &mut cost_auras,
+        0,
+        aura(AURA_MOD_POWER_COST_SCHOOL, 4, 10, 1),
+    );
+    effect(&mut cost_auras, 1, family(AURA_ADD_FLAT_MODIFIER, -5));
+    effect(&mut cost_auras, 2, family(AURA_ADD_PCT_MODIFIER, -20));
+    // The school's share, a second holder's.
+    let mut tenth = bare(TENTH_OFF, 0);
+    tenth.family_name = 3;
+    tenth.duration_index = LASTS_LONG;
+    effect(
+        &mut tenth,
+        0,
+        aura(AURA_MOD_POWER_COST_SCHOOL_PCT, 4, 10, 1),
+    );
+    let mut cheaper = bare(TENTH_CHEAPER, 0);
+    cheaper.family_name = 3;
+    cheaper.duration_index = LASTS_LONG;
+    effect(&mut cheaper, 0, family(AURA_ADD_PCT_MODIFIER, -10));
+    let mut skill_up = bare(SKILL_UP, 0);
+    skill_up.duration_index = LASTS_LONG;
+    effect(&mut skill_up, 0, aura(AURA_MOD_SKILL, FIRE as i32, 5, 1));
+    let spells: Vec<SpellTemplate> = vec![
+        fire(COSTLY, 100, 5),
+        fire(LINELESS, 100, 5),
+        shared,
+        fire(CHEAP, 3, 0),
+        cost_auras,
+        tenth,
+        cheaper,
+        skill_up,
+    ];
+    insert(d, spells);
+    d.spells.spell_skills.insert(COSTLY, FIRE);
+    d.spells.spell_skills.insert(SHARED, FIRE);
+    d.spells.spell_skills.insert(CHEAP, FIRE);
+}
+
+/// A spell's cost by the level it is cast at: a creature's level in steps
+/// of five, no higher than the spell's last; a player's skill in the
+/// spell's line (with its bonuses), none for a spell of no line. Then, in
+/// order, the school's flat change, the family's flat and percent
+/// modifiers, the level's scaling and the school's percentage, each
+/// truncated, and nothing below nothing (Thistle Tea's `CostScaling` and
+/// `Resources.power_cost`; mangos's `CalculatePowerCost` and
+/// `GetSpellRank`).
+#[tokio::test]
+async fn a_spells_cost_goes_by_its_rank_then_its_modifiers_in_order() {
+    let realm = fast_realm(costs);
+    let (_c, a, map) = human(&realm, "P6PC", "Costly", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            fn cost_of(
+                m: &mut crate::game::map::Map,
+                g: wow_world_messages::Guid,
+                s: &SpellTemplate,
+            ) -> u32 {
+                if let Some(p) = m.players.get_mut(&g) {
+                    p.fields.set_u32(UNIT_FIELD_BASE_MANA, 1_000);
+                }
+                spells::spell_cost(m, g, s, &mods::for_spell(m, g, s))
+            }
+            let spell = |m: &crate::game::map::Map, id: u32, f: &dyn Fn(&mut SpellTemplate)| {
+                let mut s = m.realm.data.spells.get(id).cloned().unwrap();
+                f(&mut s);
+                s
+            };
+            let costly = spell(m, COSTLY, &|_| {});
+            let capped = spell(m, COSTLY, &|s| s.max_level = 8);
+            let mut creatures = Vec::new();
+            for (level, s) in [(50, &costly), (54, &costly), (55, &costly), (50, &capped)] {
+                let kobold = kit::dummy(m, a, level, 5.0);
+                creatures.push(cost_of(m, kobold, s));
+            }
+            kit::ready(m, a, 50, &[]);
+            let p = m.players.get_mut(&a).unwrap();
+            crate::game::map::skills::learn_skill(p, FIRE, 1);
+            let slot = (0..128u16)
+                .find(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF == FIRE)
+                .unwrap();
+            p.fields
+                .set_u32(PLAYER_SKILL_INFO_1_1 + slot * 3 + 1, 249 | (250 << 16));
+            let twentieth = spell(m, COSTLY, &|s| s.max_level = 20);
+            let skilled = (cost_of(m, a, &costly), cost_of(m, a, &twentieth));
+            kit::apply(m, a, a, SKILL_UP);
+            crate::game::map::skills::set_bonuses(m.players.get_mut(&a).unwrap());
+            let lineless = spell(m, LINELESS, &|_| {});
+            let bonus = (cost_of(m, a, &costly), cost_of(m, a, &lineless));
+            kit::apply(m, a, a, COST_AURAS);
+            kit::apply(m, a, a, TENTH_OFF);
+            let shared = spell(m, SHARED, &|_| {});
+            let unscaled = spell(m, SHARED, &|s| s.spell_level = 0);
+            let ordered = (cost_of(m, a, &shared), cost_of(m, a, &unscaled));
+            crate::game::map::auras::remove_spell(m, a, COST_AURAS, None);
+            crate::game::map::auras::remove_spell(m, a, TENTH_OFF, None);
+            kit::apply(m, a, a, TENTH_CHEAPER);
+            let cheap = spell(m, CHEAP, &|_| {});
+            let scaled = spell(m, CHEAP, &|s| {
+                s.attributes[0] |= crate::game::data::spells::ATTR_LEVEL_DAMAGE_CALCULATION;
+                s.spell_level = 5;
+            });
+            let cheap = (cost_of(m, a, &cheap), cost_of(m, a, &scaled));
+            (creatures, skilled, bonus, ordered, cheap)
+        })
+        .await
+        .unwrap();
+    let (creatures, skilled, bonus, ordered, cheap) = out;
+    assert_eq!(
+        creatures,
+        [125, 125, 130, 115],
+        "by fives, to its last level"
+    );
+    assert_eq!(
+        skilled,
+        (320, 175),
+        "skill 249; capped at its twentieth level"
+    );
+    assert_eq!(bonus, (325, 75), "a skill bonus; no line");
+    // 150, +10 the school, -5 then -20% the family: 124; by the level
+    // (20 of 50): 394; +10% the school: 433. Unscaled: 136.
+    assert_eq!(ordered, (433, 136));
+    assert_eq!(cheap, (2, 0), "2.7 truncated; scaled below nothing");
+}
+
+/// An ability kept off by an immunity gives back 82% of what was paid for
+/// it: of the cost a charged modifier cut, which is spent; nothing when a
+/// modifier made it free, nor for a triggered one, which paid nothing. One
+/// with two effects gives back once and adds no combo point. A finisher
+/// without the attribute gives nothing back, and keeps its combo points
+/// (Thistle Tea's paid cast feedback and `AttackFeedback`; mangos's
+/// `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS` and its combo points kept on a
+/// miss).
+#[tokio::test]
+async fn an_avoided_ability_gives_back_what_was_paid() {
+    let realm = fast_realm(rogue);
+    let (_c, a, map) = human(&realm, "P6PA", "Refunded", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[STRIKE, POINTED, FINISHER]);
+            if let Some(f) = m.unit_fields_mut(a) {
+                f.set_u32(UNIT_FIELD_MAXPOWER1 + 3, 100);
+            }
+            let kobold = kit::dummy(m, a, 60, 2.0);
+            kit::apply(m, kobold, kobold, SHIELD);
+            let mut energy = Vec::new();
+            let mut strike =
+                |m: &mut crate::game::map::Map, spell: u32, from: u32, aura: Option<u32>| {
+                    set_power(m, a, 3, from);
+                    if let Some(x) = aura {
+                        kit::apply(m, a, a, x);
+                    }
+                    cast_fresh(m, a, spell, at(kobold));
+                    energy.push(power(m, a, 3));
+                    aura.is_some_and(|x| has(m, a, x))
+                };
+            let thrift_left = strike(m, STRIKE, 100, Some(THRIFT));
+            let free_left = strike(m, STRIKE, 50, Some(FREE));
+            set_power(m, a, 3, 50);
+            spells::cast_triggered(m, a, STRIKE, Some(kobold));
+            let triggered = power(m, a, 3);
+            strike(m, POINTED, 100, None);
+            let points = m.caster(a).map(|c| c.combo_points);
+            if let Some(c) = m.caster_mut(a) {
+                c.combo_points = 5;
+                c.combo_target = kobold;
+            }
+            strike(m, FINISHER, 100, None);
+            let kept = m
+                .caster(a)
+                .map(|c| (c.combo_points, c.combo_target == kobold));
+            (energy, thrift_left, free_left, triggered, points, kept)
+        })
+        .await
+        .unwrap();
+    let (energy, thrift_left, free_left, triggered, points, kept) = out;
+    assert_eq!(
+        energy,
+        [93, 50, 92, 65],
+        "40 paid, 33 back; free; 45 paid, 37 back once; a finisher's 35 kept"
+    );
+    assert!(!thrift_left && !free_left, "the charges spent");
+    assert_eq!(triggered, 50, "a triggered strike paid nothing");
+    assert_eq!(points, Some(0), "no combo point on an immune target");
+    assert_eq!(kept, Some((5, true)), "the finisher keeps its points");
+}
+
+/// A spell's diminishing returns group: its families' exceptions first
+/// (Kidney Shot, Blind none, the hunter's freezing traps, the warlock's
+/// fears and their curses none, Hamstring none, Entangling Roots, Pounce's
+/// visual none), across ranks by family flags; then the spell's and its
+/// effects' mechanics in vanilla's order, a stun before a root (Thistle
+/// Tea's `DiminishingReturns.group`, vmangos's).
+#[test]
+fn diminishing_groups_go_by_family_then_mechanic_in_order() {
+    use crate::game::map::spells::{Dr, dr_group};
+    let spell = |family: u32, flags: u64, mechanic: u32, effect_mechanic: u32| {
+        let mut s = SpellTemplate {
+            family_name: family,
+            family_flags: flags,
+            mechanic,
+            ..Default::default()
+        };
+        s.effects[0].mechanic = effect_mechanic;
+        s
+    };
+    assert_eq!(dr_group(&spell(0, 0, 17, 0)), Some(Dr::Polymorph));
+    assert_eq!(
+        dr_group(&spell(0, 0, 7, 12)),
+        Some(Dr::ControlledStun),
+        "a stun first"
+    );
+    assert_eq!(dr_group(&spell(0, 0, 0, 30)), Some(Dr::Knockout));
+    assert_eq!(dr_group(&spell(0, 0, 11, 0)), None);
+    assert_eq!(dr_group(&spell(8, 0x20_0000, 12, 0)), Some(Dr::KidneyShot));
+    assert_eq!(dr_group(&spell(8, 0x100_0000, 5, 0)), None, "Blind");
+    let mut pounce = spell(3, 0, 12, 0);
+    pounce.spell_visual = 4325;
+    assert_eq!(dr_group(&pounce), None);
+    assert_eq!(dr_group(&spell(9, 0x8, 0, 0)), Some(Dr::Freeze));
+    assert_eq!(
+        dr_group(&spell(11, 0x8000_0000, 0, 0)),
+        Some(Dr::ControlledRoot)
+    );
+    let mut seduction = spell(5, 0, 1, 0);
+    seduction.id = 6358;
+    assert_eq!(dr_group(&seduction), Some(Dr::WarlockFear));
+    assert_eq!(
+        dr_group(&spell(5, 0x8000_0000, 5, 0)),
+        Some(Dr::WarlockFear)
+    );
+    assert_eq!(dr_group(&spell(5, 0x8000_0000, 11, 0)), None, "a curse");
+    assert_eq!(dr_group(&spell(4, 0x2, 11, 0)), None, "Hamstring");
+}
+
+/// A shadow bolt of 100, of the warlock's family flag 2, one of a high
+/// flag (bit 33), one of another family; a third less threat of every
+/// school and a quarter less for the family's flag 2, then for flag 33; a
+/// shield of 40.
+const DARK: u32 = 990_990;
+const DARK_HIGH: u32 = 990_991;
+const DARK_OTHER: u32 = 990_992;
+const SUBTLE: u32 = 990_993;
+const SUBTLE_HIGH: u32 = 990_994;
+const ABSORB_40: u32 = 990_995;
+/// Sure crits of the family's flag 2, and a quarter less threat for a
+/// crit of a magic school.
+const SURE_CRIT: u32 = 990_996;
+const CALM_CRIT: u32 = 990_997;
+
+fn threats(d: &mut GameData) {
+    use crate::game::map::auras::{AURA_MOD_THREAT, AURA_SCHOOL_ABSORB};
+    let bolt = |id: u32, family: u32, flags: u64| {
+        let mut s = bare(id, 5);
+        s.family_name = family;
+        s.family_flags = flags;
+        effect(&mut s, 0, damage(100));
+        s
+    };
+    let subtle = |id: u32, mask: u64| {
+        let mut s = bare(id, 0);
+        s.family_name = 5;
+        s.duration_index = LASTS_LONG;
+        effect(&mut s, 0, aura(AURA_MOD_THREAT, 127, -30, 1));
+        effect(
+            &mut s,
+            1,
+            SpellEffect {
+                item_type: mask,
+                ..aura(AURA_ADD_PCT_MODIFIER, mods::OP_THREAT as i32, -25, 1)
+            },
+        );
+        s
+    };
+    let mut sure = bare(SURE_CRIT, 0);
+    sure.family_name = 5;
+    sure.duration_index = LASTS_LONG;
+    effect(
+        &mut sure,
+        0,
+        SpellEffect {
+            item_type: 0x2,
+            ..aura(
+                AURA_ADD_FLAT_MODIFIER,
+                mods::OP_CRITICAL_CHANCE as i32,
+                100,
+                1,
+            )
+        },
+    );
+    let mut calm = bare(CALM_CRIT, 0);
+    calm.duration_index = LASTS_LONG;
+    effect(
+        &mut calm,
+        0,
+        aura(
+            crate::game::map::auras::AURA_MOD_CRITICAL_THREAT,
+            126,
+            -25,
+            1,
+        ),
+    );
+    let mut shield = bare(ABSORB_40, 0);
+    shield.duration_index = LASTS_LONG;
+    effect(&mut shield, 0, aura(AURA_SCHOOL_ABSORB, 127, 40, 1));
+    let spells: Vec<SpellTemplate> = vec![
+        bolt(DARK, 5, 0x2),
+        bolt(DARK_HIGH, 5, 1 << 33),
+        bolt(DARK_OTHER, 6, 0x2),
+        subtle(SUBTLE, 0x2),
+        subtle(SUBTLE_HIGH, 1 << 33),
+        sure,
+        calm,
+        shield,
+    ];
+    insert(d, spells);
+}
+
+/// A tick of 100 damage and one of 100 healing, each with a `spell_threat`
+/// multiplier of 2; a third less threat of every school.
+const ROT: u32 = 990_998;
+const MEND: u32 = 990_999;
+const CALM: u32 = 991_000;
+
+fn ticking(d: &mut GameData) {
+    use crate::game::map::auras::{AURA_MOD_THREAT, AURA_PERIODIC_DAMAGE, AURA_PERIODIC_HEAL};
+    let over_time = |id: u32, kind: u32, target: u32| {
+        let mut s = bare(id, 5);
+        s.duration_index = LASTS_5S;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                amplitude: 1_000,
+                ..aura(kind, 0, 100, target)
+            },
+        );
+        s
+    };
+    let mut calm = bare(CALM, 0);
+    calm.duration_index = LASTS_LONG;
+    effect(&mut calm, 0, aura(AURA_MOD_THREAT, 127, -30, 1));
+    insert(
+        d,
+        [
+            over_time(ROT, AURA_PERIODIC_DAMAGE, 6),
+            over_time(MEND, AURA_PERIODIC_HEAL, 21),
+            calm,
+        ],
+    );
+    d.spells.threat.insert(ROT, (0, 2.0));
+    d.spells.threat.insert(MEND, (0, 2.0));
+}
+
+/// A tick's threat takes its spell's `spell_threat` multiplier and its
+/// caster's threat auras as a direct hit's does: 100 damage under a third
+/// less threat and a multiplier of 2 is 140; 100 healing, half that, 70,
+/// on the creature fighting the one healed (Thistle Tea's periodic
+/// threat; mangos's `DealDamage` for a DOT and `threatAssist` for a heal,
+/// both by `GetSpellThreatMultiplier` and `CalcThreat`).
+#[tokio::test]
+async fn a_ticks_threat_takes_its_spells_multiplier() {
+    let realm = fast_realm(ticking);
+    let (_c, a, map) = human(&realm, "P6PE", "Ticker", Class::Priest).await;
+    let (_d, b, _) = human(&realm, "P6PF", "Tanked", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[ROT, MEND]);
+            kit::apply(m, a, a, CALM);
+            let threat_of = |m: &crate::game::map::Map, c, g| {
+                m.creature(c)
+                    .and_then(|c| c.threat.iter().find(|(x, _)| *x == g).map(|(_, t)| *t))
+                    .unwrap_or(0.0)
+            };
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            kit::apply(m, a, kobold, ROT);
+            kit::tick_now(m, kobold, ROT);
+            let rotted = threat_of(m, kobold, a);
+
+            // Another creature fighting the warrior, who is healed.
+            let other = kit::dummy(m, a, 60, 6.0);
+            m.creature_mut(other).unwrap().threat = vec![(b, 10.0)];
+            kit::ready(m, b, 60, &[]);
+            kit::apply(m, a, b, MEND);
+            kit::set_health(m, b, 100);
+            kit::tick_now(m, b, MEND);
+            (rotted, threat_of(m, other, a))
+        })
+        .await
+        .unwrap();
+    let (rotted, mended) = out;
+    assert!((rotted - 140.0).abs() < 0.01, "{rotted}");
+    assert!((mended - 70.0).abs() < 0.01, "{mended}");
+}
+
+/// A spell's threat takes its school's threat auras and its family's
+/// threat modifier each as a factor, 0.7 and 0.75 making 0.525; a mask's
+/// modifier only for its flag, a high one too, and no other family's; the
+/// damage a shield absorbs makes none; a crit's threat takes the critical
+/// threat auras of its school as a third factor (Thistle Tea's
+/// `SpellThreat`; mangos's `ThreatCalcHelper::CalcThreat`: `SPELLMOD_THREAT`,
+/// `SPELL_AURA_MOD_CRITICAL_THREAT`, then the total threat modifier).
+#[tokio::test]
+async fn spell_threat_multiplies_its_school_and_family_and_skips_absorbs() {
+    let realm = fast_realm(threats);
+    let (_c, a, map) = human(&realm, "P6PD", "Subtle", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[DARK, DARK_HIGH, DARK_OTHER]);
+            let threat = |m: &mut crate::game::map::Map, spell: u32, shield: bool| {
+                let kobold = kit::dummy(m, a, 60, 5.0);
+                if shield {
+                    kit::apply(m, kobold, kobold, ABSORB_40);
+                }
+                cast_fresh(m, a, spell, at(kobold));
+                m.creature(kobold)
+                    .and_then(|c| c.threat.iter().find(|(g, _)| *g == a).map(|(_, t)| *t))
+                    .unwrap_or(0.0)
+            };
+            let plain = threat(m, DARK, false);
+            let shielded = threat(m, DARK, true);
+            kit::apply(m, a, a, SUBTLE);
+            let low = [DARK, DARK_HIGH, DARK_OTHER].map(|s| threat(m, s, false));
+            crate::game::map::auras::remove_spell(m, a, SUBTLE, None);
+            kit::apply(m, a, a, SUBTLE_HIGH);
+            let high = [DARK, DARK_HIGH, DARK_OTHER].map(|s| threat(m, s, false));
+            crate::game::map::auras::remove_spell(m, a, SUBTLE_HIGH, None);
+            // Crits of 150.
+            kit::apply(m, a, a, SURE_CRIT);
+            let crit = threat(m, DARK, false);
+            kit::apply(m, a, a, CALM_CRIT);
+            let calm = threat(m, DARK, false);
+            kit::apply(m, a, a, SUBTLE);
+            let all = threat(m, DARK, false);
+            (plain, shielded, low, high, (crit, calm, all))
+        })
+        .await
+        .unwrap();
+    let (plain, shielded, low, high, crits) = out;
+    let near = |x: f32, y: f32| (x - y).abs() < 0.01;
+    let (crit, calm, all) = crits;
+    assert!(near(crit, 150.0), "{crit}");
+    assert!(near(calm, 112.5), "{calm}: a quarter less for a crit");
+    assert!(near(all, 59.0625), "{all}: 0.7 by 0.75 by 0.75");
+    assert!(near(plain, 100.0), "{plain}");
+    assert!(near(shielded, 60.0), "{shielded}: 40 absorbed");
+    assert!(
+        near(low[0], 52.5) && near(low[1], 70.0) && near(low[2], 70.0),
+        "{low:?}"
+    );
+    assert!(
+        near(high[0], 70.0) && near(high[1], 52.5) && near(high[2], 70.0),
+        "{high:?}"
+    );
+}
+
+/// A third rank of a buff at a friend, of spell level 48, alone in its
+/// chain; the same for any level.
+const BLESSING: u32 = 991_030;
+const LOW_BLESSING: u32 = 991_031;
+
+fn blessings(d: &mut GameData) {
+    use crate::game::data::spells::SpellRank;
+    use crate::game::map::auras::AURA_MOD_STAT;
+    let blessing = |id: u32| {
+        let mut s = bare(id, 1);
+        s.spell_level = 48;
+        s.duration_index = LASTS_LONG;
+        effect(&mut s, 0, aura(AURA_MOD_STAT, 0, 10, 21));
+        s
+    };
+    let mut low = blessing(LOW_BLESSING);
+    low.attributes[2] |= 0x8;
+    insert(d, [blessing(BLESSING), low]);
+    // A human's side and the kobold's, made friends.
+    let faction = |id: u32, ours: u32| crate::game::data::FactionTemplate {
+        id,
+        faction: id,
+        ours,
+        friend_mask: 0x2,
+        enemy_mask: 0x8,
+        ..Default::default()
+    };
+    d.faction_templates.insert(1, faction(1, 0x3));
+    d.faction_templates.insert(7, faction(7, 0x2));
+    for id in [BLESSING, LOW_BLESSING] {
+        d.spells.ranks.insert(
+            id,
+            SpellRank {
+                prev: 0,
+                first: id,
+                rank: 3,
+                req: 0,
+            },
+        );
+    }
+}
+
+/// A ranked buff at a friend goes on no one more than ten levels below its
+/// spell level, 38 for one of 48; unranked, passive, at the caster, not an
+/// aura, of a harmful amount, at an enemy or marked harmful, it has no
+/// floor; a helpful aura effect beside a harmful one keeps it, and a
+/// party's aura has it though aimed at the caster (Thistle Tea's
+/// `AuraRank.select` and `minimum_level`; mangos's
+/// `SelectAuraRankForLevel`, by each effect).
+#[test]
+fn a_ranked_buffs_floor_and_what_has_none() {
+    use crate::game::map::spells::aura_rank::minimum_level;
+    let d = data_with(blessings);
+    let base = d.spells.get(BLESSING).cloned().unwrap();
+    let with = |f: &dyn Fn(&mut SpellTemplate)| {
+        let mut s = base.clone();
+        f(&mut s);
+        s
+    };
+    assert_eq!(minimum_level(&d, &base), 38);
+    let exempt = [
+        with(&|s| s.id = 1),
+        with(&|s| s.attributes[0] |= crate::game::data::spells::ATTR_PASSIVE),
+        with(&|s| s.effects[0].target_a = 1),
+        with(&|s| s.effects[0].effect = 10),
+        with(&|s| s.effects[0].base_points = -11),
+        with(&|s| s.effects[0].target_a = 6),
+        with(&|s| s.custom_flags = crate::game::data::spells::CUSTOM_NEGATIVE),
+    ];
+    for (i, s) in exempt.iter().enumerate() {
+        assert_eq!(minimum_level(&d, s), 0, "exempt {i}");
+    }
+    let mixed = with(&|s| s.effects[1] = damage(10));
+    assert_eq!(minimum_level(&d, &mixed), 38, "a buff beside a blow");
+    let party = with(&|s| {
+        s.effects[0].effect = crate::game::map::spells::EFFECT_APPLY_AREA_AURA_PARTY;
+        s.effects[0].target_a = 1;
+    });
+    assert_eq!(minimum_level(&d, &party), 38, "a party's aura");
+}
+
+/// A player's buff with no rank low enough is refused LOWLEVEL at one of
+/// 37 and goes on one of 38 and on its caster; triggered, a creature's,
+/// or allowing low levels, it goes on the one of 37 (Thistle Tea's
+/// `AuraRank.validate`; mangos's `CheckCast` LOWLEVEL).
+#[tokio::test]
+async fn a_buff_too_high_for_its_target_is_refused_but_where_excepted() {
+    let realm = fast_realm(blessings);
+    let (_c, a, map) = human(&realm, "P6PG", "Blesser", Class::Paladin).await;
+    let (_d, b, _) = human(&realm, "P6PH", "Blessed", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[BLESSING, LOW_BLESSING]);
+            let near = m.players[&a].position();
+            m.players.get_mut(&b).unwrap().movement.position = near;
+            let on = |m: &mut crate::game::map::Map,
+                      level: u8,
+                      f: &dyn Fn(&mut crate::game::map::Map)| {
+                crate::game::map::auras::remove_spell(m, b, BLESSING, None);
+                crate::game::map::auras::remove_spell(m, b, LOW_BLESSING, None);
+                kit::ready(m, b, level, &[]);
+                f(m);
+                has(m, b, BLESSING) || has(m, b, LOW_BLESSING)
+            };
+            let low = on(m, 37, &|m| {
+                cast_fresh(m, a, BLESSING, at(b));
+            });
+            let boundary = on(m, 38, &|m| {
+                cast_fresh(m, a, BLESSING, at(b));
+            });
+            cast_fresh(m, a, BLESSING, at(a));
+            let own = has(m, a, BLESSING);
+            let triggered = on(m, 37, &|m| spells::cast_triggered(m, a, BLESSING, Some(b)));
+            let kobold = kit::dummy(m, a, 60, 2.0);
+            let creature = on(m, 37, &|m| {
+                kit::fresh(m, kobold);
+                spells::cast(m, kobold, BLESSING, at(b), None);
+            });
+            let allowed = on(m, 37, &|m| {
+                cast_fresh(m, a, LOW_BLESSING, at(b));
+            });
+            (low, boundary, own, triggered, creature, allowed)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (false, true, true, true, true, true));
+}

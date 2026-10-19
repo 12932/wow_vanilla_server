@@ -139,7 +139,12 @@ async fn a_reflection_turns_a_spell_back_and_spends_a_charge_for_it() {
             // Unreflectable, a heal, the mage's own: nothing spent.
             seen.push(bolt_at(m, k, mage, UNREFLECTABLE));
             let after_unreflectable = charges(m, mage, REFLECT);
-            seen.push(bolt_at(m, mage, mage, BOLT));
+            // At oneself, triggered: a player casts no spell at an enemy at
+            // themselves (round 6, mangos's harmful target filter).
+            set_health(m, mage, 1_000);
+            spells::cast_triggered(m, mage, BOLT, Some(mage));
+            let own = 1_000 - health(m, mage);
+            seen.push((own, own));
             let after_own = charges(m, mage, REFLECT);
             // Reflected twice, then gone; the frost reflection kept.
             seen.push(bolt_at(m, k, mage, BOLT));

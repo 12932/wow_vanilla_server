@@ -191,6 +191,8 @@ pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
 /// Spell damage against creature types (`misc` their mask).
 pub const AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS: u32 = 180;
+/// The threat of a critical hit of the schools of its mask (28746's).
+pub const AURA_MOD_CRITICAL_THREAT: u32 = 183;
 /// Changes to the hit and crit chance of those who attack the unit.
 pub const AURA_MOD_ATTACKER_MELEE_HIT_CHANCE: u32 = 184;
 pub const AURA_MOD_ATTACKER_RANGED_HIT_CHANCE: u32 = 185;
@@ -651,7 +653,13 @@ pub fn positive(s: &SpellTemplate) -> bool {
     if s.attr(0, sd::ATTR_DEBUFF) {
         return false;
     }
-    !s.effects.iter().any(|e| {
+    !s.effects.iter().any(|e| harmful_effect(s, e))
+}
+
+/// Whether effect `e` of `s` harms: damage, a harmful aura, a buff's
+/// aura turned against its target, a hostile target, an instant kill.
+pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEffect) -> bool {
+    {
         matches!(e.effect, 2 | 9 | 17 | 31 | 58 | 62 | 121)
             || matches!(
                 e.aura,
@@ -708,7 +716,7 @@ pub fn positive(s: &SpellTemplate) -> bool {
             || e.effect == EFFECT_INSTAKILL
                 && !(e.target_a == 1 && e.target_b == 0)
                 && !(s.family_name == 5 && s.family_flags & 0x0200_0000 != 0)
-    })
+    }
 }
 
 /// The auras of `g`, mutably.

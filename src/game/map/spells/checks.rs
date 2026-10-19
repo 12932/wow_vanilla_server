@@ -287,6 +287,12 @@ pub fn moving(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> bo
         || f.get_fallingfar()
 }
 
+/// Whether a stand state isn't standing, as mangos's `IsStandState` has
+/// it: sitting, in a chair, asleep or kneeling; the dead stand.
+pub fn seated(state: u8) -> bool {
+    !matches!(state, 0 | 7)
+}
+
 /// `PreventionType`: what silence keeps from being cast, and what pacify
 /// does.
 pub const PREVENTION_SILENCE: u32 = 1;
@@ -320,7 +326,7 @@ pub fn check(
     }
     let player = map.players.get(&caster);
     if let Some(p) = player {
-        if !triggered && p.stand_state() != 0 && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
+        if !triggered && seated(p.stand_state()) && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
             return Some(fail::NOT_STANDING);
         }
         // Food and drink, which standing up ends, aren't had on the move
@@ -609,7 +615,16 @@ fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
 /// the range, at most three yards, beyond the reaches) and in front if the
 /// spell must be cast forward (mangos's `CheckCast(false)` and
 /// `CheckRange(false)`, Thistle Tea's launch checks). Why not, if not.
-pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mods) -> Option<u8> {
+pub fn at_finish(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    m: &Mods,
+) -> Option<u8> {
+    if let Some(code) = caster_at_finish(map, caster, s) {
+        return Some(code);
+    }
     let target = t.unit.filter(|u| *u != caster)?;
     let Some(u) = map.unit_view(target) else {
         return Some(fail::BAD_TARGETS);
@@ -637,16 +652,22 @@ pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mo
     if !map.players.contains_key(&caster) {
         return None;
     }
+    // A player's side gone from sight meanwhile (into stealth), as mangos's
+    // `CheckCast(false)` has it "since the time of cast start".
+    if harmful && player_side(map, target) && !super::stealth::sees(map, caster, target) {
+        return Some(fail::BAD_TARGETS);
+    }
     let me = map.unit_view(caster)?;
-    let (_, max) = map.realm.data.spells.range(s);
-    let max = m.apply(mods::OP_RANGE, max);
+    let (_, base) = map.realm.data.spells.range(s);
+    let max = m.apply(mods::OP_RANGE, base).max(0.0);
     let d = dist(me.position, u.position);
-    let reach = if s.melee_or_ranged() && max <= 5.0 {
+    let melee = s.melee_or_ranged() && max <= 5.0;
+    let reach = if melee {
         combat::melee_range(&me, &u) + 1.0
     } else {
         max + me.combat_reach + u.combat_reach + (max * 0.1).min(3.0)
-    };
-    if max > 0.0 && d > reach {
+    } + moving_leeway(&me, &u, melee, target);
+    if base > 0.0 && d > reach {
         return Some(fail::OUT_OF_RANGE);
     }
     let forward = !s.on_next_swing()
@@ -655,6 +676,58 @@ pub fn at_finish(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets, m: &Mo
         return Some(fail::UNIT_NOT_INFRONT);
     }
     None
+}
+
+/// A player's own state as their cast ends, checked again before it costs
+/// anything, as mangos's `Spell::cast` runs `CheckCast(false)` and Thistle
+/// Tea's `Casting.complete` its requirements: still standing (unless the
+/// spell allows sitting), not moving with food or drink, not on a flight,
+/// still somewhere a mount may be had, still where the spell's area rules
+/// allow, and its school not locked out meanwhile.
+fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    let p = map.players.get(&caster)?;
+    if seated(p.stand_state()) && !s.attr(0, sd::ATTR_ALLOW_WHILE_SITTING) {
+        return Some(fail::NOT_STANDING);
+    }
+    if s.aura_interrupt_flags & INTERRUPT_NOT_SEATED != 0 && moving(&p.movement.flags) {
+        return Some(fail::MOVING);
+    }
+    if p.flight.is_some() {
+        return Some(fail::NOT_ON_TAXI);
+    }
+    let now = map.now;
+    let locked = p
+        .caster
+        .school_lockout
+        .iter()
+        .any(|(mask, until)| *until > now && mask & s.school_mask() != 0);
+    if locked && !s.melee_or_ranged() {
+        return Some(fail::SILENCED);
+    }
+    if let Some(code) = crate::game::map::mounts::check(map, caster, s, false) {
+        return Some(code);
+    }
+    if !super::area::allows(map, caster, s.id) {
+        return Some(fail::REQUIRES_AREA);
+    }
+    None
+}
+
+/// Whether `g` is a player or a player's (mangos's
+/// `UNIT_FLAG_PLAYER_CONTROLLED`).
+fn player_side(map: &Map, g: Guid) -> bool {
+    guid::is_player(g) || crate::game::map::pets::owner_of(map, g).is_some_and(guid::is_player)
+}
+
+/// What a spell reaches beyond its range when caster and target both run
+/// forward: mangos's `MELEE_LEEWAY`, for a melee spell or one at a player
+/// (`GetMinMaxRange`; Thistle Tea's movement allowance).
+fn moving_leeway(me: &combat::UnitView, u: &combat::UnitView, melee: bool, target: Guid) -> f32 {
+    if me.running && u.running && (melee || guid::is_player(target)) {
+        combat::MELEE_LEEWAY
+    } else {
+        0.0
+    }
 }
 
 fn resurrects(s: &SpellTemplate) -> bool {
@@ -706,10 +779,20 @@ fn check_target(
             })
             && !triggered
         {
-            let (_, max) = map.realm.data.spells.range(s);
-            let max = m.apply(mods::OP_RANGE, max);
-            if max > 0.0 && dist(me.position, d) > max + 2.0 {
+            // Within range (a modifier can't take it below nothing), not too
+            // close, and in sight, as mangos's `CheckRange` has a
+            // destination: no combat reach.
+            let (min, base) = map.realm.data.spells.range(s);
+            let max = m.apply(mods::OP_RANGE, base).max(0.0);
+            let far = dist(me.position, d);
+            if base > 0.0 && far > max + 2.0 {
                 return Some(fail::OUT_OF_RANGE);
+            }
+            if min > 0.0 && far < min {
+                return Some(fail::TOO_CLOSE);
+            }
+            if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, d) {
+                return Some(fail::LINE_OF_SIGHT);
             }
         }
         return None;
@@ -755,8 +838,25 @@ fn check_target(
         } else {
             combat::can_attack_dead(map, caster, target)
         };
+        // A friend is TARGET_FRIENDLY; one who can't be attacked else (not
+        // attackable, immune to the caster's side, a neutral of no war)
+        // BAD_TARGETS, as mangos's harmful target filter and Thistle Tea's
+        // `validate_target` have it.
         if (requires_enemy || harmful && !resurrects(s)) && !attackable && !s.has_effect(95) {
-            return Some(fail::TARGET_FRIENDLY);
+            return Some(if combat::friendly(map, caster, target) {
+                fail::TARGET_FRIENDLY
+            } else {
+                fail::BAD_TARGETS
+            });
+        }
+        // A player's harmful spell at a player's side it can't see (in
+        // stealth, invisible), as mangos's `CheckCast` refuses it.
+        if harmful
+            && map.players.contains_key(&caster)
+            && player_side(map, target)
+            && !super::stealth::sees(map, caster, target)
+        {
+            return Some(fail::BAD_TARGETS);
         }
         if requires_friend && combat::can_attack(map, caster, target) {
             return Some(fail::TARGET_ENEMY);
@@ -764,6 +864,16 @@ fn check_target(
         if requires_friend && !combat::can_assist(map, caster, target) {
             return Some(fail::BAD_TARGETS);
         }
+    } else if s
+        .effects
+        .iter()
+        .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy))
+        && !triggered
+        && map.players.contains_key(&caster)
+    {
+        // A spell at an enemy isn't cast at oneself (mangos's harmful target
+        // filter: one can't attack oneself).
+        return Some(fail::BAD_TARGETS);
     }
     if let Some(c) = map.creature(target) {
         let creature_type = map
@@ -849,17 +959,25 @@ fn check_target(
     if target != caster && !triggered {
         let me = map.unit_view(caster)?;
         let (min, max) = map.realm.data.spells.range(s);
-        let max = m.apply(mods::OP_RANGE, max);
+        let max = m.apply(mods::OP_RANGE, max).max(0.0);
         let d = dist(me.position, u.position);
-        let reach = if s.melee_or_ranged() && max <= 5.0 {
+        let melee = s.melee_or_ranged() && max <= 5.0;
+        let reach = if s.on_next_swing() {
+            // A strike on the next swing is queued from afar, its swing to
+            // reach (mangos's `GetMinMaxRange`, strict: a hundred yards).
+            100.0
+        } else if melee {
             combat::melee_range(&me, &u)
         } else {
             max + me.combat_reach + u.combat_reach
         };
-        if d > reach + 1.0 {
+        if d > reach + 1.0 + moving_leeway(&me, &u, melee, target) {
             return Some(fail::OUT_OF_RANGE);
         }
-        if min > 0.0 && d < min {
+        // The minimum beyond both reaches, as the maximum is (mangos's
+        // `GetMinMaxRange`, Thistle Tea's `Range`): a hunter's dead zone is
+        // from its target's edge.
+        if min > 0.0 && d < min + me.combat_reach + u.combat_reach {
             return Some(fail::TOO_CLOSE);
         }
         if s.from_behind() && facing(map, target, caster, std::f32::consts::PI) {
