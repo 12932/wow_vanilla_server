@@ -1268,6 +1268,7 @@ fn execute(
     // Each target: the hit, then the effects.
     let mut chain = [1.0f32; 3];
     let mut landed_on_main = false;
+    let mut main_missed = false;
     // A meteor's damage is shared among those it falls on (Thistle Tea's
     // `SharedDamage`).
     let shared = if s.script_name == "spell_meteor" {
@@ -1318,11 +1319,24 @@ fn execute(
             });
             continue;
         }
-        if land(map, caster, s, target, effects, &mut chain, &launch)
-            && Some(target) == launch.targets.unit
-        {
+        let landed = land(map, caster, s, target, effects, &mut chain, &launch);
+        if landed && Some(target) == launch.targets.unit {
             landed_on_main = true;
         }
+        main_missed |= !landed && Some(target) == launch.targets.unit && target != caster;
+    }
+    // A channel whose unit target resisted it, reflected it or was immune
+    // to all of it stops at once: mangos-classic's `m_duration = 0` for a
+    // channel's missed unit target (`WriteSpellGoTargets`), Thistle Tea's
+    // "stops a target-dependent channel when its only target resists". One
+    // whose selection it didn't aim at (a self aura's) goes on.
+    if s.channeled()
+        && main_missed
+        && let Some(casting) = map
+            .caster_mut(caster)
+            .and_then(|c| c.casting.take_if(|c| c.spell == s.id))
+    {
+        end_channel(map, caster, &casting);
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
@@ -1353,7 +1367,46 @@ fn execute(
             auras::remove_where(map, caster, breaks);
         }
     }
+    cast_end_procs(map, caster, s, &targets, item, triggered);
     crate::game::map::combat::spell_launched(map, caster, s, triggered);
+}
+
+/// The cast's end, once, after whatever it landed on (vmangos's
+/// `PROC_EX_CAST_END`, Thistle Tea's `cast_complete_procs`): what procs on
+/// a spell cast rather than on its hits (Unstable Power and Ascendance
+/// spend a stack a cast, Elemental Focus and the Blue Dragon may come of
+/// one), whether it hit, was resisted or landed on many. At its unit
+/// target, else its caster. Not a triggered cast's, save a channel that
+/// is marked no proc's own (Thistle Tea's aura origin), nor a helpful
+/// item's.
+fn cast_end_procs(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    item: Option<Guid>,
+    triggered: bool,
+) {
+    if triggered && !(s.channeled() && s.attr(3, sd::ATTR_EX3_NOT_A_PROC)) {
+        return;
+    }
+    if item.is_some() && auras::positive(s) {
+        return;
+    }
+    let (done, _) = outcome::proc_flags(s);
+    crate::game::map::procs::trigger(
+        map,
+        crate::game::map::procs::Event {
+            actor: caster,
+            target: t.unit.unwrap_or(caster),
+            actor_flags: done,
+            ex: crate::game::map::procs::EX_CAST_END,
+            spell: Some(s.id),
+            school: s.school_mask(),
+            ranged: s.dmg_class == 3,
+            ..Default::default()
+        },
+    );
 }
 
 /// A mechanic immunity with charges kept `s` off `target`: a charge of it
@@ -2420,6 +2473,82 @@ pub fn moved(map: &mut Map, g: Guid) {
     }
 }
 
+/// `AURA_INTERRUPT_FLAG_TURNING` among a channel's interrupt flags.
+const CHANNEL_INTERRUPT_TURNING: u32 = 0x10;
+
+/// A player turned or jumped: a channel stops on a jump, and on a turn if
+/// its channel interrupt flags say so (mangos-classic's `Spell::update` for
+/// `SPELL_STATE_CHANNELING`: `MOVEFLAG_JUMPING`, and
+/// `AURA_INTERRUPT_FLAG_TURNING`).
+pub fn channel_turned(map: &mut Map, g: Guid, turned: bool, jumped: bool) {
+    let Some(spell) = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell)
+    else {
+        return;
+    };
+    let turns = turned
+        && map
+            .realm
+            .data
+            .spells
+            .get(spell)
+            .is_some_and(|s| s.channel_interrupt_flags & CHANNEL_INTERRUPT_TURNING != 0);
+    if jumped || turns {
+        interrupt(map, g);
+    }
+}
+
+/// A channel at another unit stops once that unit is half its range again
+/// beyond it, past both their reaches (mangos-classic's `Spell::update` for
+/// `SPELL_STATE_CHANNELING`: `IsWithinCombatDistInMap(channelTarget,
+/// m_maxRange * 1.5f)`, the range with its modifiers).
+fn channels_in_reach(map: &mut Map) {
+    let at_other = |g: Guid, c: &Caster| {
+        let x = c.casting.as_ref()?;
+        x.channel_until?;
+        let t = x.targets.unit.filter(|u| *u != g)?;
+        Some((g, x.spell, t))
+    };
+    let mut channels: Vec<(Guid, u32, Guid)> = map
+        .players
+        .values()
+        .filter_map(|p| at_other(p.guid, &p.caster))
+        .collect();
+    if map.rare.casting {
+        channels.extend(
+            map.creatures
+                .iter()
+                .filter_map(|(_, c)| at_other(c.guid, &c.caster)),
+        );
+    }
+    if channels.is_empty() {
+        return;
+    }
+    let data = map.realm.data.clone();
+    for (g, spell, target) in channels {
+        let Some(s) = data.spells.get(spell) else {
+            continue;
+        };
+        let (_, base) = data.spells.range(s);
+        if base <= 0.0 {
+            continue;
+        }
+        let max = mods::for_spell(map, g, s)
+            .apply(mods::OP_RANGE, base)
+            .max(0.0);
+        let (Some(me), Some(u)) = (map.unit_view(g), map.unit_view(target)) else {
+            continue;
+        };
+        let apart = combat::dist(me.position, u.position) - me.combat_reach - u.combat_reach;
+        if apart > max * 1.5 {
+            interrupt(map, g);
+        }
+    }
+}
+
 /// Casts that finish now go off; channels that end, end; areas tick; party
 /// auras follow their casters.
 pub fn update(map: &mut Map) {
@@ -2429,6 +2558,7 @@ pub fn update(map: &mut Map) {
     // run out, takes it away.
     effects::tick_areas(map);
     channel_costs(map);
+    channels_in_reach(map);
     let mut done: Vec<Guid> = map
         .players
         .values()

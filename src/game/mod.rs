@@ -647,6 +647,28 @@ mod tests_p7_player_social;
 #[cfg(test)]
 mod tests_p7_player_spells;
 #[cfg(test)]
+mod tests_p7_spell_caster;
+#[cfg(test)]
+mod tests_p7_spell_channel;
+#[cfg(test)]
+mod tests_p7_spell_checks;
+#[cfg(test)]
+mod tests_p7_spell_effects;
+#[cfg(test)]
+mod tests_p7_spell_forms;
+#[cfg(test)]
+mod tests_p7_spell_groups;
+#[cfg(test)]
+mod tests_p7_spell_proc_sides;
+#[cfg(test)]
+mod tests_p7_spell_procs;
+#[cfg(test)]
+mod tests_p7_spell_scripts;
+#[cfg(test)]
+mod tests_p7_spell_teleport;
+#[cfg(test)]
+mod tests_p7_spell_totems;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

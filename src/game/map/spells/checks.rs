@@ -415,7 +415,13 @@ pub fn check(
     // The caster's state. Breaking free (a trinket, Will of the Forsaken,
     // Divine Shield, Blink) works under what the spell's own immunities
     // cancel, and only that (mangos-classic's `CheckCasterAuras`).
-    if !triggered && let Some(a) = auras::auras(map, caster) {
+    // A spell that ignores its caster's restrictions isn't held by them
+    // (mangos-classic's `CheckCasterAuras` under
+    // `SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS`).
+    if !triggered
+        && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS)
+        && let Some(a) = auras::auras(map, caster)
+    {
         let data = &map.realm.data;
         let held = |kinds: &[u32]| {
             a.holders.iter().any(|h| {
@@ -441,7 +447,10 @@ pub fn check(
         {
             return Some(fail::PACIFIED);
         }
-        if held(&[AURA_MOD_FEAR]) {
+        // A fear kept from taking hold (Recklessness) doesn't flee, as
+        // mangos-classic's `SetFleeing` sets no fleeing under
+        // `SPELL_AURA_PREVENTS_FLEEING`.
+        if held(&[AURA_MOD_FEAR]) && !a.has(AURA_PREVENTS_FLEEING) {
             return Some(fail::FLEEING);
         }
         if held(&[AURA_MOD_CONFUSE]) {
@@ -510,6 +519,21 @@ pub fn check(
             }) {
                 return Some(fail::AURA_BOUNCED);
             }
+        }
+        // A stronger spell of a group that keeps its highest, on the unit a
+        // helpful aura is cast at, the caster or another (Thistle Tea's
+        // single-target upgrades; mangos's `CheckCast` refusing a weaker
+        // aura than what is there). An area's is left to each it lands on.
+        if auras::positive(s)
+            && s.effects.iter().any(|e| e.effect == 6)
+            && !super::outcome::area(s)
+            && !s
+                .effects
+                .iter()
+                .any(|e| e.effect == super::EFFECT_APPLY_AREA_AURA_PARTY)
+            && auras::group_blocks(map, t.unit.unwrap_or(caster), s)
+        {
+            return Some(fail::AURA_BOUNCED);
         }
         if let Some(r) = crate::game::map::pets::check(map, caster, s, t) {
             return Some(r);
@@ -959,6 +983,21 @@ fn check_target(
     }
     if s.max_target_level > 0 && u.level > s.max_target_level {
         return Some(fail::HIGHLEVEL);
+    }
+    // A spell for the peaceful (Sap, Distract, Duel) refuses another in a
+    // fight (mangos-classic's `CheckCast`: `SPELL_ATTR_EX_ONLY_PEACEFUL_TARGETS`
+    // and `IsInCombat`, `SPELL_FAILED_TARGET_AFFECTING_COMBAT`).
+    if target != caster
+        && !triggered
+        && s.attr(1, sd::ATTR_EX_ONLY_PEACEFUL_TARGETS)
+        && map.unit_fields(target).is_some_and(|f| {
+            f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+        })
+    {
+        return Some(fail::TARGET_AFFECTING_COMBAT);
     }
     if s.target_aura_state != 0 && !aura_state(map, target, s.target_aura_state) {
         return Some(fail::TARGET_AURASTATE);

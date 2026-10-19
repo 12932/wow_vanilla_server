@@ -834,6 +834,11 @@ fn effect(
             }
         }
         EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY => {}
+        // A passenger on a flight isn't taken off it (mangos's
+        // `EffectTeleportUnits` and `EffectTeleUnitsFaceCaster` skip one
+        // `IsTaxiFlying`).
+        EFFECT_TELEPORT_UNITS | EFFECT_TELEPORT_UNITS_FACE_CASTER
+            if map.players.get(&target).is_some_and(|p| p.flight.is_some()) => {}
         EFFECT_TELEPORT_UNITS => {
             let data = map.realm.data.clone();
             // Jaina's Teleport in her city keeps its victim there.

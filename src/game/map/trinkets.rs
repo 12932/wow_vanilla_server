@@ -64,11 +64,10 @@ fn full_stacks(bonus: u32) -> bool {
 /// can't make a missing source).
 pub fn orphan(existing: &Auras, spell: u32, caster: Guid) -> bool {
     parent_of(spell).is_some_and(|parent| {
-        full_stacks(spell)
-            && !existing
-                .holders
-                .iter()
-                .any(|h| h.spell == parent && h.caster == caster)
+        !existing
+            .holders
+            .iter()
+            .any(|h| h.spell == parent && h.caster == caster)
     })
 }
 
@@ -128,7 +127,13 @@ fn unstable_power_spell(map: &Map, h: &Holder, s: &SpellTemplate) -> bool {
         matches!(e.effect, 1 | 2 | 7 | 9 | 10 | 17 | 31 | 58 | 62 | 121)
             || matches!(e.aura, 3 | 8 | 53 | 62)
     });
-    schools & s.school_mask() != 0 && damage
+    // The totems that fight, by their look: Searing, Fire Nova, Magma and
+    // Stoneclaw's kind (Thistle Tea's "supported totems").
+    let totem = matches!(
+        (s.spell_visual, s.spell_icon),
+        (319, 1647) | (221, 680) | (369, 37) | (221, 33)
+    );
+    schools & s.school_mask() != 0 && (damage || totem)
 }
 
 /// A stacking trinket's proc, as Thistle Tea runs it. True when it is

@@ -131,6 +131,7 @@ pub const ATTR_CANT_CANCEL: u32 = 0x8000_0000;
 pub const ATTR_EX_USE_ALL_MANA: u32 = 0x2;
 pub const ATTR_EX_ALLOW_WHILE_STEALTHED: u32 = 0x20;
 pub const ATTR_EX_NO_REFLECTION: u32 = 0x80;
+pub const ATTR_EX_ONLY_PEACEFUL_TARGETS: u32 = 0x100;
 pub const ATTR_EX_FROM_BEHIND: u32 = 0x200;
 pub const ATTR_EX_NO_THREAT: u32 = 0x400;
 pub const ATTR_EX_DISCOUNT_POWER_ON_MISS: u32 = 0x800_0000;
@@ -160,6 +161,7 @@ pub const ATTR_EX3_ALWAYS_HIT: u32 = 0x4_0000;
 pub const ATTR_EX3_DEATH_PERSISTENT: u32 = 0x10_0000;
 pub const ATTR_EX3_REQ_OFFHAND: u32 = 0x100_0000;
 pub const ATTR_EX3_CAN_PROC_FROM_PROCS: u32 = 0x400_0000;
+pub const ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS: u32 = 0x1000_0000;
 pub const ATTR_EX3_IGNORE_CASTER_MODIFIERS: u32 = 0x2000_0000;
 /// `AttributesEx4` (word 4): the target's damage taken modifiers don't
 /// count (Decimate).
