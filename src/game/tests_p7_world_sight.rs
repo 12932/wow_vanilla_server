@@ -256,3 +256,36 @@ async fn a_running_creature_is_where_its_run_has_it_and_is_found_there() {
         "at its end, still, found there"
     );
 }
+
+/// Thistle Tea's `SpatialHash.distance/2` "calculates euclidean
+/// distance", "handles negative coordinates" and "calculates 3d
+/// distance": the map's distance (`combat::dist`) is the straight line.
+#[test]
+fn a_distance_is_the_straight_line_between_two_points() {
+    use crate::game::map::combat::dist;
+    let v = |x: f32, y: f32, z: f32| Vector3d { x, y, z };
+    assert_eq!(dist(v(0.0, 0.0, 0.0), v(3.0, 4.0, 0.0)), 5.0);
+    assert_eq!(dist(v(-1.0, -1.0, 0.0), v(2.0, 3.0, 0.0)), 5.0);
+    assert_eq!(dist(v(0.0, 0.0, 0.0), v(1.0, 2.0, 2.0)), 3.0);
+}
+
+/// Thistle Tea's `SpatialHash.query/6` "uses 2d cells and keeps 3d
+/// distance filtering": Alice is near where she stands; a thousand yards
+/// above it, in the same cell of the map's grid, she isn't.
+#[tokio::test]
+async fn those_near_are_found_by_their_cell_and_kept_by_the_straight_line() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let (here, above) = on(&map, move |m| {
+        let at = m.players[&ga].position();
+        let up = Vector3d {
+            z: at.z + 1_000.0,
+            ..at
+        };
+        (
+            m.players_near(at, 10.0).contains(&ga),
+            m.players_near(up, 10.0).contains(&ga),
+        )
+    })
+    .await;
+    assert_eq!((here, above), (true, false));
+}
