@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .gear, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -28,7 +28,7 @@ pub fn needed_level(name: &str) -> Option<u8> {
     use crate::accounts::{GAME_MASTER, MODERATOR};
     Some(match name {
         "guid" | "pos" | "threat" => MODERATOR,
-        "additem" | "addquest" | "learn" | "unlearn" | "character" | "damage" | "kill"
+        "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "damage" | "kill"
         | "respawn" | "move" | "modify" | "rested" | "start" | "talents" | "tgm" | "weather"
         | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion" | "event" => {
             GAME_MASTER
@@ -45,6 +45,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "learn" => learn(map, g, args, true),
         "unlearn" => learn(map, g, args, false),
         "character" => character(map, g, args),
+        "gear" => gear(map, g),
         "damage" => damage(map, g, args),
         "kill" => kill(map, g),
         "respawn" => respawn(map, g),
@@ -241,6 +242,359 @@ fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     p.fields.set_u32(PLAYER_XP, 0);
     map.realm.registry.set_level(to, level);
     Some(format!("Level {level}."))
+}
+
+/// The weapon proficiency spells, by weapon subclass: axes, bows, guns,
+/// maces, polearms, swords, staves, fist weapons, daggers, thrown,
+/// crossbows and wands.
+const WEAPON_SPELLS: &[(u32, u32)] = &[
+    (0, 196),
+    (1, 197),
+    (2, 264),
+    (3, 266),
+    (4, 198),
+    (5, 199),
+    (6, 200),
+    (7, 201),
+    (8, 202),
+    (10, 227),
+    (13, 15_590),
+    (15, 1180),
+    (16, 2567),
+    (18, 5011),
+    (19, 5009),
+];
+/// The armour proficiency spells, by armour subclass: cloth, leather,
+/// mail, plate and shields.
+const ARMOR_SPELLS: &[(u32, u32)] = &[(1, 9078), (2, 9077), (3, 8737), (4, 750), (6, 9116)];
+const DUAL_WIELD: u32 = 674;
+const AUTO_SHOT: u32 = 75;
+/// A wand's Shoot.
+const SHOOT: u32 = 5019;
+const ITEM_WEAPON: u32 = 2;
+const ITEM_ARMOR: u32 = 4;
+const ITEM_PROJECTILE: u32 = 6;
+const ARMOR_SHIELD: u32 = 6;
+const WEAPON_WAND: u32 = 19;
+
+/// What a `.gear` character holds in their hands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hands {
+    TwoHanded,
+    Shield,
+    DualWield,
+    HeldInOffHand,
+}
+
+/// The armour a class wears at a level: plate for warriors and paladins
+/// from 40 (mail before), mail for hunters and shamans from 40 (leather
+/// before), leather for rogues and druids, cloth for the rest.
+fn armour_of(class: u8, level: u8) -> u32 {
+    match (class, level >= 40) {
+        (1 | 2, true) => 4,
+        (1 | 2, false) | (3 | 7, true) => 3,
+        (3 | 7, false) | (4 | 11, _) => 2,
+        _ => 1,
+    }
+}
+
+/// What a class may hold, at a level: Dual Wield for rogues, and for
+/// warriors and hunters from 20; a shield for warriors, paladins and
+/// shamans; an off-hand item for the casters.
+fn hands_of(class: u8, level: u8) -> Vec<Hands> {
+    let mut out = Vec::new();
+    if class != 4 {
+        out.push(Hands::TwoHanded);
+    }
+    if matches!(class, 1 | 2 | 7) {
+        out.push(Hands::Shield);
+    }
+    if class == 4 || (matches!(class, 1 | 3) && level >= 20) {
+        out.push(Hands::DualWield);
+    }
+    if matches!(class, 5 | 7 | 8 | 9 | 11) {
+        out.push(Hands::HeldInOffHand);
+    }
+    out
+}
+
+/// The ranged weapons a class is given: a bow, gun or crossbow for
+/// hunters, those or a thrown weapon for warriors and rogues, a wand for
+/// priests, mages and warlocks.
+fn ranged_of(class: u8) -> &'static [u32] {
+    match class {
+        3 => &[2, 3, 18],
+        1 | 4 => &[2, 3, 16, 18],
+        5 | 8 | 9 => &[WEAPON_WAND],
+        _ => &[],
+    }
+}
+
+/// The proficiency spell an item needs, if any.
+fn proficiency_spell(t: &crate::game::data::ItemTemplate) -> Option<u32> {
+    let table = match t.class {
+        ITEM_WEAPON => WEAPON_SPELLS,
+        ITEM_ARMOR => ARMOR_SPELLS,
+        _ => return None,
+    };
+    table
+        .iter()
+        .find(|(subclass, _)| *subclass == t.subclass)
+        .map(|(_, spell)| *spell)
+}
+
+/// Whether a class may learn a proficiency spell, by its `SkillLineAbility`
+/// classes; in a world without the spell, yes.
+fn class_gets(data: &crate::game::data::GameData, spell: u32, class: u8) -> bool {
+    if data.spells.get(spell).is_none() {
+        return true;
+    }
+    let bit = 1u32 << (class.max(1) - 1);
+    data.spells.skill_abilities.get(&spell).is_some_and(|v| {
+        v.iter()
+            .any(|a| a.class_mask == 0 || a.class_mask & bit != 0)
+    })
+}
+
+/// Whether a class may use a weapon subclass.
+fn weapon_for(data: &crate::game::data::GameData, subclass: u32, class: u8) -> bool {
+    WEAPON_SPELLS
+        .iter()
+        .find(|(s, _)| *s == subclass)
+        .is_some_and(|(_, spell)| class_gets(data, *spell, class))
+}
+
+/// The items `.gear` may give a character of `class`, `race` and `level`
+/// of the inventory types `types` that `fits` takes: uncommon or rare, of
+/// a required level within ten of theirs and no higher, asking for no
+/// skill, spell, rank or standing, and not temporary.
+fn gear_pool(
+    data: &crate::game::data::GameData,
+    (class, race, level): (u8, u8, u8),
+    types: &[u32],
+    fits: impl Fn(&crate::game::data::ItemTemplate) -> bool,
+) -> Vec<u32> {
+    use rand::seq::SliceRandom;
+    let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
+    let level = u32::from(level);
+    let mut out: Vec<u32> = data
+        .items
+        .values()
+        .filter(|t| (2..=3).contains(&t.quality))
+        .filter(|t| t.required_level <= level && t.required_level + 10 >= level)
+        .filter(|t| types.contains(&t.inventory_type))
+        .filter(|t| {
+            t.required_skill == 0
+                && t.required_spell == 0
+                && t.required_honor_rank == 0
+                && t.required_reputation_faction == 0
+                && t.duration == 0
+        })
+        .filter(|t| allows(t.allowable_class, class) && allows(t.allowable_race, race))
+        .filter(|t| fits(t))
+        .map(|t| t.entry)
+        .collect();
+    out.sort_unstable();
+    out.shuffle(&mut rand::rng());
+    out
+}
+
+/// Learn a proficiency (or other) spell, and the skills of its line at
+/// their caps.
+fn teach(map: &mut Map, g: Guid, spell: u32) {
+    use crate::game::map::skills;
+    crate::game::map::spells::learn(map, g, spell);
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    if !p.spells.contains(&spell) {
+        return;
+    }
+    let lines: Vec<u32> = data
+        .spells
+        .skill_abilities
+        .get(&spell)
+        .into_iter()
+        .flatten()
+        .map(|a| a.skill)
+        .collect();
+    for skill in lines {
+        if skills::value(p, skill).is_none() {
+            skills::learn_skill(p, skill, 1);
+        }
+        if let Some(max) = skills::max_value(p, skill) {
+            skills::set_value(p, skill, max);
+        }
+    }
+}
+
+/// `.gear`: the selected player, or the GM, in random uncommon and rare
+/// gear for their class and level in every slot it can fill (but the
+/// shirt and tabard), what was worn there before gone: armour of the kind
+/// the class wears, a cloak, a necklace, two rings and two trinkets, the
+/// weapons the class may hold (a two-hander, or a one-hander with a
+/// shield, a second weapon or an off-hand item), and a ranged weapon or a
+/// wand, with ammunition for one that takes it. The proficiencies and
+/// weapon skills the items need are taught, the skills at their caps, and
+/// Auto Shot and Shoot with a ranged weapon or a wand.
+fn gear(map: &mut Map, g: Guid) -> Option<String> {
+    use crate::game::map::inventory::{self, Destination, SLOT_MAIN_HAND, SLOT_OFF_HAND};
+    use crate::game::store::BAG_PLAYER;
+    use rand::seq::SliceRandom;
+    let data = map.realm.data.clone();
+    let to = player_target(map, g);
+    let p = map.players.get(&to)?;
+    let who = (p.row.class, p.row.race, p.level());
+    let (class, _, level) = who;
+    let kind = armour_of(class, level);
+    let armour = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR && t.subclass == kind;
+    let trinket = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR;
+    let one_hand = |t: &crate::game::data::ItemTemplate| {
+        t.class == ITEM_WEAPON && weapon_for(&data, t.subclass, class)
+    };
+    let mut plan: Vec<(u8, Vec<u32>)> = vec![
+        (0, gear_pool(&data, who, &[1], armour)),
+        (1, gear_pool(&data, who, &[2], trinket)),
+        (2, gear_pool(&data, who, &[3], armour)),
+        (4, gear_pool(&data, who, &[5, 20], armour)),
+        (5, gear_pool(&data, who, &[6], armour)),
+        (6, gear_pool(&data, who, &[7], armour)),
+        (7, gear_pool(&data, who, &[8], armour)),
+        (8, gear_pool(&data, who, &[9], armour)),
+        (9, gear_pool(&data, who, &[10], armour)),
+        (10, gear_pool(&data, who, &[11], trinket)),
+        (11, gear_pool(&data, who, &[11], trinket)),
+        (12, gear_pool(&data, who, &[12], trinket)),
+        (13, gear_pool(&data, who, &[12], trinket)),
+        (
+            14,
+            gear_pool(&data, who, &[16], |t| {
+                t.class == ITEM_ARMOR && t.subclass == 1
+            }),
+        ),
+    ];
+    // The hands: a way of holding the class has, at random, that the
+    // items let them fill both of.
+    let mut ways = hands_of(class, level);
+    ways.shuffle(&mut rand::rng());
+    let fill = |way: Hands| {
+        let main = match way {
+            Hands::TwoHanded => gear_pool(&data, who, &[17], one_hand),
+            _ => gear_pool(&data, who, &[13, 21], one_hand),
+        };
+        let off = match way {
+            Hands::TwoHanded => Vec::new(),
+            Hands::Shield => gear_pool(&data, who, &[14], |t| {
+                t.class == ITEM_ARMOR
+                    && t.subclass == ARMOR_SHIELD
+                    && class_gets(&data, 9116, class)
+            }),
+            Hands::DualWield => gear_pool(&data, who, &[13, 22], one_hand),
+            Hands::HeldInOffHand => gear_pool(&data, who, &[23], trinket),
+        };
+        (way, main, off)
+    };
+    let filled: Vec<(Hands, Vec<u32>, Vec<u32>)> = ways.into_iter().map(fill).collect();
+    let hands = filled
+        .iter()
+        .find(|(way, main, off)| !main.is_empty() && (*way == Hands::TwoHanded || !off.is_empty()))
+        .or_else(|| filled.iter().find(|(_, main, _)| !main.is_empty()))
+        .cloned();
+    if let Some((way, main, off)) = &hands {
+        plan.push((SLOT_MAIN_HAND, main.clone()));
+        if *way == Hands::TwoHanded {
+            plan.push((SLOT_OFF_HAND, Vec::new()));
+        } else {
+            plan.push((SLOT_OFF_HAND, off.clone()));
+        }
+    }
+    let ranged = ranged_of(class);
+    plan.push((
+        17,
+        gear_pool(&data, who, &[15, 25, 26], |t| {
+            t.class == ITEM_WEAPON
+                && ranged.contains(&t.subclass)
+                && weapon_for(&data, t.subclass, class)
+        }),
+    ));
+    // What was worn where something new goes is gone; and the off hand
+    // with a two-hander.
+    let two_handed = hands
+        .as_ref()
+        .is_some_and(|(w, m, _)| *w == Hands::TwoHanded && !m.is_empty());
+    for (slot, picks) in &plan {
+        if picks.is_empty() && !(two_handed && *slot == SLOT_OFF_HAND) {
+            continue;
+        }
+        let worn = map.players.get(&to).and_then(|p| {
+            p.item_at(BAG_PLAYER, *slot)
+                .map(|i| (i, p.items[i].count()))
+        });
+        if let Some((i, n)) = worn {
+            inventory::take_item(map, to, i, n);
+        }
+    }
+    if hands
+        .as_ref()
+        .is_some_and(|(w, _, _)| *w == Hands::DualWield)
+    {
+        teach(map, to, DUAL_WIELD);
+    }
+    let mut names = Vec::new();
+    for (slot, picks) in plan {
+        // A few tries: one may be unique and worn already, as the first
+        // ring.
+        for entry in picks.into_iter().take(20) {
+            let Some(t) = data.item(entry) else {
+                continue;
+            };
+            if let Some(spell) = proficiency_spell(t) {
+                teach(map, to, spell);
+            }
+            if inventory::add_item_to(map, to, entry, 1, Destination::Worn(slot)).is_ok() {
+                names.push(t.name.clone());
+                if slot == 17 {
+                    if t.subclass == WEAPON_WAND {
+                        teach(map, to, SHOOT);
+                    } else if class == 3 {
+                        teach(map, to, AUTO_SHOT);
+                    }
+                    if t.ammo_type != 0 {
+                        names.extend(give_ammo(map, to, t.ammo_type, level));
+                    }
+                }
+                break;
+            }
+        }
+    }
+    if names.is_empty() {
+        return Some("No gear to equip.".into());
+    }
+    Some(format!("Equipped {}.", names.join(", ")))
+}
+
+/// Four stacks of the best ammunition of `ammo_type` (arrows, bullets) of
+/// `level` or below, and that chosen for the ranged weapon: its name and
+/// count, if any went.
+fn give_ammo(map: &mut Map, g: Guid, ammo_type: u32, level: u8) -> Option<String> {
+    let data = map.realm.data.clone();
+    let ammo = data
+        .items
+        .values()
+        .filter(|t| t.class == ITEM_PROJECTILE && t.subclass == ammo_type)
+        .filter(|t| t.required_level <= u32::from(level) && t.quality <= 3)
+        .filter(|t| t.required_reputation_faction == 0 && t.required_skill == 0)
+        .max_by_key(|t| (t.required_level, t.item_level, std::cmp::Reverse(t.entry)))?;
+    let p = map.players.get(&g)?;
+    let want = ammo.stackable.max(1) * 4;
+    let n = crate::game::map::inventory::fitting(p, &data, ammo.entry, want).ok()?;
+    if n == 0 {
+        return None;
+    }
+    crate::game::map::inventory::add_item(map, g, ammo.entry, n, true).ok()?;
+    crate::game::map::ranged::set_ammo(map, g, ammo.entry);
+    Some(format!("{n} {}", ammo.name))
 }
 
 fn damage(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
