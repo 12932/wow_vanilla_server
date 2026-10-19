@@ -4111,17 +4111,17 @@ mod warsong {
     }
 }
 
-mod transports {
+pub(crate) mod transports {
     use super::world::START;
     use super::*;
     use crate::game::data::npc::TaxiPathNode;
     use crate::game::data::*;
 
-    const BOAT: u32 = 9999;
+    pub(crate) const BOAT: u32 = 9999;
 
     /// A boat that sails 100 yards from the start on Eastern Kingdoms,
     /// crosses to Kalimdor, sails 100 more, and back, every 1.6 seconds.
-    fn data() -> GameData {
+    pub(crate) fn data() -> GameData {
         let mut d = GameData::empty();
         let mut data = [0u32; 24];
         data[0] = 77;
@@ -4224,10 +4224,271 @@ mod transports {
             })
             .await;
         assert_eq!(at.0, Map::Kalimdor);
-        assert!((at.1.x - 1001.0).abs() < 30.0, "on deck: {:?}", at.1);
+        // Her place on deck, as mangos's `TeleportTo` tells a passenger.
+        assert!(
+            (at.1.x - 1.0).abs() < 0.01 && at.1.y.abs() < 0.01,
+            "on deck: {:?}",
+            at.1
+        );
         a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
-        a.sees(ga).await;
-        assert_eq!(realm.registry.online(ga).unwrap().map().key.map, 1);
+        // The boat's create, then her own aboard it at that place, in one
+        // packet (mangos's `SendInitSelf`).
+        let (boat_first, deck) = a
+            .wait_for("her own create, aboard", |m| aboard_in(m, ga, boat))
+            .await;
+        assert!(boat_first, "the boat before her");
+        assert!(
+            (deck.x - 1.0).abs() < 0.01 && deck.y.abs() < 0.01,
+            "{deck:?}"
+        );
+        let kalimdor = realm.registry.online(ga).unwrap().map();
+        assert_eq!(kalimdor.key.map, 1);
+        // On the server, aboard at the same place on deck, in the world by
+        // the boat.
+        let (on, at) = kalimdor
+            .query(move |m| {
+                let p = &m.players[&ga];
+                (
+                    p.movement
+                        .flags
+                        .get_on_transport()
+                        .map(|t| (t.transport.guid, t.transport.position)),
+                    p.position(),
+                )
+            })
+            .await
+            .unwrap();
+        let (t, offset) = on.expect("aboard");
+        assert_eq!(t, boat);
+        assert!((offset.x - 1.0).abs() < 0.01, "{offset:?}");
+        assert!((at.x - 1001.0).abs() < 30.0, "by the boat: {at:?}");
+    }
+
+    /// One aboard is saved aboard their boat by its entry, its GUID's
+    /// counter (a boat's GUID has no entry of its own): it was saved as 0,
+    /// no transport, so a login aboard didn't come back on deck.
+    #[tokio::test]
+    async fn a_passenger_is_saved_aboard_their_boat() {
+        let realm = harness::realm_with(data());
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let boat = guid::make(guid::HighGuid::MoTransport, 0, BOAT);
+        let map = realm.registry.online(ga).unwrap().map();
+        let saved = map
+            .query(move |m| {
+                let now = m.now;
+                let p = m.players.get_mut(&ga).unwrap();
+                p.movement.flags = MovementInfo_MovementFlags::empty().set_on_transport(
+                    MovementInfo_MovementFlags_OnTransport {
+                        transport: TransportInfo {
+                            guid: boat,
+                            position: Vector3d {
+                                x: 1.0,
+                                y: 2.0,
+                                z: 3.0,
+                            },
+                            orientation: 0.5,
+                            timestamp: 0,
+                        },
+                    },
+                );
+                p.to_row(now).state.transport
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved, Some((BOAT, 1.0, 2.0, 3.0, 0.5)));
+    }
+
+    /// The boat between Booty Bay and Ratchet, `transports`' 20808.
+    const BOOTY_BAY_BOAT: u32 = 20808;
+
+    /// Move the transports' clock on to `at` ms into `route`'s round.
+    fn skip_to(route: &crate::game::transports::Route, at: u32) {
+        let now = crate::game::uptime_ms() % route.period;
+        crate::game::skip_uptime((at + route.period - now) % route.period);
+    }
+
+    /// The real Booty Bay boat, on the real data: one standing on its deck
+    /// at Booty Bay is carried to Kalimdor at the crossing, on the same
+    /// boat at the same place on deck, and the boat sails on to dock at
+    /// Ratchet.
+    #[tokio::test]
+    #[ignore = "extended"]
+    async fn the_booty_bay_boat_carries_its_passenger_to_kalimdor() {
+        let dir = harness::real_data("db");
+        if !dir.join("vmangos.sqlite").exists() {
+            return;
+        }
+        let realm = harness::realm_with(harness::load_real(&dir));
+        let route = crate::game::transports::route_of(&realm, BOOTY_BAY_BOAT).expect("its route");
+        assert_eq!(route.maps().into_iter().collect::<Vec<_>>(), vec![0, 1]);
+        let boat = route.guid;
+        // Its stop at Booty Bay, and the one at Ratchet.
+        let stop = |map| {
+            route
+                .frames
+                .iter()
+                .find(|f| f.stop && f.map == map)
+                .cloned()
+                .expect("a stop")
+        };
+        let (booty_bay, ratchet) = (stop(0), stop(1));
+        // Docked at Booty Bay, a minute before it leaves.
+        skip_to(&route, booty_bay.arrive_ms + 1000);
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        assert!(
+            a.sees_within(boat, Duration::from_secs(20)).await,
+            "the boat, on her map"
+        );
+        let pose = route.pose_at(crate::game::uptime_ms());
+        assert_eq!((pose.map, pose.moving), (0, false), "at Booty Bay");
+        let deck = Vector3d {
+            x: 2.0,
+            y: -1.0,
+            z: 6.0,
+        };
+        let (world, o) = crate::game::transports::passenger_world(deck, 0.0, &pose);
+        a.send(MSG_MOVE_HEARTBEAT_Client {
+            info: MovementInfo {
+                flags: MovementInfo_MovementFlags::empty().set_on_transport(
+                    MovementInfo_MovementFlags_OnTransport {
+                        transport: TransportInfo {
+                            guid: boat,
+                            position: deck,
+                            orientation: 0.0,
+                            timestamp: 0,
+                        },
+                    },
+                ),
+                timestamp: 0,
+                position: world,
+                orientation: o,
+                fall_time: 0.0,
+            },
+        })
+        .await;
+        let eastern = realm.registry.online(ga).unwrap().map();
+        crate::game::tests_p3_entity_objects::until(&eastern, "Alice aboard", move |m| {
+            m.players
+                .get(&ga)
+                .is_some_and(|p| p.movement.flags.get_on_transport().is_some())
+        })
+        .await;
+        // A second and a half before it crosses (its round's end).
+        skip_to(&route, route.period - 1500);
+        let by = a
+            .wait_for("SMSG_TRANSFER_PENDING aboard", |m| match m {
+                ServerOpcodeMessage::SMSG_TRANSFER_PENDING(t) => t
+                    .has_transport
+                    .as_ref()
+                    .map(|h| (t.map, h.transport, h.transport_map)),
+                _ => None,
+            })
+            .await;
+        assert_eq!(
+            by,
+            (Map::Kalimdor, BOOTY_BAY_BOAT, Map::EasternKingdoms),
+            "with the boat, from Eastern Kingdoms"
+        );
+        let (to, on_deck) = a
+            .wait_for("SMSG_NEW_WORLD", |m| match m {
+                ServerOpcodeMessage::SMSG_NEW_WORLD(w) => Some((w.map, w.position)),
+                _ => None,
+            })
+            .await;
+        assert_eq!(to, Map::Kalimdor);
+        assert!(
+            (on_deck.x - deck.x).abs() < 0.01 && (on_deck.y - deck.y).abs() < 0.01,
+            "her place on deck: {on_deck:?}"
+        );
+        a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+        let (boat_first, kept) = a
+            .wait_for("her own create, aboard", |m| aboard_in(m, ga, boat))
+            .await;
+        assert!(boat_first, "the boat before her");
+        assert!((kept.x - deck.x).abs() < 0.01 && (kept.z - deck.z).abs() < 0.01);
+        // On Kalimdor, on the boat's deck, where it is.
+        let kalimdor = realm.registry.online(ga).unwrap().map();
+        assert_eq!(kalimdor.key.map, 1);
+        let (aboard, at, has_boat) = kalimdor
+            .query(move |m| {
+                let p = &m.players[&ga];
+                (
+                    p.movement
+                        .flags
+                        .get_on_transport()
+                        .map(|t| (t.transport.guid, t.transport.position)),
+                    p.position(),
+                    m.globals.contains(&boat) && m.gameobject(boat).is_some(),
+                )
+            })
+            .await
+            .unwrap();
+        assert!(has_boat, "the boat is on Kalimdor");
+        let (t, offset) = aboard.expect("aboard");
+        assert_eq!(t, boat);
+        assert!((offset.x - deck.x).abs() < 0.01, "{offset:?}");
+        let pose = route.pose_at(crate::game::uptime_ms());
+        assert_eq!(pose.map, 1);
+        let d = ((at.x - pose.position.x).powi(2) + (at.y - pose.position.y).powi(2)).sqrt();
+        assert!(d < 40.0, "on its deck: {at:?}, the boat at {pose:?}");
+        // And it docks at Ratchet, on Kalimdor still.
+        let docked = route.pose_at(ratchet.arrive_ms + 1000);
+        assert_eq!((docked.map, docked.moving), (1, false));
+        let ratchet_dock = (-1005.6, -3841.6);
+        assert!(
+            (docked.position.x - ratchet_dock.0).abs() < 1.0
+                && (docked.position.y - ratchet_dock.1).abs() < 1.0,
+            "{docked:?}"
+        );
+        // Standing still on deck, she is carried there with it.
+        skip_to(&route, ratchet.arrive_ms + 1000);
+        let at_dock = move |m: &crate::game::map::Map| {
+            let at = m.players[&ga].position();
+            m.globals.contains(&boat)
+                && ((at.x - ratchet_dock.0).powi(2) + (at.y - ratchet_dock.1).powi(2)).sqrt() < 10.0
+        };
+        crate::game::tests_p3_entity_objects::until(&kalimdor, "Alice docked at Ratchet", at_dock)
+            .await;
+    }
+
+    /// In an update packet, `player`'s create, aboard: whether `transport`'s
+    /// create came before it, and the place on deck.
+    pub(crate) fn aboard_in(
+        m: &ServerOpcodeMessage,
+        player: wow_world_messages::Guid,
+        transport: wow_world_messages::Guid,
+    ) -> Option<(bool, Vector3d)> {
+        let objects = match m {
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+            ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+            _ => return None,
+        };
+        let create = |o: &Object| match &o.update_type {
+            Object_UpdateType::CreateObject {
+                guid3, movement2, ..
+            }
+            | Object_UpdateType::CreateObject2 {
+                guid3, movement2, ..
+            } => Some((*guid3, movement2.clone())),
+            _ => None,
+        };
+        let mine = objects
+            .iter()
+            .position(|o| create(o).is_some_and(|(g, _)| g == player))?;
+        let (_, movement) = create(&objects[mine])?;
+        let deck = match movement.update_flag.get_living()? {
+            MovementBlock_UpdateFlag_Living::Living { flags, .. } => {
+                let t = flags.get_on_transport()?;
+                (t.transport_guid == transport).then_some(t.transport_position)?
+            }
+            _ => return None,
+        };
+        let first = objects[..mine]
+            .iter()
+            .any(|o| create(o).is_some_and(|(g, _)| g == transport));
+        Some((first, deck))
     }
 }
 

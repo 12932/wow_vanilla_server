@@ -1,6 +1,7 @@
-//! Who sees what. A player sees an object within the visibility radius,
-//! and forgets it past the radius plus a margin, so an object at the edge
-//! doesn't flicker. Visibility is worked out for an object when it has
+//! Who sees what. A player sees an object within the visibility radius
+//! (on a flight master's mount, further: `[visibility] flight_yards`),
+//! measured on the ground, and forgets it past the radius plus a margin,
+//! so an object at the edge doesn't flicker. Visibility is worked out for an object when it has
 //! moved some yards since the last time, or has just come into the map.
 
 use wow_world_messages::Guid;
@@ -8,6 +9,7 @@ use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::fields::Visibility;
 use crate::game::guid;
+use crate::game::map::player::Player;
 use crate::game::map::{Map, death};
 use crate::game::update;
 
@@ -28,14 +30,40 @@ pub fn radius(map: &Map) -> f32 {
     }
 }
 
+/// How far `p` sees: on a flight master's mount, `[visibility]
+/// flight_yards` (if further than the map's), else the map's.
+pub fn sight(map: &Map, p: &Player) -> f32 {
+    let r = radius(map);
+    if p.flight.is_some() {
+        r.max(map.cfg.flight_visibility_yards)
+    } else {
+        r
+    }
+}
+
+/// [`sight`], and how far past it what `p` knows is kept, squared.
+fn sight2(map: &Map, p: &Player) -> (f32, f32) {
+    let r = sight(map, p);
+    (r * r, (r + MARGIN) * (r + MARGIN))
+}
+
+/// Distances on the ground: height doesn't count.
 fn dist2(a: Vector3d, b: Vector3d) -> f32 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
 }
 
 /// Note that `object` moved to `position`: its visibility is worked out at
-/// the next update if it went far enough.
+/// the next update if it went far enough. A flier goes further between
+/// looks, in proportion to how much further it sees (32 yards at 400):
+/// what comes into its sight is as late, for its distance, as for a
+/// walker, and a flight across a continent takes a quarter of the looks
+/// (each over a window sixteen times the size).
 pub fn moved(map: &mut Map, object: Guid, anchor: Vector3d, position: Vector3d) {
-    if dist2(anchor, position) >= MOVE_THRESHOLD * MOVE_THRESHOLD {
+    let threshold = match map.players.get(&object) {
+        Some(p) if p.flight.is_some() => MOVE_THRESHOLD * sight(map, p) / radius(map),
+        _ => MOVE_THRESHOLD,
+    };
+    if dist2(anchor, position) >= threshold * threshold {
         map.visibility_dirty.insert(object);
     }
 }
@@ -95,13 +123,12 @@ pub fn refresh(map: &mut Map, object: Guid) {
         c.vis_anchor = pos;
     }
     crate::game::map::conditions::locate(map, object, true);
-    let radius = radius(map);
-    let keep = radius + MARGIN;
-    let (r2, keep2) = (radius * radius, keep * keep);
+    let keep = radius(map) + MARGIN;
 
+    // The players near the object: should they know it? Each by how far it
+    // sees; one further off that sees further (a flier) is told of it by
+    // its own looks, which go as far as it sees.
     let nearby: Vec<Guid> = map.grid.around(pos.x, pos.y, keep).collect();
-
-    // The players near the object: should they know it?
     for &g in &nearby {
         if g == object || !guid::is_player(g) {
             continue;
@@ -112,6 +139,7 @@ pub fn refresh(map: &mut Map, object: Guid) {
         if p.awaiting_worldport {
             continue;
         }
+        let (r2, keep2) = sight2(map, p);
         let d2 = dist2(crate::game::map::cinematic::view_point(p), pos);
         let knows = p.known.contains(&object);
         let sees = death::can_see(map, g, object);
@@ -121,13 +149,14 @@ pub fn refresh(map: &mut Map, object: Guid) {
             part(map, g, object);
         }
     }
-    // Observers that have gone out of the grid window altogether.
+    // Observers that have gone out of the grid window, and past their
+    // sight.
     let far: Vec<Guid> = observers_of(map, object)
         .into_iter()
         .filter(|o| {
-            map.players
-                .get(o)
-                .is_none_or(|p| dist2(crate::game::map::cinematic::view_point(p), pos) > keep2)
+            map.players.get(o).is_none_or(|p| {
+                dist2(crate::game::map::cinematic::view_point(p), pos) > sight2(map, p).1
+            })
         })
         .collect();
     for o in far {
@@ -135,16 +164,16 @@ pub fn refresh(map: &mut Map, object: Guid) {
     }
 
     // A player: what should they know?
-    if !guid::is_player(object) {
+    let Some(me) = map.players.get(&object) else {
         return;
-    }
-    // What the player knows is what is near where they see from.
-    let view = map
-        .players
-        .get(&object)
-        .map_or(pos, crate::game::map::cinematic::view_point);
-    let (pos, nearby) = if dist2(view, pos) > 0.01 {
-        (view, map.grid.around(view.x, view.y, keep).collect())
+    };
+    // What the player knows is what is near where they see from, as far
+    // as they see.
+    let view = crate::game::map::cinematic::view_point(me);
+    let (r2, keep2) = sight2(map, me);
+    let own = sight(map, me) + MARGIN;
+    let (pos, nearby) = if dist2(view, pos) > 0.01 || own > keep {
+        (view, map.grid.around(view.x, view.y, own).collect())
     } else {
         (pos, nearby)
     };
@@ -211,6 +240,21 @@ fn observers_of(map: &Map, object: Guid) -> Vec<Guid> {
 /// log as their group's members see them, with the log's ids (mangos's
 /// `UF_FLAG_GROUP_ONLY`), else as anyone does.
 pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
+    // One aboard a boat the observer doesn't know yet: the boat first, so
+    // the create naming it doesn't come before it.
+    if let Some(t) = map
+        .players
+        .get(&object)
+        .and_then(|p| p.movement.flags.get_on_transport())
+        .map(|t| t.transport.guid)
+        && map.gameobject(t).is_some()
+        && map
+            .players
+            .get(&observer)
+            .is_some_and(|p| !p.known.contains(&t))
+    {
+        introduce(map, observer, t);
+    }
     let block = match map.players.get(&object) {
         Some(p)
             if crate::game::fields::has_group_only(&p.fields)
@@ -276,10 +320,29 @@ pub fn part(map: &mut Map, observer: Guid, object: Guid) {
 /// The create blocks a player gets for themselves and their items, sent at
 /// once (at login, and after a worldport).
 pub fn send_self(map: &mut Map, guid: Guid) {
+    // Aboard a transport on the map: its create first, in the same packet,
+    // so the client puts the player on its deck (mangos's `SendInitSelf`);
+    // the player's own says where on it.
+    let aboard = map
+        .players
+        .get(&guid)
+        .and_then(|p| p.movement.flags.get_on_transport())
+        .map(|t| t.transport.guid)
+        .filter(|t| map.gameobject(*t).is_some());
+    let transport = aboard.and_then(|t| Some((t, map.public_create(t)?)));
+    if let Some((t, _)) = transport
+        && let Some(o) = map.observers_mut(t)
+    {
+        o.insert(guid);
+    }
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
     let mut batch = update::Batch::new();
+    if let Some((t, block)) = &transport {
+        batch.push_for(*t, block);
+        p.known.insert(*t);
+    }
     for item in &p.items {
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
     }

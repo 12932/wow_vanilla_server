@@ -112,6 +112,11 @@ instances_yards = 170.0
 # Default 400.0. Range 20 to 500, clamped. Changes at a reload. mangos: Visibility.Distance.BGArenas.
 battleground_yards = 400.0
 
+# On a flight master's gryphon or wyvern: further, as the land
+# goes by below. Back to the map's own on landing.
+# Default 400.0. Range 20 to 500, clamped. Changes at a reload.
+flight_yards = 400.0
+
 # Multipliers on what players earn, and the skill-ups' sizes and
 # chances. 1 is 1.12's own.
 [rates]

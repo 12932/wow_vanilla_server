@@ -14,6 +14,7 @@ pub mod instances;
 pub mod invasion;
 pub mod jaina;
 pub mod map;
+pub mod movement_wire;
 pub mod omen;
 pub mod registry;
 pub mod session;
@@ -625,6 +626,8 @@ pub struct RealmConfig {
     /// In dungeons and raids.
     pub instance_visibility_yards: f32,
     pub battleground_visibility_yards: f32,
+    /// On a flight master's mount.
+    pub flight_visibility_yards: f32,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -682,6 +685,7 @@ impl RealmConfig {
             visibility_yards: c.visibility.continents_yards,
             instance_visibility_yards: c.visibility.instances_yards,
             battleground_visibility_yards: c.visibility.battleground_yards,
+            flight_visibility_yards: c.visibility.flight_yards,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,
@@ -1077,8 +1081,21 @@ static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::n
 /// Milliseconds since the server started: the clock transports keep time
 /// by.
 pub fn uptime_ms() -> u32 {
-    STARTED
+    let ms = STARTED
         .get_or_init(std::time::Instant::now)
         .elapsed()
-        .as_millis() as u32
+        .as_millis() as u32;
+    #[cfg(test)]
+    let ms = ms.wrapping_add(SKIPPED_MS.load(std::sync::atomic::Ordering::Relaxed));
+    ms
+}
+
+#[cfg(test)]
+static SKIPPED_MS: AtomicU32 = AtomicU32::new(0);
+
+/// Move the transports' clock on `ms` (a test, waiting for a ship's
+/// crossing minutes off). Each test is its own process under nextest.
+#[cfg(test)]
+pub fn skip_uptime(ms: u32) {
+    SKIPPED_MS.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
 }

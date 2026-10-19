@@ -141,6 +141,7 @@ How far players see, in yards. Further costs the server more and the client more
 | `continents_yards` | On the continents. | `100.0` | 20 to 500, clamped | live | `Visibility.Distance.Continents` |
 | `instances_yards` | In dungeons and raids. | `170.0` | 20 to 500, clamped | live | `Visibility.Distance.Instances` |
 | `battleground_yards` | In battlegrounds: further, so a battle's far side is in view. | `400.0` | 20 to 500, clamped | live | `Visibility.Distance.BGArenas` |
+| `flight_yards` | On a flight master's gryphon or wyvern: further, as the land goes by below. Back to the map's own on landing. | `400.0` | 20 to 500, clamped | live |  |
 
 ### `[rates]`
 

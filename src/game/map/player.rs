@@ -596,6 +596,13 @@ impl Player {
             fall_time: 0.0,
             speeds: self.speeds,
             spline: None,
+            transport: self.movement.flags.get_on_transport().map(|t| {
+                crate::game::update::Aboard {
+                    transport: t.transport.guid,
+                    position: t.transport.position,
+                    orientation: t.transport.orientation,
+                }
+            }),
         }
     }
 
@@ -671,7 +678,7 @@ impl Player {
         row.state.transport = self.movement.flags.get_on_transport().map(|t| {
             let deck = t.transport.position;
             (
-                crate::game::guid::entry(t.transport.guid),
+                crate::game::transports::entry_of(t.transport.guid),
                 deck.x,
                 deck.y,
                 deck.z,

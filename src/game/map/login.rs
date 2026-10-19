@@ -127,10 +127,13 @@ fn send_world(map: &Map, p: &mut Player) {
             Visibility::Owner,
         ));
     }
-    batch.push(&crate::game::update::create_block(
-        &p.create(true),
-        Visibility::Owner,
-    ));
+    // Not on a transport: the client hears of the transport after, at the
+    // update, so its own create mustn't name it yet.
+    let mut own = p.create(true);
+    if let crate::game::update::Placement::Living { transport, .. } = &mut own.placement {
+        *transport = None;
+    }
+    batch.push(&crate::game::update::create_block(&own, Visibility::Owner));
     for frame in batch.finish() {
         p.outbound.send_frame(frame);
     }

@@ -165,6 +165,7 @@ fn removals_lead_and_what_precedes_a_create_goes() {
                 fall_time: 0.0,
                 speeds: update::Speeds::default(),
                 spline: None,
+                transport: None,
             },
             fields: &f,
             is_self: false,

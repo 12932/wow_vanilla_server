@@ -137,6 +137,7 @@ pub fn test_config() -> RealmConfig {
         visibility_yards: visibility.continents_yards,
         instance_visibility_yards: visibility.instances_yards,
         battleground_visibility_yards: visibility.battleground_yards,
+        flight_visibility_yards: visibility.flight_yards,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,
@@ -272,7 +273,13 @@ impl Client {
         while let Some(frame) = self.rx.try_recv() {
             self.frames.push(frame.clone());
             self.captured.push(frame.clone());
-            let parsed = ServerOpcodeMessage::read_unencrypted(&frame[..]);
+            // A unit aboard is in 1.12's layout, which wow_messages's
+            // isn't: read in wow_messages's.
+            let readable: Option<Arc<[u8]>> = crate::game::movement_wire::relay_from_client(&frame)
+                .map(Arc::from)
+                .or_else(|| crate::game::update::to_wow_messages(&frame));
+            let parsed =
+                ServerOpcodeMessage::read_unencrypted(readable.as_deref().unwrap_or(&frame));
             match parsed {
                 Ok(m) => {
                     for g in creates(&m) {

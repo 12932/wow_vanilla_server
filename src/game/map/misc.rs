@@ -94,15 +94,15 @@ pub struct Summon {
     pub until: Instant,
 }
 
-/// The packed GUID and movement info of a movement packet, as
-/// wow_messages lays them out, for the packets it doesn't have.
+/// The packed GUID and movement info of a movement packet, as 1.12 lays
+/// them out, for the packets wow_messages doesn't have.
 pub fn movement_bytes(guid: Guid, info: &MovementInfo) -> Vec<u8> {
     let frame = encode(&MSG_MOVE_HEARTBEAT_Server {
         guid,
         info: info.clone(),
     })
     .expect("a heartbeat encodes");
-    frame[4..].to_vec()
+    crate::game::movement_wire::body_to_client(frame[4..].to_vec())
 }
 
 fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
@@ -118,7 +118,7 @@ fn root_ack(map: &mut Map, g: Guid, info: MovementInfo, root: bool) {
     } else {
         encode(&MSG_MOVE_UNROOT_Server { player: g, info })
     };
-    if let Some(frame) = frame {
+    if let Some(frame) = frame.map(crate::game::movement_wire::relay_to_client) {
         map.send_to_observers(g, &frame, false);
     }
 }

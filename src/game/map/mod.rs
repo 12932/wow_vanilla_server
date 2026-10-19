@@ -1014,11 +1014,17 @@ impl Map {
                 p.fall_from = None;
                 p.awaiting_worldport = true;
                 p.teleport = None;
+                // Aboard a transport, the client is told its place on deck
+                // (mangos's `TeleportTo` with a transport).
+                let (position, orientation) = match p.movement.flags.get_on_transport() {
+                    Some(t) => (t.transport.position, t.transport.orientation),
+                    None => (p.position(), p.movement.orientation),
+                };
                 p.outbound
                     .send(&wow_world_messages::vanilla::SMSG_NEW_WORLD {
                         map: crate::game::map::movement::map_enum(self.key.map),
-                        position: p.position(),
-                        orientation: p.movement.orientation,
+                        position,
+                        orientation,
                     });
                 crate::game::instances::send_saved(&self.realm, p.guid, &p.outbound);
                 let guid = p.guid;
