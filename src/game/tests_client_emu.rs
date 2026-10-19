@@ -397,11 +397,12 @@ const CHARGE: u32 = 22911;
 /// the bones' create at the reclaim, and bones whose owner has gone, to a
 /// client that never knew them.
 ///
-/// Alice and Bob are in a group, so Bob sees her ghost and isn't told of
-/// her anew when she rises: a player's create and a values block for them
-/// in one packet (what a ghost rising in view of the living gets) fails
-/// the check, bones or not, which models another player's values short
-/// (the client copies another player's fields so at every values update).
+/// Alice and Bob are strangers, not a group, so Bob loses sight of her
+/// ghost when she releases and is told of her anew when she rises: her
+/// create and a values block for her come in one packet (what a ghost
+/// rising in view of the living gets). That is a shape the 1.12 client
+/// handles; `a_ghost_rising_before_a_stranger_passes_the_client` drives it
+/// on its own and asserts it is present.
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_corpse_and_its_bones_pass_the_client() {
@@ -413,17 +414,6 @@ async fn a_corpse_and_its_bones_pass_the_client() {
     let (mut a, ga) = enter(&realm, "A", "Alice").await;
     let (mut b, _) = enter(&realm, "B", "Bob").await;
     b.sees(ga).await;
-    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
-    b.wait_for("SMSG_GROUP_INVITE", |m| {
-        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
-    })
-    .await;
-    b.send(CMSG_GROUP_ACCEPT {}).await;
-    a.wait_for("SMSG_GROUP_LIST", |m| match m {
-        ServerOpcodeMessage::SMSG_GROUP_LIST(l) if !l.members.is_empty() => Some(()),
-        _ => None,
-    })
-    .await;
     // Alice dies and releases where she fell (the test world has no
     // graveyard): Bob is told of her corpse, and so is her ghost.
     map.query(move |m| {
@@ -495,6 +485,70 @@ async fn a_corpse_and_its_bones_pass_the_client() {
     assert!(
         counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
         "the corpse's and the bones' creates were captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
+/// A ghost rising in view of a living stranger: her create and a values
+/// block for her in one packet, what a player coming into view while her
+/// fields change gets. Alice and Bob are strangers, so Bob loses sight of
+/// Alice while she is a ghost and is told of her afresh when she rises,
+/// the same update her health, flags and auras change; the create and the
+/// values ride one `SMSG_UPDATE_OBJECT`. The 1.12 client copies another
+/// player's field groups into storage it lays down at the create, so this
+/// packet is safe — the shape the earlier bones work grouped its players
+/// to avoid and the checker's model took for an overrun at `0x466816`
+/// (see docs/TESTING.md).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_ghost_rising_before_a_stranger_passes_the_client() {
+    use crate::game::fields::UNIT_FIELD_HEALTH;
+    use crate::game::map::death;
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    let (mut b, _) = enter(&realm, "B", "Bob").await;
+    b.sees(ga).await;
+    // Alice dies and becomes a ghost where she stands (no corpse, no
+    // graveyard): a living stranger cannot see a ghost, so Bob is told to
+    // forget her.
+    map.query(move |m| {
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_HEALTH, 0);
+        death::kill(m, ga);
+        let now = m.now;
+        death::become_ghost(m.players.get_mut(&ga).unwrap(), now);
+        m.visibility_dirty.insert(ga);
+    })
+    .await
+    .unwrap();
+    b.forgets(ga).await;
+    // She rises where she fell, next to Bob, her health, flags and auras
+    // all changed: Bob is told of her anew and, the same update, of her
+    // values.
+    map.query(move |m| assert!(death::resurrect(m, ga, 1.0), "Alice rose"))
+        .await
+        .unwrap();
+    // The create and the values arrive together, in one packet.
+    b.wait_for("Alice's create and values in one packet", |m| {
+        (harness::creates(m).contains(&ga) && harness::values(m).iter().any(|(g, _)| *g == ga))
+            .then_some(())
+    })
+    .await;
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "her create and values were captured"
     );
     run_checker(&check_py, &wow_exe, &capture);
 }

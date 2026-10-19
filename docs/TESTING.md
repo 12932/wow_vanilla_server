@@ -117,12 +117,17 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
 - **Its limits.** It drives parsing, not the renderer or the world, so it catches faults, over-reads, absurd counts
   and the spline copy, not a field wrongly applied. It does not model a fully initialised object, so a self-player
   create's private field groups are read short of the packet's end; an under-read is therefore a note, not a
-  failure (each packet is its own buffer, so trailing bytes are harmless). The main-pass per-type apply is not run.
-  It reports a heap overrun at `0x466816` for any values block on another player created in the same packet (what a
-  player coming into view while their fields change gets, a ghost rising in view of the living for one): the
-  field-group copy there runs at every values update of another player, so this is taken for the model's, not the
-  client's, but it isn't proven. A values block for an object of an earlier packet isn't run at all (the model
-  knows only the packet's own objects).
+  failure (each packet is its own buffer, so trailing bytes are harmless). The main-pass per-type apply is not run,
+  nor is the field-group flush (`0x4667A0`) — the client's copy of a values block's changed field groups from the
+  object's flat value array into its per-group renderer storage. That copy's offsets and byte counts come from the
+  client's globals, never the packet, so it can reveal no packet fault, and it rests on the storage and descriptor
+  list that `ClntObjMgrCreate` (`0x466e00`, stubbed) and the object's constructor build at the create, which the
+  model does not: for an object created in this same packet it would walk an uninitialised list with a wild count
+  and overrun (the `0x466816` report, which was the model's, not the client's). Stubbing it lets the real shape
+  through — another player's create followed by a values block for them in one packet, what a ghost rising in view
+  of a stranger gets — while the values parse above it (the mask read, bounded at 41 words, and the per-field reads
+  off the packet) still catches a real fault, as the captured mask-overrun crashes do. A values block for an object
+  of an earlier packet isn't run at all (the model knows only the packet's own objects).
 
 ### Running it
 
@@ -147,7 +152,9 @@ every frame its clients receive (`Client::captured`), and runs the checker over 
 It is `#[ignore = "extended"]` (it emulates x86 through `uv`, so it is slow) but needs no real world: it builds its
 own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than passing quietly.
 `a_corpse_and_its_bones_pass_the_client` does the same for a corpse, the bones it turns to at a reclaim, and bones
-whose owner has logged out, told to a newcomer.
+whose owner has logged out, told to a newcomer. `a_ghost_rising_before_a_stranger_passes_the_client` drives the
+create-then-values shape on its own: a living stranger loses sight of a player's ghost and is told of her afresh
+when she rises, her create and a values block for her in one packet.
 
 ## What the tests' realm changes
 
