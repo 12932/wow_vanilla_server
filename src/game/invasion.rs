@@ -174,12 +174,21 @@ pub fn world_states(s: &State) -> Vec<(u32, u32)> {
 }
 
 fn publish(realm: &Realm) {
-    let (events, states) = {
+    let (events, states, running) = {
         let s = realm.social.invasion.lock();
-        (driven(&s), world_states(&s))
+        (driven(&s), world_states(&s), s.enabled)
     };
-    for (state, value) in states {
+    for &(state, value) in &states {
         crate::game::map::world_states::set_global(realm, state, value);
+    }
+    // Called off, its states are told gone (0) and then left out of what
+    // those coming in are told: shown only while it runs (Thistle Tea's
+    // `world_states`).
+    if !running {
+        let mut w = realm.social.world_states.lock();
+        for (state, _) in &states {
+            w.remove(state);
+        }
     }
     {
         let mut d = realm.social.driven_events.lock();
