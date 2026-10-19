@@ -116,13 +116,23 @@ pub fn set_list(map: &mut Map, g: Guid, list: u32) {
 }
 
 /// A delay between `lo` and `hi` milliseconds.
-fn roll((lo, hi): (u32, u32)) -> Duration {
+pub(crate) fn roll((lo, hi): (u32, u32)) -> Duration {
     let ms = if hi > lo {
         rand::rng().random_range(lo..=hi)
     } else {
         lo
     };
     Duration::from_millis(u64::from(ms))
+}
+
+/// An entry's chance in a hundred: a probability of none, or over a
+/// hundred, is a hundred (Thistle Tea's `CreatureSpell.build`).
+pub(crate) fn chance_of(probability: u32) -> u32 {
+    if probability == 0 || probability > 100 {
+        100
+    } else {
+        probability
+    }
 }
 
 /// A creature fighting `victim` tries its list.
@@ -188,9 +198,7 @@ fn attempt(map: &mut Map, g: Guid, victim: Guid, i: usize, e: &CreatureSpell) ->
         resume(map, g, e);
         return false;
     }
-    let chance = e.probability == 0
-        || e.probability >= 100
-        || rand::rng().random_range(0..100) < e.probability;
+    let chance = rand::rng().random_range(0..100) < chance_of(e.probability);
     if let Some(t) = map
         .creature_mut(g)
         .and_then(|c| c.caster.spell_list.as_deref_mut())

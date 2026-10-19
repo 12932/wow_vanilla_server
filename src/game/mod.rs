@@ -541,6 +541,8 @@ mod tests_p6_ai_ranged;
 #[cfg(test)]
 mod tests_p6_ai_scripts;
 #[cfg(test)]
+mod tests_p6_ai_spells;
+#[cfg(test)]
 mod tests_p6_loader_items;
 #[cfg(test)]
 mod tests_p6_loader_spells;
