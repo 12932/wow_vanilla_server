@@ -23,7 +23,7 @@ mod control;
 pub mod eyes;
 mod hunter;
 mod inherit;
-mod possess;
+pub(crate) mod possess;
 pub mod rods;
 mod summon;
 mod totems;
@@ -393,7 +393,12 @@ pub fn effect(
         3 if s.id == rods::SPELL_DESPAWN_CASTER => rods::despawn(map, caster),
         EFFECT_TAME_CREATURE => hunter::tame(map, caster, target, s.id),
         EFFECT_SUMMON_PET => {
-            if e.misc_value > 0 {
+            if e.misc_value > 0 && wild::by_creature(map, caster) {
+                // A creature's demon is a guardian of its own, beside any
+                // it has (mangos-classic's `EffectSummonPet`, a
+                // `GUARDIAN_PET` for a caster no player).
+                wild::summon(map, caster, e.misc_value as u32, s, index, 1);
+            } else if e.misc_value > 0 {
                 summon::summon_demon(map, caster, e.misc_value as u32, s.id);
             } else {
                 // Call Pet: the hunter's current pet.

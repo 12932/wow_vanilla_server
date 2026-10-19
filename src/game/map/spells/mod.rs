@@ -1723,9 +1723,15 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
     {
         return;
     }
+    // Any spell reaching another player's side flagged for PvP flags its
+    // caster, hit or not (mangos's `Spell::FillTargetMap`).
+    combat::pvp_contact(map, caster, target, combat::Contact::Touch);
     if auras::positive(s) {
-        if hit && !s.attr(1, ATTR_EX_NO_THREAT) && !s.attr(2, ATTR_EX2_NO_INITIAL_THREAT) {
-            combat::assisted(map, caster, target);
+        if hit {
+            combat::assist_contact(map, caster, target, s);
+            if !s.attr(1, ATTR_EX_NO_THREAT) && !s.attr(2, ATTR_EX2_NO_INITIAL_THREAT) {
+                combat::assisted(map, caster, target);
+            }
         }
         return;
     }

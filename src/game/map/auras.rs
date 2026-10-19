@@ -1199,12 +1199,7 @@ pub fn apply_spell(
     recalc(map, target);
     // Helping a flagged player flags the helper.
     if pos && caster != target {
-        crate::game::map::combat::pvp_contact(
-            map,
-            caster,
-            target,
-            crate::game::map::combat::Contact::Assist,
-        );
+        crate::game::map::combat::assist_contact(map, caster, target, spell);
     }
     Ok(())
 }

@@ -19,7 +19,7 @@ use crate::game::map::combat::dist;
 use crate::game::map::creature::{Motion, Walk};
 use crate::game::map::{MapHandle, MapKey};
 
-const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+pub(super) const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
 const HUMANS: u32 = 1;
 /// Hostile to humans.
@@ -33,7 +33,7 @@ fn v(x: f32, y: f32, z: f32) -> Vector3d {
 }
 
 /// A point `dx` east and `dy` north of the start, at its height.
-fn at(dx: f32, dy: f32) -> Vector3d {
+pub(super) fn at(dx: f32, dy: f32) -> Vector3d {
     v(START.0 + dx, START.1 + dy, START.2)
 }
 
@@ -67,7 +67,7 @@ fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     }
 }
 
-fn spawn(guid: u32, entry: u32, p: Vector3d) -> CreatureSpawn {
+pub(super) fn spawn(guid: u32, entry: u32, p: Vector3d) -> CreatureSpawn {
     CreatureSpawn {
         guid,
         entries: vec![entry],
@@ -101,7 +101,7 @@ fn world() -> GameData {
 }
 
 /// A realm on `d`, and a warrior at the start.
-async fn enter(d: GameData) -> (Arc<Realm>, Client, Guid, MapHandle) {
+pub(super) async fn enter(d: GameData) -> (Arc<Realm>, Client, Guid, MapHandle) {
     let realm = harness::realm_with(d);
     let mut a = Client::connect(&realm, "A");
     let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -135,17 +135,17 @@ fn vec_at(b: &[u8], at: usize) -> Vector3d {
 
 /// An `SMSG_MONSTER_MOVE` as the client reads it.
 #[derive(Debug, Clone)]
-struct Move {
-    guid: Guid,
+pub(super) struct Move {
+    pub(super) guid: Guid,
     start: Vector3d,
-    id: u32,
+    pub(super) id: u32,
     /// 0 normal, 1 stop, 2 to face a spot, 3 a target, 4 an angle.
-    kind: u8,
+    pub(super) kind: u8,
     angle: Option<f32>,
     flags: u32,
-    duration: u32,
+    pub(super) duration: u32,
     /// The path after the start, the destination last.
-    points: Vec<Vector3d>,
+    pub(super) points: Vec<Vector3d>,
 }
 
 /// Read a body as the client does: a stop ends at its type; a flyer's
@@ -225,7 +225,11 @@ fn decode(body: &[u8]) -> Option<Move> {
 
 /// The next `SMSG_MONSTER_MOVE` for `g` that `pick` takes, as the client
 /// reads it.
-async fn next_move(a: &mut Client, g: Guid, mut pick: impl FnMut(&Move) -> bool) -> Move {
+pub(super) async fn next_move(
+    a: &mut Client,
+    g: Guid,
+    mut pick: impl FnMut(&Move) -> bool,
+) -> Move {
     let body = a
         .wait_frame("SMSG_MONSTER_MOVE", SMSG_MONSTER_MOVE, |b| {
             decode(b).is_some_and(|m| m.guid == g && pick(&m))
@@ -363,7 +367,7 @@ fn realm_with_nav(d: GameData) -> Option<Arc<Realm>> {
     Some(Realm::new(cfg, store, startup, d, None))
 }
 
-const WOLF: u32 = 5001;
+pub(super) const WOLF: u32 = 5001;
 
 /// The walks a wanderer at rest sets out on, `tries` times from its home.
 async fn wanders(map: &MapHandle, g: Guid, tries: usize) -> (Vec<Vector3d>, Vec<Duration>) {
@@ -447,10 +451,10 @@ async fn a_wanderer_with_no_point_waits() {
 
 const FEAR: u32 = 92_001;
 const CONFUSE: u32 = 92_002;
-const ROOT: u32 = 92_003;
+pub(super) const ROOT: u32 = 92_003;
 const STUN: u32 = 92_004;
 const DISTRACT: u32 = 92_005;
-const CHARGE: u32 = 92_006;
+pub(super) const CHARGE: u32 = 92_006;
 
 /// The test spells: auras of fear, confusion, root and stun, ten seconds
 /// each, and a rogue's distract.
@@ -524,7 +528,7 @@ fn with_spells(mut d: GameData) -> GameData {
     d
 }
 
-fn apply(m: &mut crate::game::map::Map, caster: Guid, target: Guid, spell: u32) {
+pub(super) fn apply(m: &mut crate::game::map::Map, caster: Guid, target: Guid, spell: u32) {
     let data = m.realm.data.clone();
     crate::game::map::auras::apply_spell(
         m,
@@ -538,7 +542,7 @@ fn apply(m: &mut crate::game::map::Map, caster: Guid, target: Guid, spell: u32) 
 }
 
 /// A wolf ten yards east of the start, alone.
-fn wolf_world() -> GameData {
+pub(super) fn wolf_world() -> GameData {
     let mut d = with_spells(world());
     d.creature_templates
         .insert(WOLF, template(WOLF, "Wolf", PACK));
@@ -547,7 +551,7 @@ fn wolf_world() -> GameData {
     d
 }
 
-fn wolf() -> Guid {
+pub(super) fn wolf() -> Guid {
     guid::unit(WOLF, 80)
 }
 

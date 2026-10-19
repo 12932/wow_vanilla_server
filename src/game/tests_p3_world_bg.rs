@@ -35,7 +35,7 @@ fn text(d: &mut GameData, id: u32, line: &str) {
 
 /// Warsong Gulch with its capture triggers, its texts, a door of the
 /// doors' event and a ghost gate of the ghost gates'.
-fn gulch() -> GameData {
+pub(super) fn gulch() -> GameData {
     let mut d = GameData::empty();
     battleground(&mut d, WSG, 2, "PVPZone03", [769, 770]);
     for (s, id) in wsg::CAPTURE_TRIGGERS.into_iter().enumerate() {
@@ -115,7 +115,7 @@ fn delayed(d: GameData, delay: Duration) -> Arc<Realm> {
 }
 
 /// Move `c` within the match's map, at once, to a height.
-async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
+pub(super) async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
     let g = c.guid;
     map.query(move |m| m.teleport(g, m.key, Vector3d { x, y, z }, 0.0))
         .await;
@@ -186,14 +186,14 @@ async fn until(
     panic!("never: {what}");
 }
 
-async fn player(realm: &Arc<Realm>, account: &str, name: &str, race: Race) -> Client {
+pub(super) async fn player(realm: &Arc<Realm>, account: &str, name: &str, race: Race) -> Client {
     let mut c = Client::connect(realm, account);
     c.enter(name, race, Class::Warrior).await;
     c
 }
 
 /// Each of `clients` queues and goes in, and the battle is on.
-async fn all_in(realm: &Arc<Realm>, clients: &mut [&mut Client]) -> MapHandle {
+pub(super) async fn all_in(realm: &Arc<Realm>, clients: &mut [&mut Client]) -> MapHandle {
     for c in clients.iter() {
         queue(c, Map::WarsongGulch).await;
     }
@@ -234,7 +234,7 @@ async fn take(map: &MapHandle, c: &mut Client, s: usize) {
     .await;
 }
 
-fn score(m: &crate::game::map::Map, g: Guid) -> bg::Score {
+pub(super) fn score(m: &crate::game::map::Map, g: Guid) -> bg::Score {
     m.battleground.as_ref().unwrap().scores[&g]
 }
 

@@ -1141,6 +1141,19 @@ pub fn assisted(map: &mut Map, helper: Guid, helped: Guid) {
             .unit_fields(helped)
             .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP));
     enter(map, helper, pvp);
+    // Helping one contested contests the helper: the guards come for a
+    // healer of the one they hunt (mangos's `SetInCombatWithAssisted`,
+    // `UpdatePvPContested`).
+    let side = crate::game::map::pets::master(map, helped);
+    let contested = map.players.get(&side).is_some_and(|p| {
+        p.fields.has_flag(
+            PLAYER_FLAGS,
+            crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+        )
+    });
+    if pvp && contested && guid::is_player(helper) {
+        crate::game::map::pvp::contest(map, helper);
+    }
 }
 
 /// `g`'s fight ends, and its pet's, guardians' and charmed unit's
@@ -2643,14 +2656,28 @@ pub fn pvp_contact(map: &mut Map, me: Guid, other: Guid, role: Contact) {
     if me == other || !map.players.contains_key(&me) {
         return;
     }
-    let Some(f) = map.unit_fields(other) else {
+    // Another player's pet, totem or guardian is their side: its flag is
+    // theirs (mangos's `GetBeneficiaryPlayer`).
+    let owner = crate::game::map::pets::master(map, other);
+    let side = if owner != other && map.players.contains_key(&owner) {
+        owner
+    } else {
+        other
+    };
+    if side == me {
+        return;
+    }
+    let Some(f) = map.unit_fields(side) else {
         return;
     };
     if !f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP) {
         return;
     }
-    let other_player = map.players.contains_key(&other);
-    let other_fighting = f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    let other_player = map.players.contains_key(&side);
+    let other_fighting = map
+        .unit_fields(other)
+        .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT));
+    let other = side;
     if other_player && crate::game::map::duel::dueling(map, me, other) {
         return;
     }
@@ -2664,7 +2691,7 @@ pub fn pvp_contact(map: &mut Map, me: Guid, other: Guid, role: Contact) {
     }
     let flags = match role {
         Contact::Attack => true,
-        Contact::Attacked => other_player,
+        Contact::Attacked | Contact::Touch => other_player,
         Contact::Assist => other_player || other_fighting,
     };
     if flags && let Some(p) = map.players.get_mut(&me) {
@@ -2679,6 +2706,29 @@ pub enum Contact {
     Attack,
     Attacked,
     Assist,
+    /// A spell of theirs reached it, helpful or harmful, hit or missed:
+    /// another player's side flagged for PvP flags the caster (mangos's
+    /// `Spell::FillTargetMap`, `UpdatePvP(true)` for a target whose
+    /// beneficiary player is flagged).
+    Touch,
+}
+
+/// A helpful spell `s` of `caster`'s landed on `target`: helping another
+/// player's flagged side flags the helper; helping a flagged creature in a
+/// fight does too, unless the help makes no threat (Thistle Tea's
+/// `spell_contacts`, assistance with `combat?` only for a threat-making
+/// spell).
+pub fn assist_contact(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+) {
+    use crate::game::data::spells as sd;
+    let threat = !s.attr(1, sd::ATTR_EX_NO_THREAT) && !s.attr(2, sd::ATTR_EX2_NO_INITIAL_THREAT);
+    if threat || guid::is_player(crate::game::map::pets::master(map, target)) {
+        pvp_contact(map, caster, target, Contact::Assist);
+    }
 }
 
 /// A next-swing spell (Heroic Strike, Cleave, Maul, Raptor Strike) waits

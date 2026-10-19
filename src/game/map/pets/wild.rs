@@ -83,7 +83,10 @@ pub fn summon(
     let Some(t) = data.creature_template(entry) else {
         return;
     };
-    let guardian = s.effects[index].effect == EFFECT_SUMMON_GUARDIAN;
+    let guardian = matches!(
+        s.effects[index].effect,
+        EFFECT_SUMMON_GUARDIAN | EFFECT_SUMMON_PET
+    );
     if guardian && guardians_of(map, caster, entry).len() >= MOST_GUARDIANS {
         return;
     }
@@ -184,11 +187,11 @@ pub fn summon(
 
 /// Whether `s` summons a guardian.
 fn guardian_spell(map: &Map, spell: u32) -> bool {
-    map.realm
-        .data
-        .spells
-        .get(spell)
-        .is_some_and(|s| s.effects.iter().any(|e| e.effect == EFFECT_SUMMON_GUARDIAN))
+    map.realm.data.spells.get(spell).is_some_and(|s| {
+        s.effects
+            .iter()
+            .any(|e| matches!(e.effect, EFFECT_SUMMON_GUARDIAN | EFFECT_SUMMON_PET))
+    })
 }
 
 /// The guardians of `owner` (of `entry`, or all for 0): a player's, a
