@@ -2585,13 +2585,54 @@ fn deception_display(native: u32) -> Option<u32> {
 /// `RestoreDisplayId` and Thistle Tea's `Appearance` work it out whenever
 /// a transform or a form comes or goes.
 fn sync_display(map: &mut Map, target: Guid) {
-    let data = map.realm.data.clone();
+    let Some((transform, growth)) = shown(map, target) else {
+        return;
+    };
+    let Some(f) = map.unit_fields_mut(target) else {
+        return;
+    };
+    let form = form_display(
+        f.get_byte(UNIT_FIELD_BYTES_1, 2),
+        f.get_byte(UNIT_FIELD_BYTES_0, 0),
+    );
+    let display = transform
+        .map(|(d, _)| d)
+        .or((form != 0).then_some(form))
+        .unwrap_or_else(|| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
+    if display != 0 && f.get_u32(UNIT_FIELD_DISPLAYID) != display {
+        f.set_u32(UNIT_FIELD_DISPLAYID, display);
+    }
+    fit_size(map, target, transform, growth);
+    fit_weapons(map, target, transform.and_then(|(_, entry)| entry));
+}
+
+/// A unit's own size, bounding radius and combat reach are now `own` (its
+/// entry changed, or an event's model put on): its fields show them
+/// through its transform and growths, and they are what comes back as
+/// those go (mangos's `RestoreDisplayId` from the creature's current
+/// template's scale), not the size it had before.
+pub fn resized(map: &mut Map, target: Guid, own: [f32; 3]) {
+    if let Some(f) = map.unit_fields_mut(target) {
+        f.set_f32(OBJECT_FIELD_SCALE_X, own[0]);
+        f.set_f32(UNIT_FIELD_BOUNDINGRADIUS, own[1]);
+        f.set_f32(UNIT_FIELD_COMBATREACH, own[2]);
+    }
+    if let Some(a) = auras_mut(map, target) {
+        a.native_size = None;
+    }
+    if let Some((transform, growth)) = shown(map, target) {
+        fit_size(map, target, transform, growth);
+    }
+}
+
+/// What a unit's auras make it show: its transform's display and creature
+/// (`sync_display`'s choice), and its growth, if it has one.
+fn shown(map: &Map, target: Guid) -> Option<(Option<(u32, Option<u32>)>, Option<f32>)> {
+    let data = &map.realm.data;
     let native = map
         .unit_fields(target)
         .map_or(0, |f| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
-    let Some(a) = auras(map, target) else {
-        return;
-    };
+    let a = auras(map, target)?;
     let mut transforms: Vec<(Option<Instant>, bool, u32, Option<u32>)> = a
         .holders
         .iter()
@@ -2621,24 +2662,8 @@ fn sync_display(map: &mut Map, target: Guid) {
         .find(|(_, positive, ..)| !positive)
         .or(transforms.last())
         .map(|(_, _, d, entry)| (*d, *entry));
-    let growth = a.product(AURA_MOD_SCALE);
-    let grown = a.has(AURA_MOD_SCALE);
-    let Some(f) = map.unit_fields_mut(target) else {
-        return;
-    };
-    let form = form_display(
-        f.get_byte(UNIT_FIELD_BYTES_1, 2),
-        f.get_byte(UNIT_FIELD_BYTES_0, 0),
-    );
-    let display = transform
-        .map(|(d, _)| d)
-        .or((form != 0).then_some(form))
-        .unwrap_or_else(|| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
-    if display != 0 && f.get_u32(UNIT_FIELD_DISPLAYID) != display {
-        f.set_u32(UNIT_FIELD_DISPLAYID, display);
-    }
-    fit_size(map, target, transform, grown.then_some(growth));
-    fit_weapons(map, target, transform.and_then(|(_, entry)| entry));
+    let growth = a.has(AURA_MOD_SCALE).then(|| a.product(AURA_MOD_SCALE));
+    Some((transform, growth))
 }
 
 /// A unit's size, bounding radius and combat reach for what it shows: its
