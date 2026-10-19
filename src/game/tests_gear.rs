@@ -40,12 +40,24 @@ async fn geared(
     race: Race,
     class: Class,
 ) -> (Worn, Vec<u32>, u32, String) {
+    geared_with(realm, (account, name), race, class, 55, ".gear").await
+}
+
+/// A `race` `class` of `level`, given `command` (`.gear`, `.gear raid`).
+async fn geared_with(
+    realm: &Arc<Realm>,
+    (account, name): (&str, &str),
+    race: Race,
+    class: Class,
+    level: u8,
+    command: &str,
+) -> (Worn, Vec<u32>, u32, String) {
     let mut c = Client::connect(realm, account);
     let g: Guid = c.enter(name, race, class).await;
     let map = realm.maps.get(realm, MapKey::world(0));
-    c.say(".character level 55").await;
-    c.system_message("Level 55").await;
-    c.say(".gear").await;
+    c.say(&format!(".character level {level}")).await;
+    c.system_message(&format!("Level {level}")).await;
+    c.say(command).await;
     let reply = c.system_message("Equipped").await;
     let (worn, spells, ammo) = on(&map, move |m| {
         let data = m.realm.data.clone();
@@ -144,6 +156,91 @@ async fn gear_dresses_a_level_55_warrior_mage_and_hunter_in_what_they_may_wear()
     let ammo = realm.data.item(ammo).expect("ammunition chosen");
     let weapon = worn.iter().find(|(s, _, _)| *s == 17).unwrap().1;
     assert_eq!(ammo.subclass, realm.data.item(weapon).unwrap().ammo_type);
+}
+
+/// `.gear raid`: a level-60 warrior in tier 2 (Battlegear of Wrath) from
+/// head to hands, and epics in every other slot, all of it usable; a
+/// level-60 priest in tier 1 or 2; a level-50 mage in the best there is
+/// for them at 50, none of it a developer's.
+#[tokio::test]
+#[ignore = "extended"]
+async fn gear_raid_dresses_a_raider_in_their_tier_set_and_epics() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let set_slots = [0, 2, 4, 5, 6, 7, 8, 9];
+    let (worn, _, _, _) = geared_with(
+        &realm,
+        ("RAIDW", "Raidwar"),
+        Race::Undead,
+        Class::Warrior,
+        60,
+        ".gear raid 2",
+    )
+    .await;
+    for slot in BODY.into_iter().chain([15, 17]) {
+        assert!(worn.iter().any(|(s, _, _)| *s == slot), "slot {slot}");
+    }
+    for (slot, entry, usable) in &worn {
+        if matches!(slot, 3 | 18) {
+            continue;
+        }
+        let t = realm.data.item(*entry).unwrap();
+        assert!(usable, "{} in slot {slot} may be used", t.name);
+        if set_slots.contains(slot) {
+            assert_eq!(t.set_id, 218, "{} in slot {slot} is tier 2's", t.name);
+        } else {
+            assert_eq!(t.quality, 4, "{} in slot {slot} is epic", t.name);
+        }
+    }
+
+    let (worn, _, _, _) = geared_with(
+        &realm,
+        ("RAIDP", "Raidpriest"),
+        Race::Undead,
+        Class::Priest,
+        60,
+        ".gear raid",
+    )
+    .await;
+    let sets: Vec<u32> = set_slots
+        .iter()
+        .map(|slot| {
+            let (_, entry, _) = worn.iter().find(|(s, _, _)| s == slot).expect("worn");
+            realm.data.item(*entry).unwrap().set_id
+        })
+        .collect();
+    assert!(
+        sets.iter().all(|s| *s == 202) || sets.iter().all(|s| *s == 211),
+        "Prophecy or Transcendence: {sets:?}"
+    );
+
+    let (worn, _, _, reply) = geared_with(
+        &realm,
+        ("RAIDM", "Raidmage"),
+        Race::Undead,
+        Class::Mage,
+        50,
+        ".gear raid",
+    )
+    .await;
+    assert!(reply.starts_with("Equipped"), "{reply}");
+    let mut rare = 0;
+    for (slot, entry, usable) in &worn {
+        if matches!(slot, 3 | 18) {
+            continue;
+        }
+        let t = realm.data.item(*entry).unwrap();
+        assert!(
+            *usable && t.required_level <= 50,
+            "{} in slot {slot}",
+            t.name
+        );
+        assert!(!crate::game::map::gm_dev::unreal(&t.name), "{}", t.name);
+        rare += usize::from(t.quality >= 3);
+    }
+    assert!(rare >= 12, "rare or better nearly everywhere: {worn:?}");
 }
 
 /// What was worn is replaced: the starting weapon is gone, not put in

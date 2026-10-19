@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [raid [1|2]], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -45,7 +45,10 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "learn" => learn(map, g, args, true),
         "unlearn" => learn(map, g, args, false),
         "character" => character(map, g, args),
-        "gear" => gear(map, g),
+        "gear" => match gear_args(args) {
+            Ok(pick) => gear(map, g, pick),
+            Err(usage) => Some(usage.into()),
+        },
         "damage" => damage(map, g, args),
         "kill" => kill(map, g),
         "respawn" => respawn(map, g),
@@ -372,24 +375,149 @@ fn weapon_for(data: &crate::game::data::GameData, subclass: u32, class: u8) -> b
         .is_some_and(|(_, spell)| class_gets(data, *spell, class))
 }
 
+/// How `.gear` chooses: at random among the uncommon and rare items of
+/// about the character's level (`.gear`), or the best they may wear, a
+/// raider's (`.gear raid`): at 60 a tier set, 1 or 2 (at random, or as
+/// asked), and the rest of the best quality there is (epic, else rare, else
+/// uncommon), the highest item level first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    Random,
+    Raid { tier: Option<u8> },
+}
+
+const GEAR_USAGE: &str = "Usage: .gear [raid [1|2]]";
+
+/// `.gear`'s arguments: none, `raid`, or `raid 1` or `raid 2`.
+fn gear_args(args: &[&str]) -> Result<Pick, &'static str> {
+    match args {
+        [] => Ok(Pick::Random),
+        [raid] if raid.eq_ignore_ascii_case("raid") => Ok(Pick::Raid { tier: None }),
+        [raid, tier] if raid.eq_ignore_ascii_case("raid") => match *tier {
+            "1" => Ok(Pick::Raid { tier: Some(1) }),
+            "2" => Ok(Pick::Raid { tier: Some(2) }),
+            _ => Err(GEAR_USAGE),
+        },
+        _ => Err(GEAR_USAGE),
+    }
+}
+
+/// A class's tier sets (`ItemSet.dbc`): tier 1's, Molten Core's, and tier
+/// 2's, Blackwing Lair's (with Onyxia's and Ragnaros's helms and legs).
+fn tier_sets(class: u8) -> Option<(u32, u32)> {
+    Some(match class {
+        1 => (209, 218),  // Battlegear of Might, of Wrath
+        2 => (208, 217),  // Lawbringer, Judgement
+        3 => (206, 215),  // Giantstalker, Dragonstalker
+        4 => (204, 213),  // Nightslayer, Bloodfang
+        5 => (202, 211),  // Vestments of Prophecy, of Transcendence
+        7 => (207, 216),  // The Earthfury, The Ten Storms
+        8 => (201, 210),  // Arcanist, Netherwind
+        9 => (203, 212),  // Felheart, Nemesis
+        11 => (205, 214), // Cenarion, Stormrage
+        _ => return None,
+    })
+}
+
+/// The equipment slot an armour piece of `inventory_type` goes in: head,
+/// shoulders, chest (or robe), waist, legs, feet, wrists, hands.
+fn armour_slot(inventory_type: u32) -> Option<u8> {
+    Some(match inventory_type {
+        1 => 0,
+        3 => 2,
+        5 | 20 => 4,
+        6 => 5,
+        7 => 6,
+        8 => 7,
+        9 => 8,
+        10 => 9,
+        _ => return None,
+    })
+}
+
+/// The pieces of `class`'s tier set `tier` (1 or 2; either at random if
+/// `None`) a character of `level` may wear, and the slots they go in:
+/// none below 60, the sets' level.
+fn tier_pieces(
+    data: &crate::game::data::GameData,
+    class: u8,
+    level: u8,
+    tier: Option<u8>,
+) -> Vec<(u8, u32)> {
+    let Some((one, two)) = tier_sets(class) else {
+        return Vec::new();
+    };
+    let tier = tier.unwrap_or_else(|| rand::rng().random_range(1..=2));
+    let set = if tier == 1 { one } else { two };
+    let mut pieces: Vec<(u8, u32)> = data
+        .items
+        .values()
+        .filter(|t| t.set_id == set && t.required_level <= u32::from(level))
+        .filter_map(|t| Some((armour_slot(t.inventory_type)?, t.entry)))
+        .collect();
+    pieces.sort_unstable();
+    pieces
+}
+
+/// An item no player could have: a developer's test, a placeholder, one
+/// deprecated or unused, a creature's weapon (`item_template` has them,
+/// some epic: "TEST Level 80 Epic", "Naxxramas Sword 1H 1 [PH]").
+pub(crate) fn unreal(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("monster")
+        || name.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+            matches!(
+                w,
+                "test" | "testing" | "qatest" | "deprecated" | "ph" | "unused"
+            )
+        })
+}
+
+/// The stats a class looks for first, the best of a quality being of
+/// them: strength and agility for warriors, rogues and hunters, intellect
+/// for priests, mages and warlocks; paladins, shamans and druids any.
+fn favours(class: u8, t: &crate::game::data::ItemTemplate) -> bool {
+    const AGILITY: u32 = 3;
+    const STRENGTH: u32 = 4;
+    const INTELLECT: u32 = 5;
+    let has = |want: &[u32]| t.stats.iter().any(|(s, v)| *v > 0 && want.contains(s));
+    match class {
+        1 | 3 | 4 => has(&[AGILITY, STRENGTH]),
+        5 | 8 | 9 => has(&[INTELLECT]),
+        _ => true,
+    }
+}
+
 /// The items `.gear` may give a character of `class`, `race` and `level`
-/// of the inventory types `types` that `fits` takes: uncommon or rare, of
-/// a required level within ten of theirs and no higher, asking for no
-/// skill, spell, rank or standing, and not temporary.
+/// of the inventory types `types` that `fits` takes, asking for no skill,
+/// spell, rank or standing, and not temporary: at random, uncommon or
+/// rare, of a required level within ten of theirs and no higher; or the
+/// best first, of any required level up to theirs, real (not
+/// [`unreal`]), by quality, then the stats the class [`favours`], then
+/// item level.
 fn gear_pool(
     data: &crate::game::data::GameData,
     (class, race, level): (u8, u8, u8),
+    pick: Pick,
     types: &[u32],
     fits: impl Fn(&crate::game::data::ItemTemplate) -> bool,
 ) -> Vec<u32> {
     use rand::seq::SliceRandom;
     let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
     let level = u32::from(level);
-    let mut out: Vec<u32> = data
+    let mut out: Vec<&crate::game::data::ItemTemplate> = data
         .items
         .values()
-        .filter(|t| (2..=3).contains(&t.quality))
-        .filter(|t| t.required_level <= level && t.required_level + 10 >= level)
+        .filter(|t| match pick {
+            Pick::Random => {
+                (2..=3).contains(&t.quality)
+                    && t.required_level <= level
+                    && t.required_level + 10 >= level
+            }
+            Pick::Raid { .. } => {
+                (2..=4).contains(&t.quality) && t.required_level <= level && !unreal(&t.name)
+            }
+        })
         .filter(|t| types.contains(&t.inventory_type))
         .filter(|t| {
             t.required_skill == 0
@@ -400,11 +528,15 @@ fn gear_pool(
         })
         .filter(|t| allows(t.allowable_class, class) && allows(t.allowable_race, race))
         .filter(|t| fits(t))
-        .map(|t| t.entry)
         .collect();
-    out.sort_unstable();
-    out.shuffle(&mut rand::rng());
-    out
+    out.sort_unstable_by_key(|t| t.entry);
+    match pick {
+        Pick::Random => out.shuffle(&mut rand::rng()),
+        Pick::Raid { .. } => out.sort_by_key(|t| {
+            std::cmp::Reverse((t.quality, favours(class, t), t.item_level, t.required_level))
+        }),
+    }
+    out.into_iter().map(|t| t.entry).collect()
 }
 
 /// Learn a proficiency (or other) spell, and the skills of its line at
@@ -447,7 +579,11 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 /// weapon skills the items need are taught, the skills at their caps, and
 /// Auto Shot and Shoot with a ranged weapon or a wand. One alive is left
 /// at full health and mana, as the reply says.
-fn gear(map: &mut Map, g: Guid) -> Option<String> {
+///
+/// `.gear raid` is a raider's gear instead (see [`Pick`]): at 60 their
+/// class's tier set, 1 or 2, where it goes, and everywhere else the best
+/// there is for them.
+fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
     use crate::game::map::inventory::{self, Destination, SLOT_MAIN_HAND, SLOT_OFF_HAND};
     use crate::game::store::BAG_PLAYER;
     use rand::seq::SliceRandom;
@@ -463,44 +599,52 @@ fn gear(map: &mut Map, g: Guid) -> Option<String> {
         t.class == ITEM_WEAPON && weapon_for(&data, t.subclass, class)
     };
     let mut plan: Vec<(u8, Vec<u32>)> = vec![
-        (0, gear_pool(&data, who, &[1], armour)),
-        (1, gear_pool(&data, who, &[2], trinket)),
-        (2, gear_pool(&data, who, &[3], armour)),
-        (4, gear_pool(&data, who, &[5, 20], armour)),
-        (5, gear_pool(&data, who, &[6], armour)),
-        (6, gear_pool(&data, who, &[7], armour)),
-        (7, gear_pool(&data, who, &[8], armour)),
-        (8, gear_pool(&data, who, &[9], armour)),
-        (9, gear_pool(&data, who, &[10], armour)),
-        (10, gear_pool(&data, who, &[11], trinket)),
-        (11, gear_pool(&data, who, &[11], trinket)),
-        (12, gear_pool(&data, who, &[12], trinket)),
-        (13, gear_pool(&data, who, &[12], trinket)),
+        (0, gear_pool(&data, who, pick, &[1], armour)),
+        (1, gear_pool(&data, who, pick, &[2], trinket)),
+        (2, gear_pool(&data, who, pick, &[3], armour)),
+        (4, gear_pool(&data, who, pick, &[5, 20], armour)),
+        (5, gear_pool(&data, who, pick, &[6], armour)),
+        (6, gear_pool(&data, who, pick, &[7], armour)),
+        (7, gear_pool(&data, who, pick, &[8], armour)),
+        (8, gear_pool(&data, who, pick, &[9], armour)),
+        (9, gear_pool(&data, who, pick, &[10], armour)),
+        (10, gear_pool(&data, who, pick, &[11], trinket)),
+        (11, gear_pool(&data, who, pick, &[11], trinket)),
+        (12, gear_pool(&data, who, pick, &[12], trinket)),
+        (13, gear_pool(&data, who, pick, &[12], trinket)),
         (
             14,
-            gear_pool(&data, who, &[16], |t| {
+            gear_pool(&data, who, pick, &[16], |t| {
                 t.class == ITEM_ARMOR && t.subclass == 1
             }),
         ),
     ];
+    // A raider at 60: their tier set's pieces first where they go.
+    if let Pick::Raid { tier } = pick {
+        for (slot, piece) in tier_pieces(&data, class, level, tier) {
+            if let Some((_, picks)) = plan.iter_mut().find(|(s, _)| *s == slot) {
+                picks.insert(0, piece);
+            }
+        }
+    }
     // The hands: a way of holding the class has, at random, that the
     // items let them fill both of.
     let mut ways = hands_of(class, level);
     ways.shuffle(&mut rand::rng());
     let fill = |way: Hands| {
         let main = match way {
-            Hands::TwoHanded => gear_pool(&data, who, &[17], one_hand),
-            _ => gear_pool(&data, who, &[13, 21], one_hand),
+            Hands::TwoHanded => gear_pool(&data, who, pick, &[17], one_hand),
+            _ => gear_pool(&data, who, pick, &[13, 21], one_hand),
         };
         let off = match way {
             Hands::TwoHanded => Vec::new(),
-            Hands::Shield => gear_pool(&data, who, &[14], |t| {
+            Hands::Shield => gear_pool(&data, who, pick, &[14], |t| {
                 t.class == ITEM_ARMOR
                     && t.subclass == ARMOR_SHIELD
                     && class_gets(&data, 9116, class)
             }),
-            Hands::DualWield => gear_pool(&data, who, &[13, 22], one_hand),
-            Hands::HeldInOffHand => gear_pool(&data, who, &[23], trinket),
+            Hands::DualWield => gear_pool(&data, who, pick, &[13, 22], one_hand),
+            Hands::HeldInOffHand => gear_pool(&data, who, pick, &[23], trinket),
         };
         (way, main, off)
     };
@@ -521,7 +665,7 @@ fn gear(map: &mut Map, g: Guid) -> Option<String> {
     let ranged = ranged_of(class);
     plan.push((
         17,
-        gear_pool(&data, who, &[15, 25, 26], |t| {
+        gear_pool(&data, who, pick, &[15, 25, 26], |t| {
             t.class == ITEM_WEAPON
                 && ranged.contains(&t.subclass)
                 && weapon_for(&data, t.subclass, class)
@@ -1382,4 +1526,60 @@ fn random_equipment(map: &mut Map, g: Guid) -> Option<String> {
         }
     }
     Some(format!("Equipped {n} random pieces."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gear_takes_raid_and_a_tier() {
+        assert_eq!(gear_args(&[]), Ok(Pick::Random));
+        assert_eq!(gear_args(&["raid"]), Ok(Pick::Raid { tier: None }));
+        assert_eq!(gear_args(&["RAID", "2"]), Ok(Pick::Raid { tier: Some(2) }));
+        assert_eq!(gear_args(&["raid", "3"]), Err(GEAR_USAGE));
+        assert_eq!(gear_args(&["epic"]), Err(GEAR_USAGE));
+    }
+
+    #[test]
+    fn the_developers_items_are_no_raiders_gear() {
+        for name in [
+            "TEST Level 80 Epic",
+            "Ring of Critical Testing 2",
+            "Naxxramas Sword 1H 1 [PH]",
+            "Blackwing Mace1H[PH]",
+            "Mandokir's Sting DEPRECATED",
+            "Blessed Qiraji Naturalist Staff UNUSED",
+            "Monster - Staff, Lord Valthalak",
+            "QATest +1000 Spell Dmg Ring",
+        ] {
+            assert!(unreal(name), "{name}");
+        }
+        for name in [
+            "Kingsfall",
+            "Testament of Hope",
+            "Phase Blade",
+            "Monstrous Glaive",
+        ] {
+            assert!(!unreal(name), "{name}");
+        }
+    }
+
+    /// Every class has its two sets, and they are the classes' own:
+    /// eighteen sets, none twice.
+    #[test]
+    fn each_class_has_its_tier_one_and_two() {
+        let mut sets: Vec<u32> = [1, 2, 3, 4, 5, 7, 8, 9, 11]
+            .into_iter()
+            .flat_map(|c| {
+                let (one, two) = tier_sets(c).expect("a class's sets");
+                assert!((201..=209).contains(&one) && (210..=218).contains(&two));
+                [one, two]
+            })
+            .collect();
+        sets.sort_unstable();
+        sets.dedup();
+        assert_eq!(sets.len(), 18);
+        assert_eq!(tier_sets(6), None);
+    }
 }
