@@ -32,6 +32,7 @@ const SLOW: u32 = 97_713;
 const KNOCK: u32 = 97_714;
 const WOLF: u32 = 97_715;
 const EYES: u32 = 97_716;
+const BLAST: u32 = 97_717;
 
 fn world() -> GameData {
     let mut d = data();
@@ -58,6 +59,26 @@ fn world() -> GameData {
                 ..Default::default()
             }],
         ),
+    );
+    // A cast of a second that throws its caster back, as Blast Wave's
+    // kin throw their own (target 1).
+    d.spells.cast_times.insert(9, 1_000);
+    d.spells.spells.insert(
+        BLAST,
+        crate::game::data::spells::SpellTemplate {
+            casting_time_index: 9,
+            ..spell(
+                BLAST,
+                &[SpellEffect {
+                    effect: crate::game::map::spells::EFFECT_KNOCK_BACK,
+                    base_points: 69,
+                    base_dice: 1,
+                    misc_value: 120,
+                    target_a: 1,
+                    ..Default::default()
+                }],
+            )
+        },
     );
     d.creature_templates.insert(
         WOLF,
@@ -643,6 +664,85 @@ fn launched(guid: Guid, counter: u32, impulse: [f32; 4], at: Vector3d) -> CMSG_M
     }
 }
 
+/// A cast that throws its own caster back: the launch comes, and the cast
+/// that delivers it isn't interrupted by it (Thistle Tea's "does not
+/// interrupt the spell currently delivering its own launch").
+#[tokio::test]
+async fn a_cast_throwing_its_caster_back_isnt_interrupted_by_it() {
+    let (_realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let started = on(&map, move |m| {
+        crate::game::map::spells::cast(
+            m,
+            ga,
+            BLAST,
+            crate::game::map::spells::Targets {
+                unit: Some(ga),
+                ..Default::default()
+            },
+            None,
+        )
+    })
+    .await;
+    assert!(started, "the cast begins");
+    on(&map, |m| {
+        m.now += Duration::from_millis(1_001);
+        crate::game::map::spells::update(m);
+    })
+    .await;
+    let body = a.wait_frame("the launch", 0x0EF, |_| true).await;
+    let mut i = 0;
+    assert_eq!(packed_guid(&body, &mut i), Some(ga));
+    let interrupted = a
+        .gets(NONE_WITHIN, |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_FAILURE(f)
+                if f.spell == BLAST && f.result == SpellCastResult::Interrupted =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(interrupted.is_none(), "not interrupted by its own launch");
+}
+
+/// A teleport within the map carries its facing, to the client and to
+/// those who see it (`MSG_MOVE_TELEPORT_ACK`, `MSG_MOVE_TELEPORT`), its
+/// movement standing: the flags go, as mangos's `TeleportTo` resets them
+/// (Thistle Tea's "retains optional movement-info fields and nonzero
+/// orientation"; the optional fields are wow_messages' to encode).
+#[tokio::test]
+async fn a_teleport_carries_its_facing_to_all() {
+    let (realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let (mut b, _) = bob(&realm, ga).await;
+    let to = Vector3d {
+        x: START.0 + 10.0,
+        y: START.1 + 5.0,
+        z: START.2,
+    };
+    on(&map, move |m| {
+        m.players.get_mut(&ga).unwrap().movement.flags = MovementInfo_MovementFlags::new_forward();
+        m.teleport(ga, m.key, to, 1.25)
+    })
+    .await;
+    let own = a
+        .wait_for("the teleport", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info),
+            _ => None,
+        })
+        .await;
+    let seen = b
+        .wait_for("her teleport", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT(t) if t.player == ga => Some(t.info),
+            _ => None,
+        })
+        .await;
+    for info in [own, seen] {
+        assert_eq!(info.position, to);
+        assert!((info.orientation - 1.25).abs() < 1e-6, "{info:?}");
+        assert!(!info.flags.get_forward(), "standing");
+    }
+}
+
 /// A launch's acknowledgement settles it once, for the unit, counter and
 /// impulse sent, the jumping flag on: then those who see him watch him fly
 /// (`MSG_MOVE_KNOCK_BACK`), and not again. A teleport makes a launch
@@ -799,9 +899,7 @@ async fn a_launch_goes_to_the_client_that_moves_the_unit() {
         free
     })
     .await;
-    let body = a
-        .wait_frame("SMSG_MOVE_KNOCK_BACK", 0x0EF, |_| true)
-        .await;
+    let body = a.wait_frame("SMSG_MOVE_KNOCK_BACK", 0x0EF, |_| true).await;
     let mut i = 0;
     assert_eq!(packed_guid(&body, &mut i), Some(pet), "the pet's launch");
     let counter = u32::from_le_bytes(body[i..i + 4].try_into().unwrap());
@@ -819,10 +917,14 @@ async fn a_launch_goes_to_the_client_that_moves_the_unit() {
     let _ = free;
     let at = on(&map, move |m| m.creature(pet).unwrap().position).await;
     a.send(launched(pet, counter, impulse, at)).await;
-    b.wait_frame("the pet flies", crate::game::map::misc::MSG_MOVE_KNOCK_BACK, |b| {
-        let mut i = 0;
-        packed_guid(b, &mut i) == Some(pet)
-    })
+    b.wait_frame(
+        "the pet flies",
+        crate::game::map::misc::MSG_MOVE_KNOCK_BACK,
+        |b| {
+            let mut i = 0;
+            packed_guid(b, &mut i) == Some(pet)
+        },
+    )
     .await;
     assert!(pending(&map, h).await.is_empty());
 }
