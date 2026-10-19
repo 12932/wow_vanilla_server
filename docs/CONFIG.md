@@ -220,7 +220,7 @@ Town guards, as mangos-classic calls them: a guard each time a creature that cal
 
 ### `[players]`
 
-New characters, the level cap, and the realm's type.
+New characters, the level cap, the realm's type, and what is left of the dead.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
@@ -230,6 +230,7 @@ New characters, the level cap, and the realm's type.
 | `characters_per_realm` | Characters an account may have on the realm. | `10` | 1 to 10, clamped | live | `CharactersPerRealm` |
 | `pvp_realm` | A PvP realm: an account's characters are all of one side, and everyone is flagged for PvP. | `false` |  | restart | `GameType` |
 | `always_max_skill_for_level` | Weapon skills and Defense at their caps, at login and each level, rather than raised by use from 1. | `false` |  | live | `AlwaysMaxSkillForLevel` |
+| `bones_hours` | Hours the bones a corpse turns to lie where it was, once its player rises (reclaims it, is raised, or a spirit healer raises them), seen by everyone; 0 leaves none. Bones aren't kept across a restart, and go with a dungeon's copy. mangos-classic has no time for them: its bones lie until their grid unloads, and `Death.Bones.World` and `Death.Bones.Battleground` turn them off. | `18` | 0 to 8760, clamped | live |  |
 
 ### `[quests]`
 

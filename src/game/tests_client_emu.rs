@@ -317,6 +317,113 @@ async fn the_elite_guards_packets_pass_the_client() {
 const DEFIAS_THUG: u32 = 38;
 const CHARGE: u32 = 22911;
 
+/// A corpse and the bones it turns to (`map/bones.rs`) pass the client:
+/// the corpse's create to the living and to its ghost, its forget with
+/// the bones' create at the reclaim, and bones whose owner has gone, to a
+/// client that never knew them.
+///
+/// Alice and Bob are in a group, so Bob sees her ghost and isn't told of
+/// her anew when she rises: a player's create and a values block for them
+/// in one packet (what a ghost rising in view of the living gets) fails
+/// the check, bones or not, which models another player's values short
+/// (the client copies another player's fields so at every values update).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_corpse_and_its_bones_pass_the_client() {
+    use crate::game::map::death::{self, Death};
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    let (mut b, _) = enter(&realm, "B", "Bob").await;
+    b.sees(ga).await;
+    a.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+    b.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    b.send(CMSG_GROUP_ACCEPT {}).await;
+    a.wait_for("SMSG_GROUP_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) if !l.members.is_empty() => Some(()),
+        _ => None,
+    })
+    .await;
+    // Alice dies and releases where she fell (the test world has no
+    // graveyard): Bob is told of her corpse, and so is her ghost.
+    map.query(move |m| {
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 0);
+        death::kill(m, ga);
+    })
+    .await
+    .unwrap();
+    a.send(CMSG_REPOP_REQUEST {}).await;
+    a.wait_for("the teleport to the graveyard", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+    let corpse = crate::game::guid::corpse(crate::game::guid::counter(ga));
+    b.sees(corpse).await;
+    a.sees(corpse).await;
+    // She reclaims it: the corpse forgotten, the bones made.
+    map.query(move |m| {
+        let since = m.now - Duration::from_secs(60);
+        m.players.get_mut(&ga).unwrap().death = Death::Ghost { since };
+    })
+    .await
+    .unwrap();
+    a.send(CMSG_RECLAIM_CORPSE { guid: corpse }).await;
+    b.forgets(corpse).await;
+    let bones = map
+        .query(move |m| {
+            m.corpses
+                .values()
+                .find(|c| c.owner == ga && c.is_bones())
+                .map(|c| c.guid)
+        })
+        .await
+        .unwrap()
+        .expect("her bones");
+    b.sees(bones).await;
+    a.sees(bones).await;
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    // She logs out; a newcomer is told of her bones, naming one it never
+    // knew.
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    b.forgets(ga).await;
+    let (mut c, _) = enter(&realm, "C", "Carol").await;
+    c.sees(bones).await;
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        b.captured();
+        c.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a, &mut b, &mut c]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "the corpse's and the bones' creates were captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
 /// Every frame `clients` received, of a kind the checker knows,
 /// deduplicated, back to back; and how many of each opcode.
 fn capture(clients: Vec<&mut Client>) -> (Vec<u8>, std::collections::BTreeMap<u16, u32>) {

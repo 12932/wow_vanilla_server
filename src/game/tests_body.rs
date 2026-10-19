@@ -1,6 +1,9 @@
 //! The body: eating and drinking seat the player, as mangos-classic's
 //! `_AddSpellAuraHolder` sits a unit an aura that standing ends goes on,
-//! and standing up, moving, jumping or turning ends the meal.
+//! and standing up, moving, jumping or turning ends the meal; and a
+//! corpse its player rises from leaves bones where it lay, for
+//! `[players] bones_hours`, as mangos's `ConvertCorpseForPlayer` makes
+//! them.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,8 +16,11 @@ use crate::game::Realm;
 use crate::game::data::GameData;
 use crate::game::data::items::ItemSpell;
 use crate::game::data::spells::{SpellEffect, SpellTemplate};
+use crate::game::fields::*;
+use crate::game::guid;
 use crate::game::harness::{self, Client};
-use crate::game::map::{Map, MapHandle, auras};
+use crate::game::map::death::{self, Death};
+use crate::game::map::{Map, MapHandle, auras, bones, grid};
 
 /// Food (Tough Jerky's), a buff food (Spiced Wolf Meat's) and its Well
 /// Fed, as the real rows have them: the meals' aura interrupt flags
@@ -328,4 +334,159 @@ async fn a_buff_foods_well_fed_outlasts_the_meal_standing_ends() {
     .await;
     settled(&mut a).await;
     assert_eq!(state(&map, g, &[WELL_FED]).await.1, vec![true]);
+}
+
+/// Move player `g` `dx` yards east of where it is, as the map sees it.
+fn put(m: &mut Map, g: Guid, dx: f32) {
+    let Some(p) = m.players.get_mut(&g) else {
+        return;
+    };
+    p.movement.position.x += dx;
+    p.move_check = None;
+    let at = p.movement.position;
+    let (old, new) = (p.cell, grid::cell_of(at.x, at.y));
+    p.cell = new;
+    m.grid.relocate(g, old, new);
+    m.visibility_dirty.insert(g);
+}
+
+/// Kill `c`'s player and release its spirit, where it stands (the test
+/// world has no graveyard), acknowledging the teleport.
+async fn die_and_release(c: &mut Client, map: &MapHandle) {
+    let g = c.guid;
+    on(map, move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .fields
+            .set_u32(UNIT_FIELD_HEALTH, 0);
+        death::kill(m, g);
+    })
+    .await;
+    c.send(CMSG_REPOP_REQUEST {}).await;
+    c.wait_for("the teleport to the graveyard", |m| {
+        matches!(m, S::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: g,
+        movement_counter: 0,
+        time: Default::default(),
+    })
+    .await;
+}
+
+/// `owner`'s bones on the map: their GUID, place, flags, owner and worn
+/// gear, once there are some.
+async fn bones_of(map: &MapHandle, owner: Guid) -> (Guid, Vector3d, u32, Guid, u32) {
+    for _ in 0..400 {
+        let found = on(map, move |m| {
+            m.corpses
+                .values()
+                .find(|c| c.owner == owner && c.is_bones())
+                .map(|c| {
+                    let worn = (0..19u16)
+                        .map(|i| c.fields.get_u32(CORPSE_FIELD_ITEM + i))
+                        .fold(0, |a, b| a | b);
+                    (
+                        c.guid,
+                        c.position,
+                        c.fields.get_u32(CORPSE_FIELD_FLAGS),
+                        c.fields.get_guid(CORPSE_FIELD_OWNER),
+                        worn,
+                    )
+                })
+        })
+        .await;
+        if let Some(b) = found {
+            return b;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("no bones of {owner}");
+}
+
+/// A ghost who reclaims their corpse leaves bones where it lay: another
+/// player is told to forget the corpse and of the bones, a corpse of the
+/// bones kind (`CORPSE_FLAG_UNK2 | CORPSE_FLAG_BONES`, the owner kept, no
+/// gear), and so is the risen; they lie `bones_hours` (18), then go.
+#[tokio::test]
+async fn a_reclaimed_corpse_is_bones_everyone_sees_until_their_hours_are_up() {
+    let realm = harness::realm();
+    let (mut a, ga, map) = enter(&realm, "A").await;
+    let (mut b, _, _) = enter(&realm, "B").await;
+    b.sees(ga).await;
+    die_and_release(&mut a, &map).await;
+    let corpse = guid::corpse(guid::counter(ga));
+    b.sees(corpse).await;
+    let lay = on(&map, move |m| m.corpses[&corpse].position).await;
+    // The wait to reclaim over.
+    on(&map, move |m| {
+        let since = m.now - Duration::from_secs(60);
+        m.players.get_mut(&ga).unwrap().death = Death::Ghost { since };
+    })
+    .await;
+    a.send(CMSG_RECLAIM_CORPSE { guid: corpse }).await;
+    b.forgets(corpse).await;
+    let (bones, at, flags, owner, worn) = bones_of(&map, ga).await;
+    assert_ne!(bones, corpse, "bones are a new object");
+    assert_eq!((at.x, at.y, at.z), (lay.x, lay.y, lay.z), "where it lay");
+    assert_eq!((flags, owner, worn), (0x05, ga, 0));
+    b.sees(bones).await;
+    a.sees(bones).await;
+    assert!(on(&map, move |m| m.players[&ga].death == Death::Alive).await);
+    // 18 hours from the reclaim they lie, to the moment; then they go.
+    let (hours, lying) = on(&map, move |m| {
+        let until = m.bones.iter().find(|(_, g)| *g == bones).unwrap().0;
+        let hours = until.saturating_duration_since(m.now);
+        m.now = until - Duration::from_millis(1);
+        bones::update(m);
+        let before = m.corpses.contains_key(&bones);
+        m.now = until;
+        bones::update(m);
+        (hours, (before, m.corpses.contains_key(&bones)))
+    })
+    .await;
+    let lie = Duration::from_secs(18 * 3600);
+    assert!(
+        hours <= lie && hours > lie - Duration::from_secs(30),
+        "{hours:?}"
+    );
+    assert_eq!(lying, (true, false));
+    b.forgets(bones).await;
+    a.forgets(bones).await;
+}
+
+/// Raised where the ghost stands, far from the corpse, the bones are
+/// where the corpse lay; with `bones_hours` 0 there are none.
+#[tokio::test]
+async fn a_raised_ghosts_bones_lie_at_the_corpse_and_none_at_zero_hours() {
+    for hours in [18, 0] {
+        let mut cfg = harness::test_config();
+        cfg.players.bones_hours = hours;
+        let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+        let realm = Realm::new(cfg, store, startup, GameData::empty(), None);
+        let (mut a, ga, map) = enter(&realm, "A").await;
+        let (mut b, _, _) = enter(&realm, "B").await;
+        die_and_release(&mut a, &map).await;
+        let corpse = guid::corpse(guid::counter(ga));
+        b.sees(corpse).await;
+        let lay = on(&map, move |m| m.corpses[&corpse].position).await;
+        let risen = on(&map, move |m| {
+            put(m, ga, 20.0);
+            death::resurrect_with(m, ga, 50, 0)
+        })
+        .await;
+        assert!(risen);
+        b.forgets(corpse).await;
+        if hours == 0 {
+            settled(&mut b).await;
+            let left = on(&map, move |m| m.corpses.len()).await;
+            assert_eq!(left, 0, "no bones at 0 hours");
+            continue;
+        }
+        let (bones, at, ..) = bones_of(&map, ga).await;
+        assert_eq!((at.x, at.y), (lay.x, lay.y), "at the corpse, not the ghost");
+        b.sees(bones).await;
+    }
 }

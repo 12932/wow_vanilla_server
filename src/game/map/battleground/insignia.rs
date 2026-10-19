@@ -13,18 +13,20 @@ use wow_world_messages::vanilla::*;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
+use crate::game::map::bones::{self, CORPSE_FLAG_BONES};
 use crate::game::map::combat::dist;
 use crate::game::map::death::{self, Death};
 
 /// A body that can be skinned: a player's, of their insignia.
 pub const UNIT_FLAG_SKINNABLE: u32 = 0x0400_0000;
 pub const EFFECT_SKIN_PLAYER_CORPSE: u32 = 116;
-/// `CORPSE_FIELD_FLAGS`: bones, and insignia to take.
-const CORPSE_BONES: u32 = 0x01;
+/// `CORPSE_FIELD_FLAGS`: insignia to take.
 pub const CORPSE_INSIGNIA: u32 = 0x20;
+/// `CORPSE_FIELD_DYNAMIC_FLAGS`: bones to loot.
 const CORPSE_LOOTABLE: u32 = 0x01;
 const RANGE: f32 = 10.0;
-/// How long bones lie.
+/// How long the bones insignia leave lie (mangos's `Corpse::IsExpired`
+/// for bones, an hour).
 pub const BONES_LIE: Duration = Duration::from_secs(3600);
 
 /// A player falls in the match: theirs is a body the enemy can take the
@@ -89,25 +91,22 @@ pub fn remove(map: &mut Map, looter: Guid, target: Option<Guid>) {
         death::release(map, victim);
     }
     let corpse = guid::corpse(guid::counter(victim));
-    let Some((pos, o, flags)) = map.corpses.get(&corpse).map(|c| {
-        (
-            c.position,
-            c.orientation,
-            c.fields.get_u32(CORPSE_FIELD_FLAGS),
-        )
-    }) else {
+    let Some((pos, flags)) = map
+        .corpses
+        .get(&corpse)
+        .map(|c| (c.position, c.fields.get_u32(CORPSE_FIELD_FLAGS)))
+    else {
         return;
     };
-    if flags & CORPSE_INSIGNIA == 0 || flags & CORPSE_BONES != 0 || dist(pos, at) > RANGE {
+    if flags & CORPSE_INSIGNIA == 0 || flags & CORPSE_FLAG_BONES != 0 || dist(pos, at) > RANGE {
         return;
     }
-    let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&victim) else {
         return;
     };
     let level = u32::from(p.level());
-    // Bones, where the corpse was: theirs no more.
-    let mut bones = death::Corpse::new(&data, p, pos, o);
+    // Bones, where the corpse was: theirs no more (mangos's
+    // `ConvertCorpseForPlayer(guid, true)`, then the bones lootable).
     p.row.state.corpse = None;
     p.outbound.send(&SMSG_PLAYER_SKINNED {
         spirit_released: true,
@@ -115,26 +114,9 @@ pub fn remove(map: &mut Map, looter: Guid, target: Option<Guid>) {
     p.outbound.send(&MSG_CORPSE_QUERY_Server {
         result: MSG_CORPSE_QUERY_Server_CorpseQueryResult::NotFound,
     });
-    map.remove_corpse(corpse);
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
-    let g = guid::corpse(0x8000_0000 | counter);
-    bones.guid = g;
-    bones.fields.set_guid(OBJECT_FIELD_GUID, g);
-    bones
-        .fields
-        .set_u32(CORPSE_FIELD_FLAGS, CORPSE_BONES | 0x04);
-    bones
-        .fields
-        .set_u32(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_LOOTABLE);
-    for slot in 0..19u16 {
-        bones.fields.set_u32(CORPSE_FIELD_ITEM + slot, 0);
-    }
-    map.add_corpse(bones);
-    let lies = map.now + BONES_LIE;
-    if let Some(m) = map.battleground.as_mut() {
-        m.bones.push((lies, g));
-    }
+    let Some(g) = bones::convert(map, victim, BONES_LIE, CORPSE_LOOTABLE) else {
+        return;
+    };
     let gold = gold(level, rand::rng().random_range(50..=150));
     crate::game::map::loot::show_item_loot(
         map,
@@ -147,20 +129,4 @@ pub fn remove(map: &mut Map, looter: Guid, target: Option<Guid>) {
             ..Default::default()
         },
     );
-}
-
-/// Bones that have lain long enough go.
-pub fn update(map: &mut Map) {
-    let now = map.now;
-    let Some(m) = map.battleground.as_mut() else {
-        return;
-    };
-    if m.bones.iter().all(|(t, _)| *t > now) {
-        return;
-    }
-    let (gone, rest): (Vec<_>, Vec<_>) = m.bones.drain(..).partition(|(t, _)| *t <= now);
-    m.bones = rest;
-    for (_, g) in gone {
-        map.remove_corpse(g);
-    }
 }

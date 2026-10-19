@@ -371,7 +371,8 @@ jaina_elites_yards = 40.0
 # Default 86400. Range 5 to 2592000, clamped. Changes at a reload.
 jaina_respawn_secs = 86400
 
-# New characters, the level cap, and the realm's type.
+# New characters, the level cap, the realm's type, and what is left
+# of the dead.
 [players]
 
 # The level new characters start at (no higher than `max_level`).
@@ -399,6 +400,16 @@ pvp_realm = false
 # level, rather than raised by use from 1.
 # Default false. Changes at a reload. mangos: AlwaysMaxSkillForLevel.
 always_max_skill_for_level = false
+
+# Hours the bones a corpse turns to lie where it was, once its
+# player rises (reclaims it, is raised, or a spirit healer raises
+# them), seen by everyone; 0 leaves none. Bones aren't kept
+# across a restart, and go with a dungeon's copy. mangos-classic
+# has no time for them: its bones lie until their grid unloads,
+# and `Death.Bones.World` and `Death.Bones.Battleground` turn
+# them off.
+# Default 18. Range 0 to 8760, clamped. Changes at a reload.
+bones_hours = 18
 
 # Quests: which givers show what.
 [quests]

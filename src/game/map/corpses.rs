@@ -172,7 +172,7 @@ pub fn revive_for_map(map: &mut Map, g: Guid, target: u32) {
 }
 
 /// A player arriving in a map: a corpse of theirs left there from before
-/// they came back to life goes.
+/// they came back to life is bones.
 pub fn arrived(map: &mut Map, g: Guid) {
     let corpse = crate::game::guid::corpse(crate::game::guid::counter(g));
     let alive = map
@@ -180,7 +180,7 @@ pub fn arrived(map: &mut Map, g: Guid) {
         .get(&g)
         .is_some_and(|p| p.row.state.corpse.is_none());
     if alive && map.corpses.contains_key(&corpse) {
-        map.remove_corpse(corpse);
+        crate::game::map::bones::at_rising(map, g);
     }
 }
 

@@ -108,7 +108,10 @@ impl Corpse {
         } else {
             0
         };
-        f.set_u32(CORPSE_FIELD_FLAGS, 0x04 | insignia);
+        f.set_u32(
+            CORPSE_FIELD_FLAGS,
+            crate::game::map::bones::CORPSE_FLAG_UNK2 | insignia,
+        );
         Self {
             guid: g,
             owner: p.guid,
@@ -118,6 +121,11 @@ impl Corpse {
             observers: AHashSet::new(),
             cell: cell_of(pos.x, pos.y),
         }
+    }
+
+    /// Whether these are bones, not a corpse to rise from.
+    pub fn is_bones(&self) -> bool {
+        self.fields.get_u32(CORPSE_FIELD_FLAGS) & crate::game::map::bones::CORPSE_FLAG_BONES != 0
     }
 
     pub fn create(&self) -> Create<'_> {
@@ -378,8 +386,10 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
             });
         }
     }
+    // Their corpse, if it lies here, is bones (one elsewhere, when they
+    // come there: `corpses::arrived`).
     if corpse.is_some() {
-        map.remove_corpse(guid::corpse(guid::counter(g)));
+        crate::game::map::bones::at_rising(map, g);
     }
     // Risen any way, no longer Waiting to Resurrect.
     crate::game::map::auras::remove_spell(
@@ -742,7 +752,8 @@ fn object_seen_by_ghost(map: &Map, observer: Guid, object: Guid) -> bool {
     }
     if guid::is_corpse(object) {
         if let Some(k) = map.corpses.get(&object) {
-            return k.owner == observer || near_corpse(map, observer, k.position);
+            return (k.owner == observer && !k.is_bones())
+                || near_corpse(map, observer, k.position);
         }
         return false;
     }
