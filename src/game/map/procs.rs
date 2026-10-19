@@ -159,10 +159,13 @@ impl Drop for Deeper {
     }
 }
 
+/// A spell landing on a target: its caster, the target, the spell, and what
+/// its effects have done so far.
+type Landing = (Guid, Guid, u32, Option<Event>);
+
 thread_local! {
-    /// The spells landing on a target now, innermost last, each with what
-    /// its effects have done so far ([`gather`]).
-    static GATHERED: std::cell::RefCell<Vec<(Guid, Guid, u32, Option<Event>)>> =
+    /// The spells landing on a target now, innermost last ([`gather`]).
+    static GATHERED: std::cell::RefCell<Vec<Landing>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 

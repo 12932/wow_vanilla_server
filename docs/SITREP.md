@@ -161,7 +161,10 @@ hours), the crate version bumped with each merge.
   nothing from the packet. The check now stubs it, as it stubs the renderer; the values block's parse is still checked,
   and all six real crash packets still fail it. A test covers a ghost rising before a stranger.
 
-## Round 6: the Thistle Tea alignment, by area
+## Rounds 6 to 8: the Thistle Tea alignment, by area
+Round 7's 7g to 7m and round 8's 8a to 8f went out together as **0.1.28** (the memory stop held the tests back).
+
+### Round 6
 Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to 6j the rest), merged as they finish.
 - **6a, the player (0.1.12):** tabard designers and charters, auction houses by faction, Evil Twin turning summonses
   away, a new character's home where it starts, a body-less login up at half health and mana, talents reset when the
@@ -369,7 +372,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **A pet settles** within 1.4 × 2 yards plus both radii of a master at rest (Thistle Tea's follow slack).
   - **Left:** 81 rows: formations, scripted follow, the rest of distancing, pets' ally autocast and Devour Magic,
     targeting by threat and PvP flag, guardians dropped by distance, totems' last pulse, scripted waypoint routes.
-- **7h, entities, round 7 (0.1.28):** forced movements (roots, speeds, water walk, feather fall, hover, knockbacks,
+- **7h, entities, round 7:** forced movements (roots, speeds, water walk, feather fall, hover, knockbacks,
   the teleport ack) carry each client's order counter, counting up from 0 (mangos's `GetOrderCounter`), where wvs
   sent 0 (the acks aren't checked against it, so older clients and peon are unaffected); a possessed creature's
   root goes to the client moving it; a kill that leaves no loot turns no round robin; an object's spell puts no
@@ -615,7 +618,9 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7j: creatures, round 7 | 82.1% | 63a5e39 |
 | 7k: auras, round 7 | 82.6% | 462b7fb |
 | 7l: movement and the network | 83.3% | d68535e |
+| 7m: the core\'s other areas, round 7 | merged | aace0cc |
+| Round 8 (8a to 8f) and fix/master1019 | 86.7% | 0.1.28 |
 
-**Running now:** round 7 (7g creature scripts, 7i pets, 7j creatures, 7k auras, 7l movement and the network), and the extended suite (19:40, at 0.1.27).
+**Running now:** round 8 (8g creature scripts, 8h entities, 8i pets); then 8j to 8m, and the full extended suite.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
