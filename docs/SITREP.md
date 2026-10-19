@@ -6,8 +6,8 @@ review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS
 question and decision in full; this page is the index.
 
 ## In short
-- **Parity:** 5,651 of Thistle Tea's 8,373 applicable tests have a wvs test that checks the same behaviour, or an
-  accepted difference (67.5%, from 21% when the matrix was first mapped). The rest are listed by area in
+- **Parity:** 5,656 of Thistle Tea's 8,373 applicable tests have a wvs test that checks the same behaviour, or an
+  accepted difference (67.6%, from 21% when the matrix was first mapped). The rest are listed by area in
   [parity/matrix.csv](parity/matrix.csv).
 - **The kobold:** fixed. A unit no longer swings from beyond its reach; two running units get the client's 8/3 yards.
 - **Robustness:**
@@ -110,17 +110,21 @@ Until you answer, wvs keeps what the line says.
   wvs's `.gear` drive it (DECISIONS 66).
 - **2026-10-19, dependencies:** every crate at its newest release, and `rayon`, `pprof`, `dotenvy`, the regex log
   filter and two unused features gone (DECISIONS 64). **Tracy now needs viewer v0.14.1.** No `.env` is read.
-- **2026-10-19, second batch, to do:** #35 a second login takes over the character, as mangos hands it over;
-  #43 a fear without the damage-break flag breaks by chance, as mangos; #42 an interrupt locks out the school on a
-  creature immune to silence; #30 attack-speed slows multiply; #46 Fade gives back only what it took; #41 cancelling
-  Stealth with Vanish on removes both; #47 quest-log slots are seen by the group; #21 the grey "!" shows to 7 levels
-  below (a setting); #7 locked doors and buttons don't open by hand without their key.
+- **2026-10-19, second batch, done** (DECISIONS 69): #35 a second login takes the character over; #43 fears break
+  by chance; #42 an interrupt locks a silence-immune creature's school (it already did); #30 attack-speed slows
+  multiply; #46 Fade gives back only what it took; #41 cancelling Stealth with Vanish on removes both; #47 quest-log
+  slots go to the group; #21 the grey "!" to 7 levels short (a setting); #7 locked doors and buttons need their key.
+  Also: trainers offer a talent's ranks only with the talent, and `SMSG_SPELLLOGMISS` checked against the client.
 - **2026-10-19, the raid's fixes:** queries have their own rate, `.gear` fills health and mana, `.character spells`,
   guards and land-bound swimmers wander, raiders on the ground and casting (DECISIONS 68).
 - **2026-10-19, the review's findings ([CODE_REVIEW.md](CODE_REVIEW.md)):** H1 (the transport flag skips the
   speed check) and M1 (the speed check ignores height) are accepted as they are; M2 (two members entering a
   dungeon at once can get different copies) and M3 (a shutdown can miss a player between maps) are to fix, not
   started; M4 (a pool saved at 0 loads full) explained, waiting on you.
+- **#59 Roots and silences break by chance** (from the second batch): mangos breaks roots (aura 26) and
+  pacify-silence (aura 60) on damage by the same chance as fears; wvs does fears only. The same for those?
+- **#60 The wow_messages fork's `SpellMissInfo`** is a u32 where 1.12 has a u8 (`SMSG_SPELLLOGMISS`, likely
+  `SMSG_SPELL_GO`'s misses too). Fix it in your fork?
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 

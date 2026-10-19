@@ -53,7 +53,7 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   it. Thistle Tea checks only at a talent reset.
 - **The weather's season** follows the server's local date, as mangos does; Thistle Tea uses UTC.
 - **Snares stack,** as mangos-classic has them: each stays on as long as it lasts, and the strongest slows. Thistle
-  Tea and vmangos keep one, passing over a weaker or shorter one. (Attack-speed slows keep Thistle Tea's rule.)
+  Tea and vmangos keep one, passing over a weaker or shorter one. Attack-speed slows stack and multiply too.
 - **Water's interrupts** also go by the terrain's liquid (deep enough to swim, as mangos-classic has it), not only by
   the client's swimming flag, which is all Thistle Tea goes by.
 - **vmangos's spell corrections** (`spell_mod`, `spell_effect_mod`) win over the raw DBC Thistle Tea reads:
@@ -132,8 +132,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
     - their range is checked as the cast begins, without line of sight;
     - a key or charge is spent when the attempt fails;
     - a picked door doesn't close itself or spring its trap.
-  - **Locked objects by hand.** A locked door or button opens by hand without its key, and a locked chest never does.
-    Thistle Tea opens each with the key carried, and refuses without it.
+  - **Locked objects by hand.** A locked door or button opens by hand only with its key carried, as Thistle Tea has
+    it; a locked chest still never opens by hand, where Thistle Tea opens it with the key.
   - **Crafts.** A craft's focus, tools and reagents aren't checked again when it completes. A craft that doesn't fit
     makes nothing and says nothing.
   - **Disenchanting.** What's left on a disenchanted item is lost only when its window is closed, and a second
@@ -206,7 +206,13 @@ Thistle Tea, with these exceptions:
 - A teleport within the map doesn't end the player's fight; Thistle Tea clears it and holds the pet until the client
   acknowledges.
 - A transport's deck offset is taken as the client sends it; Thistle Tea refuses a boarding out of range.
-- A second login while the character is in the world kicks the first session; Thistle Tea refuses it with 0x41.
+- A second login while the character is in the world takes it over where it is, as mangos-classic's reconnect
+  does; Thistle Tea refuses it with 0x41.
+- **As mangos-classic has them** (2026-10-19): a fear breaks by chance on damage its spell names; Fade gives back only
+  the threat it took; an interrupt locks out the school of a creature immune to silence; quest-log slots are seen by
+  the group; the grey "!" shows to 7 levels short (`[quests] high_level_hide_diff`).
+- **`SMSG_SPELLLOGMISS`** is laid out as mangos-classic and the 1.12 client read it (a u8 reason); 12932's
+  wow_messages fork declares the reason as a u32, so wow_messages (and peon) can't read it.
 - Totems and dynamic objects leave without `SMSG_GAMEOBJECT_DESPAWN_ANIM`.
 
 ## Tests and tooling

@@ -1060,4 +1060,29 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
       is 10. Most of Stormwind's own spawned guards are stationary in vmangos, so they stand at their posts.
     - **Jaina:** her regression test, with her real no-aggro flag.
 
+69. **The second batch of answers** (2026-10-19; `fix/answers2`).
+    - **#21:** the grey "!" for quests up to 7 levels above the player (`[quests] high_level_hide_diff`, mangos's
+      `Quests.HighLevelHideDiff`; -1 any gap). mangos's `LowLevelHideDiff` (5) isn't added.
+    - **#46:** Fade holds `max(-threat, amount)` and gives back exactly that (mangos's `threatTemporaryFade`).
+    - **#41:** cancelling any stealth removes every stealth aura and the form, so Vanish's too.
+    - **#30:** attack-speed slows stack and multiply (mangos's `ApplyAttackTimePercentMod`); Thunder Clap is no
+      longer exclusive.
+    - **#43:** a fear whose spell's proc flags name the blow breaks by chance: the ceiling is 25 × the feared unit's
+      level − 150 past level 8 (else 50), the chance damage ÷ ceiling (mangos's `HandleRemoveByDamageChanceProc`; at
+      60, 135 damage is 10%). Roots and silences by the same rule are question 59.
+    - **#42:** wvs already locked the school; a test pins it (mangos spares only `NO_INTERRUPT_SCHOOL_COOLDOWN`, which
+      no creature has).
+    - **#7:** a locked door or button opens by hand only with one of its lock's keys carried; a script's unlock lifts
+      the check and its lock bars hands; GMs open anything. Locked chests still never open by hand.
+    - **#47:** quest-log ids go to the player and their group alone (`Visibility::Group`, as mangos's
+      `UF_FLAG_GROUP_ONLY`); someone joining a group gets them at the next change.
+    - **#35:** a second login of the same character takes it over (`login::take_over`, as mangos's
+      `HandlePlayerReconnect`): the old connection closed, the client's view reset and the world resent, the group,
+      friends, guild and pet bar, a flight resumed; another character of the account is refused and the first kicked.
+      Breath timers and a cast in progress aren't resent.
+    - **Trainers:** a talent's trained rank (Mortal Strike 2 to 4) is red without the talent, the rank before named as
+      required (mangos's `GetTrainerSpellState`).
+    - **`SMSG_SPELLLOGMISS`:** wvs's layout is mangos's and the client's (`0x5E7E00`); the fork's `SpellMissInfo` is
+      a u32 (question 60). `tools/client_check/spell_log_miss.py` checks it, every kind of miss in the scenario.
+
 ## Left for later, and why
