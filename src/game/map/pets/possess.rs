@@ -15,7 +15,7 @@ use wow_world_messages::vanilla::*;
 
 use super::*;
 use crate::game::map::Map;
-use crate::game::map::auras::{AURA_MOD_CHARM, AURA_MOD_POSSESS};
+use crate::game::map::auras::{AURA_AOE_CHARM, AURA_MOD_CHARM, AURA_MOD_POSSESS};
 use rand::RngExt;
 
 /// How often a charmed player looks for a fight.
@@ -45,7 +45,10 @@ fn holding_spell(map: &Map, master: Guid, unit: Guid) -> Option<u32> {
     crate::game::map::auras::auras(map, unit).and_then(|a| {
         a.holders
             .iter()
-            .find(|h| h.caster == master && (h.has(AURA_MOD_POSSESS) || h.has(AURA_MOD_CHARM)))
+            .find(|h| {
+                h.caster == master
+                    && (h.has(AURA_MOD_POSSESS) || h.has(AURA_MOD_CHARM) || h.has(AURA_AOE_CHARM))
+            })
             .map(|h| h.spell)
     })
 }

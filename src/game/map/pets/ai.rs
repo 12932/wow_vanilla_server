@@ -135,9 +135,11 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         }
         Kind::Charmed => {
             let aura = crate::game::map::auras::auras(map, g).is_some_and(|a| {
-                a.holders
-                    .iter()
-                    .any(|h| h.caster == owner && h.has(crate::game::map::auras::AURA_MOD_CHARM))
+                a.holders.iter().any(|h| {
+                    h.caster == owner
+                        && (h.has(crate::game::map::auras::AURA_MOD_CHARM)
+                            || h.has(crate::game::map::auras::AURA_AOE_CHARM))
+                })
             });
             if !aura {
                 release(map, owner, g);

@@ -1007,6 +1007,7 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
             .find(|h| {
                 h.caster == master
                     && (h.has(crate::game::map::auras::AURA_MOD_CHARM)
+                        || h.has(crate::game::map::auras::AURA_AOE_CHARM)
                         || h.has(crate::game::map::auras::AURA_MOD_POSSESS))
             })
             .map(|h| h.spell)

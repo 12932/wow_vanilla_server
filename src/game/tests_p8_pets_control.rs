@@ -23,6 +23,8 @@ const BOLT: u32 = 990_880;
 const BOLT_TIME: u32 = 99;
 /// Its instant.
 const BLAST: u32 = 990_882;
+/// A charm of many (`SPELL_AURA_AOE_CHARM`), as Chains of Kel'Thuzad.
+const CHAINS: u32 = 990_883;
 
 fn data() -> GameData {
     let mut d = crate::game::tests_p8_pets_owner::data();
@@ -40,6 +42,17 @@ fn data() -> GameData {
     bolt.spell_level = 1;
     bolt.mana_cost = 10;
     bolt.school = 2;
+    let mut chains = crate::game::tests_pets::spell(
+        CHAINS,
+        "Chains",
+        [
+            crate::game::tests_pets::effect(6, 0, 6),
+            Default::default(),
+            Default::default(),
+        ],
+    );
+    chains.effects[0].aura = crate::game::map::auras::AURA_AOE_CHARM;
+    d.spells.spells.insert(CHAINS, chains);
     let mut blast = bolt.clone();
     blast.id = BLAST;
     blast.name = "Fire Blast".into();
@@ -252,4 +265,33 @@ async fn a_creature_charmed_caster_keeps_her_foe_and_rooted_casts_where_she_stan
     assert_eq!(r.1, Some(gb), "kept, her charmer on another");
     assert_eq!(r.2, Some(gb), "rooted, she casts");
     assert!(r.3 < 0.01, "rooted, she stays where she is: {}", r.3);
+}
+
+/// Thistle Tea's "only Chains of Kel'Thuzad activates area charm", as
+/// mangos has it: a charm of many (`SPELL_AURA_AOE_CHARM`) is a charm, of
+/// whatever spell, and its end lets her go.
+#[tokio::test]
+async fn a_charm_of_many_charms_her_and_its_end_lets_her_go() {
+    let (_realm, _c, ga, _gb, map) = two(5.0).await;
+    let r = map
+        .query(move |m| {
+            let npc = creature_at(m, ga, BRUTE, off(-3.0, 0.0, 0.0));
+            crate::game::map::spells::cast_triggered(m, npc, CHAINS, Some(ga));
+            let held = |m: &Map| {
+                (
+                    m.players[&ga]
+                        .owned
+                        .possessed_by
+                        .map(|p| (p.master, p.spell)),
+                    m.unit_fields(ga).unwrap().get_guid(UNIT_FIELD_CHARMEDBY),
+                )
+            };
+            let charmed = held(m);
+            crate::game::map::auras::remove_spell(m, ga, CHAINS, None);
+            (npc, charmed, held(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.1, (Some((r.0, CHAINS)), r.0), "charmed by it");
+    assert_eq!(r.2, (None, Guid::zero()), "let go");
 }
