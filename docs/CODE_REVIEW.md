@@ -79,7 +79,7 @@ The review of 79b6def that this file held before predates the per-map rewrite, a
 - **M3, shutdown** (review 2): shutdown can miss a player between maps. **To fix** (your go, 2026-10-19; not
   started).
 - **M4, empty pools** (review 2): health or mana saved at 0 loads as full, so a relog refills a mage. A fix needs a
-  marker that a character has been saved. **Explained, waiting on you** (2026-10-19): a pool saved at 0 (mana
+  marker that a character has been saved. **Deferred** (2026-10-20: you rated it low; explained 2026-10-19): a pool saved at 0 (mana
   spent, or rage and energy at rest) loads full, as the loader can't tell spent from never saved, so a relog refills
   it.
 - **R3-15, deaths that despawn** (review 3): a death action that despawns its creature cuts the death short, so

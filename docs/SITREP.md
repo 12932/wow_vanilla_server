@@ -526,6 +526,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   has none), without the leak; `$r` and `$c` stay as written for a creature (mangos gives no rule).
 
 ## Answered
+- **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
 - **Feign Death and emotes** (2026-10-20): mangos: an emote is refused while feigning (`UNIT_FLAG_PREVENT_ANIM`).
 - **Distract** (2026-10-20): it turns players too, as mangos's `EffectDistract`.
 - **#10** keep swinging on arrival.
