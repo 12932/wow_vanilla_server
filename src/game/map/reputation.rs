@@ -43,6 +43,9 @@ pub const FLAG_INACTIVE: u32 = 0x20;
 const AURA_FORCE_REACTION: u32 = 139;
 /// `SPELL_AURA_MOD_REPUTATION_GAIN`.
 const AURA_MOD_REPUTATION_GAIN: u32 = 156;
+/// `SPELL_AURA_MOD_FACTION_REPUTATION_GAIN`: a kill's gain with one
+/// faction (its misc value).
+const AURA_MOD_FACTION_REPUTATION_GAIN: u32 = 190;
 /// How near a corpse a group member must be for the kill's reputation.
 const GROUP_YARDS: f32 = 74.0;
 
@@ -372,8 +375,17 @@ fn gain(
     server_rate: f32,
 ) -> i32 {
     let rate = reward_rate(data, faction, source);
+    // A gain's auras, and a kill's for its faction alone (mangos's
+    // `CalculateReputationGain`); a loss takes none (Thistle Tea's
+    // `calculate_gain`).
     let bonus = if value > 0 {
-        p.auras.sum(AURA_MOD_REPUTATION_GAIN)
+        let kill = if matches!(source, Source::Kill) {
+            p.auras
+                .sum_misc(AURA_MOD_FACTION_REPUTATION_GAIN, faction as i32)
+        } else {
+            0
+        };
+        p.auras.sum(AURA_MOD_REPUTATION_GAIN) + kill
     } else {
         0
     };

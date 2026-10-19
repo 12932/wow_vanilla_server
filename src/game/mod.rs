@@ -741,6 +741,8 @@ mod tests_p8_player_login;
 #[cfg(test)]
 mod tests_p8_player_pets;
 #[cfg(test)]
+mod tests_p8_player_reputation;
+#[cfg(test)]
 mod tests_p8_player_session;
 #[cfg(test)]
 mod tests_p8_player_taxi;
