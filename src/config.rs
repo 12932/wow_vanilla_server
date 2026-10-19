@@ -177,6 +177,12 @@ settings! {
         /// Packets a client may send a second, sustained (three seconds'
         /// worth at once); a client that floods is disconnected.
         max_packets_per_sec: u32 = 100, Clamp(10.0, 100_000.0), Restart, "";
+        /// Read-only queries (names, creatures, objects, items, quests,
+        /// texts, times) a client may send a second, sustained (three
+        /// seconds' worth at once), apart from the packets: a client
+        /// walking into a crowd asks after everyone in it at once. One that
+        /// floods them is disconnected.
+        max_queries_per_sec: u32 = 1000, Clamp(10.0, 1_000_000.0), Restart, "";
     }
 }
 

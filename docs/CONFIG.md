@@ -112,6 +112,7 @@ Connections: queues, timeouts and limits.
 | `client_idle_timeout_secs` | Seconds a client may send nothing before it is disconnected. Clients ping every 30. | `120` | 10 to 3600, clamped | restart |  |
 | `max_pending_connections` | Connections still in the login or the world handshake, at most. | `1024` | 1 to 1000000, clamped | restart |  |
 | `max_packets_per_sec` | Packets a client may send a second, sustained (three seconds' worth at once); a client that floods is disconnected. | `100` | 10 to 100000, clamped | restart |  |
+| `max_queries_per_sec` | Read-only queries (names, creatures, objects, items, quests, texts, times) a client may send a second, sustained (three seconds' worth at once), apart from the packets: a client walking into a crowd asks after everyone in it at once. One that floods them is disconnected. | `1000` | 10 to 1000000, clamped | restart |  |
 
 ### `[world]`
 

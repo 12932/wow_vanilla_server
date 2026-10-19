@@ -7,6 +7,9 @@
 [network]
 # Packets a client may send a second, sustained; a client that floods is disconnected.
 #max_packets_per_sec = 100
+# Read-only queries (names, creatures, objects, quests, ...) a client may send a second, apart
+# from the packets: walking into a crowd asks after everyone in it.
+#max_queries_per_sec = 1000
 outbound_channel_bytes = 4194304
 #handshake_timeout_secs = 10
 #client_idle_timeout_secs = 120

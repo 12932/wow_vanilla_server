@@ -194,7 +194,13 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
         mut inbound,
     } = connection;
     let (control, control_rx) = mpsc::unbounded_channel();
+    // Two buckets: the read-only queries a client asks of what it sees
+    // (a crowd's names, a city's objects) in a generous one of their own,
+    // so that walking into a crowd isn't a flood; everything else in the
+    // flood guard's.
     let mut rate = PacketRate::new(realm.config().max_packets_per_sec);
+    let mut queries = PacketRate::new(realm.config().max_queries_per_sec);
+    let mut recent = Recent::default();
     let mut s = Session {
         realm,
         account: Arc::from(account),
@@ -216,8 +222,17 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
         };
         match next {
             Next::Packet(Some(msg)) => {
-                if !rate.allow(std::time::Instant::now()) {
-                    warn!("{} sends packets too fast; disconnecting", s.account);
+                let now = std::time::Instant::now();
+                recent.note(now, &msg);
+                let query = is_query(&msg);
+                let bucket = if query { &mut queries } else { &mut rate };
+                if !bucket.allow(now) {
+                    warn!(
+                        "{} sends {} too fast; disconnecting. Lately: {}",
+                        s.account,
+                        if query { "queries" } else { "packets" },
+                        recent.summary(now)
+                    );
                     break;
                 }
                 s.packet(msg).await
@@ -922,6 +937,121 @@ impl PacketRate {
     }
 }
 
+/// Whether a packet is a cheap, read-only query, counted apart from the
+/// flood guard's packets: what a client asks of each player, creature,
+/// object, item, quest giver and flight master it sees (so hundreds at
+/// once in a crowd), the texts and names it looks up by id, and the time
+/// and mail-time queries. Pings never get here: the reader answers them.
+pub fn is_query(msg: &crate::game::conn::Inbound) -> bool {
+    use ClientOpcodeMessage as C;
+    matches!(
+        msg,
+        crate::game::conn::Inbound::Msg(
+            C::CMSG_NAME_QUERY(_)
+                | C::CMSG_CREATURE_QUERY(_)
+                | C::CMSG_GAMEOBJECT_QUERY(_)
+                | C::CMSG_ITEM_QUERY_SINGLE(_)
+                | C::CMSG_ITEM_NAME_QUERY(_)
+                | C::CMSG_PAGE_TEXT_QUERY(_)
+                | C::CMSG_NPC_TEXT_QUERY(_)
+                | C::CMSG_QUEST_QUERY(_)
+                | C::CMSG_QUESTGIVER_STATUS_QUERY(_)
+                | C::CMSG_PET_NAME_QUERY(_)
+                | C::CMSG_GUILD_QUERY(_)
+                | C::CMSG_PETITION_QUERY(_)
+                | C::CMSG_ITEM_TEXT_QUERY(_)
+                | C::CMSG_TAXINODE_STATUS_QUERY(_)
+                | C::CMSG_REQUEST_PARTY_MEMBER_STATS(_)
+                | C::CMSG_AREA_SPIRIT_HEALER_QUERY(_)
+                | C::MSG_CORPSE_QUERY
+                | C::CMSG_QUERY_TIME
+                | C::CMSG_PLAYED_TIME
+                | C::MSG_QUERY_NEXT_MAIL_TIME
+                | C::CMSG_PING(_)
+        )
+    )
+}
+
+/// A packet's kind: its message, or the opcode of one read raw.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Msg(std::mem::Discriminant<ClientOpcodeMessage>),
+    Raw(u16),
+}
+
+/// The packets a session sent lately, by kind, for the warning when its
+/// rate cuts it off: those of the last [`Recent::FOR`], at most
+/// [`Recent::MAX`].
+#[derive(Default)]
+pub struct Recent {
+    packets: std::collections::VecDeque<(std::time::Instant, Kind)>,
+    /// Each kind's name, written once the first time it is sent.
+    names: Vec<(Kind, Box<str>)>,
+}
+
+impl Recent {
+    const FOR: std::time::Duration = std::time::Duration::from_secs(5);
+    const MAX: usize = 2048;
+
+    pub fn note(&mut self, now: std::time::Instant, msg: &crate::game::conn::Inbound) {
+        let kind = match msg {
+            crate::game::conn::Inbound::Msg(m) => Kind::Msg(std::mem::discriminant(m)),
+            crate::game::conn::Inbound::Raw(opcode, _) => Kind::Raw(*opcode),
+        };
+        if !self.names.iter().any(|(k, _)| *k == kind) {
+            let name = match msg {
+                crate::game::conn::Inbound::Msg(m) => m.to_string(),
+                crate::game::conn::Inbound::Raw(opcode, _) => {
+                    wow_world_messages::vanilla::opcode_to_name(u32::from(*opcode))
+                        .map_or_else(|| format!("0x{opcode:X}"), str::to_owned)
+                }
+            };
+            self.names.push((kind, name.into()));
+        }
+        while self.packets.len() >= Self::MAX
+            || self
+                .packets
+                .front()
+                .is_some_and(|(at, _)| now.saturating_duration_since(*at) > Self::FOR)
+        {
+            self.packets.pop_front();
+        }
+        self.packets.push_back((now, kind));
+    }
+
+    /// The packets of the last few seconds by kind, the most first:
+    /// `412 in 1.3 s: CMSG_NAME_QUERY 380, MSG_MOVE_HEARTBEAT 32`.
+    pub fn summary(&self, now: std::time::Instant) -> String {
+        let mut counts: Vec<(Kind, usize)> = Vec::new();
+        for (_, kind) in &self.packets {
+            match counts.iter_mut().find(|(k, _)| k == kind) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((*kind, 1)),
+            }
+        }
+        counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        let span = self.packets.front().map_or(0.0, |(at, _)| {
+            now.saturating_duration_since(*at).as_secs_f32()
+        });
+        let by_kind: Vec<String> = counts
+            .iter()
+            .map(|(kind, n)| {
+                let name = self
+                    .names
+                    .iter()
+                    .find(|(k, _)| k == kind)
+                    .map_or("?", |(_, name)| name);
+                format!("{name} {n}")
+            })
+            .collect();
+        format!(
+            "{} in {span:.1} s: {}",
+            self.packets.len(),
+            by_kind.join(", ")
+        )
+    }
+}
+
 #[cfg(test)]
 mod rate_tests {
     use super::*;
@@ -935,5 +1065,51 @@ mod rate_tests {
         assert_eq!(allowed, 30);
         let mut steady = PacketRate::new(10);
         assert!((0..1000).all(|i| steady.allow(start + Duration::from_millis(i * 100))));
+    }
+
+    fn msg(m: impl Into<ClientOpcodeMessage>) -> crate::game::conn::Inbound {
+        crate::game::conn::Inbound::Msg(m.into())
+    }
+
+    #[test]
+    fn what_a_client_asks_of_what_it_sees_is_a_query_and_what_it_does_isnt() {
+        let g = Guid::new(1);
+        let queries = [
+            msg(CMSG_NAME_QUERY { guid: g }),
+            msg(CMSG_GAMEOBJECT_QUERY {
+                entry_id: 1,
+                guid: g,
+            }),
+            msg(CMSG_QUESTGIVER_STATUS_QUERY { guid: g }),
+            msg(CMSG_QUERY_TIME {}),
+        ];
+        assert!(queries.iter().all(is_query));
+        let not = [
+            msg(CMSG_SET_SELECTION { target: g }),
+            msg(CMSG_ATTACKSWING { guid: g }),
+            crate::game::conn::Inbound::Raw(0x318, Vec::new()),
+        ];
+        assert!(!not.iter().any(is_query));
+    }
+
+    /// The warning names what a session sent lately, by kind, the most
+    /// first, and forgets what is older than a few seconds.
+    #[test]
+    fn the_recent_packets_are_counted_by_kind() {
+        let start = Instant::now();
+        let mut r = Recent::default();
+        let g = Guid::new(1);
+        r.note(start, &msg(CMSG_SET_SELECTION { target: g }));
+        let late = start + Duration::from_secs(10);
+        for _ in 0..3 {
+            r.note(late, &msg(CMSG_NAME_QUERY { guid: g }));
+        }
+        r.note(late, &crate::game::conn::Inbound::Raw(0x318, Vec::new()));
+        let s = r.summary(late);
+        assert!(
+            s.starts_with("4 in 0.0 s: CMSG_NAME_QUERY 3, "),
+            "the selection is forgotten: {s}"
+        );
+        assert!(s.contains("CMSG_SET_WATCHED_FACTION 1"), "{s}");
     }
 }

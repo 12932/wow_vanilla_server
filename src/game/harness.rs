@@ -156,6 +156,7 @@ pub fn test_config() -> RealmConfig {
         bg_invite_for: crate::game::battlegrounds::INVITE_FOR,
         pvp_realm: false,
         max_packets_per_sec: 200,
+        max_queries_per_sec: 2000,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         spell_rolls: false,
         spell_travel: false,

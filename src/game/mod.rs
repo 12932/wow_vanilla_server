@@ -644,6 +644,9 @@ pub struct RealmConfig {
     pub pvp_realm: bool,
     /// Packets a client may send a second, sustained.
     pub max_packets_per_sec: u32,
+    /// Read-only queries a client may send a second, sustained, apart
+    /// from the packets (`session::is_query`).
+    pub max_queries_per_sec: u32,
     /// The weekday honor's week turns over on: 1 Monday to 7 Sunday.
     pub honor_reset_weekday: u8,
     /// Whether spells roll to hit, crit and resist (tests fix them).
@@ -689,6 +692,7 @@ impl RealmConfig {
             bg_invite_for: Duration::from_secs(b.invitation_secs),
             pvp_realm: c.players.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
+            max_queries_per_sec: c.network.max_queries_per_sec,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
             spell_travel: true,
