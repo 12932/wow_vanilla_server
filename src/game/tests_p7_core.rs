@@ -207,3 +207,55 @@ async fn a_pet_told_to_follow_or_made_passive_stops_attacking_but_stays_in_comba
         .await;
     }
 }
+
+/// A made-up Feign Death (5384's aura), of five seconds.
+const FEIGN: u32 = 997_703;
+
+fn feign(d: &mut GameData) {
+    let mut s = bare(FEIGN, 0);
+    s.duration_index = LASTS_5S;
+    effect(&mut s, 0, aura(auras::AURA_FEIGN_DEATH, 0, 0, 1));
+    insert(d, [s]);
+}
+
+/// Thistle Tea's `reset/1` "Feign Death replacement preserves the pose and
+/// the final removal restores standing": Feign Death cast again over
+/// itself keeps the hunter lying (the dead dynamic flag, standing), and
+/// its removal, or its running out, lets them up: the flag off, still
+/// standing, no other dynamic flag touched.
+#[tokio::test]
+async fn feign_death_cast_again_keeps_the_pose_and_its_end_lets_them_up() {
+    use crate::game::fields::UNIT_DYNAMIC_FLAGS;
+    let realm = fast_realm(feign);
+    let (_c, g, map) = human(&realm, "P7C3", "Feigner", Class::Warrior).await;
+    let pose = |m: &Map, g: Guid| {
+        let p = &m.players[&g];
+        (
+            kit::has(m, g, FEIGN),
+            p.fields.get_u32(UNIT_DYNAMIC_FLAGS),
+            p.stand_state(),
+        )
+    };
+    let out = on(&map, move |m| {
+        kit::ready(m, g, 60, &[]);
+        if let Some(p) = m.players.get_mut(&g) {
+            p.fields.set_u32(UNIT_DYNAMIC_FLAGS, 0x08);
+        }
+        spells::cast_triggered(m, g, FEIGN, Some(g));
+        let lying = pose(m, g);
+        kit::pass(m, 1_000);
+        spells::cast_triggered(m, g, FEIGN, Some(g));
+        let again = pose(m, g);
+        auras::remove_spell(m, g, FEIGN, None);
+        let removed = pose(m, g);
+        spells::cast_triggered(m, g, FEIGN, Some(g));
+        kit::pass(m, 6_000);
+        (lying, again, removed, pose(m, g))
+    })
+    .await;
+    let (lying, again, removed, expired) = out;
+    assert_eq!(lying, (true, 0x28, 0), "lying as the dead");
+    assert_eq!(again, lying, "cast again, the same pose");
+    assert_eq!(removed, (false, 0x08, 0), "removed: up");
+    assert_eq!(expired, (false, 0x08, 0), "run out: up");
+}
