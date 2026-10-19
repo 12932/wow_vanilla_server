@@ -3629,6 +3629,8 @@ async fn a_follower_turns_on_its_player_at_its_goal() {
             title: "Gyromast's Revenge".into(),
             min_level: 1,
             level: 1,
+            // An event's to do, as the real one: incomplete till then.
+            special_flags: crate::game::data::npc::QUEST_SPECIAL_EXPLORATION_OR_EVENT,
             ..Default::default()
         },
     );
@@ -3644,6 +3646,8 @@ async fn a_follower_turns_on_its_player_at_its_goal() {
             c.speeds.run = 20.0;
         }
         crate::game::map::quests::accept(m, g, thresh, 2078);
+        // Its key turned (its gossip option, not the quest's acceptance).
+        crate::game::map::escorts::gossip_select(m, g, thresh, 1);
     })
     .await;
     // Led to Gelkak.

@@ -225,7 +225,9 @@ pub struct NpcData {
     /// Area trigger → the quest it explores for.
     pub area_trigger_quests: AHashMap<u32, u32>,
     pub taverns: AHashSet<u32>,
-    pub quest_greetings: AHashMap<u32, String>,
+    /// `quest_greeting`: (entry, 0 a creature or 1 an object) → its words,
+    /// its emote and the emote's delay (mangos's `QuestgiverGreeting`).
+    pub quest_greetings: AHashMap<(u32, u32), (String, u32, u32)>,
     /// The quests that need each one done first: quest → those after it.
     pub quests_after: AHashMap<u32, Vec<u32>>,
     /// The quests' dependencies, worked out from `quests` when first asked.

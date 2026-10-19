@@ -333,11 +333,122 @@ fn nearest(map: &Map, entry: u32, at: Vector3d, reach: f32) -> Option<Guid> {
         .map(|c| c.guid)
 }
 
-/// A quest was accepted: its escort or follower sets out.
+/// A follower that starts from a gossip option on its creature, offered
+/// while its quest is incomplete, not when the quest is accepted (from
+/// another, far off): the Threshwackonator's key (mangos-classic's
+/// `npc_threshwackonator`, Thistle Tea's follower `gossip`).
+pub struct GossipStart {
+    pub quest: u32,
+    /// The option's text, and the menu's texts with and without it.
+    pub option: &'static str,
+    pub ready_text: u32,
+    pub idle_text: u32,
+}
+
+pub const GOSSIP_STARTS: &[GossipStart] = &[GossipStart {
+    quest: 2078,
+    option: "[PH] Insert key",
+    ready_text: 758,
+    idle_text: 718,
+}];
+
+/// The gossip start of `npc`, a gossip follower's creature, and whether
+/// `player` may start it: their quest incomplete (mangos's
+/// `QUEST_STATUS_INCOMPLETE`; chosen while it follows, it does nothing).
+fn gossip_start(map: &Map, player: Guid, npc: Guid) -> Option<(&'static GossipStart, bool)> {
+    let entry = map.creature(npc)?.entry;
+    let start = GOSSIP_STARTS
+        .iter()
+        .find(|g| follower(g.quest).is_some_and(|f| f.entry == entry))?;
+    let p = map.players.get(&player)?;
+    let incomplete = p.journal.slot_of(start.quest).is_some_and(|slot| {
+        let l = &p.journal.log[slot];
+        map.realm
+            .data
+            .npc
+            .quests
+            .get(&start.quest)
+            .is_some_and(|q| !crate::game::map::quests::complete(p, q, l))
+    });
+    Some((start, incomplete))
+}
+
+/// `CMSG_GOSSIP_HELLO` at a gossip follower's creature: its menu, the
+/// option there while the player may start it. Whether it was one.
+pub fn gossip_hello(map: &mut Map, player: Guid, npc: Guid) -> bool {
+    use wow_world_messages::vanilla::{GossipItem, SMSG_GOSSIP_MESSAGE};
+    let Some((start, ready)) = gossip_start(map, player, npc) else {
+        return false;
+    };
+    let quests = crate::game::map::quests::giver_quests(map, player, npc);
+    let Some(p) = map.players.get_mut(&player) else {
+        return true;
+    };
+    p.gossip_menu = None;
+    p.outbound.send(&SMSG_GOSSIP_MESSAGE {
+        guid: npc,
+        title_text_id: if ready {
+            start.ready_text
+        } else {
+            start.idle_text
+        },
+        gossips: if ready {
+            vec![GossipItem {
+                id: GOSSIP_START_OPTION,
+                item_icon: 0,
+                coded: false,
+                message: start.option.into(),
+            }]
+        } else {
+            Vec::new()
+        },
+        quests,
+    });
+    true
+}
+
+/// The option that starts a gossip follower.
+const GOSSIP_START_OPTION: u32 = 1;
+
+/// `CMSG_GOSSIP_SELECT_OPTION` at a gossip follower's creature: its option
+/// closes the gossip and the creature follows. Whether it was one.
+pub fn gossip_select(map: &mut Map, player: Guid, npc: Guid, option: u32) -> bool {
+    let Some((start, ready)) = gossip_start(map, player, npc) else {
+        return false;
+    };
+    if let Some(p) = map.players.get(&player) {
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_GOSSIP_COMPLETE {});
+    }
+    if ready && option == GOSSIP_START_OPTION {
+        let quest = start.quest;
+        set_out(map, player, quest, npc);
+    }
+    true
+}
+
+/// A quest was accepted: its escort or follower sets out, the nearest of
+/// its creature to the player; not one that a gossip option starts.
 pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
+    if GOSSIP_STARTS.iter().any(|g| g.quest == quest) {
+        return;
+    }
     let Some(at) = map.players.get(&player).map(|p| p.position()) else {
         return;
     };
+    let Some(entry) = escort(quest)
+        .map(|e| e.entry)
+        .or_else(|| follower(quest).map(|f| f.entry))
+    else {
+        return;
+    };
+    if let Some(creature) = nearest(map, entry, at, GIVER_REACH) {
+        set_out(map, player, quest, creature);
+    }
+}
+
+/// `creature` sets out on `quest`'s escort or follow, with `player`.
+fn set_out(map: &mut Map, player: Guid, quest: u32, creature: Guid) {
     let now = map.now;
     let (entry, kind, accept) = if let Some(def) = escort(quest) {
         // Its own points are numbered from 0; `script_waypoint`'s by their
@@ -408,9 +519,9 @@ pub fn accepted(map: &mut Map, player: Guid, quest: u32) {
     } else {
         return;
     };
-    let Some(creature) = nearest(map, entry, at, GIVER_REACH) else {
+    if map.creature(creature).is_none_or(|c| c.entry != entry) {
         return;
-    };
+    }
     if map.escorts.iter().any(|a| a.creature == creature) {
         return;
     }

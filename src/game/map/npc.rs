@@ -141,6 +141,9 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
         return;
     };
     crate::game::map::creature_motion::talk_pause(map, npc);
+    if crate::game::map::escorts::gossip_hello(map, player, npc) {
+        return;
+    }
     let data = map.realm.data.clone();
     let flags = map
         .creature(npc)
@@ -311,6 +314,9 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             return;
         };
         crate::game::map::creature_motion::talk_pause(map, npc);
+        if crate::game::map::escorts::gossip_select(map, player, npc, option) {
+            return;
+        }
         data.creature_template(entry)
             .map_or(0, |t| t.gossip_menu_id)
     };

@@ -335,7 +335,8 @@ fn built_in_channels_are_known_in_any_case() {
 /// portals are two a battleground, Warsong's 3650 the Alliance's out to
 /// Kalimdor and Alterac's 2413 the Horde's out to the Eastern Kingdoms;
 /// npc_text 68's first group is "Greetings, $n." for both genders, its
-/// others empty, and the spirit healer's (580) the same for both; Marshal
+/// others empty, and the spirit healer's (580) the same for both; Deputy
+/// Willem's quest greeting (823) is a creature's, with its emote; Marshal
 /// McBride (197) gives 7 and 3100 and takes 783, and the script-spawned
 /// object 35875 (a spawn time of -60) isn't out by default.
 #[test]
@@ -402,6 +403,11 @@ fn real_texts_emotes_intros_portals_and_relations_load() {
     assert!(line(healer, false).is_some_and(|l| !l.is_empty()));
     assert_eq!(line(healer, false), line(healer, true));
 
+    // Deputy Willem's (823) quest greeting is a creature's, with its emote.
+    let (text, emote, _) = &n.quest_greetings[&(823, 0)];
+    assert!(text.starts_with("Hello there, $c."));
+    assert_eq!(*emote, 1);
+    assert!(!n.quest_greetings.contains_key(&(823, 1)));
     assert!(n.creature_starts[&197].contains(&7));
     assert!(n.creature_starts[&197].contains(&3100));
     assert!(n.creature_ends[&197].contains(&783));
@@ -571,4 +577,120 @@ async fn real_start_casts_stuck_to_where_its_caster_last_stood() {
     .await;
     c.say(".start").await;
     c.system_message("in combat").await;
+}
+
+const THRESHWACKONATOR: u32 = 6669;
+const GYROMASTS_REVENGE: u32 = 2078;
+
+/// What `c` is told of `npc`'s gossip: its text, and its options' texts.
+async fn gossip(c: &mut Client, npc: Guid) -> (u32, Vec<String>) {
+    c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
+    c.wait_for("SMSG_GOSSIP_MESSAGE", |m| match m {
+        ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(g) if g.guid == npc => Some((
+            g.title_text_id,
+            g.gossips.iter().map(|o| o.message.clone()).collect(),
+        )),
+        _ => None,
+    })
+    .await
+}
+
+/// Thistle Tea's gossip followers (`quest_follower_test.exs`,
+/// `quest_follower_vmangos_test.exs`, `gossip_test.exs`) and
+/// mangos-classic's `npc_threshwackonator`: the Threshwackonator, with no
+/// menu of its own, shows its idle text (718) and nothing to choose; with
+/// Gyromast's Revenge taken (which starts nothing: Gyromast is far off),
+/// its key text (758) and "[PH] Insert key", which closes the gossip and
+/// has it follow, once. The real followers' quests exist and their lines
+/// are broadcast texts.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_threshwackonator_follows_from_its_key_gossip() {
+    use crate::game::map::escorts::{self, Act};
+    if !have_data() {
+        return;
+    }
+    let d = real().unwrap();
+    for f in crate::game::map::escorts::catalog::FOLLOWERS {
+        // One that starts on accepting waits on its event (an
+        // exploration); the Threshwackonator's on its death.
+        let gossip = escorts::GOSSIP_STARTS.iter().any(|g| g.quest == f.quest);
+        assert!(
+            gossip || d.npc.quests[&f.quest].needs_event(),
+            "{}",
+            f.quest
+        );
+        for a in f.accept.iter().chain(f.arrive) {
+            if let Act::Say(t) | Act::SayBy(_, t) = a {
+                assert!(
+                    d.npc
+                        .broadcast_line(*t, false)
+                        .is_some_and(|l| !l.is_empty()),
+                    "{t}"
+                );
+            }
+        }
+    }
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P6LTHRESH");
+    let g = c.enter("Thresha", Race::NightElf, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(1));
+    let robot = on(&map, move |m| {
+        let p = m.players[&g].position();
+        let o = m.players[&g].movement.orientation;
+        let at = Vector3d {
+            x: p.x + 2.0 * o.cos(),
+            y: p.y + 2.0 * o.sin(),
+            z: p.z,
+        };
+        crate::game::map::scripts::summon(m, Guid::zero(), THRESHWACKONATOR, at, 0.0, None)
+            .expect("the robot")
+    })
+    .await;
+    c.sees(robot).await;
+    assert_eq!(gossip(&mut c, robot).await, (718, vec![]));
+    c.say(&format!(".addquest {GYROMASTS_REVENGE}")).await;
+    let mut taken = false;
+    for _ in 0..50 {
+        taken = on(&map, move |m| m.players[&g].journal.has(GYROMASTS_REVENGE)).await;
+        if taken {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(taken);
+    let following = move |m: &mut Map| m.escorts.iter().any(|a| a.creature == robot);
+    assert!(!on(&map, following).await, "not on accepting");
+    assert_eq!(
+        gossip(&mut c, robot).await,
+        (758, vec!["[PH] Insert key".to_owned()])
+    );
+    c.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: robot,
+        gossip_list_id: 1,
+        unknown: None,
+    })
+    .await;
+    c.wait_for("SMSG_GOSSIP_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+    })
+    .await;
+    assert!(on(&map, following).await, "it follows");
+    // Chosen again, nothing more: one follow.
+    c.send(CMSG_GOSSIP_SELECT_OPTION {
+        guid: robot,
+        gossip_list_id: 1,
+        unknown: None,
+    })
+    .await;
+    c.wait_for("SMSG_GOSSIP_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE).then_some(())
+    })
+    .await;
+    let follows = on(&map, move |m| {
+        m.escorts.iter().filter(|a| a.creature == robot).count()
+    })
+    .await;
+    assert_eq!(follows, 1);
+    assert_eq!(escorts::GOSSIP_STARTS.len(), 1);
 }

@@ -1530,8 +1530,8 @@ async fn a_quest_list_greets_with_the_givers_words() {
     let mut d = data();
     d.npc
         .quest_greetings
-        .insert(GIVER, "Hello there, $c.".into());
-    assert_eq!(quest_list(d).await, ("Hello there, $c.".into(), 0, 0));
+        .insert((GIVER, 0), ("Hello there, $c.".into(), 1, 0));
+    assert_eq!(quest_list(d).await, ("Hello there, $c.".into(), 0, 1));
     let with_menu = |text: u32| {
         let mut d = data();
         d.creature_templates.get_mut(&GIVER).unwrap().gossip_menu_id = 500;
