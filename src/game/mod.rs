@@ -751,6 +751,8 @@ mod tests_p8_spell_amounts;
 #[cfg(test)]
 mod tests_p8_spell_funnel;
 #[cfg(test)]
+mod tests_p8_spell_wounds;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

@@ -444,7 +444,10 @@ fn run(
         }
         let script = crate::game::map::proc_scripts::fire(map, owner, other, &h, e);
         let went_off = script != crate::game::map::proc_scripts::Outcome::Unhandled || {
-            let fired = fire(map, owner, other, &h, e.damage, hand);
+            // A swing's hand, a next swing's; an ability's none, for the
+            // swing timers to say (Thistle Tea's `proc_attack_hand`).
+            let named = trigger_spell.is_none_or(|t| t.on_next_swing());
+            let fired = fire(map, owner, other, &h, e.damage, named.then_some(hand));
             let answered = crate::game::map::spells::class_scripts::proc(
                 map, owner, other, &h, e.spell, outgoing,
             );
@@ -532,7 +535,14 @@ pub fn fear_break_chance(level: u32, damage: u32) -> f32 {
 /// A holder went off on a blow of `damage`: its trigger spells cast, its
 /// damage dealt, a fear broken by chance, and the class scripts the data
 /// can't say (Thistle Tea's `Core.Class`). Whether anything came of it.
-fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, damage: u32, hand: Hand) -> bool {
+fn fire(
+    map: &mut Map,
+    owner: Guid,
+    other: Guid,
+    h: &Holder,
+    damage: u32,
+    hand: Option<Hand>,
+) -> bool {
     let mut fired = false;
     for x in &h.effects {
         match x.kind {
