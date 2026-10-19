@@ -127,13 +127,31 @@ pub struct Leashes {
     swept_at: Option<Instant>,
 }
 
+/// The creature that summoned `c`, or owns it.
+fn summoner_of(c: &crate::game::map::creature::Creature) -> Option<Guid> {
+    c.scripted
+        .as_deref()
+        .and_then(|s| s.summoner)
+        .or(c.owner)
+        .filter(|s| guid::is_unit(*s))
+}
+
 /// `g`'s leash runs on `with`'s clock from now on (`with` gets one if it
-/// has none).
+/// has none). A summon whose summoner is fighting keeps its summoner's:
+/// ownership comes before a call for help (Thistle Tea's owned leash).
 pub fn share_leash(map: &mut Map, g: Guid, with: Guid) {
     if g == with {
         return;
     }
     let now = map.now;
+    if let Some(s) = map.creature(g).and_then(summoner_of)
+        && s != with
+        && map
+            .creature(s)
+            .is_some_and(|o| o.alive() && o.engagement.origin.is_some())
+    {
+        return;
+    }
     let Some(w) = map.creature(with) else {
         return;
     };
@@ -161,7 +179,9 @@ pub fn share_leash(map: &mut Map, g: Guid, with: Guid) {
 
 /// A fight begins for `g`: its leash is its own, unless a creature that
 /// summoned it is fighting, whose clock it runs on (Thistle Tea's summon
-/// source).
+/// source); and its summons fighting already run on its clock from now,
+/// where their fights began kept (Thistle Tea's owned leash linking a
+/// summon that fought first).
 pub fn leash_begins(map: &mut Map, g: Guid) {
     let now = map.now;
     let Some(c) = map.creature_mut(g) else {
@@ -169,19 +189,30 @@ pub fn leash_begins(map: &mut Map, g: Guid) {
     };
     c.engagement.clock = None;
     c.engagement.control_extend_at = Some(now + CONTROL_EXTEND_EVERY);
-    let summoner = c
+    let summoner = summoner_of(c);
+    let summons = c
         .scripted
         .as_deref()
-        .and_then(|s| s.summoner)
-        .or(c.owner)
-        .filter(|s| guid::is_unit(*s));
+        .map(|s| s.summoned.clone())
+        .unwrap_or_default();
     if let Some(s) = summoner {
         share_leash(map, g, s);
+    }
+    for s in summons {
+        if map.creature(s).is_some_and(|x| {
+            x.alive() && x.engagement.origin.is_some() && summoner_of(x) == Some(g)
+        }) {
+            share_leash(map, s, g);
+        }
     }
 }
 
 /// The last time `g`'s leash was extended: by a hostile act on it, or on
 /// any it shares its clock with.
+pub fn leash_extended_at(map: &Map, g: Guid) -> Option<Instant> {
+    map.creature(g).and_then(|c| extended_at(map, c))
+}
+
 fn extended_at(map: &Map, c: &crate::game::map::creature::Creature) -> Option<Instant> {
     let shared = c
         .engagement

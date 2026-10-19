@@ -625,6 +625,8 @@ mod tests_p7_combat;
 #[cfg(test)]
 mod tests_p7_combat_feign;
 #[cfg(test)]
+mod tests_p7_combat_leash;
+#[cfg(test)]
 mod tests_p7_combat_rewards;
 #[cfg(test)]
 mod tests_p7_combat_zone;
