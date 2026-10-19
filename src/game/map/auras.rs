@@ -1259,30 +1259,77 @@ fn group_relation(
     a: &Auras,
     spell: &SpellTemplate,
 ) -> Option<GroupRelation> {
-    let mine = data.spells.groups.get(&spell.id)?;
+    // Any holder that blocks it refuses it whole, whatever another group
+    // would have it replace (Thistle Tea's atomic rejection).
+    let mut out = None;
     for h in &a.holders {
-        if h.spell == spell.id || h.passive || data.spells.same_kind(h.spell, spell.id) {
-            continue;
+        match group_relation_to(data, spell, h) {
+            Some(GroupRelation::Blocked) => return Some(GroupRelation::Blocked),
+            Some(r) => out = Some(r),
+            None => {}
         }
-        let Some(theirs) = data.spells.groups.get(&h.spell) else {
-            continue;
-        };
-        for g in mine.iter().filter(|g| theirs.contains(g)) {
-            match data.spells.group_rules.get(g).copied().unwrap_or(0) {
-                1 => return Some(GroupRelation::Replaces),
-                3 => {
-                    let order = |id| data.spells.group_order(*g, id);
-                    return Some(if order(h.spell) > order(spell.id) {
-                        GroupRelation::Blocked
-                    } else {
-                        GroupRelation::Replaces
-                    });
-                }
-                _ => {}
+    }
+    out
+}
+
+/// How `spell` stands to holder `h` by their first common group with a
+/// rule (vmangos's `spell_group_stack_rules`): none for the same spell, a
+/// rank of its own kind, a passive or hidden holder (what stands apart
+/// from the groups, as Thistle Tea's exclusivity keeps them), or a spell
+/// and the one it triggers.
+fn group_relation_to(
+    data: &crate::game::data::GameData,
+    spell: &SpellTemplate,
+    h: &Holder,
+) -> Option<GroupRelation> {
+    let mine = data.spells.groups.get(&spell.id)?;
+    if h.spell == spell.id || h.passive || data.spells.same_kind(h.spell, spell.id) {
+        return None;
+    }
+    let theirs = data.spells.groups.get(&h.spell)?;
+    let other = data.spells.get(h.spell);
+    if other.is_some_and(|o| o.attr(0, sd::ATTR_HIDDEN)) || triggers_one_another(spell, other) {
+        return None;
+    }
+    for g in mine.iter().filter(|g| theirs.contains(g)) {
+        match data.spells.group_rules.get(g).copied().unwrap_or(0) {
+            1 => return Some(GroupRelation::Replaces),
+            3 => {
+                let order = |id| data.spells.group_order(*g, id);
+                return Some(if order(h.spell) > order(spell.id) {
+                    GroupRelation::Blocked
+                } else {
+                    GroupRelation::Replaces
+                });
             }
+            _ => {}
         }
     }
     None
+}
+
+/// Whether `a` triggers `b` or `b` triggers `a` by an effect: a parent and
+/// its own triggered aura stand together (Thistle Tea's "direct trigger
+/// pairs preserve their parent").
+fn triggers_one_another(a: &SpellTemplate, b: Option<&SpellTemplate>) -> bool {
+    let Some(b) = b else {
+        return false;
+    };
+    a.effects
+        .iter()
+        .any(|e| e.trigger_spell == b.id && b.id != 0)
+        || b.effects
+            .iter()
+            .any(|e| e.trigger_spell == a.id && a.id != 0)
+}
+
+/// Whether a group's stronger spell already on `target` refuses `spell`
+/// there (rule 3 keeping its highest): a helpful cast at one unit is told
+/// so before it costs anything (Thistle Tea's "positive single-target
+/// upgrades reject weaker casts on self and others").
+pub(crate) fn group_blocks(map: &Map, target: Guid, spell: &SpellTemplate) -> bool {
+    auras(map, target)
+        .is_some_and(|a| group_relation(&map.realm.data, a, spell) == Some(GroupRelation::Blocked))
 }
 
 /// Whether the new holder `new` (of `spell`) takes `old`'s place.
@@ -1333,23 +1380,7 @@ fn replaces(
     if data.spells.same_kind(old.spell, new.spell) {
         return old.caster == new.caster || !cross_caster_coexist(spell, old, effects);
     }
-    if !old.passive {
-        let mine = data.spells.groups.get(&new.spell);
-        let theirs = data.spells.groups.get(&old.spell);
-        if let (Some(mine), Some(theirs)) = (mine, theirs) {
-            for g in mine.iter().filter(|g| theirs.contains(g)) {
-                match data.spells.group_rules.get(g).copied().unwrap_or(0) {
-                    1 => return true,
-                    3 => {
-                        return data.spells.group_order(*g, old.spell)
-                            <= data.spells.group_order(*g, new.spell);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    false
+    group_relation_to(data, spell, old) == Some(GroupRelation::Replaces)
 }
 
 /// The slot fields for holder `index` of `target`.

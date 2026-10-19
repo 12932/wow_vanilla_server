@@ -19,6 +19,9 @@ const MOUNT: u32 = 997_601;
 const DUEL: u32 = 997_602;
 const CONSECRATE: u32 = 997_603;
 const SHADOW_BOLT: u32 = 997_604;
+/// Sap's kind (for the peaceful only) and a stealth.
+const SAP: u32 = 997_605;
+const STEALTH: u32 = 997_606;
 const RADIUS_8: u32 = 996;
 
 fn data(d: &mut GameData) {
@@ -55,7 +58,15 @@ fn data(d: &mut GameData) {
     );
     let mut bolt = bare(SHADOW_BOLT, 5);
     effect(&mut bolt, 0, damage(100));
-    insert(d, [mount, duel, consecrate, bolt]);
+    let mut sap = bare(SAP, 0);
+    sap.attributes[1] |= crate::game::data::spells::ATTR_EX_ONLY_PEACEFUL_TARGETS;
+    sap.duration_index = LASTS_5S;
+    effect(&mut sap, 0, aura(AURA_MOD_STUN, 0, 0, 6));
+    let mut stealth = bare(STEALTH, 0);
+    stealth.duration_index = LASTS_LONG;
+    stealth.aura_interrupt_flags = INTERRUPT_CAST;
+    effect(&mut stealth, 0, aura(AURA_MOD_STEALTH, 0, 5, 1));
+    insert(d, [mount, duel, consecrate, bolt, sap, stealth]);
 }
 
 /// A player on a flight casts nothing, a mount neither (Thistle Tea's
@@ -152,4 +163,43 @@ async fn nothing_is_resisted_of_nothing() {
         .await
         .unwrap();
     assert_eq!(out, Some(0));
+}
+
+/// Sap's kind refuses a target in a fight before it costs its caster
+/// their stealth, and lands on one out of it (mangos-classic's `CheckCast`:
+/// `SPELL_ATTR_EX_ONLY_PEACEFUL_TARGETS`, `TARGET_AFFECTING_COMBAT`;
+/// Thistle Tea's "peaceful-target requirements reject combat before
+/// consuming stealth").
+#[tokio::test]
+async fn sap_refuses_one_in_a_fight_before_it_costs_stealth() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P7CK4", "Sapper", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[SAP]);
+            let kobold = kit::dummy(m, a, 60, 3.0);
+            kit::apply(m, a, a, STEALTH);
+            if let Some(f) = m.unit_fields_mut(kobold) {
+                f.set_flag(
+                    crate::game::fields::UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    true,
+                );
+            }
+            let s = m.realm.data.spells.get(SAP).unwrap().clone();
+            let fighting = checks::check(m, a, &s, &at(kobold), None, false, &Mods::default());
+            let kept = kit::has(m, a, STEALTH);
+            if let Some(f) = m.unit_fields_mut(kobold) {
+                f.set_flag(
+                    crate::game::fields::UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    false,
+                );
+            }
+            cast_fresh(m, a, SAP, at(kobold));
+            (fighting, kept, kit::has(m, kobold, SAP))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (Some(fail::TARGET_AFFECTING_COMBAT), true, true));
 }
