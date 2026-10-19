@@ -186,6 +186,18 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     creature enters a fight.
   - **Left as gaps:** casting a quest's `SrcSpell` on acceptance (Moonglade's teleport, 5921) and auto-rewarding
     flag quests (Naxxramas's attunement, 9378) were tried, had no tests, and were dropped.
+- **6g, the world's systems (0.1.15):** a trade is called off as the partners walk apart; an addon's line is never a
+  GM command; the first honor after midnight goes on the new day; gaining or losing detection is seen at once
+  (mangos's `HandleInvisibilityDetect`); a stealthed walker is looked at every 2 yards; the Scourge invasion's world
+  states show only while it runs; ending a map event that isn't under way fails; a chain spell grounded by a totem
+  stops at it (mangos's `CheckAndAddMagnetTarget`). **My calls:**
+  - **A trade** is called off past 11 yards (wvs's opening distance), checked every map update. mangos opens at
+    11.11 yards and cancels on movement past 5; Thistle Tea uses 10 for both.
+  - **Addon-language lines** are never commands: mangos would parse them, but an addon's prefix isn't one.
+  - **Stealthed units** (not invisible ones) are looked at every 2 yards of movement, everyone else every 8.
+  - **Left as gaps:** a trap isn't looked at again when its owner's PvP flag or duel changes (until someone moves);
+    visibility isn't checked on a turn (mangos doesn't either). 137 rows in the area are still open, mostly the
+    real-navmesh pathfinding (38) and positions (20).
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -268,7 +280,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 6b: spells | merged | b1deacf |
 | 6a: the player | 69.5% | 99266b6 |
 | 6c: the world's loaders | 70.2% | cd3605e |
+| 6g: the world's systems | 71.0% | 2febcb2 |
 
-**Running now:** round 6 (6d to 6g), and `fix/extended1019` for the four tests the 15:38 extended run failed.
+**Running now:** round 6 (6d, 6e, 6f, 6h), and `fix/extended1019` for the four tests the 15:38 extended run failed.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
