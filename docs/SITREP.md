@@ -120,6 +120,15 @@ hours), the crate version bumped with each merge.
   `[players] bones_hours` (18; 0 for none); not saved across a restart, as mangos never saves them. **mangos's own
   numbers:** an unclaimed corpse turns to bones after 3 days (checked every 20 minutes); bones last until their grid
   unloads, about 5 minutes with no one near. wvs has no 3-day expiry for unclaimed corpses yet.
+- **Four in-game bugs (0.1.8):** the 1.12 client, within one update packet, runs a field's display handlers only for
+  the last values block of an object (it compares each block with a copy taken before it), and wvs sent a creature's
+  tap in a second block: so a dead Rabbit's frame stayed at 100% with no animation, and Frost Nova's ring never
+  showed. Each viewer now gets one block, its tap view in it (mangos's and Thistle Tea's way). Frost Nova's wolf
+  also left its fight at the root and was never told it was held: a root keeps the fight, a held creature stops, faces
+  and swings in reach, and the client gets `SMSG_SPLINE_MOVE_ROOT`. Dead creatures lose their NPC flags until they
+  respawn (no quest icon, gossip, vendor). A non-hunter at a stable master gets the default greeting window (text 68;
+  mangos answers with nothing; vmangos has no stable text). **Left:** a game object's quest sparkle can go in a
+  second block too (rare).
 - **Raid AI, roles (0.1.7, peon `1bd7d04`):** each raider a tank, healer or damage from its seed (about 1 tank and
   2.3 healers per 10: warriors tank 45%, druids tank 30% and heal 40%, priests heal 90%, shamans 80%, paladins tank
   20% and heal 50%); warrior tanks in Defensive Stance with Taunt, Shield Block, Revenge, Sunder; druid tanks in bear
