@@ -838,3 +838,72 @@ The difference is inside the noise between pairs, but for one step. The frames a
 where the introductions hold their observers, costs 0.12 to 0.15 ms more an update walking at 100% (2.15 and 2.16 ms
 on Eastern Kingdoms before, 2.27 and 2.31 after; 2.76 and 2.77 on Kalimdor, 2.88 and 2.89), and the held step
 0.01 ms. Standing, nothing changes past 0.02 ms. The cores are 1.16 before and 1.17 after, walking at 100%.
+
+## The concurrency micro-benchmarks
+
+`benches/sync.rs` settles "which channel" or "which lock" in five minutes, not in hours of load tests. It is
+[divan](https://crates.io/crates/divan)'s (a dev-dependency, as are flume, crossbeam-channel and arc-swap). Each
+benchmark stands for a path in wvs, named in its doc comment, and runs that path's shape (who sends, from where, who
+receives and how) with each candidate. What the paths do besides is left out (the cipher and the socket, SQLite, the
+disk, a map's handling of an event), so a row is the channel's or the lock's cost, and the harness's, which is the
+same for every candidate.
+
+```sh
+cargo bench --bench sync                     # everything: 76 cases, about five minutes
+cargo bench --bench sync -- channels         # a group: channels, locks or live_config
+cargo bench --bench sync -- channels::store  # one benchmark
+cargo bench --bench sync -- Tokio            # the cases with Tokio in their path (a filter is a regular expression)
+cargo bench --bench sync -- --max-time 0.2   # a quick look: each case 0.2 s
+cargo bench --bench sync -- --list           # the cases, without running them
+```
+
+- **Each case runs 4 s** (`SECS`), whatever it costs, so the whole run takes the same time on any machine.
+- **The first build compiles wvs in release** (the bench links the server's library, and the bench profile is
+  release's: thin LTO, one codegen unit), about three and a half minutes on 4 jobs. `build.rs` names no file to be
+  rerun on, so cargo reruns it on any change in the package, the bench's own file or a doc's, and builds the library
+  again.
+- **Run it on a quiet machine, twice.** Other work moves the numbers more than some candidates differ.
+
+| Benchmark | wvs's path | The shape | Candidates, wvs's first |
+|---|---|---|---|
+| `channels::outbound` | `conn.rs`: `Outbound`, `run_writer` | 1, 4 or 16 producer threads send `Arc<[u8]>` frames (36 to 384 bytes) with a sync send; one writer task waits for a frame, takes up to 128 and copies them out. A round: 16,384 frames | `Kanal`; `Tokio` (drained as kanal is), `TokioRecvMany` (`recv_many`), `Flume` |
+| `channels::mailbox` | `map/mod.rs`: `MapHandle`, `map::run` | 1 or 64 sender tasks send the real `MapEvent` (a movement packet) with a sync send; the map's task receives in `select!` beside its 50 ms ticker, then drains up to 512. A round: 4,096 events | `Tokio`; `Flume` in `select!`; `TokioNoSelect` and `KanalNoSelect` in a loop of their own (kanal's receive isn't safe in `select!`: a message can be lost) |
+| `channels::tiles` | `map/tiles.rs`: `tiles::read` | one sender, 4 reader threads asleep in a blocking receive (a round waits 1 ms first, untimed). A round: 8 jobs | `Kanal`; `Crossbeam`, `Flume`; `Std` and `Tokio`, whose one receiver the readers share behind a mutex |
+| `channels::store` | `store.rs`: `Store`, `serve_all` | 1 caller task, or 16, sends a request with a sync send and awaits the reply on tokio's `oneshot`; the store's thread waits in a blocking receive, takes up to 512 and answers each. A round: 256 round trips | `Std`; `Tokio` (`blocking_recv`), `Kanal`, `Flume`, `Crossbeam` |
+| `locks::registry` | `registry.rs`: `Registry::online` | 1,000 players in a `RwLock<AHashMap<Guid, Arc<Online>>>`, looked up (the `Arc` cloned and dropped) from 1, 4, 16 or 32 threads; every 1,000th operation on a thread a write (a login) | `ParkingLot`; `Std`, `StdRecovering` (a poisoned lock taken anyway, as wvs would need) |
+| `locks::social` | `social/mod.rs`: a service's `Mutex` | the friends lists of 1,000 players, a friend added or removed, from 1, 4 or 16 threads | `ParkingLot`; `Std`, `StdRecovering` |
+| `live_config::*` | `game/mod.rs`: `Realm::config` | the real `RealmConfig`, read from 1, 4, 16 or 32 threads | `generation` (a map's look, once an update), `parking_lot_read_clone` (`Realm::config`); `std_read_clone`, `arc_swap_load` (`Realm::config` before), `arc_swap_load_full` |
+
+crossbeam-channel and std's `mpsc` have no async receive, so they are candidates only where the receiver is a plain
+thread: the tiles and the store.
+
+### Reading divan's output
+
+```text
+sync                          fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ channels                                 │               │               │               │         │
+│  ├─ outbound                              │               │               │               │         │
+│  │  ├─ Kanal                              │               │               │               │         │
+│  │  │  ├─ 1                 …             │ …             │ …             │ …             │ …       │ …
+│  │  │  │                    … Mitem/s     │ … Mitem/s     │ … Mitem/s     │ … Mitem/s     │         │
+…
+╰─ locks                                    │               │               │               │         │
+   ├─ registry                              │               │               │               │         │
+   │  ├─ ParkingLot                         │               │               │               │         │
+   │  │  ├─ t=1               …             │ …             │ …             │ …             │ …       │ …
+```
+
+- **The tree is the path**: the group, the benchmark, the candidate, then the producers, senders or callers (a
+  number), or the threads (`t=N`).
+- **The columns are over the samples**: the fastest, the slowest, the median and the mean of an iteration's time.
+  Read the median. A busy machine pulls the mean and the slowest up, and the fastest is luck. `samples` and `iters`
+  are how many there were.
+- **A channel's iteration is a round**: it sends the round's items (16,384 frames, 4,096 events, 8 jobs or 256 round
+  trips) and ends when the consumer has taken them all. Its time is the round's; the line under it (`item/s`) is the
+  items through in a second. An item's cost is the round's time over its items: 16,384 frames in 1 ms are 61 ns a
+  frame. A round has the same items whatever the producers, so a benchmark's rows compare, down a column.
+- **A thread's iteration (`t=N`) is one operation**, as one of N threads sees it while the others run theirs (4,096
+  operations a sample on each thread). N over it is what the N threads do together in a second; a time that grows
+  with N is contention. 32 threads on 16 cores are two to a core, and some of that row is the scheduler's.
+- **`Std` and `StdRecovering` differ only on a poisoned lock**, which there never is here: the gap between their rows
+  is the noise.

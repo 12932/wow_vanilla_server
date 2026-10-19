@@ -115,6 +115,13 @@ name = "wvs-world-bench"
 path = "src/bin/wvs-world-bench.rs"
 required-features = ["world-bench"]
 
+# The concurrency micro-benchmarks: which channel, which lock, how the live
+# settings are read, on wvs's own patterns (`cargo bench --bench sync`,
+# docs/PERFORMANCE.md). divan's, so not libtest's harness.
+[[bench]]
+name = "sync"
+harness = false
+
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,
 # wow_messages, the navmesh, compression): the suite takes a third less time,
 # and the crate itself builds as quickly as before. See docs/PERFORMANCE.md.
@@ -133,3 +140,9 @@ codegen-units = 1
 # The real world's snapshot for the extended tests (`harness::real_world`).
 ahash = { version = "0.8.12", features = ["serde"] }
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
+# The concurrency micro-benchmarks (`benches/sync.rs`): divan, and the
+# channels and arc-swap they hold up against wvs's own.
+divan = "0.1.21"
+flume = "0.12.0"
+crossbeam-channel = "0.5.17"
+arc-swap = "1.9.3"
