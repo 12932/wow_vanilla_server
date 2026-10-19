@@ -33,6 +33,13 @@ pub(super) fn stand(m: &mut Map, g: Guid, at: Vector3d) {
 /// and bound for it, its group with it and `me` beside: it arrives at
 /// the next update or so. Where the point is.
 pub(super) fn bring(m: &mut Map, me: Guid, g: Guid, point: u32) -> Vector3d {
+    let at = arrive(m, g, point);
+    stand(m, me, off(at, 3.0, 0.0));
+    at
+}
+
+/// [`bring`], `g` and its group alone.
+pub(super) fn arrive(m: &mut Map, g: Guid, point: u32) -> Vector3d {
     let points = creature_motion::waypoints(m, g).expect("a route");
     let i = points
         .iter()
@@ -61,7 +68,6 @@ pub(super) fn bring(m: &mut Map, me: Guid, g: Guid, point: u32) -> Vector3d {
             s.hold = None;
         }
     }
-    stand(m, me, off(at, 3.0, 0.0));
     at
 }
 
@@ -76,6 +82,12 @@ pub(super) fn reached(m: &Map, g: Guid, point: u32) -> bool {
     c.last_waypoint
         .and_then(|i| points.get(i))
         .is_some_and(|p| p.point == point)
+}
+
+/// Whether `g` has gone: despawned (a spawn, till it comes back) or
+/// removed.
+pub(super) fn gone(m: &Map, g: Guid) -> bool {
+    m.creature(g).is_none_or(|c| c.despawned)
 }
 
 /// Whether `g` is held on its path by a script.
@@ -146,7 +158,7 @@ async fn formed(map: &MapHandle, home: Vector3d) -> Guid {
 
 /// `c` takes `quest` from `giver`, beside them: whether its event is
 /// under way then.
-async fn takes(c: &mut Client, map: &MapHandle, giver: Guid, quest: u32) -> bool {
+pub(super) async fn takes(c: &mut Client, map: &MapHandle, giver: Guid, quest: u32) -> bool {
     let me = c.guid;
     map.query(move |m| {
         let at = m.position_of(giver).unwrap();
