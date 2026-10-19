@@ -3131,21 +3131,40 @@ pub fn held(map: &Map, g: Guid, casting: bool) -> bool {
     })
 }
 
-/// `CMSG_CANCEL_AURA`: a player takes a helpful aura off.
+/// `CMSG_CANCEL_AURA`: a player takes a helpful aura off. A stealth taken
+/// off takes every stealth with it, so cancelling Stealth while Vanish's
+/// own stealth is on leaves the rogue seen (Thistle Tea's `cancel_spell`
+/// and its `stealth_holder?`, the user's #41; mangos's takes the spell
+/// named alone).
 pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
     let data = map.realm.data.clone();
-    let cancelable = map.players.get(&player).is_some_and(|p| {
+    let Some(stealth) = map.players.get(&player).and_then(|p| {
         p.auras
             .holders
             .iter()
-            .any(|h| h.spell == spell && h.positive && !h.passive)
-    }) && !data
+            .find(|h| h.spell == spell && h.positive && !h.passive)
+            .map(stealth_holder)
+    }) else {
+        return;
+    };
+    if data
         .spells
         .get(spell)
-        .is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL));
-    if cancelable {
-        remove_where(map, player, |h| h.spell == spell && !h.passive);
+        .is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL))
+    {
+        return;
     }
+    remove_where(map, player, |h| {
+        !h.passive && (h.spell == spell || (stealth && stealth_holder(h)))
+    });
+}
+
+/// A stealth: its aura, or the form (Thistle Tea's `stealth_holder?`).
+fn stealth_holder(h: &Holder) -> bool {
+    h.effects.iter().any(|x| {
+        x.kind == AURA_MOD_STEALTH
+            || (x.kind == AURA_MOD_SHAPESHIFT && x.misc == i32::from(FORM_STEALTH))
+    })
 }
 
 /// On death every aura but the passive and death-persistent ones goes, and

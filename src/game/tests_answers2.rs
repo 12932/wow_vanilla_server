@@ -84,6 +84,76 @@ fn beside(guid: u32, entry: u32, dx: f32) -> CreatureSpawn {
     }
 }
 
+// ---- #41: cancelling Stealth with Vanish on ------------------------------
+
+const STEALTH: u32 = 994_100;
+const VANISHED: u32 = 994_101;
+
+fn stealth_kit(d: &mut GameData) {
+    // Stealth: the form and the aura; Vanish's own: the aura alone, for a
+    // while.
+    let mut stealth = bare(STEALTH, 0);
+    stealth.duration_index = super::tests_p3_cast_kit::LASTS_LONG;
+    effect(
+        &mut stealth,
+        0,
+        aura(
+            auras::AURA_MOD_SHAPESHIFT,
+            i32::from(auras::FORM_STEALTH),
+            0,
+            1,
+        ),
+    );
+    effect(&mut stealth, 1, aura(auras::AURA_MOD_STEALTH, 0, 0, 1));
+    let mut vanished = bare(VANISHED, 0);
+    vanished.duration_index = LASTS_15S;
+    effect(&mut vanished, 0, aura(auras::AURA_MOD_STEALTH, 0, 0, 1));
+    insert(d, [stealth, vanished]);
+}
+
+/// Cancelling Stealth while Vanish's stealth is on takes both, so the
+/// rogue is seen (the user's #41, as Thistle Tea's `cancel_spell` takes
+/// every stealth holder); before, Vanish's kept them hidden (mangos's
+/// `CMSG_CANCEL_AURA` takes the spell named alone). A buff of another kind
+/// cancelled takes nothing more.
+#[tokio::test]
+async fn cancelling_stealth_with_vanish_on_takes_both() {
+    let realm = fast_realm(stealth_kit);
+    let (mut c, rogue, map) = human(&realm, "VANISH", "Vanisher", Class::Rogue).await;
+    on(&map, move |m| {
+        for id in [STEALTH, VANISHED] {
+            let s = m.realm.data.spells.get(id).cloned().unwrap();
+            let effects: Vec<(usize, i32)> = (0..3)
+                .filter(|i| s.effects[*i].effect == 6)
+                .map(|i| (i, 0))
+                .collect();
+            auras::apply_spell(m, rogue, rogue, &s, &effects, auras::Context::default())
+                .expect("the stealth takes");
+        }
+    })
+    .await;
+    let both = on(&map, move |m| {
+        [STEALTH, VANISHED].map(|id| auras::auras(m, rogue).is_some_and(|a| a.has_spell(id)))
+    })
+    .await;
+    assert_eq!(both, [true, true]);
+    c.send(CMSG_CANCEL_AURA { id: STEALTH }).await;
+    handled(&mut c).await;
+    let after = on(&map, move |m| {
+        (
+            [STEALTH, VANISHED].map(|id| auras::auras(m, rogue).is_some_and(|a| a.has_spell(id))),
+            auras::auras(m, rogue).is_some_and(|a| a.has(auras::AURA_MOD_STEALTH)),
+            auras::form(m, rogue),
+        )
+    })
+    .await;
+    assert_eq!(
+        after,
+        ([false, false], false, 0),
+        "both gone, the rogue seen"
+    );
+}
+
 // ---- #21: the grey "!" -------------------------------------------------
 
 /// Givers of quests 7, 8 and 29 levels above a new character's.
