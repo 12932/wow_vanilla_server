@@ -609,6 +609,8 @@ mod tests_p6_wspell_units;
 #[cfg(test)]
 mod tests_p7_spell_caster;
 #[cfg(test)]
+mod tests_p7_spell_effects;
+#[cfg(test)]
 mod tests_p7_spell_proc_sides;
 #[cfg(test)]
 mod tests_p7_spell_procs;
