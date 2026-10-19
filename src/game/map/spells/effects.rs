@@ -884,7 +884,10 @@ fn effect(
         EFFECT_LEAP => {
             let flying = map.players.get(&caster).is_some_and(|p| p.flight.is_some());
             if let Some(me) = map.unit_view(caster).filter(|_| !flying) {
-                let d = super::targets::radius(map, s, index, &l.mods).max(10.0);
+                // As far as its radius, none without one (mangos's
+                // caster-relative place at its radius, Thistle Tea's
+                // `CasterLocation`): every leap of 1.12 has twenty yards.
+                let d = super::targets::radius(map, s, index, &l.mods);
                 let o = me.orientation + leap_angle(e.target_a, e.target_b);
                 let want = Vector3d {
                     x: me.position.x + d * o.cos(),
