@@ -607,6 +607,10 @@ mod tests_p6_wspell_requirements;
 #[cfg(test)]
 mod tests_p6_wspell_units;
 #[cfg(test)]
+mod tests_p7_spell_caster;
+#[cfg(test)]
+mod tests_p7_spell_procs;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

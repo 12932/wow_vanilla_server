@@ -396,7 +396,13 @@ pub fn check(
     // The caster's state. Breaking free (a trinket, Will of the Forsaken,
     // Divine Shield, Blink) works under what the spell's own immunities
     // cancel, and only that (mangos-classic's `CheckCasterAuras`).
-    if !triggered && let Some(a) = auras::auras(map, caster) {
+    // A spell that ignores its caster's restrictions isn't held by them
+    // (mangos-classic's `CheckCasterAuras` under
+    // `SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS`).
+    if !triggered
+        && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS)
+        && let Some(a) = auras::auras(map, caster)
+    {
         let data = &map.realm.data;
         let held = |kinds: &[u32]| {
             a.holders.iter().any(|h| {
@@ -422,7 +428,10 @@ pub fn check(
         {
             return Some(fail::PACIFIED);
         }
-        if held(&[AURA_MOD_FEAR]) {
+        // A fear kept from taking hold (Recklessness) doesn't flee, as
+        // mangos-classic's `SetFleeing` sets no fleeing under
+        // `SPELL_AURA_PREVENTS_FLEEING`.
+        if held(&[AURA_MOD_FEAR]) && !a.has(AURA_PREVENTS_FLEEING) {
             return Some(fail::FLEEING);
         }
         if held(&[AURA_MOD_CONFUSE]) {

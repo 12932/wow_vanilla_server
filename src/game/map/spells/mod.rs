@@ -1353,7 +1353,46 @@ fn execute(
             auras::remove_where(map, caster, breaks);
         }
     }
+    cast_end_procs(map, caster, s, &targets, item, triggered);
     crate::game::map::combat::spell_launched(map, caster, s, triggered);
+}
+
+/// The cast's end, once, after whatever it landed on (vmangos's
+/// `PROC_EX_CAST_END`, Thistle Tea's `cast_complete_procs`): what procs on
+/// a spell cast rather than on its hits (Unstable Power and Ascendance
+/// spend a stack a cast, Elemental Focus and the Blue Dragon may come of
+/// one), whether it hit, was resisted or landed on many. At its unit
+/// target, else its caster. Not a triggered cast's, save a channel that
+/// is marked no proc's own (Thistle Tea's aura origin), nor a helpful
+/// item's.
+fn cast_end_procs(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    item: Option<Guid>,
+    triggered: bool,
+) {
+    if triggered && !(s.channeled() && s.attr(3, sd::ATTR_EX3_NOT_A_PROC)) {
+        return;
+    }
+    if item.is_some() && auras::positive(s) {
+        return;
+    }
+    let (done, _) = outcome::proc_flags(s);
+    crate::game::map::procs::trigger(
+        map,
+        crate::game::map::procs::Event {
+            actor: caster,
+            target: t.unit.unwrap_or(caster),
+            actor_flags: done,
+            ex: crate::game::map::procs::EX_CAST_END,
+            spell: Some(s.id),
+            school: s.school_mask(),
+            ranged: s.dmg_class == 3,
+            ..Default::default()
+        },
+    );
 }
 
 /// A mechanic immunity with charges kept `s` off `target`: a charge of it
