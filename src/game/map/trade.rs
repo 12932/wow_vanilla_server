@@ -315,10 +315,32 @@ fn traded(map: &Map, g: Guid) -> Vec<usize> {
         .collect()
 }
 
-/// `CMSG_ACCEPT_TRADE`: when both have, it goes through.
+/// A trade whose partners have moved apart is called off as soon as they
+/// have (mangos's `Player::SetPosition`, `TradeCancel(TARGET_TO_FAR)`;
+/// Thistle Tea's check), at the distance a trade opens within: what either
+/// accepts after is no trade.
+pub fn update(map: &mut Map) {
+    let apart: Vec<Guid> = map
+        .players
+        .values()
+        .filter_map(|p| {
+            let t = p.trade.as_ref()?;
+            let near = map
+                .players
+                .get(&t.with)
+                .is_some_and(|o| dist(p.position(), o.position()) <= TRADE_YARDS);
+            (!near).then_some(p.guid)
+        })
+        .collect();
+    for g in apart {
+        cancel(map, g, SMSG_TRADE_STATUS_TradeStatus::TargetToFar);
+    }
+}
+
 /// The most money a player may hold.
 const MAX_MONEY: u32 = 2_147_483_647;
 
+/// `CMSG_ACCEPT_TRADE`: when both have, it goes through.
 pub fn accept(map: &mut Map, g: Guid) {
     type S = SMSG_TRADE_STATUS_TradeStatus;
     let Some(with) = partner(map, g) else {

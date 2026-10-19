@@ -29,24 +29,32 @@ fn kind(t: &SMSG_MESSAGECHAT_ChatType) -> String {
         .collect()
 }
 
-/// The chat lines `c` hears within [`NONE_WITHIN`]: their kind, language
-/// and text.
-async fn lines(c: &mut Client) -> Vec<(String, Language, String)> {
+/// A chat line `c` hears: its kind, language and text.
+type Line = (String, Language, String);
+
+fn line(m: &ServerOpcodeMessage) -> Option<Line> {
+    match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(x)
+            if !matches!(x.chat_type, SMSG_MESSAGECHAT_ChatType::System { .. }) =>
+        {
+            Some((kind(&x.chat_type), x.language, x.message.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// The chat lines `c` hears within [`NONE_WITHIN`].
+async fn lines(c: &mut Client) -> Vec<Line> {
     let mut heard = Vec::new();
-    while let Some(l) = c
-        .gets(NONE_WITHIN, |m| match m {
-            ServerOpcodeMessage::SMSG_MESSAGECHAT(x)
-                if !matches!(x.chat_type, SMSG_MESSAGECHAT_ChatType::System { .. }) =>
-            {
-                Some((kind(&x.chat_type), x.language, x.message.clone()))
-            }
-            _ => None,
-        })
-        .await
-    {
+    while let Some(l) = c.gets(NONE_WITHIN, line).await {
         heard.push(l);
     }
     heard
+}
+
+/// The next chat line `c` hears.
+async fn next_line(c: &mut Client) -> Line {
+    c.wait_for("a chat line", line).await
 }
 
 /// `leader` invites `member` by `name`, who accepts.
@@ -90,15 +98,14 @@ async fn raid_party_chat_is_the_subgroups_and_raid_leading_lines_the_leaders() {
     .await;
     handled(&mut a).await;
     for x in [&mut a, &mut b, &mut c] {
-        let _ = lines(x).await;
+        handled(x).await;
         x.clear();
     }
     use CMSG_MESSAGECHAT_ChatType as T;
     speak(&a, T::Party, Language::Common, "subgroup").await;
     let party = ("Party".to_owned(), Language::Common, "subgroup".to_owned());
-    assert_eq!(lines(&mut a).await, [party.clone()]);
-    assert_eq!(lines(&mut c).await, [party]);
-    assert_eq!(lines(&mut b).await, [], "Bob's in the second subgroup");
+    assert_eq!(next_line(&mut a).await, party);
+    assert_eq!(next_line(&mut c).await, party);
     for (kind, wire) in [
         (T::Raid, "Raid"),
         (T::RaidLeader, "RaidLeader"),
@@ -107,15 +114,21 @@ async fn raid_party_chat_is_the_subgroups_and_raid_leading_lines_the_leaders() {
         speak(&a, kind, Language::Common, "raid").await;
         for x in [&mut a, &mut b, &mut c] {
             assert_eq!(
-                lines(x).await,
-                [(wire.to_owned(), Language::Common, "raid".to_owned())]
+                next_line(x).await,
+                (wire.to_owned(), Language::Common, "raid".to_owned())
             );
         }
     }
     for kind in [T::RaidLeader, T::RaidWarning] {
         speak(&b, kind, Language::Common, "forged").await;
     }
-    for x in [&mut a, &mut b, &mut c] {
+    handled(&mut b).await;
+    assert_eq!(
+        lines(&mut b).await,
+        [],
+        "Bob's in the second subgroup, and doesn't lead"
+    );
+    for x in [&mut a, &mut c] {
         assert_eq!(lines(x).await, [], "Bob doesn't lead");
     }
     a.send(CMSG_GROUP_ASSISTANT_LEADER {
@@ -127,12 +140,12 @@ async fn raid_party_chat_is_the_subgroups_and_raid_leading_lines_the_leaders() {
     speak(&b, T::RaidWarning, Language::Common, "assistant").await;
     for x in [&mut a, &mut b, &mut c] {
         assert_eq!(
-            lines(x).await,
-            [(
+            next_line(x).await,
+            (
                 "RaidWarning".to_owned(),
                 Language::Common,
                 "assistant".to_owned()
-            )]
+            )
         );
     }
 }
@@ -178,10 +191,16 @@ async fn an_addons_line_is_its_payload_and_never_a_command() {
     handled(&mut a).await;
     a.clear();
     b.clear();
-    speak(&a, CMSG_MESSAGECHAT_ChatType::Party, Language::Addon, ".die").await;
+    speak(
+        &a,
+        CMSG_MESSAGECHAT_ChatType::Party,
+        Language::Addon,
+        ".die",
+    )
+    .await;
     let line = ("Party".to_owned(), Language::Addon, ".die".to_owned());
-    assert_eq!(lines(&mut a).await, [line.clone()]);
-    assert_eq!(lines(&mut b).await, [line]);
+    assert_eq!(next_line(&mut a).await, line);
+    assert_eq!(next_line(&mut b).await, line);
     let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
     let alive = map
         .query(move |m| m.players[&ga].death == crate::game::map::death::Death::Alive)
