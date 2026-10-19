@@ -130,6 +130,15 @@ pub fn escort_failed(_map: &Map, _source: Option<Guid>, _target: Option<Guid>) -
     false
 }
 
+/// Whether `b` is in sight of `a`: from the eyes at `a` to the middle of
+/// what is at `b`, past the navmesh's walls (with none, in sight).
+pub fn in_sight(map: &Map, a: Vector3d, b: Vector3d) -> bool {
+    let up = |v: Vector3d, h: f32| Vector3d { z: v.z + h, ..v };
+    map.nav
+        .as_ref()
+        .is_none_or(|n| n.sight(up(a, 2.0), up(b, 1.0)))
+}
+
 /// A comparison by mode: 0 equal, 1 at least, 2 at most; another mode
 /// isn't judged.
 fn compare(actual: i64, expected: i64, mode: i32) -> Truth {
@@ -448,14 +457,7 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
         },
         // Line of sight from the source's eyes to the target's middle.
         37 => match (position(source), position(target)) {
-            (Some(a), Some(b)) => {
-                let up = |v: Vector3d, h: f32| Vector3d { z: v.z + h, ..v };
-                Truth::of(
-                    map.nav
-                        .as_ref()
-                        .is_none_or(|n| n.sight(up(a, 2.0), up(b, 1.0))),
-                )
-            }
+            (Some(a), Some(b)) => Truth::of(in_sight(map, a, b)),
             _ => Truth::Unknown,
         },
         38 => match (position(source), position(target)) {

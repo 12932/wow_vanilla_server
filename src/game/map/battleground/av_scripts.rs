@@ -600,6 +600,20 @@ fn rituals(map: &mut Map) {
 /// The ritual is complete: the lord rises; the summoner and escorts stop,
 /// take up the altar, and leave a while later.
 fn complete(map: &mut Map, i: usize) {
+    // The ritual is the summoner's, alive and invoking at her altar (the
+    // events 7060 and 7268 go to her, and only then does she take them
+    // up): with her fallen, it comes to nothing, its channellers let go.
+    let side = extras(map).map_or(0, |x| x.scripts.rituals[i].side);
+    let summoner =
+        creature_of(map, SUMMONERS[side].entry).filter(|g| event_ai::phase(map, *g) == INVOKING);
+    let Some(g) = summoner else {
+        let users =
+            state_mut(map).map_or(Vec::new(), |st| std::mem::take(&mut st.rituals[i].users));
+        for (u, _) in users {
+            end_channel(map, u);
+        }
+        return;
+    };
     let Some(r) = state_mut(map).map(|st| st.rituals.remove(i)) else {
         return;
     };
@@ -614,9 +628,6 @@ fn complete(map: &mut Map, i: usize) {
     if let Some((at, o)) = altar {
         raise_lord(map, s, (at.x, at.y, at.z, o));
     }
-    let Some(g) = creature_of(map, SUMMONERS[s].entry) else {
-        return;
-    };
     set_phase(map, g, SUMMONED);
     stop_invoking(map, g);
     for e in escorts(map, g, s, 200.0) {
@@ -1286,9 +1297,12 @@ fn sweep(map: &mut Map) {
             }
         }
         if l.entry == BALINDA {
-            let spot = map
-                .position_of(victim)
-                .is_some_and(|v| (5.0..=25.0).contains(&dist(v, at)));
+            // Her casting spot: five to twenty-five yards from her victim,
+            // in sight of them.
+            let spot = map.position_of(victim).is_some_and(|v| {
+                (5.0..=25.0).contains(&dist(v, at))
+                    && crate::game::map::conditions::in_sight(map, at, v)
+            });
             if let Some(s) = event_ai::scripted_mut(map, g) {
                 s.no_combat_movement = spot;
             }
@@ -1507,6 +1521,46 @@ impl<'a> Builder<'a> {
         );
     }
 
+    /// A condition of the victim within `yards` (`distance_to_target`, at
+    /// most): its id.
+    fn victim_within(&mut self, yards: i32) -> u32 {
+        self.next += 1;
+        let id = self.next;
+        self.data.conditions.insert(
+            id,
+            Condition {
+                entry: id,
+                kind: 38,
+                values: [yards, 2, 0, 0],
+                flags: 0,
+            },
+        );
+        id
+    }
+
+    /// In combat, as [`Builder::every`], but only with its victim within
+    /// `yards`: due, it waits for them there (Thistle Tea's `condition:`
+    /// on a timer).
+    fn every_within(
+        &mut self,
+        entry: u32,
+        yards: i32,
+        first: (i32, i32),
+        repeat: (i32, i32),
+        steps: Vec<ScriptStep>,
+    ) {
+        let condition = self.victim_within(yards);
+        self.every(entry, first, repeat, steps);
+        if let Some(e) = self
+            .data
+            .ai_events
+            .get_mut(&entry)
+            .and_then(|events| events.last_mut())
+        {
+            e.condition = condition;
+        }
+    }
+
     /// With the victim between `min` and `max` yards, every `repeat`.
     fn within(
         &mut self,
@@ -1578,11 +1632,11 @@ pub fn install(data: &mut GameData) {
             vec![home_step(), stand_step(u32::from(sits))],
         );
     }
-    // The war riders.
+    // The war riders: their spells for a victim within thirty yards.
     for entry in HORDE_RIDERS.into_iter().chain(ALLIANCE_RIDERS) {
-        b.every(entry, (0, 0), (5000, 5000), vec![cast(22088)]);
-        b.every(entry, (8000, 8000), (7500, 7500), vec![cast(15285)]);
-        b.every(entry, (13000, 13000), (9000, 9000), vec![cast(21188)]);
+        b.every_within(entry, 30, (0, 0), (5000, 5000), vec![cast(22088)]);
+        b.every_within(entry, 30, (8000, 8000), (7500, 7500), vec![cast(15285)]);
+        b.every_within(entry, 30, (13000, 13000), (9000, 9000), vec![cast(21188)]);
     }
     // The cavalry get down to fight, and mount again after.
     for c in &CAVALRY {
