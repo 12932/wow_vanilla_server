@@ -453,6 +453,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     (`UNIT_FLAG_PREVENT_ANIM`).
   - **Left:** a create strips jump and spline-elevation data where both references send it; riding skill caps
     don't follow `SkillTiers`; the Scourge camps and fireworks; Stratholme's Baron and Aurius.
+- **8b, spells, round 8:** **what a cast breaks is mangos's now:** wvs took off the caster's auras with flag 0x1
+  (mangos's HOSTILE_ACTION, which 1.12's Stealth has) at the cast's start, so **applying a poison or disarming a
+  trap broke Stealth**; now ACTION (0x4) goes at the start and ACTION_LATE at the launch, the spell's own aura and
+  spells that allow Stealth or Invisibility keep them, and NOT_AN_ACTION breaks nothing. Pick Pocket's failure
+  breaks stealth; a health funnel takes spell power and its modifiers (mangos); a DoT's coefficient shares by
+  mangos's tick count (`GetSpellAuraMaxTicks`); Deep Wounds adds flat damage done; a refreshed Discombobulate
+  dismounts again. **My calls:** a cast now ends Feign Death too (its flags include ACTION, mangos); a harmful spell
+  at a dead target still rolls to hit (mangos). **Found:** a cast at a corpse with a destination is misread
+  (`CMSG_CAST_SPELL`'s targets), queued for the fork.
 
 ## Answered
 - **#10** keep swinging on arrival.
