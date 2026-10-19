@@ -1183,6 +1183,10 @@ pub fn apply_spell(
         crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
         crate::game::map::spells::single_target::applied(map, caster, target, spell);
         crate::game::map::spells::immunity::applied(map, target, &h);
+        // Food and drink seat the eater (mangos's `_AddSpellAuraHolder`).
+        if spell.aura_interrupt_flags & INTERRUPT_NOT_SEATED != 0 {
+            crate::game::map::chat::sit_for_aura(map, target);
+        }
     }
     recalc(map, target);
     // Helping a flagged player flags the helper.

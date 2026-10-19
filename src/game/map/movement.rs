@@ -161,6 +161,7 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     let turned = f.get_turn_left()
         || f.get_turn_right()
         || (info.orientation - p.movement.orientation).abs() > f32::EPSILON;
+    let jumped = f.get_jumping().is_some();
     p.cell = new_cell;
     p.movement = info.clone();
     let position = info.position;
@@ -173,7 +174,7 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     if let Some(frame) = relay(guid, info) {
         map.send_to_observers(guid, &frame, false);
     }
-    body_moved(map, guid, moved, turned);
+    body_moved(map, guid, moved, turned, jumped);
     // Into the water or out of it: the auras that ends (Thistle Tea's
     // `interrupt_water_auras`). The terrain's liquid ends them too, for a
     // client that doesn't say (`environment::update`).
@@ -227,12 +228,13 @@ fn remember_safe_position(map: &mut Map, g: Guid) {
     }
 }
 
-/// A player moved or turned (Thistle Tea's `Emote.move` and movement
-/// interrupts): moving ends an emote state, moving or turning stands them
-/// up, and the auras moving or turning breaks go.
-fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
+/// A player moved, turned or jumped (Thistle Tea's `Emote.move` and
+/// movement interrupts): moving ends an emote state, any of them stands
+/// them up, which ends what needs them seated (food, drink: mangos's
+/// `SetStandState`), and the auras moving or turning breaks go.
+fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool, jumped: bool) {
     use crate::game::map::auras::{INTERRUPT_MOVE, INTERRUPT_NOT_SEATED, INTERRUPT_TURNING};
-    if !moved && !turned {
+    if !moved && !turned && !jumped {
         return;
     }
     let Some(p) = map.players.get_mut(&g) else {
@@ -244,18 +246,27 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool) {
     }
     // Sitting, sleeping or kneeling; not dead: up, and told so, as mangos's
     // SetStandState and Thistle Tea's `Emote.move` tell it.
-    if !matches!(p.stand_state(), 0 | 7) && p.death == crate::game::map::death::Death::Alive {
+    let stood =
+        !matches!(p.stand_state(), 0 | 7) && p.death == crate::game::map::death::Death::Alive;
+    if stood {
         p.set_stand_state(0);
         p.outbound.send(&SMSG_STANDSTATE_UPDATE {
             state: UnitStandState::Stand,
         });
     }
-    let mask = if moved {
+    let mut mask = if moved {
         INTERRUPT_MOVE | INTERRUPT_TURNING | INTERRUPT_NOT_SEATED
-    } else {
+    } else if turned {
         INTERRUPT_TURNING
+    } else {
+        0
     };
-    crate::game::map::auras::interrupt(map, g, mask);
+    if stood {
+        mask |= INTERRUPT_NOT_SEATED;
+    }
+    if mask != 0 {
+        crate::game::map::auras::interrupt(map, g, mask);
+    }
 }
 
 /// vmangos's safe fall: below this many yards a fall doesn't hurt.

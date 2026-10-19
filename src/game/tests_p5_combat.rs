@@ -239,7 +239,8 @@ fn posture(m: &Map, g: Guid) -> (u8, bool) {
 /// posture", as mangos's `DealDamage` has it since 1.5: a player sitting,
 /// sleeping or kneeling who is struck (a swing that misses too, or a
 /// spell) stands, told so, and their food ends; a periodic tick leaves
-/// them as they were; god mode, nothing.
+/// them as they were; god mode, nothing. (Food sits a player down, and
+/// sleeping ends it.)
 #[tokio::test]
 async fn a_seated_player_struck_stands_and_their_food_ends_but_a_tick_leaves_them_seated() {
     let (_realm, mut a, ga, map) = setup_with(data(), Class::Warrior).await;
@@ -258,6 +259,9 @@ async fn a_seated_player_struck_stands_and_their_food_ends_but_a_tick_leaves_the
         (UnitStandState::Sleep, combat::Outcome::Hit),
         (UnitStandState::Kneel, combat::Outcome::Dodge),
     ] {
+        // The food sits them; then the posture: kneeling keeps the meal,
+        // lying down to sleep ends it (mangos's `IsSeatedState`).
+        map.query(move |m| food(m, ga, 90_510)).await.unwrap();
         a.send(CMSG_STANDSTATECHANGE {
             animation_state: state,
         })
@@ -269,14 +273,14 @@ async fn a_seated_player_struck_stands_and_their_food_ends_but_a_tick_leaves_the
         .await;
         let (seated, struck) = map
             .query(move |m| {
-                food(m, ga, 90_510);
                 let seated = posture(m, ga);
                 forced_swing(m, brute, ga, outcome);
                 (seated, posture(m, ga))
             })
             .await
             .unwrap();
-        assert_eq!(seated, (state.as_int(), true), "{state:?} with food");
+        let fed = state != UnitStandState::Sleep;
+        assert_eq!(seated, (state.as_int(), fed), "{state:?} after food");
         assert_eq!(struck, (0, false), "{state:?} struck: {outcome:?}");
         a.wait_for("standing", |m| match m {
             ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(u) if u.state == UnitStandState::Stand => {

@@ -681,8 +681,9 @@ async fn a_percent_heal_ticks_a_share_of_the_maximum() {
 
 /// Thistle Tea's food and drink: with no amplitude neither ticks as an
 /// aura (the regeneration gives what they give), so nothing is healed,
-/// given or logged by their auras; turning doesn't take them off, as
-/// they are broken by standing alone.
+/// given or logged by their auras; turning's interrupt doesn't take them
+/// off, as they are broken by standing alone (turning stands a seated
+/// eater up, which does: `tests_body`).
 #[tokio::test]
 async fn food_and_drink_tick_no_aura_and_turning_leaves_them() {
     let (_realm, mut a, ga, map) = setup_with(data(), Class::Priest).await;

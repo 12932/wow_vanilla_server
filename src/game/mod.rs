@@ -39,6 +39,8 @@ mod tests_bg5;
 #[cfg(test)]
 mod tests_bg6;
 #[cfg(test)]
+mod tests_body;
+#[cfg(test)]
 mod tests_bosses;
 #[cfg(test)]
 mod tests_bugs1;
