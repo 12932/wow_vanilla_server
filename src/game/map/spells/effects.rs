@@ -264,6 +264,33 @@ pub fn run(
     t: &Targets,
 ) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
+    // A death item's aura goes on before the damage of its spell, so a
+    // Shadowburn that kills leaves its shard (mangos's `DoSpellHitOnUnit`
+    // adds the holder before `DealSpellDamage`).
+    let aura_of = |i: usize| {
+        which[i]
+            && matches!(
+                s.effects[i].effect,
+                EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY
+            )
+            && s.effects[i].aura != 0
+    };
+    let early = (0..3).any(|i| aura_of(i) && s.effects[i].aura == auras::AURA_CHANNEL_DEATH_ITEM)
+        && (0..3).any(|i| which[i] && s.effects[i].effect == EFFECT_SCHOOL_DAMAGE);
+    if early {
+        let pre: Vec<(usize, i32)> = (0..3)
+            .filter(|i| {
+                aura_of(*i)
+                    && !crate::game::map::pets::immune(map, caster, target, s, *i)
+                    && !crate::game::map::extra_effects::effect_immune(map, target, s, *i)
+            })
+            .map(|i| {
+                let points = l.mods.points(s, i, points_with(s, i, level, l.combo));
+                (i, aura_amount(map, caster, target, s, i, points, l))
+            })
+            .collect();
+        apply_auras(map, caster, target, s, &pre, l, item);
+    }
     let mut aura_effects = Vec::new();
     let mut weapon = Vec::new();
     let mut pet_aura = Vec::new();
@@ -291,8 +318,10 @@ pub fn run(
             // `retain_combo_points`).
             EFFECT_APPLY_AURA if e.aura == AURA_RETAIN_COMBO_POINTS && awards_combo_points(s) => {}
             EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY if e.aura != 0 => {
-                let amount = aura_amount(map, caster, target, s, index, points, &here);
-                aura_effects.push((index, amount));
+                if !early {
+                    let amount = aura_amount(map, caster, target, s, index, points, &here);
+                    aura_effects.push((index, amount));
+                }
             }
             EFFECT_WEAPON_DAMAGE
             | EFFECT_WEAPON_DAMAGE_NOSCHOOL
@@ -320,6 +349,23 @@ pub fn run(
     if !pet_aura.is_empty() {
         crate::game::map::pets::area_aura(map, caster, s, &pet_aura);
     }
+    if !early {
+        apply_auras(map, caster, target, s, &aura_effects, l, item);
+    }
+}
+
+/// `s`'s aura effects on `target` together, one holder: its duration (and
+/// diminishing returns), charges, the procs of a harmful one and its
+/// threat.
+fn apply_auras(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    aura_effects: &[(usize, i32)],
+    l: &Landing,
+    item: Option<Guid>,
+) {
     if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);
         // The target's returns before, should the aura not go on.
@@ -351,7 +397,7 @@ pub fn run(
                 l.mods.pct[mods::OP_ACTIVATION_TIME],
             ),
         };
-        if auras::apply_spell(map, caster, target, s, &aura_effects, ctx).is_err()
+        if auras::apply_spell(map, caster, target, s, aura_effects, ctx).is_err()
             && caster != target
         {
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);

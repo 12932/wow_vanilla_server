@@ -740,3 +740,152 @@ fn aura_of_strength(m: &mut Map, g: Guid, amount: i32) {
     crate::game::tests_p3_combat::aura_of(m, g, 91_510, AURA_MOD_STAT, 0, amount);
     derive::unit(m, g);
 }
+
+/// A Kobold Geomancer, a creature with mana.
+const GEOMANCER: u32 = 476;
+
+fn mana(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_POWER1))
+}
+
+fn set_mana(m: &mut Map, g: Guid, now: u32, max: u32) {
+    if let Some(f) = m.unit_fields_mut(g) {
+        f.set_u32(UNIT_FIELD_MAXPOWER1, max);
+        f.set_u32(UNIT_FIELD_POWER1, now);
+    }
+}
+
+/// Thistle Tea's "equipment procs independently energize and leech through
+/// the caster owner", "targets with other resources cannot prevent the self
+/// grant", "dead or missing victims still allow the self grant and a dead
+/// wearer cannot receive it" and "restoration clamps to capacity and
+/// equipment removal stops both spells": Mana Drain's blow gives its
+/// wearer eight mana and drains the victim's (as much as it has, none of
+/// one without mana), whatever the victim; no more than the wearer holds;
+/// the aura gone, neither.
+#[tokio::test]
+#[ignore = "extended"]
+async fn mana_drain_gives_its_wearer_mana_whatever_the_victim() {
+    const TRIGGER: u32 = 27_522;
+    let (_realm, _a, gp, map) = real(Race::Human, Class::Paladin).await;
+    let r = map
+        .query(move |m| {
+            put_on(m, gp, gp, TRIGGER);
+            let mut by_victim = Vec::new();
+            for victim_mana in [100, 3, 0] {
+                let victim = spawn(m, gp, GEOMANCER, 60, 3.0);
+                set_mana(m, victim, victim_mana, 100);
+                set_mana(m, gp, 0, 1000);
+                procs::trigger(m, blow(gp, victim, procs::EX_NORMAL_HIT));
+                by_victim.push((mana(m, gp), mana(m, victim)));
+            }
+            // A victim without mana; a dead one.
+            let rager = spawn(m, gp, VERMIN, 60, 3.0);
+            set_mana(m, gp, 0, 1000);
+            procs::trigger(m, blow(gp, rager, procs::EX_NORMAL_HIT));
+            let no_mana = mana(m, gp);
+            // Near full.
+            let victim = spawn(m, gp, GEOMANCER, 60, 3.0);
+            set_mana(m, victim, 100, 100);
+            set_mana(m, gp, 98, 100);
+            procs::trigger(m, blow(gp, victim, procs::EX_NORMAL_HIT));
+            let capped = mana(m, gp);
+            // Gone.
+            auras::remove_spell(m, gp, TRIGGER, None);
+            set_mana(m, gp, 0, 1000);
+            procs::trigger(m, blow(gp, victim, procs::EX_NORMAL_HIT));
+            (by_victim, no_mana, capped, mana(m, gp))
+        })
+        .await
+        .unwrap();
+    let (by_victim, no_mana, capped, gone) = r;
+    let drained: Vec<u32> = by_victim.iter().map(|(_, v)| *v).collect();
+    assert_eq!(drained, [92, 0, 0], "eight drained, or what it had");
+    for (gained, _) in &by_victim {
+        assert!(*gained >= 8, "{by_victim:?}");
+    }
+    assert_eq!(no_mana, 8, "eight from a victim without mana");
+    assert_eq!(capped, 100, "no more than it holds");
+    assert_eq!(gone, 0, "the aura gone, nothing");
+}
+
+/// Thistle Tea's "lethal Shadowburn ranks capture their shard aura before
+/// damage", "resisted and expired Shadowburn do not produce shards" and
+/// "loads positive death items without turning the zero-count Infernal
+/// Fire into a reward": each rank of Shadowburn that kills (a victim worth
+/// experience) leaves its warlock a Soul Shard; one that doesn't kill, its
+/// aura run out before the death, none; the death-item spells name their
+/// item and count, Infernal Fire's none.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_killing_shadowburn_leaves_a_soul_shard_and_one_run_out_none() {
+    const SHARD: u32 = 6265;
+    let (_realm, _a, gw, map) = real(Race::Human, Class::Warlock).await;
+    let r = map
+        .query(move |m| {
+            let shards = |m: &Map| {
+                m.players[&gw]
+                    .items
+                    .iter()
+                    .filter(|i| i.entry == SHARD)
+                    .map(|i| i.fields.get_u32(ITEM_FIELD_STACK_COUNT).max(1))
+                    .sum::<u32>()
+            };
+            let mut ranks = Vec::new();
+            for id in [17_877, 18_867, 18_868, 18_869, 18_870, 18_871] {
+                let victim = spawn(m, gw, VERMIN, 60, 3.0);
+                if let Some(c) = m.creature_mut(victim) {
+                    c.fields.set_u32(UNIT_FIELD_HEALTH, 10);
+                }
+                let before = shards(m);
+                crate::game::map::spells::cast_triggered(m, gw, id, Some(victim));
+                ranks.push((
+                    m.unit_view(victim).is_some_and(|u| !u.alive),
+                    shards(m) - before,
+                ));
+            }
+            // Not lethal: its aura, run out, then the death.
+            let victim = spawn(m, gw, VERMIN, 60, 3.0);
+            let before = shards(m);
+            crate::game::map::spells::cast_triggered(m, gw, 17_877, Some(victim));
+            let held = holder(m, victim, 17_877).is_some();
+            expire(m, victim, 17_877);
+            combat::kill(m, gw, victim);
+            let late = shards(m) - before;
+            let data = m.realm.data.clone();
+            let items: Vec<(u32, i32)> = [1120, 8288, 8289, 11_675, 7914, 16_627, 16_628, 24_826]
+                .into_iter()
+                .map(|id| {
+                    let s = data.spells.get(id).unwrap();
+                    let i = s
+                        .effects
+                        .iter()
+                        .position(|e| e.aura == AURA_CHANNEL_DEATH_ITEM)
+                        .unwrap();
+                    (
+                        s.effects[i].item_type as u32,
+                        crate::game::map::spells::points(s, i, 60),
+                    )
+                })
+                .collect();
+            (ranks, (held, late), items)
+        })
+        .await
+        .unwrap();
+    let (ranks, late, items) = r;
+    assert_eq!(ranks, [(true, 1); 6], "each rank's kill, a shard");
+    assert_eq!(late, (true, 0), "run out before the death: none");
+    assert_eq!(
+        items,
+        [
+            (6265, 1),
+            (6265, 1),
+            (6265, 1),
+            (6265, 1),
+            (6435, 1),
+            (12_648, 1),
+            (12_649, 1),
+            (19_960, 0)
+        ]
+    );
+}
