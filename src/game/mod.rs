@@ -659,6 +659,8 @@ mod tests_p7_core_bg;
 #[cfg(test)]
 mod tests_p7_core_loot;
 #[cfg(test)]
+mod tests_p7_core_motion;
+#[cfg(test)]
 mod tests_p7_core_objects;
 #[cfg(test)]
 mod tests_p7_entity;
