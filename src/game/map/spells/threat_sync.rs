@@ -4,21 +4,26 @@
 //! given back when the caster's last taunt there ends (what was earned
 //! meanwhile stays), while Taunt's own attack-me effect matches it for
 //! good first; Fade's reduction goes on the creatures already fighting the
-//! priest and comes off when it ends, and creatures met while faded don't
-//! take it.
+//! priest, no more than the threat there is, and only what it took comes
+//! back when it ends (mangos's `threatTemporaryFade`); creatures met while
+//! faded don't take it.
 
 use wow_world_messages::Guid;
 
 use crate::game::map::Map;
 use crate::game::map::auras::{self, AURA_MOD_TAUNT, AURA_MOD_TOTAL_THREAT};
 
-/// `unit`'s threat on `creature` changed by `delta`, no lower than none.
-fn modify(map: &mut Map, creature: Guid, unit: Guid, delta: f32) {
+/// `unit`'s threat on `creature` changed by `delta`, no lower than none:
+/// by how much it changed.
+fn modify(map: &mut Map, creature: Guid, unit: Guid, delta: f32) -> f32 {
     if let Some(c) = map.creature_mut(creature)
         && let Some((_, t)) = c.threat.iter_mut().find(|(g, _)| *g == unit)
     {
+        let was = *t;
         *t = (*t + delta).max(0.0);
+        return *t - was;
     }
+    0.0
 }
 
 /// `creature` forgot its fight (died, evaded): nothing is held there now
@@ -32,7 +37,11 @@ pub fn removed(map: &mut Map, creature: Guid, unit: Guid) {
     map.spells.temp_threat.remove(&(creature, unit));
 }
 
-/// `unit`'s temporary threat on `creature` is `amount` now.
+/// `unit`'s temporary threat on `creature` is `amount` now: what was held
+/// there goes back first, and what is held is what `amount` changed, a
+/// reduction no more than the threat there is (mangos's
+/// `setFadeoutThreatReduction`, `max(-threat, amount)`), so a reduction's
+/// end gives back only what it took.
 pub fn set_temporary(map: &mut Map, creature: Guid, unit: Guid, amount: f32) {
     let tracked = map
         .creature(creature)
@@ -52,11 +61,11 @@ pub fn set_temporary(map: &mut Map, creature: Guid, unit: Guid, amount: f32) {
         return;
     }
     modify(map, creature, unit, -previous);
-    modify(map, creature, unit, amount);
-    if amount == 0.0 {
+    let held = modify(map, creature, unit, amount);
+    if held == 0.0 {
         map.spells.temp_threat.remove(&(creature, unit));
     } else {
-        map.spells.temp_threat.insert((creature, unit), amount);
+        map.spells.temp_threat.insert((creature, unit), held);
     }
 }
 
