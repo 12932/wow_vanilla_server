@@ -23,7 +23,7 @@ mod control;
 pub mod eyes;
 mod hunter;
 mod inherit;
-mod possess;
+pub(crate) mod possess;
 pub mod rods;
 mod summon;
 mod totems;

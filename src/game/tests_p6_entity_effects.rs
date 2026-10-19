@@ -357,3 +357,281 @@ async fn attacking_a_plain_creature_or_helping_oneself_flags_no_one() {
         .unwrap();
     assert_eq!(flagged, (false, false), "the wolf, and herself");
 }
+
+// Who a spell's contact flags for PvP.
+
+const SAP: u32 = 9_801;
+const HEAL: u32 = 9_802;
+const QUIET_BUFF: u32 = 9_803;
+const QUIET_HEAL: u32 = 9_804;
+const MARK: u32 = 9_805;
+
+fn pvp_data() -> crate::game::data::GameData {
+    use crate::game::data::spells::{ATTR_EX_NO_THREAT, SpellEffect};
+    use crate::game::tests_pets::{data, effect, spell};
+    let mut d = data();
+    let none = SpellEffect::default();
+    let mut stun = effect(6, 0, 6);
+    stun.aura = crate::game::map::auras::AURA_MOD_STUN;
+    let mut sap = spell(SAP, "Sap", [stun, none, none]);
+    sap.family_name = 8;
+    sap.family_flags = 0x80;
+    sap.duration_index = 4;
+    let heal = spell(HEAL, "Heal", [effect(10, 9, 21), none, none]);
+    let mut quiet_heal = spell(QUIET_HEAL, "Quiet Heal", [effect(10, 9, 21), none, none]);
+    quiet_heal.attributes[1] |= ATTR_EX_NO_THREAT;
+    let mut ward = effect(6, 9, 21);
+    ward.aura = 22;
+    ward.misc_value = 4;
+    let mut quiet_buff = spell(QUIET_BUFF, "Quiet Ward", [ward, none, none]);
+    quiet_buff.attributes[1] |= ATTR_EX_NO_THREAT;
+    quiet_buff.duration_index = 4;
+    // A harmful mark with no damage and no threat: Hunter's Mark's kind.
+    let mut mark = effect(6, 0, 6);
+    mark.aura = 4;
+    let mut mark = spell(MARK, "Mark", [mark, none, none]);
+    mark.attributes[1] |= ATTR_EX_NO_THREAT;
+    mark.duration_index = 4;
+    for s in [sap, heal, quiet_heal, quiet_buff, mark] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d
+}
+
+fn pvp_flagged(m: &Map, g: Guid) -> bool {
+    m.unit_fields(g)
+        .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_PVP))
+}
+
+fn fighting(m: &Map, g: Guid) -> bool {
+    m.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+    })
+}
+
+fn contested(m: &Map, g: Guid) -> bool {
+    m.players[&g].fields.has_flag(
+        PLAYER_FLAGS,
+        crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+    )
+}
+
+/// Any spell of a player's reaching another player's side flagged for PvP
+/// flags its caster, as mangos-classic's `Spell::FillTargetMap` has it:
+/// Sap (which starts no fight), a harmful mark of no threat, a heal; a
+/// buff of no threat on one flagged, in a fight and contested, flags the
+/// caster and no more; a heal that makes threat puts the healer in the
+/// fight and contests them as the one healed is (`SetInCombatWithAssisted`),
+/// a totem's owner standing for the totem. A flagged creature in a fight
+/// flags a helper whose help makes threat, not one whose help makes none
+/// (Thistle Tea's `spell_contacts`).
+#[tokio::test]
+async fn a_spell_on_a_flagged_players_side_flags_its_caster_as_mangos_has_it() {
+    use crate::game::map::spells::cast_triggered;
+    use crate::game::tests_pets::{WOLF, enter};
+    let realm = harness::realm_with(pvp_data());
+    let (_a, alice, map) = enter(&realm, "A", "Alice", Race::Human, Class::Rogue).await;
+    let (_b, bob, _) = enter(&realm, "B", "Bob", Race::Human, Class::Priest).await;
+    let (_g, grom, _) = enter(&realm, "G", "Grom", Race::Undead, Class::Warrior).await;
+    let seen = map
+        .query(move |m| {
+            let reset = |m: &mut Map| {
+                for g in [alice, bob, grom] {
+                    let p = m.players.get_mut(&g).unwrap();
+                    p.pvp = Default::default();
+                    p.combat = Default::default();
+                    p.fields.set_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_PVP,
+                        false,
+                    );
+                    p.fields.set_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                        false,
+                    );
+                    p.fields.set_flag(
+                        PLAYER_FLAGS,
+                        crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+                        false,
+                    );
+                    crate::game::map::auras::remove_spell(m, g, SAP, None);
+                    crate::game::map::auras::remove_spell(m, g, QUIET_BUFF, None);
+                    crate::game::map::auras::remove_spell(m, g, MARK, None);
+                }
+            };
+            let hot = |m: &mut Map, g: Guid| {
+                let f = m.unit_fields_mut(g).unwrap();
+                f.set_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_PVP,
+                    true,
+                );
+                f.set_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    true,
+                );
+                if let Some(p) = m.players.get_mut(&g) {
+                    p.fields.set_flag(
+                        PLAYER_FLAGS,
+                        crate::game::map::pvp::PLAYER_FLAGS_CONTESTED_PVP,
+                        true,
+                    );
+                }
+            };
+            let mut seen = Vec::new();
+            // Sap on flagged Grom: Alice flagged, and no one fights.
+            reset(m);
+            m.unit_fields_mut(grom).unwrap().set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_PVP,
+                true,
+            );
+            cast_triggered(m, alice, SAP, Some(grom));
+            seen.push((
+                "sap",
+                pvp_flagged(m, alice),
+                fighting(m, alice) || fighting(m, grom),
+                contested(m, alice),
+            ));
+            // A mark of no threat on him: flagged too.
+            reset(m);
+            m.unit_fields_mut(grom).unwrap().set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_PVP,
+                true,
+            );
+            cast_triggered(m, alice, MARK, Some(grom));
+            seen.push(("mark", pvp_flagged(m, alice), fighting(m, alice), false));
+            // Bob flagged, fighting and contested: a quiet ward flags her,
+            // no more; a heal puts her in his fight, contested.
+            reset(m);
+            hot(m, bob);
+            cast_triggered(m, alice, QUIET_BUFF, Some(bob));
+            seen.push((
+                "quiet ward",
+                pvp_flagged(m, alice),
+                fighting(m, alice),
+                contested(m, alice),
+            ));
+            reset(m);
+            hot(m, bob);
+            cast_triggered(m, alice, HEAL, Some(bob));
+            seen.push((
+                "heal",
+                pvp_flagged(m, alice),
+                fighting(m, alice),
+                contested(m, alice),
+            ));
+            // Bob's totem, in his fight: healing it is helping him.
+            reset(m);
+            hot(m, bob);
+            let t = m.realm.data.creature_template(WOLF).cloned().unwrap();
+            let at = m.players[&bob].position();
+            let mut totem = Creature::new(guid::unit(WOLF, 77), &t, 1, at, 0.0);
+            totem.owner = Some(bob);
+            let totem = m.add_creature(totem);
+            hot(m, totem);
+            cast_triggered(m, alice, HEAL, Some(totem));
+            seen.push((
+                "his totem",
+                pvp_flagged(m, alice),
+                fighting(m, alice),
+                contested(m, alice),
+            ));
+            // A flagged wolf in a fight: a quiet heal flags no one, a heal
+            // that makes threat does.
+            reset(m);
+            let wolf = Creature::new(guid::unit(WOLF, 78), &t, 1, at, 0.0);
+            let wolf = m.add_creature(wolf);
+            hot(m, wolf);
+            cast_triggered(m, alice, QUIET_HEAL, Some(wolf));
+            let quiet = pvp_flagged(m, alice);
+            cast_triggered(m, alice, HEAL, Some(wolf));
+            seen.push(("flagged wolf", quiet, pvp_flagged(m, alice), false));
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        seen,
+        vec![
+            ("sap", true, false, false),
+            ("mark", true, false, false),
+            ("quiet ward", true, false, false),
+            ("heal", true, true, true),
+            ("his totem", true, true, true),
+            ("flagged wolf", false, true, false),
+        ]
+    );
+}
+
+/// A pet's blow on a flagged player is its master's: he is flagged,
+/// contested and in the fight; the one struck is flagged by it, not
+/// contested. A possessed player's blow flags the one who holds them
+/// (Thistle Tea's "resolves a pet attack to both players and applies the
+/// owner's flags" and "a possessed player's combat flags the controller";
+/// mangos's `SetInCombatWithVictim` by the beneficiary player).
+#[tokio::test]
+async fn a_pets_or_a_puppets_blow_flags_its_master() {
+    use crate::game::tests_pets::{WOLF, enter};
+    let realm = harness::realm_with(pvp_data());
+    let (_a, alice, map) = enter(&realm, "A", "Alice", Race::Human, Class::Warrior).await;
+    let (_b, bob, _) = enter(&realm, "B", "Bob", Race::Human, Class::Priest).await;
+    let (_g, grom, _) = enter(&realm, "G", "Grom", Race::Undead, Class::Warrior).await;
+    let (pet_blow, puppet_blow) = map
+        .query(move |m| {
+            let t = m.realm.data.creature_template(WOLF).cloned().unwrap();
+            let at = m.players[&alice].position();
+            let mut pet = Creature::new(guid::unit(WOLF, 79), &t, 1, at, 0.0);
+            pet.owner = Some(alice);
+            let pet = m.add_creature(pet);
+            m.unit_fields_mut(grom).unwrap().set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_PVP,
+                true,
+            );
+            combat::engage(m, pet, grom);
+            combat::deal_damage(m, pet, grom, 1);
+            let pet_blow = (
+                pvp_flagged(m, alice),
+                contested(m, alice),
+                fighting(m, alice),
+                pvp_flagged(m, grom),
+                contested(m, grom),
+            );
+            // Bob, held by Grom, strikes flagged Alice: Grom's blow.
+            for g in [grom, alice] {
+                let p = m.players.get_mut(&g).unwrap();
+                p.combat = Default::default();
+                p.pvp = Default::default();
+                p.fields.set_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_PVP,
+                    g == alice,
+                );
+            }
+            let now = m.now;
+            m.players.get_mut(&bob).unwrap().owned.possessed_by =
+                Some(crate::game::map::pets::possess::Possession {
+                    master: grom,
+                    spell: 605,
+                    was_faction: 1,
+                    manual: true,
+                    next_think: now,
+                    next_cast_at: now,
+                    melee_fallback: false,
+                });
+            combat::engage(m, bob, alice);
+            combat::deal_damage(m, bob, alice, 1);
+            (pet_blow, (pvp_flagged(m, grom), fighting(m, grom)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(pet_blow, (true, true, true, true, false), "Alice's pet");
+    assert_eq!(puppet_blow, (true, true), "Grom's puppet");
+}
