@@ -1,6 +1,6 @@
 //! Round 7's player tests, ported from Thistle Tea's
 //! `test/game/world/entity/player/` (docs/parity/matrix.csv): conditions
-//! read off the player as they stand.
+//! read off the player as they stand, and who a meeting stone queues.
 
 use std::time::Duration;
 
@@ -162,4 +162,145 @@ async fn conditions_read_the_player_and_the_world_as_they_stand() {
     );
     assert_eq!(seen.4, ((Unmet, Met), (Met, Unmet)), "Fireball known");
     assert_eq!(seen.5, (Unmet, Met), "High Warlord, the source's");
+}
+
+const STONE: u32 = 178_824;
+
+/// The queue status `a` is told within a moment, if any.
+async fn quiet(a: &mut Client) -> Option<MeetingStoneStatus> {
+    a.gets(Duration::from_millis(150), |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(
+            s,
+        ) => Some(s.status),
+        _ => None,
+    })
+    .await
+}
+
+fn stone_world() -> GameData {
+    use crate::game::data::{GameObjectSpawn, GameObjectTemplate};
+    use crate::game::tests_p3_combat::START;
+    let mut d = crate::game::tests_p3_combat::data();
+    d.gameobject_templates.insert(
+        STONE,
+        GameObjectTemplate {
+            entry: STONE,
+            kind: 23,
+            display_id: 1,
+            name: "Meeting Stone".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 30,
+            entry: STONE,
+            map: 0,
+            x: START.0 - 2.0,
+            y: START.1,
+            z: START.2,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            state: 1,
+            ..Default::default()
+        }],
+    );
+    d.misc.meeting_stones.insert(
+        STONE,
+        crate::game::data::misc::MeetingStone {
+            min_level: 1,
+            max_level: 60,
+            area: 1581,
+        },
+    );
+    d
+}
+
+/// Thistle Tea's `MeetingStones.join` "queues at a live stone and rejects
+/// remote, dead, disabled, or foreign targets": the dead, one too far
+/// off, a stone that can't be used (`GAMEOBJECT_FLAGS` 0x10) and one not
+/// on the player's map queue no one; at the stone, alive, they are
+/// queued for its dungeon, and leaving tells them so.
+#[tokio::test]
+async fn a_meeting_stone_queues_only_the_living_beside_a_usable_stone() {
+    use crate::game::fields::GAMEOBJECT_FLAGS;
+    use crate::game::tests_p3_combat::START;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let realm = harness::realm_with(stone_world());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let stone = guid::game_object(STONE, 30);
+    a.sees(stone).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let queued = || realm.social.meeting_stones.lock().of(g).is_some();
+    // Dead.
+    on(&map, move |m| crate::game::map::death::kill(m, g)).await;
+    a.clear();
+    a.send(CMSG_MEETINGSTONE_JOIN { guid: stone }).await;
+    assert_eq!(quiet(&mut a).await, None, "the dead");
+    on(&map, move |m| {
+        crate::game::map::death::resurrect(m, g, 1.0);
+    })
+    .await;
+    // Too far.
+    on(&map, move |m| {
+        let at = Vector3d {
+            x: START.0 + 30.0,
+            y: START.1,
+            z: START.2,
+        };
+        crate::game::map::movement::teleport_within(m, g, at, 0.0);
+        crate::game::map::movement::teleport_ack(m, g);
+    })
+    .await;
+    a.send(CMSG_MEETINGSTONE_JOIN { guid: stone }).await;
+    assert_eq!(quiet(&mut a).await, None, "too far");
+    on(&map, move |m| {
+        let at = Vector3d {
+            x: START.0,
+            y: START.1,
+            z: START.2,
+        };
+        crate::game::map::movement::teleport_within(m, g, at, 0.0);
+        crate::game::map::movement::teleport_ack(m, g);
+        let f = &mut m.gameobject_mut(stone).unwrap().fields;
+        let flags = f.get_u32(GAMEOBJECT_FLAGS);
+        f.set_u32(GAMEOBJECT_FLAGS, flags | 0x10);
+    })
+    .await;
+    a.send(CMSG_MEETINGSTONE_JOIN { guid: stone }).await;
+    assert_eq!(quiet(&mut a).await, None, "a stone that can't be used");
+    // Another map's stone (none of this map's).
+    a.send(CMSG_MEETINGSTONE_JOIN {
+        guid: guid::game_object(STONE, 31),
+    })
+    .await;
+    assert_eq!(quiet(&mut a).await, None, "not here");
+    assert!(!queued());
+    on(&map, move |m| {
+        let f = &mut m.gameobject_mut(stone).unwrap().fields;
+        let flags = f.get_u32(GAMEOBJECT_FLAGS);
+        f.set_u32(GAMEOBJECT_FLAGS, flags & !0x10);
+    })
+    .await;
+    a.send(CMSG_MEETINGSTONE_JOIN { guid: stone }).await;
+    let joined = a
+        .wait_for("SMSG_MEETINGSTONE_SETQUEUE", |m| match m {
+            ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(s) => Some((s.area.as_int(), s.status)),
+            _ => None,
+        })
+        .await;
+    assert_eq!(joined, (1581, MeetingStoneStatus::JoinedQueue));
+    assert!(queued());
+    a.send(CMSG_MEETINGSTONE_LEAVE {}).await;
+    let left = a
+        .wait_for("SMSG_MEETINGSTONE_SETQUEUE", |m| match m {
+            ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(s) => Some(s.status),
+            _ => None,
+        })
+        .await;
+    assert_eq!(left, MeetingStoneStatus::LeaveQueue);
+    assert!(!queued());
 }
