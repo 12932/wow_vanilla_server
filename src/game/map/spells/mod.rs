@@ -2487,7 +2487,7 @@ pub fn free_talent_points(p: &crate::game::map::player::Player, data: &GameData)
 }
 
 /// Talent points spent, in all trees or in `tab`.
-fn spent_talent_points(
+pub(crate) fn spent_talent_points(
     p: &crate::game::map::player::Player,
     data: &GameData,
     tab: Option<u32>,

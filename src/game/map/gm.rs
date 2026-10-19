@@ -196,6 +196,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             });
             if let Some(level) = level {
                 map.realm.registry.set_level(target, level);
+                crate::game::map::misc::reset_if_overbudget(map, target);
             }
             None
         }

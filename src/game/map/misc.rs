@@ -553,9 +553,36 @@ pub fn talent_spells(
                     }
                 }
             }
+            // And what came with the rank (`spell_learn_spell`), as
+            // mangos's `removeSpell` takes its dependents.
+            for d in data.spells.learn_with.get(r).into_iter().flatten() {
+                if p.spells.contains(d) && !out.contains(d) {
+                    out.push(*d);
+                }
+            }
         }
     }
     out
+}
+
+/// A level lowered below what a player's talents took: they are unlearned
+/// and the points given back, as mangos's `UpdateFreeTalentPoints` resets
+/// them (but an administrator's own, left with no point free).
+pub fn reset_if_overbudget(map: &mut Map, g: Guid) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let earned = u32::from(p.level()).saturating_sub(9);
+    let spent = crate::game::map::spells::spent_talent_points(p, &data, None);
+    if spent <= earned || p.gm_level >= crate::accounts::ADMINISTRATOR {
+        return;
+    }
+    let spells = talent_spells(p, &data);
+    forget_spells(map, g, &spells);
+    if let Some(p) = map.players.get_mut(&g) {
+        crate::game::map::spells::refresh_talent_points(p, &data);
+    }
 }
 
 /// Take spells off a player: their auras go, and the client forgets them.
@@ -603,6 +630,11 @@ fn talent_wipe(map: &mut Map, g: Guid, npc: Guid) {
         return;
     }
     forget_spells(map, g, &spells);
+    // The pet goes, a demon's reagents back (mangos's `resetTalents`,
+    // `RemovePet(PET_SAVE_REAGENTS)`).
+    if let Some(pet) = map.players.get(&g).and_then(|p| p.owned.pet) {
+        crate::game::map::pets::unsummon_refunding(map, pet);
+    }
     if let Some(p) = map.players.get_mut(&g) {
         let money = p.money() - cost;
         p.set_money(money);

@@ -1817,3 +1817,168 @@ async fn a_ghost_back_is_told_the_wait_left_and_none_past_it() {
     relog(&mut a, &realm).await;
     assert_eq!(reclaim_delay(&mut a).await, None, "the living");
 }
+
+/// A warrior's talent of one rank, which brings an ability with it
+/// (`spell_learn_spell`).
+const TALENT_RANK: u32 = 96_200;
+const TALENT_ABILITY: u32 = 96_201;
+
+fn talent_world() -> crate::game::data::GameData {
+    let mut d = data();
+    d.spells.talents.insert(
+        1,
+        crate::game::data::spells::TalentInfo {
+            id: 1,
+            tab: 161,
+            ranks: [TALENT_RANK, 0, 0, 0, 0],
+            ..Default::default()
+        },
+    );
+    d.spells.talent_tab_classes.insert(161, 0x1);
+    let mut rank = crate::game::tests_p3_entity::spell(
+        TALENT_RANK,
+        &[crate::game::tests_p3_entity::aura_effect(29, 1, 0, 1)],
+    );
+    rank.attributes[0] = 0x40;
+    d.spells.spells.insert(TALENT_RANK, rank);
+    d.spells.spells.insert(
+        TALENT_ABILITY,
+        crate::game::tests_p3_entity::spell(TALENT_ABILITY, &[]),
+    );
+    d.spells
+        .learn_with
+        .insert(TALENT_RANK, vec![TALENT_ABILITY]);
+    d
+}
+
+/// Thistle Tea's `Talents.learn` and `reset` "learns and resets
+/// talent-dependent abilities", and `reset_if_overbudget` "resets talents
+/// when the new level cannot support the spent points" and "keeps a valid
+/// talent allocation": a talent brings its ability, and a reset takes both
+/// (mangos's `removeSpell` takes a spell's dependents); a level the spent
+/// points still fit keeps them, one they don't resets them (mangos's
+/// `UpdateFreeTalentPoints`), the points given back.
+#[tokio::test]
+async fn a_talent_brings_its_ability_and_a_level_too_low_for_it_takes_both() {
+    use crate::game::fields::PLAYER_CHARACTER_POINTS1;
+    let realm = harness::realm_with(talent_world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    fn known(m: &crate::game::map::Map, ga: Guid) -> (bool, bool, u32) {
+        let p = &m.players[&ga];
+        (
+            p.spells.contains(&TALENT_RANK),
+            p.spells.contains(&TALENT_ABILITY),
+            p.fields.get_u32(PLAYER_CHARACTER_POINTS1),
+        )
+    }
+    let learned = on(&map, move |m| {
+        // A player, as mangos leaves an administrator's own alone.
+        m.players.get_mut(&ga).unwrap().gm_level = crate::accounts::PLAYER;
+        crate::game::tests_p3_combat::level(m, ga, 10);
+        crate::game::map::spells::learn_talent(m, ga, 1, 0);
+        known(m, ga)
+    })
+    .await;
+    assert_eq!(learned, (true, true, 0), "the talent and its ability");
+    // A level set as `.character level` sets it.
+    let set = |to: u8| {
+        let map = map.clone();
+        async move {
+            on(&map, move |m| {
+                crate::game::tests_p3_combat::level(m, ga, to);
+                crate::game::map::misc::reset_if_overbudget(m, ga);
+                known(m, ga)
+            })
+            .await
+        }
+    };
+    assert_eq!(set(10).await, (true, true, 0), "it fits");
+    assert_eq!(set(9).await, (false, false, 0), "too low: both gone");
+    assert_eq!(set(12).await, (false, false, 3), "points back");
+    // An administrator's own are kept, with no point free.
+    on(&map, move |m| {
+        m.players.get_mut(&ga).unwrap().gm_level = crate::accounts::ADMINISTRATOR;
+        crate::game::tests_p3_combat::level(m, ga, 10);
+        crate::game::map::spells::learn_talent(m, ga, 1, 0);
+    })
+    .await;
+    assert_eq!(set(9).await, (true, true, 0), "an administrator's");
+}
+
+/// Thistle Tea's `TalentReset.complete` "charges once, refunds points,
+/// removes dependent buffs, and preserves other classes' spells": a
+/// trainer's reset takes the talent, the ability that came with it and the
+/// talent's aura, gives the point back and keeps the rest of the spellbook;
+/// it costs a gold, once.
+#[tokio::test]
+async fn a_talent_reset_takes_the_talent_its_ability_and_aura_and_gives_the_point_back() {
+    use crate::game::fields::PLAYER_CHARACTER_POINTS1;
+    let mut d = talent_world();
+    d.creature_templates.insert(
+        9_405,
+        crate::game::data::CreatureTemplate {
+            faction: crate::game::tests_p3_combat::HUMANS,
+            npc_flags: crate::game::map::npc::NPC_FLAG_TRAINER,
+            trainer_class: 1,
+            ..crate::game::tests_p3_combat::template(9_405, 7)
+        },
+    );
+    d.spells.spells.insert(
+        HIGH_BUFF,
+        crate::game::tests_p3_entity::spell(HIGH_BUFF, &[]),
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let trainer = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, ga, 20);
+        crate::game::map::spells::learn(m, ga, HIGH_BUFF);
+        crate::game::map::spells::learn_talent(m, ga, 1, 0);
+        m.players.get_mut(&ga).unwrap().set_money(30_000);
+        crate::game::tests_p3_combat::spawn(m, ga, 9_405, 20, 2.0)
+    })
+    .await;
+    a.sees(trainer).await;
+    let before = on(&map, move |m| {
+        let p = &m.players[&ga];
+        (
+            p.auras.has_spell(TALENT_RANK),
+            p.fields.get_u32(PLAYER_CHARACTER_POINTS1),
+        )
+    })
+    .await;
+    assert_eq!(before, (true, 10), "the talent's aura on, a point spent");
+    a.send(MSG_TALENT_WIPE_CONFIRM_Client {
+        wiping_npc: trainer,
+    })
+    .await;
+    handled(&mut a).await;
+    let after = on(&map, move |m| {
+        let p = &m.players[&ga];
+        (
+            p.spells.contains(&TALENT_RANK),
+            p.spells.contains(&TALENT_ABILITY),
+            p.auras.has_spell(TALENT_RANK),
+            p.spells.contains(&HIGH_BUFF),
+            p.fields.get_u32(PLAYER_CHARACTER_POINTS1),
+            p.money(),
+        )
+    })
+    .await;
+    assert_eq!(
+        after,
+        (false, false, false, true, 11, 20_000),
+        "talent, ability and aura gone, the rest kept, the point back, a gold paid"
+    );
+    a.send(MSG_TALENT_WIPE_CONFIRM_Client {
+        wiping_npc: trainer,
+    })
+    .await;
+    handled(&mut a).await;
+    let money = on(&map, move |m| m.players[&ga].money()).await;
+    assert_eq!(money, 20_000, "nothing to reset, nothing paid");
+}

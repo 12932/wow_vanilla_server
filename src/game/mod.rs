@@ -542,6 +542,8 @@ mod tests_p6_player_copies;
 #[cfg(test)]
 mod tests_p6_player_corpses;
 #[cfg(test)]
+mod tests_p6_player_pets;
+#[cfg(test)]
 mod tests_p6_player_real;
 #[cfg(test)]
 mod tests_parity_combat;
