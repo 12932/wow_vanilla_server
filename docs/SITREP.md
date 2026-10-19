@@ -101,6 +101,28 @@ hours), the crate version bumped with each merge.
   - **Strong raiders:** 1%, in their class's tier set at 60 (a new `.gear raid`), a setting.
   - **Raid AI:** two agents, one for roles, buffs and spells, one for movement and pathing, to keep their files apart.
 
+**Merged from the evening list** (0.1.5, 0.1.6):
+- **Boats (0.1.5):** the cause was the movement layout: the 1.12 client marks "on a transport" with flag
+  0x02000000, the ship's full 8-byte GUID and no timestamp, where 12932's wow_messages fork expects 0x200, a packed
+  GUID and a timestamp. wvs read no real player as aboard: walking on a deck tripped the speed check into the sea,
+  and the crossing left them behind. wvs now converts the real layout at its edges (`movement_wire`), and crosses as
+  mangos does (`SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` with the deck offset, the boat added before its
+  passengers and removed after); passengers' server positions follow the deck; every two-map route crosses both
+  ways. **My call:** fix the fork's vanilla movement layout too, as we did its spell misses, so `movement_wire` can
+  go (queued). Left: logging in on a boat doesn't attach you to it; the Grom'Gol-Undercity zeppelin's in-map jump
+  sends no near teleport.
+- **Flight view (0.1.5):** `[visibility] flight_yards` 400, only on a flight master's mount, measured on the ground;
+  others see the flier at their own distance.
+- **Food (0.1.6):** an aura that standing ends seats a living player (mangos's `_AddSpellAuraHolder`); moving,
+  turning, jumping or lying down ends the meal. Only players sit (mangos sits any unit). Jumping ends it as you asked,
+  though mangos's mask doesn't include the jump.
+- **Bones (0.1.6):** a risen player's corpse becomes bones (flags 0x05, gear slots cleared), seen by everyone, for
+  `[players] bones_hours` (18; 0 for none); not saved across a restart, as mangos never saves them. **mangos's own
+  numbers:** an unclaimed corpse turns to bones after 3 days (checked every 20 minutes); bones last until their grid
+  unloads, about 5 minutes with no one near. wvs has no 3-day expiry for unclaimed corpses yet.
+- **A possible client crash** the bones work's client check found (a heap overrun at `0x466816` when another
+  player's values follow its create in one packet, as when a ghost rises in view): being settled now (`fix/crashcheck`).
+
 ## Answered
 - **#10** keep swinging on arrival.
 - **#18** keep moving unusable gear off at login.
