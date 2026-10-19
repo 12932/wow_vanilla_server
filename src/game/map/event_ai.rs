@@ -1103,6 +1103,8 @@ fn spawned_now(map: &mut Map, g: Guid) {
             ensure_started(map, g);
             fire(map, g, |e| e.kind == EVENT_SPAWNED, None);
         }
+        // A firework guy sends his firework up as he appears.
+        crate::game::fireworks::spawned(map, g);
     }
     // Its summoner hears of it once it is in the world, its own spawned
     // events first (Thistle Tea's `handle_continue({:spawned, _})`).
