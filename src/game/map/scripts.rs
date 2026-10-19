@@ -252,7 +252,7 @@ fn present(map: &Map, g: Guid) -> bool {
 /// object command at an object it found) hands it to the target it
 /// selected, on the old source; the self flag then makes the target the
 /// one that runs it. None if it can't run.
-fn resolve_targets(
+pub(crate) fn resolve_targets(
     map: &Map,
     step: &ScriptStep,
     source: Guid,
@@ -445,18 +445,30 @@ fn hostile_allowed(map: &Map, step: &ScriptStep, source: Guid, g: Guid) -> bool 
     {
         return false;
     }
+    // A cast's target within the spell's range, from its least (taken)
+    // to its most (not), between the two units' reaches (Thistle Tea's
+    // hostile selectors, mangos's combat distance).
     if step.command == 15
         && let Some(s) = map.realm.data.spells.spells.get(&step.datalong[0])
     {
-        let (_, max) = map.realm.data.spells.range(s);
-        if max > 0.0
-            && let (Some(a), Some(b)) = (map.position_of(source), map.position_of(g))
-            && dist(a, b) > max + 5.0
+        let (min, max) = map.realm.data.spells.range(s);
+        if let Some(d) = combat_distance(map, source, g)
+            && ((max > 0.0 && d >= max) || (min > 0.0 && d < min))
         {
             return false;
         }
     }
     true
+}
+
+/// The distance between two units' combat reaches.
+fn combat_distance(map: &Map, a: Guid, b: Guid) -> Option<f32> {
+    let (pa, pb) = (map.position_of(a)?, map.position_of(b)?);
+    let reach = |g| {
+        map.unit_fields(g)
+            .map_or(0.0, |f| f.get_f32(UNIT_FIELD_COMBATREACH).max(0.0))
+    };
+    Some((dist(pa, pb) - reach(a) - reach(b)).max(0.0))
 }
 
 /// How far a target type looks: its parameter, or Thistle Tea's 30 yards
@@ -475,10 +487,17 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
     };
     match step.target_type {
         0 => (!provided.is_zero()).then_some(provided),
-        1 => map
-            .creature(source)
-            .map(|c| c.combat.victim)
-            .filter(|v| !v.is_zero() && alive(map, *v)),
+        // The source's victim: a creature's, or the one a player (a step
+        // swapped to them) attacks (vmangos's `GetVictim`).
+        1 => match map.creature(source) {
+            Some(c) => Some(c.combat.victim),
+            None => map
+                .players
+                .get(&source)
+                .filter(|p| p.combat.attacking)
+                .map(|p| p.combat.victim),
+        }
+        .filter(|v| !v.is_zero() && alive(map, *v)),
         2..=7 => {
             let mut t = threat_list(map, source);
             if matches!(step.target_type, 2 | 5) && !t.is_empty() {
@@ -489,14 +508,16 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
                 2 => t.first().copied(),
                 3 => t.last().copied(),
                 4 | 5 => pick(t, &mut rng),
+                // The nearest and farthest by their reach, not their
+                // centre (Thistle Tea's).
                 6 => t.into_iter().min_by(|a, b| {
-                    let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, at));
-                    let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, at));
+                    let da = combat_distance(map, source, *a).unwrap_or(f32::MAX);
+                    let db = combat_distance(map, source, *b).unwrap_or(f32::MAX);
                     da.total_cmp(&db)
                 }),
                 _ => t.into_iter().max_by(|a, b| {
-                    let da = map.position_of(*a).map_or(0.0, |p| dist(p, at));
-                    let db = map.position_of(*b).map_or(0.0, |p| dist(p, at));
+                    let da = combat_distance(map, source, *a).unwrap_or(0.0);
+                    let db = combat_distance(map, source, *b).unwrap_or(0.0);
                     da.total_cmp(&db)
                 }),
             }
@@ -1235,6 +1256,9 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
 
 /// The bounding radius Thistle Tea takes for a unit with none.
 const DEFAULT_BOUNDING_RADIUS: f32 = 0.389;
+
+/// `UNIT_FLAG_PACIFIED`: a master so can't send its pet in.
+const UNIT_FLAG_PACIFIED_SCRIPT: u32 = 0x0002_0000;
 
 /// Set a game object's state (0 open, 1 closed, 2 active), its flags as
 /// they are; a use's close still to come doesn't undo it.
@@ -2577,9 +2601,24 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // command there is none of, changes nothing, and fails no script
         // (Thistle Tea's).
         88 => {
+            // A source that isn't a creature fails it (its abort flag
+            // says whether that ends the script).
+            if !guid::is_unit(source) {
+                return false;
+            }
             let Some(kind) = crate::game::map::pets::state(map, source).map(|s| s.kind) else {
                 return true;
             };
+            // One its master moves takes no stay or follow from a script:
+            // its movement and fight are its master's.
+            if kind == crate::game::map::pets::Kind::Possessed
+                && matches!(
+                    d1 as u8,
+                    crate::game::map::pets::COMMAND_STAY | crate::game::map::pets::COMMAND_FOLLOW
+                )
+            {
+                return true;
+            }
             match d1 as u8 {
                 crate::game::map::pets::COMMAND_STAY => {
                     let at = map.position_of(source);
@@ -2589,19 +2628,43 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                         s.stay_at = at;
                     }
                 }
+                // Follow: its attack and its cast stop, its foes are
+                // let go, its fight's flag waits out its own time (Thistle
+                // Tea's `set_command_state` follow).
                 crate::game::map::pets::COMMAND_FOLLOW => {
                     crate::game::map::combat::stop_attack(map, source);
+                    crate::game::map::spells::interrupt(map, source);
+                    if let Some(c) = creature_mut(map, source) {
+                        c.threat.clear();
+                        c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+                    }
                     if let Some(s) = crate::game::map::pets::state_mut(map, source) {
                         s.command = crate::game::map::pets::COMMAND_FOLLOW;
                         s.stay_at = None;
                         s.returning = true;
+                        s.commanded = None;
                     }
                 }
+                // Attack, whatever its stance, a living unit it may
+                // attack, its master not pacified; as its master's Attack
+                // (the victim it goes after when told to stay).
                 crate::game::map::pets::COMMAND_ATTACK => {
-                    if !crate::game::map::combat::can_attack(map, source, target) {
+                    let owner = crate::game::map::pets::state(map, source).map(|s| s.owner);
+                    let pacified = owner.and_then(|o| map.unit_fields(o)).is_some_and(|f| {
+                        f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_PACIFIED_SCRIPT != 0
+                    });
+                    if target.is_zero()
+                        || !alive(map, target)
+                        || pacified
+                        || !crate::game::map::combat::can_attack(map, source, target)
+                    {
                         return false;
                     }
                     crate::game::map::pets::attack_target(map, source, target);
+                    if let Some(s) = crate::game::map::pets::state_mut(map, source) {
+                        s.commanded = Some(target);
+                        s.commanded_at = Some(now);
+                    }
                 }
                 // A hunter's pet isn't dismissed so (mangos's "no action
                 // for hunter pets").

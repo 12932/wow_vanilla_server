@@ -279,7 +279,13 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
         // The next it may fight: not one it can't reach or see.
         let next = pick_victim(map, c);
         combat::stop_attack(map, c);
+        let pet = map.creature(c).is_some_and(|cr| cr.pet.is_some());
         match next {
+            // A pet takes up the next itself (its own AI's choice); with
+            // none, its fight is over where it stands, whole as it is
+            // (Thistle Tea's `drop_threat` for a pet): no evade home.
+            Some(_) if pet => {}
+            None if pet => pet_fight_over(map, c),
             Some(t) => {
                 if let Some(cr) = map.creature_mut(c) {
                     cr.combat.attacking = false;
@@ -295,6 +301,21 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             None => evade(map, c),
         }
     }
+}
+
+/// A pet's last foe gone: it leaves the fight where it is, its health and
+/// auras as they are, its master's Attack over; it follows or stays as it
+/// was told.
+fn pet_fight_over(map: &mut Map, g: Guid) {
+    if let Some(c) = map.creature_mut(g) {
+        c.threat.clear();
+        c.chase_target_at = None;
+        c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+        if let Some(s) = c.pet.as_deref_mut() {
+            s.commanded = None;
+        }
+    }
+    combat::leave_combat(map, g);
 }
 
 /// A taunt: `by` is `creature`'s victim while the taunt lasts, and level
@@ -1250,14 +1271,26 @@ fn fight_step(map: &mut Map, g: Guid) {
     {
         c.combat.victim = victim;
         c.fields.set_guid(UNIT_FIELD_TARGET, victim);
+        // A new victim, a new clock for reaching it (Thistle Tea's
+        // `UnreachableTarget.record` by victim).
+        c.engagement.unreachable_since = None;
         // Another victim: one that calls the guards calls one (mangos's
         // `AttackStart` from `SelectHostileTarget`).
         crate::game::map::guards::attack_started(map, g, victim);
     }
     advance_motion(map, g);
-    // A script's move goes on until it gets there.
+    // A script's move goes on until it gets there; there, its arrival is
+    // told before the fight moves it on (a retreat's end frees its spell
+    // list, a point is informed).
     if scripted_moving(map, g) {
         return;
+    }
+    if map.creature(g).is_some_and(|c| {
+        c.scripted
+            .as_deref()
+            .is_some_and(|s| s.scripted_move.is_some())
+    }) {
+        crate::game::map::event_ai::scripted_move_ended(map, g);
     }
     // Stunned, or casting: it stands where it is.
     crate::game::map::spells::creature_cast(map, g, victim);
@@ -1283,20 +1316,27 @@ fn fight_step(map: &mut Map, g: Guid) {
     let swing = crate::game::map::event_ai::melee(map, g);
     let in_reach = combat::in_melee_range(&me, &them);
     if in_reach || !chase {
-        if in_reach {
+        // In reach, or held where it stands, it isn't failing to reach
+        // its victim (Thistle Tea's `UnreachableTarget.maintain`: a
+        // control pause keeps no failure).
+        if in_reach || rooted {
             crate::game::map::creature_combat::reach(map, g, true);
         }
         // On its way in, a chaser runs on to where it aimed, inside its
         // reach, until it touches its victim (Thistle Tea's
         // `halt_at_contact`): it doesn't stop on the reach's edge. A step
-        // about its victim goes on to its end.
-        let (moving, spreading) = map.creature(g).map_or((false, false), |c| {
+        // about its victim goes on to its end. A walk that isn't a chase
+        // (a wander, its path) stops as the fight begins in reach
+        // (`interrupt_idle_movement`).
+        let (moving, spreading, chasing) = map.creature(g).map_or((false, false, false), |c| {
             (
                 matches!(c.motion, Motion::Moving(_)),
                 c.engagement.spreading,
+                c.chase_target_at.is_some(),
             )
         });
-        let runs_on = chase && moving && (spreading || !combat::in_contact(&me, &them));
+        let runs_on =
+            chase && moving && (spreading || (chasing && !combat::in_contact(&me, &them)));
         if !runs_on && moving {
             stop_moving(map, g);
             face(map, g, victim);
@@ -1330,9 +1370,13 @@ fn fight_step(map: &mut Map, g: Guid) {
     let bounding = map
         .unit_fields(victim)
         .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0));
-    let flies = crate::game::map::creature_motion::habitat(map, g).fly;
+    let habitat = crate::game::map::creature_motion::habitat(map, g);
+    let flies = habitat.fly;
+    // A flyer, or a swimmer under the water, goes after its victim's
+    // height as well: it paths again when only that changes (Thistle
+    // Tea's aquatic chase).
     let stale = c.chase_target_at.is_none_or(|at| {
-        let moved = if flies {
+        let moved = if flies || habitat.swims {
             dist(at, them.position)
         } else {
             planar(at, them.position)

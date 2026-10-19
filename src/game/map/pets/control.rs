@@ -407,8 +407,13 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
             if let Some(s) = state_mut(map, pet) {
                 s.react = (action as u8).min(REACT_AGGRESSIVE);
             }
+            // Passive, it stops its attack, its cast (mangos's
+            // `AttackStop(true, true)`) and the chase it was on (Thistle
+            // Tea's movement transition).
             if action as u8 == REACT_PASSIVE {
                 crate::game::map::combat::stop_attack(map, pet);
+                crate::game::map::spells::interrupt(map, pet);
+                ai::stop(map, pet);
             }
         }
         _ if action != 0 => {

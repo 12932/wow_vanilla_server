@@ -378,6 +378,9 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.origin = None;
         c.engagement.unreachable_since = None;
         c.engagement.flee = None;
+        // No chase under way: its next fight's walks are its own until it
+        // chases again.
+        c.chase_target_at = None;
         c.engagement.zone_pulse_at = None;
         c.engagement.zone_scripted = false;
         c.engagement.damage_by_players = 0;

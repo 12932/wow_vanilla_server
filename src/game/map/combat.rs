@@ -1704,6 +1704,11 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     if !c.attacking {
         return;
     }
+    // A creature barred from melee (its template, a script) swings at no
+    // one, however its fight began (a pet sent in, a guardian).
+    if guid::is_unit(attacker) && !crate::game::map::event_ai::melee(map, attacker) {
+        return;
+    }
     let victim = c.victim;
     let dual = dual_wields(map, attacker);
     let main_due = c.next_swing.is_none_or(|t| t <= now);
