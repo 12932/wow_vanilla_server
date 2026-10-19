@@ -540,3 +540,32 @@ async fn obsidian_armor_spends_a_charge_an_answer_and_waits_its_cooldown() {
         "frost at ten seconds, the last charge"
     );
 }
+
+/// Thistle Tea's `TriggeredLifetime` on the real data: the Badge of the
+/// Swarmguard's Insight of the Qiraji (a lasting aura its proc gives)
+/// goes when the badge's thirty seconds are out.
+#[tokio::test]
+#[ignore = "extended"]
+async fn insight_of_the_qiraji_goes_with_the_badge_of_the_swarmguard() {
+    const BADGE: u32 = 26480;
+    const INSIGHT: u32 = 26481;
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, g, map) = player(&realm, "P7KR9", "Badgeone", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            apply(m, g, g, BADGE);
+            spells::cast_triggered(m, g, INSIGHT, Some(g));
+            let on = (has(m, g, BADGE), has(m, g, INSIGHT));
+            pass(m, 29_999);
+            let before = has(m, g, INSIGHT);
+            pass(m, 1);
+            (on, before, has(m, g, BADGE), has(m, g, INSIGHT))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, ((true, true), true, false, false));
+}
