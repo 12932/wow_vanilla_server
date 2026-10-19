@@ -90,6 +90,9 @@ async fn gear_bound_elsewhere_goes_with_its_stats_cast_and_window() {
     let map = realm.maps.get(&realm, MapKey::world(0));
     let sword = guid::item(964_210);
     let boxed = guid::item(964_211);
+    // Cleared before the items go on, not after: the map's own look at
+    // them, each second, may take them off before the test's below.
+    a.clear();
     let before = on(&map, move |m| {
         let data = m.realm.data.clone();
         let p = m.players.get_mut(&g).unwrap();
@@ -135,7 +138,6 @@ async fn gear_bound_elsewhere_goes_with_its_stats_cast_and_window() {
     assert_eq!(worn.0, bare + 500, "50 Stamina's health");
     assert_eq!(worn.1, BOUND_SWORD, "the sword shown");
     assert!(casting, "using the box");
-    a.clear();
     on(&map, move |m| {
         m.players.get_mut(&g).unwrap().misc.items_checked_at = None;
         crate::game::map::item_rules::limit_location(m, g);

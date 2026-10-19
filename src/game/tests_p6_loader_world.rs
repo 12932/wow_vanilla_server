@@ -123,7 +123,12 @@ async fn real_spawn_flags_hold_back_hide_and_lay_out_dead() {
             }
             _ => false,
         };
-        // Symbol of Life brings him back.
+        // Symbol of Life brings him back, cast within its range of him
+        // (its script's creature is looked for there: mangos's
+        // `CheckScriptTargeting`).
+        let mut by = c.position;
+        by.x += 3.0;
+        crate::game::tests_p6_wspell::put(m, priest, by);
         crate::game::map::spells::cast_triggered(m, priest, SYMBOL_OF_LIFE, Some(g));
         let revived = m.creature(g).is_some_and(|c| c.alive());
         // A respawn lays him out again.

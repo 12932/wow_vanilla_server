@@ -450,14 +450,12 @@ fn reconcile(map: &mut Map, g: Guid, s: &crate::game::data::CreatureSpawn, on: &
         UNIT_FIELD_DISPLAYID,
         morph.unwrap_or_else(|| f.get_u32(UNIT_FIELD_DISPLAYID)),
     );
-    let grown = c.auras.product(crate::game::map::auras::AURA_MOD_SCALE);
-    c.fields.set_f32(
-        OBJECT_FIELD_SCALE_X,
-        f.get_f32(OBJECT_FIELD_SCALE_X) * grown,
-    );
-    for field in [UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_COMBATREACH] {
-        c.fields.set_f32(field, f.get_f32(field));
-    }
+    // Its own size the looks', through its scale auras below.
+    let own = [
+        f.get_f32(OBJECT_FIELD_SCALE_X),
+        f.get_f32(UNIT_FIELD_BOUNDINGRADIUS),
+        f.get_f32(UNIT_FIELD_COMBATREACH),
+    ];
     c.fields
         .set_byte(UNIT_FIELD_BYTES_0, 2, f.get_byte(UNIT_FIELD_BYTES_0, 2));
     for i in 0..3 {
@@ -473,6 +471,7 @@ fn reconcile(map: &mut Map, g: Guid, s: &crate::game::data::CreatureSpawn, on: &
         );
     }
     c.event_looks = fresh.event_looks;
+    crate::game::map::auras::resized(map, g, own);
     if let Some(n) = new {
         event_spells(map, g, &n, true);
     }

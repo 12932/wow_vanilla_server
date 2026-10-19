@@ -963,13 +963,13 @@ pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
     ] {
         c.fields.set_u32(field, fresh.fields.get_u32(field));
     }
-    // Its size, as its scale auras make it (they divide it back as they
-    // go: Thistle Tea's `CreatureEntry.apply` recomputes it through them).
-    let grown = c.auras.product(crate::game::map::auras::AURA_MOD_SCALE);
-    c.fields.set_f32(OBJECT_FIELD_SCALE_X, scale * grown);
-    for field in [UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_COMBATREACH] {
-        c.fields.set_f32(field, fresh.fields.get_f32(field));
-    }
+    // Its own size, through its scale auras below (Thistle Tea's
+    // `CreatureEntry.apply` recomputes it through them).
+    let own = [
+        scale,
+        fresh.fields.get_f32(UNIT_FIELD_BOUNDINGRADIUS),
+        fresh.fields.get_f32(UNIT_FIELD_COMBATREACH),
+    ];
     c.fields.set_byte(
         UNIT_FIELD_BYTES_0,
         1,
@@ -1036,6 +1036,7 @@ pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
     if new_list {
         s.spell_list = None;
     }
+    crate::game::map::auras::resized(map, g, own);
     map.visibility_dirty.insert(g);
     if walk {
         let speed = map.creature(g).map_or(2.5, |c| c.speeds.walk);
