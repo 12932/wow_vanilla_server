@@ -489,6 +489,14 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   leash clocks per creature (Thistle Tea shares one between a caller and its helpers); no combat hold for a fighting
   pet under Feign Death; group reward measured from the member, not the corpse; no Void Zone lift; stealth checked
   again on moving, not on turning; a leech's heal makes no threat.
+- **8f, creature AI, round 8:** a retreat (movement 19) needs its point on the ground, seen and reached, and breaks
+  only a cast that moving breaks; a scripted flight runs for its time; a pet's helpful autocast goes on its master,
+  then their party (a raid's subgroup) near, alive and in sight, then itself (mangos's `PetAI::UpdateAllies`; it
+  had cast only on itself); a fighting leader no longer drags its formation; a scripted follower leaves a fight
+  where it stands; a list's cast that takes time halts the walk and faces the target. **My calls:** a door script
+  with `datalong2` 0 stays open (the Emberseer, Chromaggus and Mur'Alzzin doors use it; mangos would close it after
+  15 s); a retreat reaches its point within 0.5 yards (navmesh ends; Thistle Tea 0.1); a script's follower evades in
+  place (Thistle Tea; mangos walks it back).
 
 ## Answered
 - **#10** keep swinging on arrival.
