@@ -635,6 +635,8 @@ mod tests_p7_player_social;
 #[cfg(test)]
 mod tests_p7_player_spells;
 #[cfg(test)]
+mod tests_p7_world_combat;
+#[cfg(test)]
 mod tests_p7_world_nav;
 #[cfg(test)]
 mod tests_parity_combat;

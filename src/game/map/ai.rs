@@ -137,11 +137,24 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     if guid::is_player(master) {
         combat::enter(map, master, false);
     }
+    let group = map
+        .creature(creature)
+        .is_some_and(|c| c.tapped_by.is_none())
+        .then(|| {
+            map.realm
+                .social
+                .groups
+                .lock()
+                .group_of(attacker)
+                .map(|g| g.id)
+        })
+        .flatten();
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
     if c.tapped_by.is_none() && guid::is_player(attacker) {
         c.tapped_by = Some(attacker);
+        c.tap_group = group;
     }
     let new = c.threat.iter().all(|(g, _)| *g != attacker);
     if new {
@@ -265,7 +278,10 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
                 continue;
             };
             cr.threat.retain(|(t, _)| *t != g);
-            cr.tapped_by = cr.tapped_by.filter(|t| *t != g);
+            if cr.tapped_by == Some(g) {
+                cr.tapped_by = None;
+                cr.tap_group = None;
+            }
             if cr.combat.victim != g {
                 continue;
             }
@@ -1706,6 +1722,7 @@ fn evade(map: &mut Map, g: Guid) {
     c.combat = Default::default();
     c.caster = Default::default();
     c.tapped_by = None;
+    c.tap_group = None;
     c.chase_target_at = None;
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.fields

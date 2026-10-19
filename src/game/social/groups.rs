@@ -359,6 +359,11 @@ impl Groups {
         self.groups.get_mut(&id).filter(|gr| gr.formed)
     }
 
+    /// Group `id`, while it is together.
+    pub fn get(&self, id: u32) -> Option<&Group> {
+        self.groups.get(&id).filter(|gr| gr.formed)
+    }
+
     /// Whether group `id` is still together.
     pub fn formed(&self, id: u32) -> bool {
         self.groups.get(&id).is_some_and(|gr| gr.formed)

@@ -3214,17 +3214,33 @@ pub fn group_shares(levels: &[u32], mob_level: u32, o: &KillXp) -> (Vec<u32>, Op
 /// XP and kill credit for a creature's death: the tapper's, or shared with
 /// their group near the corpse (Thistle Tea's `GroupReward`): the living
 /// and the original tapper count; the dead earn nothing, and a released
-/// spirit no quest credit.
+/// spirit no quest credit. The group is the one the tapper was in as they
+/// tapped it, while it holds together, the tapper too if they have left
+/// it, and not a group they have joined since (mangos's
+/// `GetGroupLootRecipient`, Thistle Tea's `KillReward.selection`); else
+/// the tapper's own.
 fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
-    let Some(at) = map.creature(victim).map(|c| c.position) else {
+    let Some((at, tapped_with)) = map.creature(victim).map(|c| {
+        (
+            c.position,
+            c.tap_group.filter(|_| c.tapped_by == Some(tapper)),
+        )
+    }) else {
         return;
     };
     let members: Vec<Guid> = {
         let groups = map.realm.social.groups.lock();
-        match groups.group_of(tapper) {
+        let mut members: Vec<Guid> = match tapped_with
+            .and_then(|id| groups.get(id))
+            .or_else(|| groups.group_of(tapper))
+        {
             Some(g) => g.members.iter().map(|m| m.guid).collect(),
-            None => vec![tapper],
+            None => Vec::new(),
+        };
+        if !members.contains(&tapper) {
+            members.push(tapper);
         }
+        members
     };
     let near: Vec<(Guid, u32, Death)> = members
         .into_iter()
