@@ -355,6 +355,19 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   - **The bake's sea surface** is 0.19 where Thistle Tea's is 0.268 (the test allows 0.1).
   - **Noticed, not changed:** a script group's members keep pointing at a leader who left (Thistle Tea disbands
     it); spells' hit chance has a 22% floor (`magic_hit_chance`), not yet checked against mangos.
+- **7f, creature AI, round 7 (0.1.27):** a wander in reach stops as the fight begins; a swimmer chases its victim's
+  depth; the victim selector works for a player source after a swap; hostile selectors measure between the two
+  reaches, minimum included; a pet finishes its cast before it walks, settles by a master at rest, stops walking and
+  casting on Passive, leaves a fight where it stands when its last foe vanishes; death clears a pet's recall and
+  orders; a guardian's corpse lies its time, and a dead creature's fighting guardians stay; script command 88 (pet
+  commands) fixed; a rooted creature doesn't back away; a retreat's end frees the spell list. **My calls:**
+  - **Hostile selectors** use combat distance (Thistle Tea and mangos); the old 5-yard leeway is gone.
+  - **Passive** also stops the pet's cast (mangos's `AttackStop(true, true)`).
+  - **A pet whose last foe vanishes** leaves the fight at once, not after its 6-second calm.
+  - **A creature's death** leaves its fighting guardians and their corpses; its totems and companions go.
+  - **A pet settles** within 1.4 × 2 yards plus both radii of a master at rest (Thistle Tea's follow slack).
+  - **Left:** 81 rows: formations, scripted follow, the rest of distancing, pets' ally autocast and Devour Magic,
+    targeting by threat and PvP flag, guardians dropped by distance, totems' last pulse, scripted waypoint routes.
 
 ## Answered
 - **#10** keep swinging on arrival.
@@ -450,7 +463,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7c: the loaders, round 7 | merged | 2df117c |
 | 7d: combat, round 7 | 78.5% | 5890d1f |
 | 7e: the world, round 7 | 79.2% | 0c99ac6 |
+| 7f: creature AI, round 7 | 80.0% | 427b0c3 |
 
-**Running now:** round 7 (7e the world, 7f creature AI, 7g creature scripts, 7h entities, 7i pets).
+**Running now:** round 7 (7g creature scripts, 7h entities, 7i pets, 7j creatures, 7k auras).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
