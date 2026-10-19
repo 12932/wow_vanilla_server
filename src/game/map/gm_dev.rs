@@ -483,11 +483,17 @@ fn tier_pieces(
 }
 
 /// An item no player could have: a developer's test, a placeholder, one
-/// deprecated or unused, a creature's weapon (`item_template` has them,
-/// some epic: "TEST Level 80 Epic", "Naxxramas Sword 1H 1 [PH]").
+/// deprecated or unused, a creature's weapon, a level's test kit
+/// (`item_template` has them, some epic: "TEST Level 80 Epic", "Naxxramas
+/// Sword 1H 1 [PH]", "90 Epic Warrior Ring").
 pub(crate) fn unreal(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     name.starts_with("monster")
+        // "90 Epic Warrior Ring", "63 Green Frost Staff": a level's test kit.
+        || name
+            .split(' ')
+            .next()
+            .is_some_and(|w| !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit()))
         || name.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
             matches!(
                 w,
@@ -1575,6 +1581,8 @@ mod tests {
             "Blessed Qiraji Naturalist Staff UNUSED",
             "Monster - Staff, Lord Valthalak",
             "QATest +1000 Spell Dmg Ring",
+            "90 Epic Warrior Ring",
+            "63 Green Frost Staff",
         ] {
             assert!(unreal(name), "{name}");
         }
