@@ -1028,4 +1028,16 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Matrix:** the rows that named the removed post tests, and those of #27 and #20's removed tests, are
       `accepted`, each with its reason.
 
+67. **Channels, locks and the live config, measured** (2026-10-19; `cargo bench --bench sync`, a quiet machine).
+    - **Channels: tokio's everywhere** (your call; `chore/channels`). kanal won only the outbound queue with one
+      sender (33 ns a frame against tokio's 109, 79 with `recv_many`), about 0.6% of a core at 400 players, and lost
+      under contention (16 senders: 487 ns against 188; a 64-sender mailbox: 1,388 ns against 217). Its async
+      receive is unsafe in `select!` by its own docs. The store's and the tiles' differences are microseconds
+      against milliseconds of SQLite and tile reads.
+    - **parking_lot stays** (your call): no clear winner. The registry's `RwLock` is about 20% faster with it at 16
+      and 32 threads; a contended `Mutex` is 1.8x faster at 4 threads and 2.3x slower at 16; uncontended, the same.
+      std with poison recovery costs nothing over std.
+    - **arc-swap gone** (`bbafa39`): a map's update reads the reload counter, 0.14 ns, against arc-swap's 4 ns; the
+      rare reads elsewhere take the lock (8.5 ns alone, about 1 µs at 32 threads).
+
 ## Left for later, and why
