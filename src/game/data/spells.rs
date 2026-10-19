@@ -146,6 +146,8 @@ pub const ATTR_EX2_CANT_CRIT: u32 = 0x2000_0000;
 /// A resurrection that doesn't wait out the reclaim delay (Rebirth's).
 /// `SPELL_ATTR_EX3_NO_PROC_EQUIP_REQUIREMENT`: its procs ask for no gear.
 pub const ATTR_EX3_NO_PROC_EQUIP_REQUIREMENT: u32 = 0x2;
+/// `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`: a block takes all of it, as a miss.
+pub const ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x8;
 pub const ATTR_EX3_NO_RES_TIMER: u32 = 0x10;
 /// A death it causes wears no gear down.
 pub const ATTR_EX3_NO_DURABILITY_LOSS: u32 = 0x20;

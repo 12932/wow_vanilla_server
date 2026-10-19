@@ -88,11 +88,14 @@ fn send_world(map: &Map, p: &mut Player) {
     out.send(&SMSG_TUTORIAL_FLAGS {
         tutorial_data: p.row.state.tutorials,
     });
+    // A rank a higher one has taken the place of isn't in the spellbook.
+    let data = map.realm.data.clone();
     out.send(&SMSG_INITIAL_SPELLS {
         unknown1: 0,
         initial_spells: p
             .spells
             .iter()
+            .filter(|s| !crate::game::map::spells::superseded_in_book(&data, &p.spells, **s))
             .filter_map(|s| u16::try_from(*s).ok())
             .map(|spell_id| InitialSpell {
                 spell_id,

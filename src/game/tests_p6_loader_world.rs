@@ -503,3 +503,72 @@ async fn real_models_reach_breathe_and_show_as_they_should() {
         .await;
     assert_eq!(flags, 0x2);
 }
+
+/// Thistle Tea's Stuck (`spell_stuck_dbc_test.exs`) and mangos-classic's
+/// `HandleStartCommand`: `.start` casts the client's Stuck (7355), ten
+/// seconds of it, at its caster; done, its effect takes them to where
+/// they last stood on the ground (Thistle Tea's; see the matrix's note).
+/// Refused in a fight.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_start_casts_stuck_to_where_its_caster_last_stood() {
+    use crate::game::map::gm_dev::STUCK;
+    if !have_data() {
+        return;
+    }
+    let d = real().unwrap();
+    let stuck = d.spells.get(STUCK).unwrap();
+    assert_eq!(
+        stuck.effects[0].effect,
+        crate::game::map::spells::EFFECT_STUCK
+    );
+    assert_eq!(d.spells.cast_time(stuck), 10_000);
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P6LSTUCK");
+    let g = c.enter("Stucka", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let safe = on(&map, move |m| {
+        let at = m.players[&g].position();
+        let safe = Vector3d {
+            x: at.x + 20.0,
+            ..at
+        };
+        m.players.get_mut(&g).unwrap().safe_position = Some((0, safe, 1.0));
+        safe
+    })
+    .await;
+    c.say(".start").await;
+    let mut began = None;
+    for _ in 0..100 {
+        began = on(&map, move |m| {
+            m.caster(g)
+                .and_then(|c| c.casting.as_ref())
+                .map(|c| (c.spell, c.duration))
+        })
+        .await;
+        if began.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(began, Some((STUCK, 10_000)));
+    on(&map, |m| {
+        m.now += Duration::from_millis(10_001);
+        crate::game::map::spells::update(m);
+    })
+    .await;
+    let landed = c
+        .wait_for("the teleport", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) => Some(t.info.position),
+            _ => None,
+        })
+        .await;
+    assert!((landed.x - safe.x).abs() < 0.1, "{landed:?} {safe:?}");
+    // Not in a fight.
+    on(&map, move |m| {
+        crate::game::map::combat::enter(m, g, false);
+    })
+    .await;
+    c.say(".start").await;
+    c.system_message("in combat").await;
+}

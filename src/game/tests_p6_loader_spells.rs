@@ -449,3 +449,117 @@ async fn real_global_cooldowns_follow_their_modifiers() {
     assert_eq!(waits, (true, false));
     assert_eq!(wrath, 0, "Bestial Wrath starts none");
 }
+
+const SHIELD_BASH: u32 = 72;
+const HAMSTRING: u32 = 1715;
+const HEROIC_STRIKE: u32 = 78;
+const MORTAL_STRIKE: u32 = 12_294;
+
+/// Thistle Tea's `completely_blocked` (`spell_vmangos_test.exs`) and
+/// mangos-classic's `CanBlockAbility`: Shield Bash and Hamstring, marked
+/// blocked whole, are a miss when blocked (told as a block, nothing of
+/// them lands: no damage, no interrupt, no snare), where Heroic Strike,
+/// Mortal Strike and the judgements, not marked, are blocked in part and
+/// land.
+#[test]
+#[ignore = "extended"]
+fn real_shield_bash_and_hamstring_are_blocked_whole_the_rest_in_part() {
+    use crate::game::map::spells::outcome::{self, Hit};
+    let Some(d) = crate::game::data::load::real_data() else {
+        return;
+    };
+    let of = |id: u32| outcome::block_of(d.spells.get(id).unwrap());
+    assert_eq!(of(SHIELD_BASH), Hit::Blocked);
+    assert_eq!(of(HAMSTRING), Hit::Blocked);
+    for id in [HEROIC_STRIKE, MORTAL_STRIKE, 20_467, 20_424] {
+        assert_eq!(of(id), Hit::Block, "{id}");
+    }
+    assert!(!Hit::Blocked.lands() && Hit::Block.lands());
+    assert_eq!((Hit::Blocked.wire(), Hit::Block.wire()), (5, 5));
+    assert_eq!(
+        Hit::Blocked.proc_ex(),
+        crate::game::map::procs::EX_BLOCK,
+        "a block, no hit"
+    );
+}
+
+const BATTLE_SHOUT: u32 = 6673;
+const BATTLE_SHOUT_TOP: u32 = 11_551;
+const SUNDER_ARMOR: u32 = 7386;
+const SUNDER_ARMOR_TOP: u32 = 11_597;
+const FROSTBOLT: u32 = 116;
+const FROSTBOLT_2: u32 = 205;
+
+/// Thistle Tea's `SpellBook.learn` (`spell_vmangos_test.exs`) and
+/// mangos-classic's inactive ranks (`addSpell`, the skill line's
+/// `superseded_by`): a warrior who has learned every rank to sixty has
+/// only the highest of each in the spellbook at login (Battle Shout's
+/// 11551, Sunder Armor's 11597), whatever order the ranks came in; a
+/// lower rank is still known (a trainer counts it) but not cast at the
+/// client's request. A mage's Frostbolt ranks stack, and both are shown.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_superseded_ranks_leave_the_spellbook_but_stay_known() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, g, map) = player(&realm, "P6LRANKS", "Ranka", Race::Human, Class::Warrior).await;
+    let known = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &data, 60);
+        // The lower ranks first, then every rank the trainers teach.
+        spells::learn(m, g, BATTLE_SHOUT);
+        spells::learn(m, g, SUNDER_ARMOR);
+        crate::game::map::npc::learn_class_spells(m, g);
+        spells::learn(m, g, FROSTBOLT);
+        spells::learn(m, g, FROSTBOLT_2);
+        let p = &m.players[&g];
+        [
+            BATTLE_SHOUT,
+            BATTLE_SHOUT_TOP,
+            SUNDER_ARMOR,
+            SUNDER_ARMOR_TOP,
+        ]
+        .map(|s| p.spells.contains(&s))
+    })
+    .await;
+    assert_eq!(known, [true; 4], "every rank known");
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+    c.login(g).await;
+    let book: Vec<u32> = c
+        .wait_for("SMSG_INITIAL_SPELLS", |m| match m {
+            ServerOpcodeMessage::SMSG_INITIAL_SPELLS(s) => Some(
+                s.initial_spells
+                    .iter()
+                    .map(|i| u32::from(i.spell_id))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .await;
+    assert!(book.contains(&BATTLE_SHOUT_TOP) && book.contains(&SUNDER_ARMOR_TOP));
+    assert!(!book.contains(&BATTLE_SHOUT) && !book.contains(&SUNDER_ARMOR));
+    assert!(
+        book.contains(&FROSTBOLT) && book.contains(&FROSTBOLT_2),
+        "Frostbolt's stack"
+    );
+    c.send(CMSG_CAST_SPELL {
+        spell: BATTLE_SHOUT,
+        targets: SpellCastTargets::default(),
+    })
+    .await;
+    let refused = c
+        .wait_frame("SMSG_CAST_RESULT", 0x130, |b| {
+            b[..4] == BATTLE_SHOUT.to_le_bytes()
+        })
+        .await;
+    assert_eq!(refused[4..6], [2, fail::NOT_KNOWN]);
+}

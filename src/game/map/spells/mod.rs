@@ -354,6 +354,20 @@ fn supersedes(data: &GameData, known: &[u32], spell: u32) -> (Option<u32>, bool)
     (line, false)
 }
 
+/// Whether known `spell` is a rank a known higher one has taken the place
+/// of in the spellbook: its skill line's `superseded_by` is known. The
+/// client's data names one only for ranks that don't stack in the
+/// spellbook (a rage or energy spell's, not a mage's Frostbolt). Such a
+/// rank is known (a trainer counts it) but not shown at login nor cast at
+/// the client's request: mangos-classic's inactive spell (`addSpell`,
+/// `GetSpellBookSuccessorSpellId`, `HasActiveSpell`).
+pub fn superseded_in_book(data: &GameData, known: &[u32], spell: u32) -> bool {
+    data.spells.skill_abilities.get(&spell).is_some_and(|v| {
+        v.iter()
+            .any(|a| a.superseded_by != 0 && known.contains(&a.superseded_by))
+    })
+}
+
 /// Every passive spell a player knows takes hold, as on login, and the
 /// auras and cooldowns they logged out with come back.
 pub fn apply_passives(map: &mut Map, player: Guid) {
@@ -763,10 +777,11 @@ impl Map {
 /// asks that (mangos's `HandleCastSpellOpcode`); a script's or an item's
 /// cast is the player's whether they know it or not.
 pub fn cast_request(map: &mut Map, caster: Guid, spell: u32, t: &SpellCastTargets) {
+    let data = &map.realm.data;
     if map
         .players
         .get(&caster)
-        .is_some_and(|p| !p.spells.contains(&spell))
+        .is_some_and(|p| !p.spells.contains(&spell) || superseded_in_book(data, &p.spells, spell))
     {
         send_cast_result(map, caster, spell, Some(fail::NOT_KNOWN));
         return;
@@ -1430,7 +1445,7 @@ fn land(
     if outcome::physical(s)
         && matches!(
             hit,
-            Hit::Hit | Hit::Block | Hit::Miss | Hit::Dodge | Hit::Parry
+            Hit::Hit | Hit::Block | Hit::Blocked | Hit::Miss | Hit::Dodge | Hit::Parry
         )
     {
         crate::game::map::combat::ability_skill_gains(map, caster, target, s);

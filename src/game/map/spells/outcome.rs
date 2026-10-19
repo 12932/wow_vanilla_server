@@ -35,6 +35,9 @@ pub enum Hit {
     Parry,
     /// Hit, but blocked: the damage less the block value.
     Block,
+    /// Blocked whole, as a miss: an ability marked so (Shield Bash,
+    /// `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`).
+    Blocked,
     Evade,
     Immune,
     Deflect,
@@ -47,14 +50,14 @@ impl Hit {
         matches!(self, Hit::Hit | Hit::Block)
     }
 
-    fn wire(self) -> u8 {
+    pub(crate) fn wire(self) -> u8 {
         match self {
             Hit::Hit => 0,
             Hit::Miss => 1,
             Hit::Resist => 2,
             Hit::Dodge => 3,
             Hit::Parry => 4,
-            Hit::Block => 5,
+            Hit::Block | Hit::Blocked => 5,
             Hit::Evade => 6,
             Hit::Immune => 7,
             Hit::Deflect => 9,
@@ -71,6 +74,7 @@ impl Hit {
             Hit::Dodge => procs::EX_DODGE,
             Hit::Parry => procs::EX_PARRY,
             Hit::Block => procs::EX_BLOCK | procs::EX_NORMAL_HIT,
+            Hit::Blocked => procs::EX_BLOCK,
             Hit::Evade => procs::EX_EVADE,
             Hit::Immune => procs::EX_IMMUNE,
             Hit::Deflect => procs::EX_DEFLECT,
@@ -539,9 +543,20 @@ pub fn melee_roll(
         combat::Outcome::Miss => (Hit::Miss, false),
         combat::Outcome::Dodge => (Hit::Dodge, false),
         combat::Outcome::Parry => (Hit::Parry, false),
-        combat::Outcome::Block => (Hit::Block, false),
+        combat::Outcome::Block => (block_of(s), false),
         combat::Outcome::Crit => (Hit::Hit, true),
         _ => (Hit::Hit, false),
+    }
+}
+
+/// What a block of ability `s` is: a miss for one blocked whole (Shield
+/// Bash, `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`), its effects all lost; else
+/// a hit blocked in part (mangos-classic's `CanBlockAbility`).
+pub fn block_of(s: &SpellTemplate) -> Hit {
+    if s.attr(3, sd::ATTR_EX3_COMPLETELY_BLOCKED) {
+        Hit::Blocked
+    } else {
+        Hit::Block
     }
 }
 
