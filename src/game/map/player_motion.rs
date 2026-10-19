@@ -300,6 +300,10 @@ fn walk(map: &mut Map, g: Guid, points: Vec<Vector3d>, run: bool, pause: Duratio
         return;
     };
     let speed = if run { p.speeds.run } else { p.speeds.walk };
+    // The server moves it: a fall under way is over (Thistle Tea's
+    // "server-driven movement clears tracked height").
+    p.fall_from = None;
+    p.misc.fall_far = false;
     let w = Walk::new(points, speed, now, spline_id, run);
     let frame = w.frame(g, p.position());
     if let Some(d) = p.driven.as_mut() {

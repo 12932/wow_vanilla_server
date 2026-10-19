@@ -135,6 +135,11 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
             *at = Some(at.map_or(now, |t| t.max(now)) + delay);
         }
         p.movement.orientation = (to.y - from.y).atan2(to.x - from.x);
+        // A fall under way is over (mangos's `EffectCharge`:
+        // `SetFallInformation`; Thistle Tea's "server-driven movement
+        // clears tracked height").
+        p.fall_from = None;
+        p.misc.fall_far = false;
         p.charge = Some(Charge {
             arrives_at,
             spline_id,
