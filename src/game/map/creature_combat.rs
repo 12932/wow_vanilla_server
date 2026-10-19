@@ -400,14 +400,20 @@ pub fn disengaged(map: &mut Map, g: Guid) {
 /// `static_flags1`: its corpse is the raid's, whoever fought it.
 const STATIC_CORPSE_RAID: u32 = 0x1000;
 
-/// Damage `amount` to creature `g` from `by` (Thistle Tea's
-/// `DamageOrigin.record`): a player's side's, or its own, counts as the
-/// players'; anything else as the NPCs'.
+/// Whether damage to `g` from `by` counts as the players' (Thistle Tea's
+/// `DamageOrigin.record`): a player's side's, or its own; anything else is
+/// the NPCs'.
+fn by_players(map: &Map, g: Guid, by: Guid) -> bool {
+    by == g || guid::is_player(crate::game::map::pets::master(map, by))
+}
+
+/// Damage `amount` to creature `g` from `by`, counted to the players' side
+/// or the NPCs' ([`by_players`]).
 pub fn damaged(map: &mut Map, g: Guid, by: Guid, amount: u32) {
     if amount == 0 || !guid::is_unit(g) {
         return;
     }
-    let players = by == g || guid::is_player(crate::game::map::pets::master(map, by));
+    let players = by_players(map, g, by);
     if let Some(c) = map.creature_mut(g) {
         if players {
             c.engagement.damage_by_players += u64::from(amount);
@@ -420,10 +426,21 @@ pub fn damaged(map: &mut Map, g: Guid, by: Guid, amount: u32) {
 /// Whether a creature's corpse is lootable, and its kill rewarded: players
 /// dealt more than 35% of its damage, or its corpse is the raid's.
 pub fn loot_allowed(map: &Map, g: Guid) -> bool {
+    loot_allowed_with(map, g, g, 0)
+}
+
+/// [`loot_allowed`], with `amount` more from `by` (a killing blow not yet
+/// counted).
+pub fn loot_allowed_with(map: &Map, g: Guid, by: Guid, amount: u32) -> bool {
     let Some(c) = map.creature(g) else {
         return true;
     };
-    let (p, n) = (c.engagement.damage_by_players, c.engagement.damage_by_npcs);
+    let (mut p, mut n) = (c.engagement.damage_by_players, c.engagement.damage_by_npcs);
+    if by_players(map, g, by) {
+        p += u64::from(amount);
+    } else {
+        n += u64::from(amount);
+    }
     template(map, g).is_some_and(|t| t.static_flags1 & STATIC_CORPSE_RAID != 0)
         || p + n == 0
         || 65 * p > 35 * n

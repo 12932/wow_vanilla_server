@@ -2028,7 +2028,7 @@ pub fn periodic_damage_of(
     }) {
         map.send_to_observers(target, &frame, true);
     }
-    let items = outcome::death_items(map, target, left);
+    let items = outcome::death_items(map, target, h.caster, left);
     // A leech takes no more than the health there was (mangos's
     // `PeriodicTick`: `min(pdamage, victim's health)`).
     let had = map

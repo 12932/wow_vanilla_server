@@ -773,6 +773,8 @@ mod tests_p8_combat_control;
 #[cfg(test)]
 mod tests_p8_combat_elemental;
 #[cfg(test)]
+mod tests_p8_combat_origin;
+#[cfg(test)]
 mod tests_p8_combat_posture;
 #[cfg(test)]
 mod tests_p8_combat_state;

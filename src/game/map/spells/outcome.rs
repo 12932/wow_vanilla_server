@@ -1255,7 +1255,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
             extra_attack: false,
         },
     );
-    let items = death_items(map, target, left);
+    let items = death_items(map, target, caster, left);
     if left > 0 {
         // Its threat by the auras of its school (`super::threat`).
         combat::deal_damage_by(map, caster, target, left, s.school_mask(), Some(s.id));
@@ -1265,9 +1265,10 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
 }
 
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
-/// casters (Drain Soul's and Shadowburn's soul shards), if `damage` kills
-/// it: only for a death that gives experience or honor.
-pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)> {
+/// casters (Drain Soul's and Shadowburn's soul shards), if `damage` from
+/// `by` kills it: only for a death that gives experience or honor, the
+/// killing blow's part in it counted.
+pub fn death_items(map: &Map, target: Guid, by: Guid, damage: u32) -> Vec<(Guid, u32, u32)> {
     let health = map
         .unit_fields(target)
         .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
@@ -1284,9 +1285,11 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
     // A soul shard only from a death worth something to its caster (Thistle
     // Tea's `DeathItem.eligible?`, mangos's `isHonorOrXPTarget`): not grey,
     // a player or tapped, not a pet or a totem, nor a creature worth no
-    // experience.
+    // experience, nor one mostly the NPCs' kill, its killing blow counted
+    // (Thistle Tea's `DamageOrigin` before the shard).
     let shard_target = creature.is_none_or(|c| {
         c.pet.is_none()
+            && crate::game::map::creature_combat::loot_allowed_with(map, target, by, damage)
             && crate::game::map::pets::owner_of(map, target).is_none()
             && data
                 .creature_template(c.entry)
