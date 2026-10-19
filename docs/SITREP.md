@@ -115,6 +115,8 @@ Until you answer, wvs keeps what the line says.
   creature immune to silence; #30 attack-speed slows multiply; #46 Fade gives back only what it took; #41 cancelling
   Stealth with Vanish on removes both; #47 quest-log slots are seen by the group; #21 the grey "!" shows to 7 levels
   below (a setting); #7 locked doors and buttons don't open by hand without their key.
+- **2026-10-19, the raid's fixes:** queries have their own rate, `.gear` fills health and mana, `.character spells`,
+  guards and land-bound swimmers wander, raiders on the ground and casting (DECISIONS 68).
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 

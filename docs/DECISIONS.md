@@ -1040,4 +1040,24 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **arc-swap gone** (`bbafa39`): a map's update reads the reload counter, 0.14 ns, against arc-swap's 4 ns; the
       rare reads elsewhere take the lock (8.5 ns alone, about 1 µs at 32 threads).
 
+68. **What the user's 400-bot raid showed** (2026-10-19; wvs `fix/raidfix`, peon `fix/raidfix`).
+    - **"Sends packets too fast":** a client arriving in a crowded city sends a burst of queries, about 140 for the
+      place and one name query per player in view, some 540 in a crowd of 400; a real client would too. Read-only
+      queries (name, creature, game object, item, page, NPC text, quest and quest-giver status, time, played time,
+      next mail, pet name, guild, petition, item text, taxi node, party member stats, corpse and spirit healer) now
+      have their own bucket, `[network] max_queries_per_sec` (1,000, 3 s of burst); the 100/s guard covers the rest.
+      A session cut off logs, once, what it sent in its last 5 s by opcode. peon asks each thing once and paces its
+      queries (5 a second), and `--send-limit` (60) holds a bot under wvs's limit.
+    - **Half health:** `.gear` raised the maximums and left the current values; it now fills health and mana (a GM
+      convenience). `.character level` already did, as mangos's `GiveLevel`.
+    - **Abilities:** `.character spells` teaches the class trainers' spells up to the level, rank by rank, talent
+      ranks only with the talent (quest-given spells, such as stances, totems and forms, aren't taught; neither are
+      weapon skills). peon's raiders cast a rotation per class, area spells among them, and heal.
+    - **Half-sunk raiders:** peon places and moves them on the navmesh's ground (`--nav-data`).
+    - **Guards standing still:** Stormwind's guards can swim, and a random-moving swimmer looked only for water
+      about its home; on land it found none and idled. A swimmer now swims only when its wander centre is in water
+      (as Thistle Tea), so 4,655 of vmangos's 41,927 random-moving spawns now walk on land. `[guards] wander_yards`
+      is 10. Most of Stormwind's own spawned guards are stationary in vmangos, so they stand at their posts.
+    - **Jaina:** her regression test, with her real no-aggro flag.
+
 ## Left for later, and why

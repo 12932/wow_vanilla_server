@@ -62,8 +62,10 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Guards, as mangos-classic calls them:** a civilian calls one guard each time it takes a victim, with no posts,
   charges or cooldowns, no call on sight and no rousing of a guard nearby (Thistle Tea's `GuardCall` ports vmangos's
   `GuardMgr`). Each town's alarm escalates (Avoidance, then two elite a call, then Jaina for Stormwind): wvs's own.
-- **`.gear`** replaces what is worn and teaches the skills its items need; Thistle Tea's `.debug random equipment`
-  fills only empty slots.
+- **`.gear`** replaces what is worn, teaches the skills its items need and leaves its target at full health and
+  mana; Thistle Tea's `.debug random equipment` fills only empty slots.
+- **`.character spells`** teaches what the class's trainers would, rank by rank, prerequisites met, talent ranks only
+  with the talent; Thistle Tea's `.debug spells` teaches every rank and the quest-given spells, ignoring prerequisites.
 - **The player's combat**, as mangos-classic's `CombatManager` has it: a player leaves combat once no creature holds
   them on its threat list, the 5 s timer runs only between players (and their pets), and Bloodrage holds a warrior in
   combat while it lasts. Thistle Tea also gives 5 s for a creature's blow and for any help.
