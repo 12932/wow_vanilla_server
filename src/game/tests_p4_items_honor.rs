@@ -248,6 +248,7 @@ async fn a_duel_lost_is_no_honorable_kill() {
                 phase: crate::game::map::duel::Phase::Fighting,
                 initiator: me == alice,
                 out_of_bounds_since: None,
+                started: None,
             });
         }
         set_health(m, grim, 50);

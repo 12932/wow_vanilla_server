@@ -838,8 +838,11 @@ pub(crate) fn type_flags(static1: u32, static2: u32) -> u32 {
     flags
 }
 
-fn parse_ids(s: &str) -> Vec<u32> {
-    s.split(|c: char| !c.is_ascii_digit())
+/// A creature addon's auras: spell ids apart by spaces. A token that
+/// isn't a spell id (a word, a negative, 0) is left out, as mangos's
+/// `ConvertCreatureAddonAuras` finds no such spell.
+pub(crate) fn parse_ids(s: &str) -> Vec<u32> {
+    s.split_whitespace()
         .filter_map(|p| p.parse().ok())
         .filter(|v| *v != 0)
         .collect()

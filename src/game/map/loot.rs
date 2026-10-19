@@ -413,13 +413,18 @@ pub fn personal(
 /// The group members of `tapper` near `at` on this map, the tapper first;
 /// just the tapper alone.
 pub fn tap_group(map: &Map, tapper: Guid, at: wow_world_messages::vanilla::Vector3d) -> Vec<Guid> {
-    let members: Vec<Guid> = {
-        let groups = map.realm.social.groups.lock();
-        match groups.group_of(tapper) {
-            Some(g) => g.members.iter().map(|m| m.guid).collect(),
-            None => Vec::new(),
-        }
-    };
+    tapped_for(map, tapper, None, at)
+}
+
+/// [`tap_group`], of the group `group` a creature was tapped for while it
+/// stands (`map::tap::recipients`).
+fn tapped_for(
+    map: &Map,
+    tapper: Guid,
+    group: Option<u32>,
+    at: wow_world_messages::vanilla::Vector3d,
+) -> Vec<Guid> {
+    let members = crate::game::map::tap::recipients(&map.realm, tapper, group);
     let mut near: Vec<Guid> = vec![tapper];
     near.extend(members.into_iter().filter(|g| {
         *g != tapper
@@ -435,7 +440,13 @@ pub fn tap_group(map: &Map, tapper: Guid, at: wow_world_messages::vanilla::Vecto
 pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     let data = map.realm.data.clone();
     let cfg = map.cfg.clone();
-    let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) else {
+    let Some((entry, at, tap_group)) = map.creature(creature).map(|c| {
+        (
+            c.entry,
+            c.position,
+            crate::game::map::tap::group_of(c, tapper),
+        )
+    }) else {
         return;
     };
     let Some(t) = data.creature_template(entry) else {
@@ -443,7 +454,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     };
     let tapped = guid::is_player(tapper);
     let group = if tapped {
-        tap_group(map, tapper, at)
+        tapped_for(map, tapper, tap_group, at)
     } else {
         Vec::new()
     };
@@ -488,7 +499,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         ..Default::default()
     };
     if group.len() > 1 {
-        setup_group(map, &mut loot, creature, tapper, group);
+        setup_group(map, &mut loot, creature, tapper, tap_group, group);
     }
     let lootable = !loot.is_empty() || loot.items.iter().any(|s| s.quest);
     let rolls: Vec<usize> = loot.rolls.iter().map(|r| r.slot).collect();
@@ -517,11 +528,22 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
 }
 
 /// The group's loot method on a kill.
-fn setup_group(map: &mut Map, loot: &mut Loot, creature: Guid, tapper: Guid, near: Vec<Guid>) {
+fn setup_group(
+    map: &mut Map,
+    loot: &mut Loot,
+    creature: Guid,
+    tapper: Guid,
+    tap_group: Option<u32>,
+    near: Vec<Guid>,
+) {
     let data = map.realm.data.clone();
     let (method, master, threshold, assigned) = {
         let mut groups = map.realm.social.groups.lock();
-        let Some(g) = groups.group_of_mut(tapper) else {
+        // The group it was tapped for, while it stands; else the tapper's.
+        let id = tap_group
+            .filter(|id| groups.get(*id).is_some())
+            .or_else(|| groups.group_of(tapper).map(|g| g.id));
+        let Some(g) = id.and_then(|id| groups.get_mut(id)) else {
             return;
         };
         // The next member near, after the last looter in the group's

@@ -152,6 +152,7 @@ async fn a_duel_won_ends_both_fights_at_once_and_one_fled_leaves_the_timer() {
                         phase: duel::Phase::Fighting,
                         initiator,
                         out_of_bounds_since: None,
+                        started: None,
                     });
                 }
             };

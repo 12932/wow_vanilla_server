@@ -16,14 +16,15 @@ use crate::game::map::creature::Creature;
 use crate::game::map::loot::DYNFLAG_LOOTABLE;
 use crate::game::update::{self, Batch};
 
-/// Those whose kill a creature tapped by `tapper` is: the tapper and the
-/// tapper's group (mangos's `IsTappedBy`).
-fn holders(realm: &Realm, tapper: Guid) -> Vec<Guid> {
-    let mut out: Vec<Guid> = realm
-        .social
-        .groups
-        .lock()
-        .group_of(tapper)
+/// Those whose kill a creature tapped by `tapper` for `group` is: that
+/// group while it stands, though the tapper has left it or joined another
+/// (mangos's `GetGroupLootRecipient`), else the tapper's group now; and
+/// the tapper always (mangos's `IsTappedBy`, `m_lootRecipientGuid`).
+pub fn recipients(realm: &Realm, tapper: Guid, group: Option<u32>) -> Vec<Guid> {
+    let groups = realm.social.groups.lock();
+    let mut out: Vec<Guid> = group
+        .and_then(|id| groups.get(id))
+        .or_else(|| groups.group_of(tapper))
         .map(|g| g.members.iter().map(|m| m.guid).collect())
         .unwrap_or_default();
     if !out.contains(&tapper) {
@@ -32,9 +33,32 @@ fn holders(realm: &Realm, tapper: Guid) -> Vec<Guid> {
     out
 }
 
-/// Whether `g` holds `tapper`'s tap: the tapper, or one of their group.
-pub fn holds(map: &Map, tapper: Guid, g: Guid) -> bool {
-    holders(&map.realm, tapper).contains(&g)
+/// The group `c` was tapped for, if `tapper` holds its tap.
+pub fn group_of(c: &Creature, tapper: Guid) -> Option<u32> {
+    c.tap_group.filter(|_| c.tapped_by == Some(tapper))
+}
+
+/// `tapper` takes `c`'s tap, for the group they are in now (mangos's
+/// `SetLootRecipient`).
+pub fn take(realm: &Realm, c: &mut Creature, tapper: Guid) {
+    c.tapped_by = Some(tapper);
+    c.tap_group = realm.social.groups.lock().group_of(tapper).map(|g| g.id);
+}
+
+/// `c`'s tap let go.
+pub fn clear(c: &mut Creature) {
+    c.tapped_by = None;
+    c.tap_group = None;
+}
+
+fn holders(realm: &Realm, c: &Creature) -> Option<Vec<Guid>> {
+    c.tapped_by.map(|t| recipients(realm, t, c.tap_group))
+}
+
+/// Whether `g` holds `c`'s tap (no one's is everyone's): the tapper, or
+/// one of the group it is for.
+pub fn holds(map: &Map, c: &Creature, g: Guid) -> bool {
+    holders(&map.realm, c).is_none_or(|h| h.contains(&g))
 }
 
 /// The dynamic flags a viewer outside the tap sees: grey, nothing to loot.
@@ -60,7 +84,7 @@ fn view_block(c: &Creature, flags: u32) -> Option<Vec<u8>> {
 /// full health).
 pub fn tell(realm: &Realm, batches: &mut AHashMap<Guid, Batch>, c: &Creature, all: bool) {
     let flags = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
-    let holders = c.tapped_by.map(|t| holders(realm, t));
+    let holders = holders(realm, c);
     let outside = view_block(c, grey(flags));
     let inside = if all {
         view_block(c, flags)
@@ -80,8 +104,7 @@ pub fn tell(realm: &Realm, batches: &mut AHashMap<Guid, Batch>, c: &Creature, al
 /// view in it, rather than a second block after it.
 pub fn create_for(map: &Map, observer: Guid, creature: Guid) -> Option<std::sync::Arc<[u8]>> {
     let c = map.creature(creature)?;
-    let tapper = c.tapped_by?;
-    if holders(&map.realm, tapper).contains(&observer) {
+    if holders(&map.realm, c)?.contains(&observer) {
         return None;
     }
     let mut fields = c.fields.clone();

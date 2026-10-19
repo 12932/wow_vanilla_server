@@ -364,6 +364,15 @@ impl Groups {
         self.groups.get(&id).is_some_and(|gr| gr.formed)
     }
 
+    /// Group `id`, while it is together.
+    pub fn get(&self, id: u32) -> Option<&Group> {
+        self.groups.get(&id).filter(|gr| gr.formed)
+    }
+
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut Group> {
+        self.groups.get_mut(&id).filter(|gr| gr.formed)
+    }
+
     /// The other members of `g`'s group.
     pub fn others(&self, g: Guid) -> Vec<Guid> {
         self.group_of(g)
@@ -535,6 +544,28 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
                 return;
             }
             id
+        }
+        // One with an invitation pending invites for the group they are
+        // invited to, which isn't theirs to lead (mangos's
+        // `HandleGroupInviteOpcode`, `GetGroupInvite`): refused once it is
+        // formed, else nothing.
+        None if groups.invites.contains_key(&me.guid) => {
+            let formed = groups
+                .invites
+                .get(&me.guid)
+                .and_then(|id| groups.groups.get(id))
+                .is_some_and(|gr| gr.formed);
+            drop(groups);
+            if formed {
+                result(
+                    realm,
+                    me.guid,
+                    PartyOperation::Invite,
+                    "",
+                    PartyResult::NotLeader,
+                );
+            }
+            return;
         }
         None => {
             groups.next_id += 1;

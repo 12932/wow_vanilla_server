@@ -137,11 +137,14 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     if guid::is_player(master) {
         combat::enter(map, master, false);
     }
+    let realm = map.realm.clone();
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    if c.tapped_by.is_none() && guid::is_player(attacker) {
-        c.tapped_by = Some(attacker);
+    // The tap is the player whose side it is: a possessed player's
+    // controller's (mangos's `GetBeneficiaryPlayer`).
+    if c.tapped_by.is_none() && guid::is_player(master) {
+        crate::game::map::tap::take(&realm, c, master);
     }
     let new = c.threat.iter().all(|(g, _)| *g != attacker);
     if new {
@@ -265,7 +268,9 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
                 continue;
             };
             cr.threat.retain(|(t, _)| *t != g);
-            cr.tapped_by = cr.tapped_by.filter(|t| *t != g);
+            if cr.tapped_by == Some(g) {
+                crate::game::map::tap::clear(cr);
+            }
             if cr.combat.victim != g {
                 continue;
             }
@@ -430,7 +435,18 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
         crate::game::map::auras::UNIT_FLAG_FLEEING,
         false,
     );
-    c.tapped_by = Some(tapper);
+    // The kill is its tapper's, for the group it was tapped for; another's
+    // (the tap not theirs) for their group now.
+    if c.tapped_by != Some(tapper) {
+        let realm = map.realm.clone();
+        let Some(c) = map.creature_mut(creature) else {
+            return;
+        };
+        crate::game::map::tap::take(&realm, c, tapper);
+    }
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
     let pos = c.position;
     let (spawn, locks_raid) = (
         c.spawn_guid,
@@ -639,7 +655,13 @@ fn spawn_creature_with(
     if let Some(c) = crate::game::events::spawn_creature(&data, spawn, &on, &mut rand::rng()) {
         let g = map.add_creature(c);
         lie_dead_if_spawned_so(map, g, spawn);
-        if let Some(t) = faction {
+        if let Some(mut t) = faction {
+            // Cleared, it is its respawned self's again (mangos's
+            // `ClearTemporaryFaction`, the template's): not the faction it
+            // had under an entry a script changed.
+            if let Some(c) = map.creature(g) {
+                t.original = c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
+            }
             if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
                 s.temp_faction = Some(t);
             }
@@ -1705,7 +1727,7 @@ fn evade(map: &mut Map, g: Guid) {
     c.threat.clear();
     c.combat = Default::default();
     c.caster = Default::default();
-    c.tapped_by = None;
+    crate::game::map::tap::clear(c);
     c.chase_target_at = None;
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.fields

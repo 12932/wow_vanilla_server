@@ -298,6 +298,7 @@ async fn a_duels_fighters_are_each_others_and_no_one_elses() {
                     phase: Phase::Fighting,
                     initiator,
                     out_of_bounds_since: None,
+                    started: None,
                 });
             }
             // Something of each side's to dispel.

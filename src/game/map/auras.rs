@@ -487,6 +487,9 @@ pub struct Holder {
     pub heartbeat: Option<crate::game::map::spells::heartbeat::Heartbeat>,
     /// From a triggered spell (worth less when the bar is full).
     pub triggered: bool,
+    /// When it was put on (or last refreshed): what a duel did goes at its
+    /// end (mangos's `GetAuraApplyTime`).
+    pub applied: Option<Instant>,
 }
 
 impl Holder {
@@ -997,6 +1000,7 @@ pub fn apply_spell(
             map, caster, target, spell, pos, duration,
         ),
         triggered: ctx.triggered,
+        applied: Some(now),
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
@@ -1179,6 +1183,10 @@ pub fn apply_spell(
         }
         // And what the scripts add with it (Bestial Wrath's immunities).
         crate::game::map::spells::class_scripts::aura_applied(map, target, h);
+        // A transform refreshed is the newest put on.
+        if h.has(AURA_TRANSFORM) {
+            sync_display(map, target);
+        }
     }
     if let Some(h) = h
         && refreshed.is_none()
@@ -2408,30 +2416,34 @@ fn sync_display(map: &mut Map, target: Guid) {
     let Some(a) = auras(map, target) else {
         return;
     };
-    let transforms: Vec<(bool, u32)> = a
+    let mut transforms: Vec<(Option<Instant>, bool, u32)> = a
         .holders
         .iter()
         .flat_map(|h| {
             h.effects
                 .iter()
                 .filter(|x| x.kind == AURA_TRANSFORM)
-                .map(move |x| (h.spell, h.positive, x.misc))
+                .map(move |x| (h.spell, h.applied, h.positive, x.misc))
         })
-        .filter_map(|(spell, positive, misc)| {
+        .filter_map(|(spell, applied, positive, misc)| {
             if misc == 0 && spell == ORB_OF_DECEPTION {
-                return deception_display(native).map(|d| (positive, d));
+                return deception_display(native).map(|d| (applied, positive, d));
             }
             data.creature_template(misc.max(0) as u32)
                 .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
-                .map(|d| (positive, d))
+                .map(|d| (applied, positive, d))
         })
         .collect();
+    // The newest put on (or refreshed) shows, a harmful one over any
+    // helpful (Thistle Tea's `Appearance`, mangos preferring the negative);
+    // those put on at once in their order.
+    transforms.sort_by_key(|(applied, _, _)| *applied);
     let transform = transforms
         .iter()
         .rev()
-        .find(|(positive, _)| !positive)
+        .find(|(_, positive, _)| !positive)
         .or(transforms.last())
-        .map(|(_, d)| *d);
+        .map(|(_, _, d)| *d);
     let Some(f) = map.unit_fields_mut(target) else {
         return;
     };

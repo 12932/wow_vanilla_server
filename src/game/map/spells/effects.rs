@@ -1889,6 +1889,7 @@ fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
         effects: Vec::new(),
         heartbeat: None,
         triggered: false,
+        applied: None,
     }
 }
 

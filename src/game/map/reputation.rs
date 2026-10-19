@@ -408,13 +408,8 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
         return;
     };
     let (at, level) = (c.position, c.fields.get_u32(UNIT_FIELD_LEVEL));
-    let members: Vec<Guid> = {
-        let groups = map.realm.social.groups.lock();
-        match groups.group_of(tapper) {
-            Some(g) => g.members.iter().map(|m| m.guid).collect(),
-            None => vec![tapper],
-        }
-    };
+    let group = crate::game::map::tap::group_of(c, tapper);
+    let members = crate::game::map::tap::recipients(&map.realm, tapper, group);
     for m in members {
         let Some(p) = map.players.get(&m) else {
             continue;

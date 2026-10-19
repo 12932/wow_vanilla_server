@@ -1162,7 +1162,11 @@ pub fn petition_buy(map: &mut Map, g: Guid, npc: Guid, name: &str) {
         return;
     }
     let before: Vec<Guid> = p.items.iter().map(|i| i.guid).collect();
-    if crate::game::map::inventory::add_item(map, g, CHARTER_ITEM, 1, true).is_err() {
+    // No room, or one already carried (the charter's limit): told so.
+    if let Err(fail) = crate::game::map::inventory::add_item(map, g, CHARTER_ITEM, 1, true) {
+        if let Some(p) = map.players.get(&g) {
+            crate::game::map::inventory::send_fail(p, fail, Guid::zero());
+        }
         return;
     }
     let Some(p) = map.players.get_mut(&g) else {
@@ -1188,6 +1192,18 @@ pub fn petition_buy(map: &mut Map, g: Guid, npc: Guid, name: &str) {
     let mut records = Records::new();
     records.put(KIND_PETITION, u64::from(petition.id), &petition);
     let mut guilds = realm.social.guilds.lock();
+    // One charter an owner: a new one ends the owner's older petitions
+    // (mangos's `HandlePetitionBuyOpcode` deletes them), their names free.
+    let older: Vec<u32> = guilds
+        .petitions
+        .values()
+        .filter(|p| p.owner == petition.owner)
+        .map(|p| p.id)
+        .collect();
+    for id in older {
+        guilds.petitions.remove(&id);
+        records.delete(KIND_PETITION, u64::from(id));
+    }
     guilds.petitions.insert(petition.id, petition);
     map.save_together(&[g], records);
     drop(guilds);

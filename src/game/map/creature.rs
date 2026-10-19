@@ -289,6 +289,9 @@ pub struct Creature {
     pub threat: Vec<(Guid, f32)>,
     /// The player whose kill this is.
     pub tapped_by: Option<Guid>,
+    /// The group the tapper was in as they tapped it, whose kill it is
+    /// while that group stands (`map::tap::recipients`).
+    pub tap_group: Option<u32>,
     /// The tap as its observers were last told it (`map::tap`).
     pub tap_told: Option<Guid>,
     pub evading: bool,
@@ -435,6 +438,7 @@ impl Creature {
             combat_start: None,
             threat: Vec::new(),
             tapped_by: None,
+            tap_group: None,
             tap_told: None,
             evading: false,
             chase_target_at: None,
