@@ -139,8 +139,10 @@ hours), the crate version bumped with each merge.
   `.pet` (no beasts of their level near Stormwind to tame), warlocks a Voidwalker. **Left:** raiders aren't grouped,
   so party buffs and totems reach only the caster; healers don't favour tanks; Shield Block needs `.gear` to hand a
   warrior a shield.
-- **A possible client crash** the bones work's client check found (a heap overrun at `0x466816` when another
-  player's values follow its create in one packet, as when a ghost rises in view): being settled now (`fix/crashcheck`).
+- **The possible client crash (0.1.9): not a crash.** `0x466816` is the client's per-field-group flush after a values
+  block (`0x4667A0`), a copy from storage the real client set up at the create and the emulator never models; it reads
+  nothing from the packet. The check now stubs it, as it stubs the renderer; the values block's parse is still checked,
+  and all six real crash packets still fail it. A test covers a ghost rising before a stranger.
 
 ## Answered
 - **#10** keep swinging on arrival.
