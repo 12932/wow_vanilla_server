@@ -402,6 +402,20 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
     players only; Beast Lore's flag is seen by everyone.
   - **Found:** a reconnect within milliseconds of a disconnect can load the character before the disconnect's save
     lands and lose recent state (the pet); queued for the next player round.
+- **7j, creatures, round 7:** an entry change tells its speeds, keeps its scale auras' growth, lands a flyer and
+  swaps a script's spell list; a template's school at a DoT's ticks; a sessile creature stands under fear and
+  leaves its fight; a critter held from fleeing stands until let go; **an event's looks now change a living
+  creature where it stands** (Thistle Tea's way; they had waited for its fight to end), leave a corpse to its
+  respawn, and cast their start and end spells (the holiday costumes); a charmed creature casts its bar. 7i and 7j
+  both loosened the "not in control" check; both are kept (a creature under a charm casts, and a player held by a
+  creature's charm casts through the charm's AI). **My calls** (`wrong-for-1.12`, mangos's):
+  - **A script's entry change** keeps the react state and auras; the new template's auras aren't put on.
+  - **Sessile creatures** take fear, roots and confusion but don't move under them.
+  - **A resisted hostile spell** still sends a critter running (mangos counts it an attack).
+  - **A script's weapon reset** goes to the template's weapons, not an event's.
+  - **`NO_SPELL_DEFENSE`** as Thistle Tea (mangos names the flag but never reads it).
+  - **Left:** Lunar Festival fireworks (a feature to port); scale auras grow a creature's size but not its reach;
+    an entry change doesn't update a creature's maximum mana.
 
 ## Answered
 - **#10** keep swinging on arrival.

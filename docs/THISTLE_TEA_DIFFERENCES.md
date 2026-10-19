@@ -47,8 +47,6 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   either form at any size, so this only trades bandwidth against CPU.
 - **A pet's Stay from its master's bar** stops its attack, as mangos-classic's does; Thistle Tea and vmangos keep the
   fight. Script command 88 keeps it, as they do.
-- **An event's looks wait for a creature's fight to end,** and it is respawned in them; Thistle Tea changes the living
-  creature in place.
 - **Gear a character can't use comes off at login,** to the bags or else by mail, as mangos's `_LoadInventory` has
   it. Thistle Tea checks only at a talent reset.
 - **The weather's season** follows the server's local date, as mangos does; Thistle Tea uses UTC.
