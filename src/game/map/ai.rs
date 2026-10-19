@@ -845,11 +845,13 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
         // Passive in a fight: it waits it out until no one it could
         // fight is left.
         passive_fight(map, g);
-        // A distraction holds it where it stands.
+        // A distraction holds it where it stands, and so do a root and a
+        // stun.
         if !map
             .creature(g)
             .is_some_and(|c| c.combat.attacking || c.evading)
             && !crate::game::map::creature_motion::distracted(map, g)
+            && !crate::game::map::creature_combat::immobile(map, g)
         {
             crate::game::map::world::step_creature_key(map, key);
         }
@@ -1222,7 +1224,10 @@ fn fight_step(map: &mut Map, g: Guid) {
     let sight = caster.is_some()
         && crate::game::map::spells::checks::line_of_sight(map, me.position, them.position);
     let stand_off = sight && caster.is_some_and(|d| dist(me.position, them.position) <= d + 0.01);
-    let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off;
+    // Rooted, it fights where it stands, turning to its victim (mangos's
+    // chase waits out `UNIT_STAT_ROOT`).
+    let rooted = crate::game::map::creature_combat::immobile(map, g);
+    let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off && !rooted;
     let swing = crate::game::map::event_ai::melee(map, g);
     let in_reach = combat::in_melee_range(&me, &them);
     if in_reach || !chase {

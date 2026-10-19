@@ -51,6 +51,8 @@ mod tests_bugs4;
 #[cfg(test)]
 mod tests_bugs5;
 #[cfg(test)]
+mod tests_bugs6;
+#[cfg(test)]
 mod tests_charges;
 #[cfg(test)]
 mod tests_client_emu;
