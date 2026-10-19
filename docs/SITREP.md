@@ -133,6 +133,8 @@ hours), the crate version bumped with each merge.
   multiply; #46 Fade gives back only what it took; #41 cancelling Stealth with Vanish on removes both; #47 quest-log
   slots go to the group; #21 the grey "!" to 7 levels short (a setting); #7 locked doors and buttons need their key.
   Also: trainers offer a talent's ranks only with the talent, and `SMSG_SPELLLOGMISS` checked against the client.
+- **#60** fixed in your fork (`27dfce0`): 1.12's spell misses are a byte reason, with `SMSG_SPELL_GO`'s reflect
+  result and the miss log's debug floats; wvs, peon and rustigator all pin it (wvs 0.1.4).
 - **2026-10-19, the raid's fixes:** queries have their own rate, `.gear` fills health and mana, `.character spells`,
   guards and land-bound swimmers wander, raiders on the ground and casting (DECISIONS 68).
 - **2026-10-19, the review's findings ([CODE_REVIEW.md](CODE_REVIEW.md)):** H1 (the transport flag skips the
@@ -141,8 +143,6 @@ hours), the crate version bumped with each merge.
   started; M4 (a pool saved at 0 loads full) explained, waiting on you.
 - **#59 Roots and silences break by chance** (from the second batch): mangos breaks roots (aura 26) and
   pacify-silence (aura 60) on damage by the same chance as fears; wvs does fears only. The same for those?
-- **#60 The wow_messages fork's `SpellMissInfo`** is a u32 where 1.12 has a u8 (`SMSG_SPELLLOGMISS`, likely
-  `SMSG_SPELL_GO`'s misses too). Fix it in your fork?
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 
