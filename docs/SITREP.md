@@ -388,6 +388,20 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   aimed at another creature keeps a literal `$n`; the test client couldn't parse some melee blows (HitInfo 32770
   and 18) in Eranikus's fight, to go through the client check. **Left:** Alterac Valley's 15 rows (wvs builds them
   in `av_scripts.rs`, not from Thistle Tea's events).
+- **7i, pets, round 7:** a pet's use teaches its master by 10 chances in 101 (mangos's `CheckLearning`); a pet's
+  passives take the master's modifiers and are put on again as one comes or goes (Endurance Training did nothing);
+  totems' time takes the shaman's talents; a pet's bar comes back without what it can't use; a wild summon comes at
+  its spell's place and dies as its fight ends; **engineering guardians (Dragonling, sheep, land mine) start their
+  item's cooldown at their death** (they had none after the first use); Mind Control refused above its rank, at the
+  charmed and at oneself; a held player's bar is Attack alone and their own client plays nothing but chat; a
+  creature-charmed caster casts her best spells. **My calls:**
+  - **A companion** comes 2 yards front-left facing its owner (Thistle Tea; mangos puts it on top of them).
+  - **Eyes of the Beast:** a possessed pet still teaches (mangos). **Revive Pet** from another map works from the
+    stored pet (mangos's `LoadPetFromDB`); Thistle Tea refuses.
+  - **`wrong-for-1.12`, mangos's way:** a hunter pet's corpse lasts 60 s (Thistle Tea an hour); Rebirth raises
+    players only; Beast Lore's flag is seen by everyone.
+  - **Found:** a reconnect within milliseconds of a disconnect can load the character before the disconnect's save
+    lands and lose recent state (the pet); queued for the next player round.
 
 ## Answered
 - **#10** keep swinging on arrival.
