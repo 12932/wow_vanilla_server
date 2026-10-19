@@ -2083,6 +2083,11 @@ pub fn after_outcome(map: &mut Map, attacker: Guid, victim: Guid, outcome: Outco
     if !matches!(outcome, Outcome::Dodge | Outcome::Parry | Outcome::Block) {
         return;
     }
+    // The dead open nothing (mangos's `ProcSkillsAndReactives` wants a
+    // living victim).
+    if !map.unit_view(victim).is_some_and(|u| u.alive) {
+        return;
+    }
     let class = map.players.get(&victim).map(|p| p.row.class);
     if let Some(class) = class
         && let Some(c) = map.combat_mut(victim)
