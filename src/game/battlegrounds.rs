@@ -626,8 +626,13 @@ pub fn leave(map: &mut Map, g: Guid) {
             Some(g),
         );
     }
+    // A spirit of redemption goes home a living priest, not to die there
+    // (mangos's `RemovePlayerAtLeave`, Thistle Tea's `leave_battleground`).
+    if crate::game::map::spells::redemption::spirit(map, g) {
+        crate::game::map::spells::redemption::end_without_death(map, g);
+    }
     // The dead and the ghosts go home alive and whole, their corpse gone
-    // (Thistle Tea's exit, as vmangos does it).
+    // (Thistle Tea's exit, as vmangos does it); the living as they are.
     if map
         .players
         .get(&g)
