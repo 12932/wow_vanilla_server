@@ -389,6 +389,15 @@ const PACKET_LIMIT: usize = 24 * 1024;
 /// created ahead of their owners' going. A block about an object (a create,
 /// or a values block sent during the update) is kept with its object, so
 /// forgetting the object drops what the client would no longer have.
+///
+/// An object gets one values block a packet: the client keeps a copy of
+/// an object's fields as they were before each values block is written
+/// (its first pass, `0x466590`, copying at `0x4667a0`), and its second pass
+/// runs a field's handlers only where the field differs from that copy
+/// (`0x465570`). A second values block about the object in the packet
+/// copies the first's changes over, and they run nothing: a death neither
+/// fell nor showed on the target's frame, a Frost Nova showed no frost
+/// (`tap::tell`, which gives each viewer its own block).
 #[derive(Debug, Default)]
 pub struct Batch {
     forget: Vec<Guid>,

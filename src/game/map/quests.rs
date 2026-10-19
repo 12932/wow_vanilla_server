@@ -331,6 +331,11 @@ pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
     let Some(p) = map.players.get(&player) else {
         return QuestGiverStatus::None;
     };
+    // The dead give none: their NPC flags go with their life (mangos's
+    // `Creature::SetDeathState`).
+    if guid::is_unit(giver) && map.creature(giver).is_some_and(|c| !c.alive()) {
+        return QuestGiverStatus::None;
+    }
     let data = &map.realm.data;
     let hide_diff = map.cfg.quests.high_level_hide_diff;
     let (starts, ends) = relations(map, giver);

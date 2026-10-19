@@ -34,6 +34,8 @@ const UNIT_FLAG_DISABLE_MOVE: u32 = 0x0000_0004;
 const TAXI_SPEED: f32 = 32.0;
 /// The text an NPC without its own shows.
 pub const DEFAULT_TEXT: u32 = 68;
+/// A gossip option that opens the stable.
+const GOSSIP_OPTION_STABLEPET: u32 = 14;
 
 /// A flight in progress.
 #[derive(Debug, Clone)]
@@ -150,6 +152,7 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
         .unwrap_or(0);
     let options = menu_options(map, menu_id, flags, player, npc);
     let quests = quests::giver_quests(map, player, npc);
+    let hunter = is_hunter(map, player);
     if options.is_empty() && quests.is_empty() && menu_id == 0 {
         // No menu: the NPC's one service.
         if flags & NPC_FLAG_VENDOR != 0 {
@@ -170,11 +173,18 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
         if flags & NPC_FLAG_BATTLEMASTER != 0 {
             return battlemaster_hello(map, player, npc);
         }
-        if flags & crate::game::map::pets::NPC_FLAG_STABLEMASTER != 0 {
+        // A stable master's stable is a hunter's alone; anyone else gets
+        // its greeting (mangos's `PrepareGossipMenu`).
+        if flags & crate::game::map::pets::NPC_FLAG_STABLEMASTER != 0 && hunter {
             return crate::game::map::pets::list_stable(map, player, npc);
         }
     }
     show_menu(map, player, npc, menu_id, flags);
+}
+
+/// Hunters stable pets.
+fn is_hunter(map: &Map, player: Guid) -> bool {
+    map.players.get(&player).is_some_and(|p| p.row.class == 3)
 }
 
 /// The options of a menu this NPC offers. An NPC's own menu with no
@@ -212,6 +222,9 @@ fn menu_options(
                     || !map.realm.data.scripts.conditions.contains_key(&o.condition)
                     || crate::game::map::conditions::met(map, o.condition, Some(npc), Some(player))
             })
+            // The stable is for hunters (mangos's `GOSSIP_OPTION_STABLEPET`
+            // in `PrepareGossipMenu`).
+            .filter(|o| o.kind != GOSSIP_OPTION_STABLEPET || is_hunter(map, player))
             .cloned()
             .collect()
     })

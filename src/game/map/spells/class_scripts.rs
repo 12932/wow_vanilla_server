@@ -471,12 +471,17 @@ fn id_dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> boo
         }
         // A dead creature lives again, for two minutes.
         RESTORE_TO_LIFE if dead => {
+            let data = map.realm.data.clone();
             if let Some(c) = map.creature_mut(target) {
                 let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
                 c.life = crate::game::map::creature::Life::Alive;
                 c.despawned = false;
                 c.fields.set_u32(UNIT_FIELD_HEALTH, max.max(1));
                 c.fields.set_u32(UNIT_DYNAMIC_FLAGS, 0);
+                // Its NPC flags, gone with its death, come back as its
+                // template has them (mangos's `JUST_ALIVED`).
+                let npc_flags = data.creature_template(c.entry).map_or(0, |t| t.npc_flags);
+                c.fields.set_u32(UNIT_NPC_FLAGS, npc_flags);
                 // Nothing left on it to loot, and no one's kill.
                 c.loot = None;
                 c.tapped_by = None;

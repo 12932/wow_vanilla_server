@@ -312,6 +312,82 @@ async fn the_elite_guards_packets_pass_the_client() {
     run_checker(&check_py, &wow_exe, &capture);
 }
 
+const PROWLER: u32 = 306;
+const HOLD: u32 = 995_101;
+
+/// A creature held by a root (its create with `MOVEFLAG_ROOT` in its
+/// movement, its walk stopped), tapped by one player and so grey in its
+/// create for another, and its death, one block for each: what came of
+/// the user's Frost Nova and Rabbit (`tests_bugs6`) passes the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_held_tapped_and_dead_creatures_packets_pass_the_client() {
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let mut d = GameData::empty();
+    d.creature_templates
+        .insert(PROWLER, template(PROWLER, "Prowler", 7));
+    let mut prowler = spawn(3, PROWLER, (START.0 + 6.0, START.1, START.2));
+    prowler.movement_type = 1;
+    prowler.wander_distance = 5.0;
+    d.creature_spawns.insert(0, vec![prowler]);
+    let hold = crate::game::tests_p3_spells_kit::made_up(
+        HOLD,
+        6,
+        crate::game::map::auras::AURA_MOD_ROOT,
+        0,
+        0,
+    );
+    d.spells.spells.insert(HOLD, hold);
+    let realm = harness::realm_with(d);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    let g = map
+        .query(|m| m.creatures.iter().map(|(_, c)| c.guid).next())
+        .await
+        .unwrap()
+        .expect("the prowler");
+    a.sees(g).await;
+    // Held, and tapped by her.
+    map.query(move |m| {
+        let s = m.realm.data.spells.get(HOLD).unwrap().clone();
+        let _ = crate::game::map::auras::apply_spell(
+            m,
+            ga,
+            g,
+            &s,
+            &[(0, 0)],
+            crate::game::map::auras::Context::default(),
+        );
+        crate::game::map::ai::attacked(m, g, ga);
+    })
+    .await
+    .unwrap();
+    a.wait_for("the hold", |m| match m {
+        ServerOpcodeMessage::SMSG_SPLINE_MOVE_ROOT(r) if r.guid == g => Some(()),
+        _ => None,
+    })
+    .await;
+    // Another comes: told of it held, and grey.
+    let (mut b, _gb) = enter(&realm, "B", "Bea").await;
+    b.sees(g).await;
+    // It dies at her hand.
+    map.query(move |m| crate::game::map::combat::kill(m, ga, g))
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "its creates and values were captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
 /// A passenger's creates, with 1.12's transport in their movement (its
 /// flag, the boat's whole GUID, the place on deck): the one Bob, on
 /// Kalimdor, is told as the boat brings Alice there, and her own after the

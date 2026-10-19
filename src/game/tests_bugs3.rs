@@ -1383,14 +1383,32 @@ async fn a_tapped_creature_is_grey_to_all_but_its_tappers() {
         0,
         "nor the tapper's group"
     );
-    // One who comes later.
+    // One who comes later: grey in its create, as mangos makes it for
+    // each viewer (a second block after it, in the same packet, is one the
+    // client may not heed).
     let (mut d, _gd, _) = enter(&realm, "D", "Dax", Race::Human, Class::Warrior).await;
-    d.sees(raptor).await;
-    assert_ne!(
-        dynamic_flags(&mut d, raptor).await & TAPPED,
-        0,
-        "grey to one who comes later"
-    );
+    let created = d
+        .wait_for("the creature's create", |m| {
+            let objects = match m {
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+                ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+                _ => return None,
+            };
+            objects.iter().find_map(|o| match &o.update_type {
+                Object_UpdateType::CreateObject { guid3, mask2, .. }
+                | Object_UpdateType::CreateObject2 { guid3, mask2, .. }
+                    if *guid3 == raptor =>
+                {
+                    match mask2 {
+                        UpdateMask::Unit(u) => Some(u.unit_dynamic_flags().unwrap_or(0) as u32),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        })
+        .await;
+    assert_ne!(created & TAPPED, 0, "grey to one who comes later");
     on(&map, move |m| crate::game::map::ai::enter_evade(m, raptor)).await;
     assert_eq!(
         dynamic_flags(&mut b, raptor).await & TAPPED,

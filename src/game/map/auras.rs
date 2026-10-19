@@ -1628,7 +1628,15 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         ),
         AURA_LINKED => linked(map, target, h, a.trigger),
         AURA_MOD_STUN | AURA_MOD_ROOT => {
-            crate::game::map::combat::stop_attack(map, target);
+            // A stun stops a player's swings. A root stops no one's, and
+            // neither takes a creature out of its fight: it fights on
+            // where it stands, and chases once it's free (mangos's
+            // `HandleAuraModRoot` and `SetStunned` stop no attack). A
+            // Young Wolf under Frost Nova went back to its wander, its
+            // victim still selected.
+            if kind == AURA_MOD_STUN && !crate::game::guid::is_unit(target) {
+                crate::game::map::combat::stop_attack(map, target);
+            }
             if kind == AURA_MOD_STUN
                 && let Some(f) = map.unit_fields_mut(target)
             {
@@ -1913,6 +1921,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if !rooted && let Some(p) = map.players.get(&target) {
                 p.outbound
                     .send_frame(crate::game::map::movement::root_frame(target, false));
+            }
+            if !rooted {
+                crate::game::map::creature_combat::freed(map, target);
             }
         }
         AURA_MOD_FEAR if !still(map, AURA_MOD_FEAR) => {

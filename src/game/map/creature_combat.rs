@@ -746,15 +746,54 @@ pub fn control_changed(map: &mut Map, g: Guid) -> Option<Control> {
     want
 }
 
-/// A creature rooted or stunned: a run under way (in fear, confusion or
-/// flight) stops where it is (Thistle Tea's `MovementSync`).
+/// `MOVEFLAG_ROOT`: a creature held where it stands, in its movement as a
+/// newcomer is told of it (mangos's `SendMoveRoot` keeps it there).
+pub const MOVEFLAG_ROOT: u32 = 0x0800_0000;
+
+/// A creature rooted or stunned: whatever walk it was on (a wander, its
+/// path, a chase, a run in fear) stops where it is, and those who see it
+/// are told it is held (mangos's `SetImmobilizedState`: `StopMoving`, then
+/// `SMSG_SPLINE_MOVE_ROOT`). Its own walk goes on once it's free; its fight
+/// goes on where it stands.
 pub fn immobilized(map: &mut Map, g: Guid) {
-    if map
-        .creature(g)
-        .is_some_and(|c| c.engagement.control.is_some())
+    let now = map.now;
+    let Some(was) = map.creature(g).map(|c| c.move_flags & MOVEFLAG_ROOT != 0) else {
+        return;
+    };
+    crate::game::map::ai::halt(map, g);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if c.movement_type != crate::game::map::creature::MOVEMENT_IDLE
+        && matches!(c.motion, Motion::Idle { until: None })
     {
-        crate::game::map::ai::halt(map, g);
+        c.motion = Motion::Idle { until: Some(now) };
     }
+    c.move_flags |= MOVEFLAG_ROOT;
+    if !was && let Some(frame) = crate::game::conn::encode(&SMSG_SPLINE_MOVE_ROOT { guid: g }) {
+        map.send_to_observers(g, &frame, false);
+    }
+}
+
+/// A creature's last root or stun gone: it may move again, and those who
+/// see it are told (mangos's `SMSG_SPLINE_MOVE_UNROOT`).
+pub fn freed(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    if c.move_flags & MOVEFLAG_ROOT == 0 {
+        return;
+    }
+    c.move_flags &= !MOVEFLAG_ROOT;
+    if let Some(frame) = crate::game::conn::encode(&SMSG_SPLINE_MOVE_UNROOT { guid: g }) {
+        map.send_to_observers(g, &frame, false);
+    }
+}
+
+/// Rooted or stunned: it may not move.
+pub fn immobile(map: &Map, g: Guid) -> bool {
+    map.creature(g)
+        .is_some_and(|c| c.auras.has(AURA_MOD_ROOT) || c.auras.has(AURA_MOD_STUN))
 }
 
 /// Fear, confusion and fleeing move a creature themselves: the fight's own

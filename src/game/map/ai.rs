@@ -417,6 +417,10 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
+    // A corpse is no one's quest giver, vendor or trainer: its NPC flags
+    // go, and its respawn has its template's (mangos's
+    // `Creature::SetDeathState`). A dead quest giver kept its "!".
+    c.fields.set_u32(UNIT_NPC_FLAGS, 0);
     // A run ends with its death: a critter's escape, a flight for help
     // (Thistle Tea's `Critter.clear` and `flee_until` at death).
     c.engagement.flee = None;
@@ -662,6 +666,7 @@ pub fn lie_dead_if_spawned_so(map: &mut Map, g: Guid, spawn: &crate::game::data:
         respawn_at: never,
     };
     c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    c.fields.set_u32(UNIT_NPC_FLAGS, 0);
     map.dead_creatures.push(g);
 }
 
@@ -845,11 +850,13 @@ fn turn(map: &mut Map, key: usize, g: Guid, now: Instant) {
         // Passive in a fight: it waits it out until no one it could
         // fight is left.
         passive_fight(map, g);
-        // A distraction holds it where it stands.
+        // A distraction holds it where it stands, and so do a root and a
+        // stun.
         if !map
             .creature(g)
             .is_some_and(|c| c.combat.attacking || c.evading)
             && !crate::game::map::creature_motion::distracted(map, g)
+            && !crate::game::map::creature_combat::immobile(map, g)
         {
             crate::game::map::world::step_creature_key(map, key);
         }
@@ -1222,7 +1229,10 @@ fn fight_step(map: &mut Map, g: Guid) {
     let sight = caster.is_some()
         && crate::game::map::spells::checks::line_of_sight(map, me.position, them.position);
     let stand_off = sight && caster.is_some_and(|d| dist(me.position, them.position) <= d + 0.01);
-    let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off;
+    // Rooted, it fights where it stands, turning to its victim (mangos's
+    // chase waits out `UNIT_STAT_ROOT`).
+    let rooted = crate::game::map::creature_combat::immobile(map, g);
+    let chase = crate::game::map::event_ai::combat_movement(map, g) && !stand_off && !rooted;
     let swing = crate::game::map::event_ai::melee(map, g);
     let in_reach = combat::in_melee_range(&me, &them);
     if in_reach || !chase {
