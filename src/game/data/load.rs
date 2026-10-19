@@ -1213,10 +1213,17 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }) {
         npc.trainer_greetings.insert(entry, text);
     }
-    for (entry, text) in rows(db, "SELECT * FROM quest_greeting", |c| {
-        (c.u32("entry"), c.string("content_default"))
+    for (key, greeting) in rows(db, "SELECT * FROM quest_greeting", |c| {
+        (
+            (c.u32("entry"), c.u32("type")),
+            (
+                c.string("content_default"),
+                c.u32("emote_id"),
+                c.u32("emote_delay"),
+            ),
+        )
     }) {
-        npc.quest_greetings.insert(entry, text);
+        npc.quest_greetings.insert(key, greeting);
     }
     for n in rows(
         db,

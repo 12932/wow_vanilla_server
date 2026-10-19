@@ -183,6 +183,10 @@ async fn a_follower_turns_on_the_player_at_its_goal() {
     let gorm = guid::unit(GORM, GORM);
     a.sees(gorm).await;
     take(&map, g, gorm, GORM_QUEST).await;
+    // Its key turned (its gossip option, not the quest's acceptance).
+    map.query(move |m| crate::game::map::escorts::gossip_select(m, g, gorm, 1))
+        .await
+        .unwrap();
     let by_goal = at(START.0 + 25.0, START.1, START.2);
     let turned = until(&map, "turned", move |m| {
         place(m, g, by_goal);

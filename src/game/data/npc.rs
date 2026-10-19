@@ -225,7 +225,9 @@ pub struct NpcData {
     /// Area trigger → the quest it explores for.
     pub area_trigger_quests: AHashMap<u32, u32>,
     pub taverns: AHashSet<u32>,
-    pub quest_greetings: AHashMap<u32, String>,
+    /// `quest_greeting`: (entry, 0 a creature or 1 an object) → its words,
+    /// its emote and the emote's delay (mangos's `QuestgiverGreeting`).
+    pub quest_greetings: AHashMap<(u32, u32), (String, u32, u32)>,
     /// The quests that need each one done first: quest → those after it.
     pub quests_after: AHashMap<u32, Vec<u32>>,
     /// The quests' dependencies, worked out from `quests` when first asked.
@@ -384,10 +386,11 @@ impl NpcData {
         out
     }
 
-    /// A broadcast text's line for a speaker of `gender`.
+    /// A broadcast text's line for a speaker of `gender`; the other
+    /// gender's where it has only that one (Ysida's 11816, female only).
     pub fn broadcast_line(&self, id: u32, female: bool) -> Option<&str> {
         let b = self.broadcast_texts.get(&id)?;
-        let line = if female && !b.female.is_empty() {
+        let line = if (female || b.male.is_empty()) && !b.female.is_empty() {
             &b.female
         } else {
             &b.male

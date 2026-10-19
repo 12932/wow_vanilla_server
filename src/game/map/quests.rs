@@ -569,8 +569,11 @@ pub fn hello(map: &mut Map, player: Guid, giver: Guid) {
 /// `SendPreparedQuest`, Thistle Tea's `greeting`), else nothing.
 fn greeting(map: &Map, player: Guid, giver: Guid) -> (String, u32, u32) {
     let npc = &map.realm.data.npc;
-    if let Some(text) = npc.quest_greetings.get(&guid::entry(giver)) {
-        return (text.clone(), 0, 0);
+    // A creature's or an object's own, with its emote (mangos-classic's
+    // `GetQuestgiverGreetingData` by entry and type).
+    let kind = u32::from(guid::is_game_object(giver));
+    if let Some((text, emote, delay)) = npc.quest_greetings.get(&(guid::entry(giver), kind)) {
+        return (text.clone(), *delay, *emote);
     }
     let Some(c) = map.creature(giver) else {
         return Default::default();

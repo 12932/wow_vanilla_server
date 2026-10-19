@@ -969,20 +969,28 @@ fn rested(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     Some(format!("Rested XP: {:.0}.", p.row.state.rest_bonus))
 }
 
-/// `.start`: back to where the race and class begin, as mangos's does.
+/// The client's "Stuck" spell.
+pub const STUCK: u32 = 7355;
+
+/// `.start`: the Stuck spell cast, its ten seconds and all, as
+/// mangos-classic's `HandleStartCommand` and Thistle Tea's `.start` have
+/// it; not on a flight nor in a fight.
 fn start(map: &mut Map, g: Guid) -> Option<String> {
     let p = map.players.get(&g)?;
-    let s = map.realm.data.start_info(p.row.race, p.row.class)?;
-    map.teleport(
-        g,
-        MapKey::world(s.map),
-        Vector3d {
-            x: s.x,
-            y: s.y,
-            z: s.z,
-        },
-        s.orientation,
-    );
+    if p.flight.is_some() {
+        return Some("You are in flight.".into());
+    }
+    if p.fields.has_flag(
+        crate::game::fields::UNIT_FIELD_FLAGS,
+        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+    ) {
+        return Some("You are in combat.".into());
+    }
+    let at = crate::game::map::spells::Targets {
+        unit: Some(g),
+        ..Default::default()
+    };
+    crate::game::map::spells::cast(map, g, STUCK, at, None);
     None
 }
 

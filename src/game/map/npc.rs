@@ -158,6 +158,9 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
         return;
     };
     crate::game::map::creature_motion::talk_pause(map, npc);
+    if crate::game::map::escorts::gossip_hello(map, player, npc) {
+        return;
+    }
     let data = map.realm.data.clone();
     let flags = map
         .creature(npc)
@@ -328,6 +331,9 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             return;
         };
         crate::game::map::creature_motion::talk_pause(map, npc);
+        if crate::game::map::escorts::gossip_select(map, player, npc, option) {
+            return;
+        }
         data.creature_template(entry)
             .map_or(0, |t| t.gossip_menu_id)
     };
@@ -465,7 +471,7 @@ pub fn npc_text(map: &Map, player: Guid, text_id: u32) {
 }
 
 /// The professions a player may have two of.
-const PRIMARY_PROFESSIONS: [u32; 9] = [164, 165, 171, 182, 186, 197, 202, 333, 393];
+pub(crate) const PRIMARY_PROFESSIONS: [u32; 9] = [164, 165, 171, 182, 186, 197, 202, 333, 393];
 const EFFECT_SKILL_STEP: u32 = 44;
 
 /// What a trainer's spell is to a player, as Thistle Tea's `Trainer`

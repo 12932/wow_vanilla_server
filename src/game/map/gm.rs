@@ -382,19 +382,29 @@ fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
     Some(format!("Spawned {} ({g}).", template.name))
 }
 
-/// `.tele <place>`: a place from vmangos's `game_tele`, by name or the
-/// start of one.
+/// `.tele <place>`: a place from vmangos's `game_tele`, by name, the
+/// start of one, or a part of one.
 fn tele(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
     let wanted = args.join(" ").to_lowercase();
     if wanted.is_empty() {
         return Some("Usage: .tele <place>".to_owned());
     }
+    let wanted = wanted.trim();
     let data = map.realm.data.clone();
-    let starting: Vec<&crate::game::data::Tele> = data
+    let mut starting: Vec<&crate::game::data::Tele> = data
         .tele
         .iter()
-        .filter(|t| t.name.to_lowercase().starts_with(&wanted))
+        .filter(|t| t.name.to_lowercase().starts_with(wanted))
         .collect();
+    // None starts with it: those with it anywhere in their name, as
+    // mangos's `GetGameTele` and Thistle Tea's `GameTele.search`.
+    if starting.is_empty() {
+        starting = data
+            .tele
+            .iter()
+            .filter(|t| t.name.to_lowercase().contains(wanted))
+            .collect();
+    }
     let exact = data.tele.iter().find(|t| t.name.to_lowercase() == wanted);
     // Several fit and none exactly: they are listed.
     if exact.is_none() && starting.len() > 1 {
