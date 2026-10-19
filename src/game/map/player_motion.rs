@@ -266,6 +266,25 @@ fn stop(map: &mut Map, g: Guid) {
     map.send_to_observers(g, &frame, true);
 }
 
+/// Turn a player on the spot to face `at`, as mangos-classic's
+/// `SetFacingTo` turns one: a facing-angle `SMSG_MONSTER_MOVE` for their
+/// guid, to their own client (which turns them by it) and to everyone who
+/// sees them. Their client keeps control.
+pub fn face_point(map: &mut Map, g: Guid, at: Vector3d) {
+    let spline_id = map.next_spline_id;
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    let pos = p.position();
+    if at.x != pos.x || at.y != pos.y {
+        p.movement.orientation = (at.y - pos.y).atan2(at.x - pos.x);
+    }
+    let o = p.movement.orientation;
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
+    let frame = crate::game::map::ai::face_packet(g, pos, o, spline_id);
+    map.send_to_observers(g, &frame, true);
+}
+
 /// The player along its walk at `now`: position, cell and what it sees.
 fn advance(map: &mut Map, g: Guid) {
     let now = map.now;

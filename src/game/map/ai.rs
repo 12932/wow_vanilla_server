@@ -34,8 +34,9 @@ pub fn stop_packet(g: Guid, at: Vector3d, spline_id: u32) -> Arc<[u8]> {
     b.frame(SMSG_MONSTER_MOVE)
 }
 
-/// A creature turning on the spot to `angle` (a facing-angle monster
-/// move of 100 ms, as Thistle Tea turns one).
+/// A unit turning on the spot to `angle` (a facing-angle monster move of
+/// 100 ms, as Thistle Tea turns one); a player's client turns itself by
+/// one for its own guid.
 pub fn face_packet(g: Guid, at: Vector3d, angle: f32, spline_id: u32) -> Arc<[u8]> {
     let mut b = Body::default();
     crate::game::update::write_packed_guid(&mut b.0, g);

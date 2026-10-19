@@ -861,6 +861,91 @@ async fn distract_stops_and_turns_a_creature_for_its_seconds() {
     assert!(still, "it stands");
 }
 
+/// Distract turns a player too, as mangos-classic's `EffectDistract` does
+/// (`SetFacingTo`): a facing-angle move for their guid, to their own client
+/// and to those who see them, and nothing more: no pause, their client
+/// keeping control. One in a fight pays it no heed.
+#[tokio::test]
+async fn distract_turns_a_player_to_the_point_and_leaves_them_their_control() {
+    use crate::game::fields::{PLAYER_FLAGS, UNIT_FIELD_FLAGS};
+    use crate::game::map::player::{PLAYER_FLAGS_FFA_PVP, UNIT_FLAG_IN_COMBAT};
+    let (realm, mut a, ga, map) = enter(with_spells(world())).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.heartbeat(START.0 + 5.0, START.1, START.2).await;
+    a.sees(gb).await;
+    for _ in 0..400 {
+        let there = map
+            .query(move |m| (m.players[&gb].position().x - (START.0 + 5.0)).abs() < 0.01)
+            .await
+            .unwrap();
+        if there {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // Free for all, so Bob is Alice's enemy.
+    map.query(move |m| {
+        for g in [ga, gb] {
+            m.players.get_mut(&g).unwrap().fields.set_flag(
+                PLAYER_FLAGS,
+                PLAYER_FLAGS_FFA_PVP,
+                true,
+            );
+        }
+        m.players.get_mut(&gb).unwrap().movement.orientation = 0.0;
+    })
+    .await
+    .unwrap();
+    b.clear();
+    // Five yards north of him.
+    let north = at(5.0, 5.0);
+    let (facing, driven) = map
+        .query(move |m| {
+            crate::game::map::spells::cast_triggered_at(m, ga, DISTRACT, north);
+            let p = &m.players[&gb];
+            (p.movement.orientation, p.driven.is_some())
+        })
+        .await
+        .unwrap();
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    assert!(
+        (facing - half_pi).abs() < 0.01,
+        "toward the point: {facing}"
+    );
+    assert!(!driven, "no pause");
+    let seen = next_move(&mut a, gb, |m| m.kind == 4).await;
+    assert!(
+        seen.angle.is_some_and(|o| (o - half_pi).abs() < 0.01),
+        "his watchers see him turn: {seen:?}"
+    );
+    let own = next_move(&mut b, gb, |m| m.kind == 4).await;
+    assert!(
+        own.angle.is_some_and(|o| (o - half_pi).abs() < 0.01),
+        "his client turns him: {own:?}"
+    );
+    let control = b
+        .gets(Duration::from_millis(200), |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(_)).then_some(())
+        })
+        .await;
+    assert!(control.is_none(), "his client keeps control");
+    // In a fight, he isn't turned.
+    let facing = map
+        .query(move |m| {
+            m.players.get_mut(&gb).unwrap().fields.set_flag(
+                UNIT_FIELD_FLAGS,
+                UNIT_FLAG_IN_COMBAT,
+                true,
+            );
+            crate::game::map::spells::cast_triggered_at(m, ga, DISTRACT, at(5.0, -5.0));
+            m.players[&gb].movement.orientation
+        })
+        .await
+        .unwrap();
+    assert!((facing - half_pi).abs() < 0.01, "one fighting: {facing}");
+}
+
 const SLUGGISH: u32 = 5002;
 
 /// A creature that leashes is whole again as it turns for home, not when

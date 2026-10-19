@@ -632,6 +632,42 @@ async fn a_ghost_rising_before_a_stranger_passes_the_client() {
     run_checker(&check_py, &wow_exe, &capture);
 }
 
+/// A player turned on the spot, as Distract turns one
+/// (`player_motion::face_point`, mangos-classic's `SetFacingTo`): the
+/// facing-angle `SMSG_MONSTER_MOVE` for her own guid, to her own client and
+/// to Bob, who sees her, passes the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_player_turned_on_the_spot_passes_the_client() {
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    let (mut b, _) = enter(&realm, "B", "Bob").await;
+    b.sees(ga).await;
+    let north = Vector3d {
+        x: START.0,
+        y: START.1 + 5.0,
+        z: START.2,
+    };
+    map.query(move |m| crate::game::map::player_motion::face_point(m, ga, north))
+        .await
+        .unwrap();
+    let turn = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) => (mv.guid == ga).then_some(()),
+        _ => None,
+    };
+    a.wait_for("her own turn", turn).await;
+    b.wait_for("her turn, seen", turn).await;
+    let (capture, counts) = capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0DD).copied().unwrap_or(0) > 0,
+        "her turn was captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
 /// Every frame `clients` received, of a kind the checker knows,
 /// deduplicated, back to back; and how many of each opcode.
 pub(crate) fn capture(
