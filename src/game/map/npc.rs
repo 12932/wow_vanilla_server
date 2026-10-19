@@ -185,7 +185,7 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
             return taxi_nodes(map, player, npc);
         }
         if flags & NPC_FLAG_BANKER != 0 {
-            return send(map, player, &SMSG_SHOW_BANK { guid: npc });
+            return crate::game::map::bank::show(map, player, npc);
         }
         if flags & NPC_FLAG_AUCTIONEER != 0 {
             return auction_hello(map, player, npc);
@@ -407,7 +407,7 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
             crate::game::map::death::spirit_healer_hello(map, player, npc);
         }
         8 => send(map, player, &SMSG_BINDER_CONFIRM { guid: npc }),
-        9 => send(map, player, &SMSG_SHOW_BANK { guid: npc }),
+        9 => crate::game::map::bank::show(map, player, npc),
         12 => battlemaster_hello(map, player, npc),
         13 => auction_hello(map, player, npc),
         14 => crate::game::map::pets::list_stable(map, player, npc),
@@ -846,7 +846,9 @@ pub fn bind_home(map: &mut Map, player: Guid, binder: Guid) {
 /// `CMSG_BANKER_ACTIVATE`.
 pub fn banker(map: &mut Map, player: Guid, npc: Guid) {
     if npc_entry(map, player, npc, NPC_FLAG_BANKER).is_some() {
-        send(map, player, &SMSG_SHOW_BANK { guid: npc });
+        crate::game::map::bank::show(map, player, npc);
+    } else {
+        crate::game::map::bank::close(map, player);
     }
 }
 
@@ -856,6 +858,9 @@ pub const MAX_BANK_BAG_SLOTS: u8 = 6;
 
 pub fn buy_bank_slot(map: &mut Map, player: Guid, npc: Guid) {
     let banker = npc_entry(map, player, npc, NPC_FLAG_BANKER).is_some();
+    if !banker {
+        crate::game::map::bank::close(map, player);
+    }
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
         return;

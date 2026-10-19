@@ -282,6 +282,12 @@ async fn setup_with(d: GameData) -> (Arc<Realm>, Client, Guid) {
     (realm, a, g)
 }
 
+/// The bank opened at a banker beside `g`, for a test that moves things
+/// into or out of it.
+async fn open_bank(realm: &Arc<Realm>, g: Guid) {
+    harness::open_bank(&realm.maps.get(realm, MapKey::world(0)), g).await;
+}
+
 async fn learn(realm: &Arc<Realm>, g: Guid, spell: u32) {
     on_map(realm, move |m| {
         m.players.get_mut(&g).unwrap().spells.push(spell)
@@ -575,6 +581,7 @@ async fn the_off_hand_takes_dual_wield_and_a_two_hander_puts_it_away() {
 #[tokio::test]
 async fn a_two_hander_from_full_bags_leaves_its_slot_for_the_off_hand() {
     let (realm, mut a, g) = setup().await;
+    open_bank(&realm, g).await;
     on_map(&realm, move |m| {
         m.players
             .get_mut(&g)
@@ -723,6 +730,7 @@ async fn one_quiver_on_the_bar_and_bank_bag_slots_bought() {
         (POUCH, QUIVER, "CanEquipOnly1Ammopouch"),
     ] {
         let (realm, mut a, g) = setup().await;
+        open_bank(&realm, g).await;
         let existing = give_at(&realm, g, worn, 1, BAG1).await;
         let incoming = give_at(&realm, g, other, 1, PACK).await;
         assert_eq!(auto_equip(&mut a, PACK).await.as_deref(), Some(error));
@@ -848,6 +856,7 @@ async fn stacks_dropped_on_their_kind_merge() {
 #[tokio::test]
 async fn a_stack_splits_into_the_old_ones_kind() {
     let (realm, mut a, g) = setup().await;
+    open_bank(&realm, g).await;
     let src = give_at(&realm, g, TIMED, 10, PACK).await;
     on_map(&realm, move |m| {
         let p = m.players.get_mut(&g).unwrap();
@@ -981,6 +990,7 @@ async fn destroying_takes_what_is_there() {
 #[tokio::test]
 async fn the_bank_takes_items_onto_its_stacks_and_into_its_bags() {
     let (realm, mut a, g) = setup().await;
+    open_bank(&realm, g).await;
     on_map(&realm, move |m| {
         m.players
             .get_mut(&g)
@@ -1099,6 +1109,7 @@ async fn the_bank_takes_items_onto_its_stacks_and_into_its_bags() {
 #[tokio::test]
 async fn a_full_bank_or_full_bags_leave_an_item_where_it_is() {
     let (realm, mut a, g) = setup().await;
+    open_bank(&realm, g).await;
     let source = give_at(&realm, g, CHEST, 1, PACK).await;
     for slot in BANK_START..crate::game::map::inventory::BANK_END {
         give_at(&realm, g, FILLER, 1, (BAG_PLAYER, slot)).await;
@@ -1112,6 +1123,7 @@ async fn a_full_bank_or_full_bags_leave_an_item_where_it_is() {
     assert_eq!(at(&realm, g, source).await, Some((BAG_PLAYER, PACK.1, 1)));
 
     let (realm, mut a, g) = setup().await;
+    open_bank(&realm, g).await;
     let source = give_at(&realm, g, CHEST, 1, BANK1).await;
     fill_pack(&realm, g).await;
     a.send(CMSG_AUTOSTORE_BANK_ITEM {
@@ -1486,6 +1498,7 @@ async fn a_turn_in_rewards_in_the_room_its_items_leave() {
 
     // A ring banked isn't taken for the quest.
     let (realm, mut a, g) = setup().await;
+    open_bank(&realm, g).await;
     a.sees(giver()).await;
     accept(&mut a, &realm, g, RING_QUEST).await;
     let ring = give_at(&realm, g, RING, 1, BANK1).await;

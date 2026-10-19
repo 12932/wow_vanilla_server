@@ -880,7 +880,8 @@ async fn items_are_read_wrapped_banked_and_equipped_to_a_slot() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let book = on_map(&realm, move |m| m.players[&g].count_of(BOOK)).await;
     assert_eq!(book, 1);
-    // Into the bank and back.
+    // Into the bank and back, at a banker.
+    harness::open_bank(&realm.maps.get(&realm, MapKey::world(0)), g).await;
     a.send(CMSG_AUTOBANK_ITEM {
         bag_index: bag,
         slot_index: slot,

@@ -279,6 +279,7 @@ async fn a_full_bank_bag_is_not_destroyed() {
         (p.items[b].guid, p.items[w].guid)
     })
     .await;
+    harness::open_bank(&realm.maps.get(&realm, MapKey::world(0)), g).await;
     a.send(CMSG_DESTROYITEM {
         bag: BAG_PLAYER,
         slot: BANK_BAG_START,
