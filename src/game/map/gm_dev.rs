@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .gear, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear, .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>, \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -230,9 +230,17 @@ fn learn(map: &mut Map, g: Guid, args: &[&str], learn: bool) -> Option<String> {
     }
 }
 
+/// `.character level <n>` and `.character spells`: the selected player,
+/// or the GM, at a level (at full health and mana, as a level gained), or
+/// taught every spell their class's trainers would teach them now.
 fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    if args.first() == Some(&"spells") && args.len() == 1 {
+        let to = player_target(map, g);
+        let n = crate::game::map::npc::learn_class_spells(map, to);
+        return Some(format!("Learned {n} spells."));
+    }
     let (Some(&"level"), Some(level)) = (args.first(), num::<u8>(args.get(1))) else {
-        return Some("Usage: .character level <level>".into());
+        return Some("Usage: .character level <level> | .character spells".into());
     };
     let data = map.realm.data.clone();
     let to = player_target(map, g);
