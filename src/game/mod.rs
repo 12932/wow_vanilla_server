@@ -611,6 +611,8 @@ mod tests_p7_spell_caster;
 #[cfg(test)]
 mod tests_p7_spell_procs;
 #[cfg(test)]
+mod tests_p7_spell_teleport;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
