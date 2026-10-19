@@ -621,6 +621,8 @@ mod tests_p7_spell_proc_sides;
 #[cfg(test)]
 mod tests_p7_spell_procs;
 #[cfg(test)]
+mod tests_p7_spell_scripts;
+#[cfg(test)]
 mod tests_p7_spell_teleport;
 #[cfg(test)]
 mod tests_parity_combat;
