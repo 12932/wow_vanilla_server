@@ -784,11 +784,17 @@ async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_rea
             );
             m.now += Duration::from_millis(5_001);
             let unlocked = check(m, FIREBALL, at(kobold));
-            // Charge's least range, in Battle Stance.
+            // Charge's least range, in Battle Stance: 8 yards beyond both
+            // reaches (mangos's `GetMinMaxRange`).
             spells::cast_triggered(m, me, 2457, None);
-            place(m, me, kobold, 3.0);
+            let reaches = [me, kobold]
+                .iter()
+                .filter_map(|&g| m.unit_view(g))
+                .map(|u| u.combat_reach)
+                .sum::<f32>();
+            place(m, me, kobold, 8.0 + reaches - 0.5);
             let close = check(m, CHARGE, at(kobold));
-            place(m, me, kobold, 10.0);
+            place(m, me, kobold, 8.0 + reaches + 0.5);
             let charge = check(m, CHARGE, at(kobold));
             clear_all(m, me);
             // Forms: Claw is a cat's; Fireball no shape's; Renew no shadow's.
