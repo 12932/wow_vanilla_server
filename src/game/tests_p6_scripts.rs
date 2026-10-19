@@ -1732,7 +1732,23 @@ fn take_again(m: &mut Map, me: Guid, giver: Guid, quest: u32, before: &[u32]) ->
     let data = m.realm.data.clone();
     quests::refresh_log(m.players.get_mut(&me).unwrap(), &data);
     quests::accept(m, me, giver, quest);
-    m.players[&me].journal.has(quest)
+    let taken = m.players[&me].journal.has(quest);
+    if !taken {
+        let q = data.npc.quests.get(&quest).unwrap();
+        eprintln!(
+            "{quest} not taken: can_take {} condition {} npc {:?} flags {:x} ranks {:?} {:?} combat {:?} at war {}",
+            quests::can_take(&m.players[&me], q, &data),
+            quests::condition_ok(m, me, giver, quest),
+            crate::game::map::npc::npc_entry(m, me, giver, 0),
+            npc_flags(m, giver),
+            crate::game::map::reputation::reaction_rank(m, giver, me),
+            crate::game::map::reputation::reaction_rank(m, me, giver),
+            m.combat(giver).map(|f| (f.attacking, f.victim)),
+            crate::game::map::reputation::faction_of(m, giver)
+                .is_some_and(|f| crate::game::map::reputation::at_war(&m.players[&me], &data, f)),
+        );
+    }
+    taken
 }
 
 const PIZNIK: u32 = 4276;
@@ -1877,4 +1893,152 @@ async fn shakes_sounds_the_alarm_and_fails_if_he_dies_or_the_player_strays() {
             "stray {stray}: he is back"
         );
     }
+}
+
+const DASHEL: u32 = 4961;
+const THUG: u32 = 4969;
+const DASHELS_BRAWL: u32 = 1447;
+
+/// The Missing Diplomat's brawl: Dashel Stonefist gives up at a fifth of
+/// his health only in the quest's fight; giving up, he and his thugs
+/// turn friendly and he goes home, where he sends them off, each
+/// answering him in its turn, and the quest is done for its player;
+/// left alone, he settles it himself (Thistle Tea's `dashel_stonefist`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn dashel_gives_up_in_the_quest_fight_and_sends_his_thugs_off() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, dashel) = hero_by(&realm, "Brawled", DASHEL).await;
+    let usual = map.query(move |m| faction(m, dashel)).await.unwrap();
+    // Not in the quest's fight: he fights on.
+    let kept = map
+        .query(move |m| {
+            tough(m, dashel);
+            crate::game::map::scripts::set_faction(m, dashel, 14);
+            let d = dummy(m, off(m.position_of(dashel).unwrap(), 3.0, 0.0));
+            crate::game::map::ai::attacked(m, dashel, d);
+            set_pct(m, dashel, 15);
+            due(m, dashel, 496101);
+            let kept = (event_ai::phase(m, dashel), faction(m, dashel));
+            crate::game::map::scripts::set_faction(m, dashel, usual);
+            crate::game::map::scripts::despawn(m, d);
+            event_ai::evade(m, dashel);
+            kept
+        })
+        .await
+        .unwrap();
+    assert_eq!(kept, (0, 14), "no giving up outside the quest's fight");
+    assert!(
+        until(&map, 5_000, move |m| at_peace(m, dashel)).await,
+        "home again"
+    );
+    // The quest's fight.
+    let taken = map
+        .query(move |m| {
+            if let Some(f) = m.unit_fields_mut(dashel) {
+                let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+                f.set_u32(UNIT_FIELD_HEALTH, max);
+            }
+            take_again(m, me, dashel, DASHELS_BRAWL, &[1246])
+        })
+        .await
+        .unwrap();
+    assert!(taken, "taken");
+    assert!(
+        until(&map, 2_000, move |m| event_ai::phase(m, dashel) == 1
+            && living(m, THUG).len() == 2)
+        .await,
+        "the fight, with two thugs"
+    );
+    let thugs: [Guid; 2] = map
+        .query(|m| living(m, THUG))
+        .await
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let phases: Vec<u32> = map
+        .query(move |m| {
+            let mut p: Vec<u32> = thugs.iter().map(|t| event_ai::phase(m, *t)).collect();
+            p.sort();
+            p
+        })
+        .await
+        .unwrap();
+    assert_eq!(phases, [1, 2], "each thug its turn");
+    c.clear();
+    let gave_up = map
+        .query(move |m| {
+            for t in &thugs {
+                tough(m, *t);
+            }
+            set_pct(m, dashel, 15);
+            due(m, dashel, 496101);
+            hurry_runs(m, None, Duration::from_millis(100));
+            (
+                event_ai::phase(m, dashel),
+                faction(m, dashel),
+                thugs.iter().map(|t| faction(m, *t)).collect::<Vec<_>>(),
+                m.creature(dashel).is_some_and(|c| c.evading) || at_peace(m, dashel),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        gave_up,
+        (2, 35, vec![35, 35], true),
+        "yielded, everyone friendly, he going home"
+    );
+    assert!(hears(&mut c, &realm, dashel, 1712).await, "enough fighting");
+    // Home, he sends them off.
+    let settling = map
+        .query(move |m| {
+            for t in &thugs {
+                if let Some(at) = m.position_of(dashel) {
+                    crate::game::map::scripts::place(m, *t, off(at, 2.0, 0.0), 0.0);
+                }
+            }
+            event_ai::reached_home(m, dashel);
+            event_ai::phase(m, dashel)
+        })
+        .await
+        .unwrap();
+    assert_eq!(settling, 3, "settling");
+    hurry_all(&map, 3.0).await;
+    assert!(hears(&mut c, &realm, dashel, 1713).await, "back off");
+    let (first, second) = map
+        .query(move |m| {
+            let first = thugs
+                .iter()
+                .copied()
+                .find(|t| event_ai::phase(m, *t) == 1)
+                .unwrap();
+            let second = thugs.iter().copied().find(|t| *t != first).unwrap();
+            (first, second)
+        })
+        .await
+        .unwrap();
+    hurry_all(&map, 3.0).await;
+    assert!(
+        hears(&mut c, &realm, first, 1716).await,
+        "the first answers"
+    );
+    hurry_all(&map, 1.5).await;
+    assert!(hears(&mut c, &realm, second, 1715).await, "then the second");
+    let done = map
+        .query(move |m| {
+            for _ in 0..12 {
+                hurry_runs(m, None, Duration::from_secs(1));
+            }
+            (
+                explored(m, me, DASHELS_BRAWL),
+                faction(m, dashel),
+                npc_flags(m, dashel) & 0x2,
+                event_ai::phase(m, dashel),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(done, (true, usual, 0x2, 0), "credited, and himself again");
 }
