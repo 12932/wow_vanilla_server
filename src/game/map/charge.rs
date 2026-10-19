@@ -198,7 +198,15 @@ pub fn update(map: &mut Map) {
         .map(|p| p.guid)
         .collect();
     for g in players {
-        advance(map, g);
+        // One who fell on the way lies where they fell (Thistle Tea's
+        // "death ends the charge without moving the corpse").
+        if map
+            .players
+            .get(&g)
+            .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
+        {
+            advance(map, g);
+        }
         let Some(p) = map.players.get(&g) else {
             continue;
         };
