@@ -439,3 +439,251 @@ async fn an_aggressive_guardian_takes_the_lower_guid_of_two_as_near() {
     assert!(low.guid() < high.guid());
     assert_eq!(out, Some(low), "the lower guid");
 }
+
+fn in_combat(m: &Map, g: Guid) -> bool {
+    m.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+    })
+}
+
+/// A script's pet command (88), `datalong` the command, from `source` on
+/// `target`, with the abort flag: whether its script would go on.
+fn command(m: &mut Map, d1: u32, source: Guid, target: Guid) -> bool {
+    use crate::game::data::scripts::{SF_ABORT_ON_FAILURE, ScriptStep};
+    let st = ScriptStep {
+        data_flags: SF_ABORT_ON_FAILURE,
+        ..crate::game::tests_p3_entity::step(88, [d1, 0, 0, 0])
+    };
+    crate::game::map::scripts::execute(m, &st, source, target)
+}
+
+/// Thistle Tea's `set_command_state` "follow stops attacking and casting
+/// without clearing the combat timer", "possessed stay and follow leave
+/// client movement and combat in place", "explicit attacks override
+/// passive reaction and reject invalid targets" and "non-creature sources
+/// honor the abort flag": a script's Follow stops its pet's attack and
+/// its cast and lets its foes go, its fight's flag kept; one its master
+/// possesses takes no stay or follow; an Attack sends it in passive or
+/// not, as its master's would, but at no one, no one dead, no one it may
+/// not attack, and not while its master is pacified; and from one that
+/// isn't a creature, the command fails.
+#[tokio::test]
+async fn a_scripts_pet_commands_stop_its_fight_send_it_in_or_fail() {
+    let (_realm, _h, gh, map, pet, wolf) = tamed_with(world()).await;
+    let other = place(&map, gh, WOLF, 0x70_0040, 10.0).await;
+    let out = map
+        .query(move |m| {
+            for w in [wolf, other] {
+                let f = m.unit_fields_mut(w).unwrap();
+                f.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+                f.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+            }
+            pets::state_mut(m, pet).unwrap().spells.push(BUFF_B);
+            // Fighting, casting: Follow.
+            pets::attack_target(m, pet, wolf);
+            let c = m.creature_mut(pet).unwrap();
+            c.threat.push((wolf, 10.0));
+            c.fields.set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                true,
+            );
+            crate::game::map::spells::cast(
+                m,
+                pet,
+                BUFF_B,
+                crate::game::map::spells::Targets {
+                    unit: Some(pet),
+                    ..Default::default()
+                },
+                None,
+            );
+            let before = (casting(m, pet), in_combat(m, pet));
+            let ok = command(m, u32::from(pets::COMMAND_FOLLOW), pet, Guid::zero());
+            let c = m.creature(pet).unwrap();
+            let followed = (
+                ok,
+                c.combat.attacking,
+                casting(m, pet),
+                in_combat(m, pet),
+                c.threat.is_empty(),
+                pets::state(m, pet).unwrap().command,
+            );
+            // Possessed: neither stay nor follow takes.
+            pets::attack_target(m, pet, wolf);
+            pets::state_mut(m, pet).unwrap().kind = Kind::Possessed;
+            let held = [pets::COMMAND_STAY, pets::COMMAND_FOLLOW].map(|d| {
+                let ok = command(m, u32::from(d), pet, Guid::zero());
+                (
+                    ok,
+                    m.combat(pet)
+                        .is_some_and(|c| c.attacking && c.victim == wolf),
+                )
+            });
+            pets::state_mut(m, pet).unwrap().kind = Kind::Hunter;
+            // Passive, an Attack sends it in.
+            command(m, u32::from(pets::COMMAND_FOLLOW), pet, Guid::zero());
+            pets::state_mut(m, pet).unwrap().react = pets::REACT_PASSIVE;
+            let sent = (
+                command(m, u32::from(pets::COMMAND_ATTACK), pet, other),
+                m.combat(pet)
+                    .is_some_and(|c| c.attacking && c.victim == other),
+                pets::state(m, pet).unwrap().commanded == Some(other),
+            );
+            // At no one; her pacified; one it may not attack; one dead.
+            let attack = |m: &mut Map, t: Guid| {
+                command(m, u32::from(pets::COMMAND_FOLLOW), pet, Guid::zero());
+                command(m, u32::from(pets::COMMAND_ATTACK), pet, t)
+            };
+            let nobody = attack(m, Guid::zero());
+            m.players
+                .get_mut(&gh)
+                .unwrap()
+                .fields
+                .set_flag(UNIT_FIELD_FLAGS, 0x2_0000, true);
+            let pacified = attack(m, wolf);
+            m.players
+                .get_mut(&gh)
+                .unwrap()
+                .fields
+                .set_flag(UNIT_FIELD_FLAGS, 0x2_0000, false);
+            m.unit_fields_mut(wolf)
+                .unwrap()
+                .set_flag(UNIT_FIELD_FLAGS, 0x2, true);
+            let untouchable = attack(m, wolf);
+            ai::die(m, other, gh);
+            let dead = attack(m, other);
+            // From a player.
+            let player = command(m, u32::from(pets::COMMAND_STAY), gh, Guid::zero());
+            (
+                before,
+                followed,
+                held,
+                sent,
+                [nobody, pacified, untouchable, dead],
+                player,
+            )
+        })
+        .await
+        .unwrap();
+    let (before, followed, held, sent, denied, player) = out;
+    assert_eq!(before, (Some(BUFF_B), true));
+    assert_eq!(
+        followed,
+        (true, false, None, true, true, pets::COMMAND_FOLLOW),
+        "its attack and cast stop, its fight's flag stays"
+    );
+    assert_eq!(held, [(true, true); 2], "possessed: its fight goes on");
+    assert_eq!(sent, (true, true, true), "passive, sent in");
+    assert_eq!(denied, [false; 4], "no one, pacified, untouchable, dead");
+    assert!(!player, "a player's fails");
+}
+
+const GROUP_SCRIPT: u32 = 9_570;
+
+/// Thistle Tea's `remove_guardians` "removes matching guardians from
+/// either unit owner without touching other companions", and the group's
+/// script "selects one nested script for the whole group and preserves
+/// its delays and target" and "a missed chance honors the abort flag": a
+/// script's call (56) takes away a player's or a creature's guardians of
+/// an entry, its other guardians and its companion left; one script, by
+/// chance, runs for a creature and each of its group, its delays kept; a
+/// chance missed fails the step.
+#[tokio::test]
+async fn a_scripts_guardians_go_by_entry_and_its_group_script_runs_for_all() {
+    use crate::game::data::scripts::*;
+    use crate::game::tests_p3_entity::step;
+    let mut d = world();
+    d.scripts.generic.insert(
+        GROUP_SCRIPT,
+        vec![
+            step(28, [1, 0, 0, 0]),
+            ScriptStep {
+                delay_ms: 1_000,
+                ..step(28, [8, 0, 0, 0])
+            },
+        ],
+    );
+    let (_realm, _h, gh, map, _pet, _wolf) = tamed_with(d).await;
+    let master = place(&map, gh, WOLF, 0x70_0041, 6.0).await;
+    let member = place(&map, gh, WOLF, 0x70_0042, 7.0).await;
+    let out = map
+        .query(move |m| {
+            let at = m.position_of(master).unwrap();
+            let summon = |m: &mut Map, owner: Guid, entry: u32, kind: Kind| {
+                let g = pets::testing::spawn(m, owner, entry, kind, 10, at, 0.0);
+                if kind == Kind::Guardian
+                    && let Some(p) = m.players.get_mut(&owner)
+                {
+                    p.owned.guardians.push(g);
+                }
+                g
+            };
+            let hers = [
+                summon(m, gh, STILL, Kind::Guardian),
+                summon(m, gh, SWINGER, Kind::Guardian),
+                summon(m, gh, STILL, Kind::Critter),
+            ];
+            let its = summon(m, master, STILL, Kind::Guardian);
+            let remove = step(56, [STILL, 0, 0, 0]);
+            crate::game::map::scripts::execute(m, &remove, gh, Guid::zero());
+            let after_hers = (
+                hers.map(|g| m.creature(g).is_some()),
+                m.creature(its).is_some(),
+            );
+            crate::game::map::scripts::execute(m, &remove, master, Guid::zero());
+            let after_its = m.creature(its).is_some();
+            // The group's script.
+            crate::game::map::creature_groups::join_with(m, member, master, 2.0, 0.0, 0);
+            let stand = |m: &Map, g: Guid| {
+                m.unit_fields(g)
+                    .map_or(u8::MAX, |f| f.get_byte(UNIT_FIELD_BYTES_1, 0))
+            };
+            let group = ScriptStep {
+                dataint: [100, 0, 0, 0],
+                ..step(90, [GROUP_SCRIPT, 0, 0, 0])
+            };
+            let ran = crate::game::map::scripts::execute(m, &group, master, gh);
+            let first = (stand(m, master), stand(m, member));
+            for r in m.scripts.runs.iter_mut() {
+                r.started -= Duration::from_millis(1_000);
+            }
+            crate::game::map::scripts::update(m);
+            let later = (stand(m, master), stand(m, member));
+            // A chance in a hundred: missed, the step fails.
+            let mut honoured = true;
+            let mut missed = 0;
+            for _ in 0..30 {
+                m.unit_fields_mut(master)
+                    .unwrap()
+                    .set_byte(UNIT_FIELD_BYTES_1, 0, 0);
+                let slim = ScriptStep {
+                    dataint: [1, 0, 0, 0],
+                    data_flags: SF_ABORT_ON_FAILURE,
+                    ..step(90, [GROUP_SCRIPT, 0, 0, 0])
+                };
+                let ok = crate::game::map::scripts::execute(m, &slim, master, gh);
+                if stand(m, master) == 0 {
+                    missed += 1;
+                    honoured &= !ok;
+                }
+            }
+            (after_hers, after_its, ran, first, later, missed, honoured)
+        })
+        .await
+        .unwrap();
+    let (after_hers, after_its, ran, first, later, missed, honoured) = out;
+    assert_eq!(
+        after_hers,
+        ([false, true, true], true),
+        "hers of the entry go; her other and her companion stay, its too"
+    );
+    assert!(!after_its, "a creature's go");
+    assert!(ran);
+    assert_eq!(first, (1, 1), "for both");
+    assert_eq!(later, (8, 8), "its delay kept");
+    assert!(missed > 0 && honoured, "a miss fails the step");
+}

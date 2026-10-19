@@ -1257,6 +1257,9 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
 /// The bounding radius Thistle Tea takes for a unit with none.
 const DEFAULT_BOUNDING_RADIUS: f32 = 0.389;
 
+/// `UNIT_FLAG_PACIFIED`: a master so can't send its pet in.
+const UNIT_FLAG_PACIFIED_SCRIPT: u32 = 0x0002_0000;
+
 /// Set a game object's state (0 open, 1 closed, 2 active), its flags as
 /// they are; a use's close still to come doesn't undo it.
 pub fn set_object_state(map: &mut Map, object: Guid, state: u32) {
@@ -2596,9 +2599,24 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // command there is none of, changes nothing, and fails no script
         // (Thistle Tea's).
         88 => {
+            // A source that isn't a creature fails it (its abort flag
+            // says whether that ends the script).
+            if !guid::is_unit(source) {
+                return false;
+            }
             let Some(kind) = crate::game::map::pets::state(map, source).map(|s| s.kind) else {
                 return true;
             };
+            // One its master moves takes no stay or follow from a script:
+            // its movement and fight are its master's.
+            if kind == crate::game::map::pets::Kind::Possessed
+                && matches!(
+                    d1 as u8,
+                    crate::game::map::pets::COMMAND_STAY | crate::game::map::pets::COMMAND_FOLLOW
+                )
+            {
+                return true;
+            }
             match d1 as u8 {
                 crate::game::map::pets::COMMAND_STAY => {
                     let at = map.position_of(source);
@@ -2608,19 +2626,43 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                         s.stay_at = at;
                     }
                 }
+                // Follow: its attack and its cast stop, its foes are
+                // let go, its fight's flag waits out its own time (Thistle
+                // Tea's `set_command_state` follow).
                 crate::game::map::pets::COMMAND_FOLLOW => {
                     crate::game::map::combat::stop_attack(map, source);
+                    crate::game::map::spells::interrupt(map, source);
+                    if let Some(c) = creature_mut(map, source) {
+                        c.threat.clear();
+                        c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+                    }
                     if let Some(s) = crate::game::map::pets::state_mut(map, source) {
                         s.command = crate::game::map::pets::COMMAND_FOLLOW;
                         s.stay_at = None;
                         s.returning = true;
+                        s.commanded = None;
                     }
                 }
+                // Attack, whatever its stance, a living unit it may
+                // attack, its master not pacified; as its master's Attack
+                // (the victim it goes after when told to stay).
                 crate::game::map::pets::COMMAND_ATTACK => {
-                    if !crate::game::map::combat::can_attack(map, source, target) {
+                    let owner = crate::game::map::pets::state(map, source).map(|s| s.owner);
+                    let pacified = owner.and_then(|o| map.unit_fields(o)).is_some_and(|f| {
+                        f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_PACIFIED_SCRIPT != 0
+                    });
+                    if target.is_zero()
+                        || !alive(map, target)
+                        || pacified
+                        || !crate::game::map::combat::can_attack(map, source, target)
+                    {
                         return false;
                     }
                     crate::game::map::pets::attack_target(map, source, target);
+                    if let Some(s) = crate::game::map::pets::state_mut(map, source) {
+                        s.commanded = Some(target);
+                        s.commanded_at = Some(now);
+                    }
                 }
                 // A hunter's pet isn't dismissed so (mangos's "no action
                 // for hunter pets").
