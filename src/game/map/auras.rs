@@ -507,6 +507,13 @@ impl Holder {
 #[derive(Debug, Clone, Default)]
 pub struct Auras {
     pub holders: Vec<Holder>,
+    /// The unit's own size, bounding radius and combat reach, kept while a
+    /// transform or a growth changes them, to come back to (Thistle Tea's
+    /// `base_scale_x`, `base_bounding_radius` and `base_combat_reach`).
+    pub native_size: Option<[f32; 3]>,
+    /// A creature's own weapons (its virtual item fields), kept while a
+    /// transform puts its creature's on.
+    pub native_weapons: Option<[u32; 9]>,
 }
 
 impl Auras {
@@ -1776,12 +1783,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_TRACK_CREATURES | AURA_TRACK_RESOURCES | AURA_TRACK_STEALTHED => {
             tracking(map, target);
         }
-        AURA_MOD_SCALE => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                let s = f.get_f32(OBJECT_FIELD_SCALE_X);
-                f.set_f32(OBJECT_FIELD_SCALE_X, s * (100 + a.amount) as f32 / 100.0);
-            }
-        }
+        AURA_MOD_SCALE => sync_display(map, target),
         AURA_MOD_DISARM => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_DISARMED, true);
@@ -2018,15 +2020,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         AURA_TRACK_CREATURES | AURA_TRACK_RESOURCES | AURA_TRACK_STEALTHED => {
             tracking(map, target);
         }
-        AURA_MOD_SCALE => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                let s = f.get_f32(OBJECT_FIELD_SCALE_X);
-                f.set_f32(
-                    OBJECT_FIELD_SCALE_X,
-                    s * 100.0 / (100 + a.amount).max(1) as f32,
-                );
-            }
-        }
+        AURA_MOD_SCALE => sync_display(map, target),
         AURA_MOD_DISARM if !still(map, AURA_MOD_DISARM) => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_DISARMED, false);
@@ -2454,7 +2448,7 @@ fn sync_display(map: &mut Map, target: Guid) {
     let Some(a) = auras(map, target) else {
         return;
     };
-    let mut transforms: Vec<(Option<Instant>, bool, u32)> = a
+    let mut transforms: Vec<(Option<Instant>, bool, u32, Option<u32>)> = a
         .holders
         .iter()
         .flat_map(|h| {
@@ -2465,23 +2459,26 @@ fn sync_display(map: &mut Map, target: Guid) {
         })
         .filter_map(|(spell, applied, positive, misc)| {
             if misc == 0 && spell == ORB_OF_DECEPTION {
-                return deception_display(native).map(|d| (applied, positive, d));
+                return deception_display(native).map(|d| (applied, positive, d, None));
             }
-            data.creature_template(misc.max(0) as u32)
+            let entry = misc.max(0) as u32;
+            data.creature_template(entry)
                 .and_then(|t| t.display_ids.iter().copied().find(|d| *d != 0))
-                .map(|d| (applied, positive, d))
+                .map(|d| (applied, positive, d, Some(entry)))
         })
         .collect();
     // The newest put on (or refreshed) shows, a harmful one over any
     // helpful (Thistle Tea's `Appearance`, mangos preferring the negative);
     // those put on at once in their order.
-    transforms.sort_by_key(|(applied, _, _)| *applied);
+    transforms.sort_by_key(|(applied, ..)| *applied);
     let transform = transforms
         .iter()
         .rev()
-        .find(|(_, positive, _)| !positive)
+        .find(|(_, positive, ..)| !positive)
         .or(transforms.last())
-        .map(|(_, _, d)| *d);
+        .map(|(_, _, d, entry)| (*d, *entry));
+    let growth = a.product(AURA_MOD_SCALE);
+    let grown = a.has(AURA_MOD_SCALE);
     let Some(f) = map.unit_fields_mut(target) else {
         return;
     };
@@ -2490,10 +2487,124 @@ fn sync_display(map: &mut Map, target: Guid) {
         f.get_byte(UNIT_FIELD_BYTES_0, 0),
     );
     let display = transform
+        .map(|(d, _)| d)
         .or((form != 0).then_some(form))
         .unwrap_or_else(|| f.get_u32(UNIT_FIELD_NATIVEDISPLAYID));
     if display != 0 && f.get_u32(UNIT_FIELD_DISPLAYID) != display {
         f.set_u32(UNIT_FIELD_DISPLAYID, display);
+    }
+    fit_size(map, target, transform, grown.then_some(growth));
+    fit_weapons(map, target, transform.and_then(|(_, entry)| entry));
+}
+
+/// A unit's size, bounding radius and combat reach for what it shows: its
+/// transform's creature's as that creature has them (`Creature::fit_model`),
+/// else its own, each grown by its growths (`SPELL_AURA_MOD_SCALE`), as
+/// mangos's `RestoreDisplayId` and `UpdateModelData` and Thistle Tea's
+/// `Appearance.project` derive them, never from what they were (no
+/// compounding). Its own come back as they were once neither is on.
+fn fit_size(
+    map: &mut Map,
+    target: Guid,
+    transform: Option<(u32, Option<u32>)>,
+    growth: Option<f32>,
+) {
+    let data = map.realm.data.clone();
+    let Some(f) = map.unit_fields(target) else {
+        return;
+    };
+    let current = [
+        f.get_f32(OBJECT_FIELD_SCALE_X),
+        f.get_f32(UNIT_FIELD_BOUNDINGRADIUS),
+        f.get_f32(UNIT_FIELD_COMBATREACH),
+    ];
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    if transform.is_none() && growth.is_none() {
+        let Some(own) = a.native_size.take() else {
+            return;
+        };
+        if let Some(f) = map.unit_fields_mut(target) {
+            f.set_f32(OBJECT_FIELD_SCALE_X, own[0]);
+            f.set_f32(UNIT_FIELD_BOUNDINGRADIUS, own[1]);
+            f.set_f32(UNIT_FIELD_COMBATREACH, own[2]);
+        }
+        return;
+    }
+    let own = *a.native_size.get_or_insert(current);
+    let base = transform
+        .map(|(display, entry)| {
+            let template = entry.and_then(|e| data.creature_template(e));
+            let chosen = template
+                .and_then(|t| {
+                    let i = t.display_ids.iter().position(|x| *x == display)?;
+                    Some(t.display_scales[i])
+                })
+                .filter(|s| *s > 0.0);
+            match data.display_info.get(&display) {
+                Some(d) => {
+                    let native = if d.scale > 0.0 { d.scale } else { 1.0 };
+                    let scale = chosen.unwrap_or(native);
+                    let grow = scale / native;
+                    let radius = if d.bounding_radius > 0.0 {
+                        d.bounding_radius
+                    } else {
+                        0.5
+                    };
+                    let reach = if d.combat_reach > 0.0 {
+                        d.combat_reach
+                    } else {
+                        1.5
+                    };
+                    [scale, radius * grow, reach * grow]
+                }
+                None => {
+                    let scale = chosen.unwrap_or(1.0);
+                    let grow = scale / own[0].max(0.01);
+                    [scale, own[1] * grow, own[2] * grow]
+                }
+            }
+        })
+        .unwrap_or(own);
+    let growth = growth.unwrap_or(1.0).clamp(0.01, 100.0);
+    if let Some(f) = map.unit_fields_mut(target) {
+        f.set_f32(OBJECT_FIELD_SCALE_X, base[0] * growth);
+        f.set_f32(UNIT_FIELD_BOUNDINGRADIUS, base[1] * growth);
+        f.set_f32(UNIT_FIELD_COMBATREACH, base[2] * growth);
+    }
+}
+
+/// A creature's weapons for its transform: the transform's creature's,
+/// where it has some (mangos's `HandleAuraTransform` loading its
+/// equipment), else its own, back as they were (Thistle Tea's
+/// `Appearance.reconcile_equipment`).
+fn fit_weapons(map: &mut Map, target: Guid, entry: Option<u32>) {
+    let data = map.realm.data.clone();
+    let items = entry
+        .and_then(|e| data.creature_template(e))
+        .and_then(|t| data.creature_equipment.get(&t.equipment_id))
+        .copied();
+    let Some(c) = map.creature_mut(target) else {
+        return;
+    };
+    let fields = |c: &crate::game::map::creature::Creature| -> [u32; 9] {
+        std::array::from_fn(|i| c.fields.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i as u16))
+    };
+    match items {
+        Some(items) => {
+            if c.auras.native_weapons.is_none() {
+                c.auras.native_weapons = Some(fields(c));
+            }
+            c.set_equipment_slots(&data, items.map(Some));
+        }
+        None => {
+            if let Some(own) = c.auras.native_weapons.take() {
+                for (i, v) in (0u16..).zip(own) {
+                    c.fields.set_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i, v);
+                }
+            }
+        }
     }
 }
 
