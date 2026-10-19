@@ -79,3 +79,80 @@ async fn a_shared_blow_is_logged_to_its_taker_under_the_links_spell() {
     assert_eq!(u32_at(9), 0, "none absorbed");
     assert_eq!(u32_at(21), 0, "no crit");
 }
+
+/// Thistle Tea's `SpellReception.aura_contexts/2` "running auras observe
+/// modifier gain and removal on subsequent ticks": Alice's burn on a
+/// brute ticks a hundred; while her threat is cut by thirty percent a tick
+/// is seventy threat, and once the cut is gone the next is a hundred
+/// (each tick's threat by her modifiers as it lands: mangos's
+/// `PeriodicTick` dealing damage through `DealDamage`'s threat).
+#[tokio::test]
+async fn a_burns_ticks_threaten_by_the_casters_modifiers_as_they_land() {
+    use crate::game::map::auras::{AURA_MOD_THREAT, AURA_PERIODIC_DAMAGE};
+    use crate::game::map::spells::{self, Targets};
+    use crate::game::tests_p3_cast_kit::{LASTS_15S, aura, bare, effect, insert};
+    use crate::game::tests_p3_combat::{aura_of, data, setup_with};
+    const BURN: u32 = 997_870;
+    const CALM: u32 = 997_871;
+    let mut d = data();
+    d.spells.durations.insert(
+        LASTS_15S,
+        crate::game::data::spells::SpellDuration {
+            base: 15_000,
+            per_level: 0,
+            max: 15_000,
+        },
+    );
+    let mut burn = bare(BURN, 2);
+    burn.duration_index = LASTS_15S;
+    effect(
+        &mut burn,
+        0,
+        SpellEffect {
+            amplitude: 1000,
+            ..aura(AURA_PERIODIC_DAMAGE, 0, 100, 6)
+        },
+    );
+    insert(&mut d, [burn]);
+    let (_realm, _a, ga, map) = setup_with(d, Class::Mage).await;
+    let out = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 10.0);
+        let threat = |m: &crate::game::map::Map| {
+            m.creature(brute)
+                .unwrap()
+                .threat
+                .iter()
+                .find(|(t, _)| *t == ga)
+                .map_or(0.0, |(_, v)| *v)
+        };
+        aura_of(m, ga, CALM, AURA_MOD_THREAT, 127, -30);
+        let cast = spells::cast(
+            m,
+            ga,
+            BURN,
+            Targets {
+                unit: Some(brute),
+                ..Default::default()
+            },
+            None,
+        );
+        let mut deltas = Vec::new();
+        for calm in [true, false] {
+            if !calm {
+                crate::game::map::auras::remove_spell(m, ga, CALM, None);
+            }
+            let before = threat(m);
+            m.now += std::time::Duration::from_millis(1001);
+            crate::game::map::auras::update(m);
+            deltas.push(threat(m) - before);
+        }
+        (cast, deltas)
+    })
+    .await;
+    let (cast, deltas) = out;
+    assert!(cast);
+    assert!(
+        (deltas[0] - 70.0).abs() < 0.5 && (deltas[1] - 100.0).abs() < 0.5,
+        "seventy with the cut, a hundred without: {deltas:?}"
+    );
+}
