@@ -139,3 +139,109 @@ async fn a_unit_shows_its_newest_transform_a_harmful_one_first() {
     .await;
     assert_eq!(both, 200);
 }
+
+/// A tracking spell of `kind` and `misc`, on oneself, for good.
+fn tracker(id: u32, kind: u32, misc: i32) -> SpellTemplate {
+    let mut s = SpellTemplate {
+        id,
+        name: format!("Track {id}"),
+        equipped_item_class: -1,
+        custom_flags: CUSTOM_POSITIVE,
+        // As the real ones are: castable mounted (mangos's tracking
+        // exclusivity, `IsSpellAllowedWhileMounted`).
+        attributes: [
+            crate::game::data::spells::ATTR_ALLOW_WHILE_MOUNTED,
+            0,
+            0,
+            0,
+            0,
+        ],
+        ..Default::default()
+    };
+    s.effects[0] = SpellEffect {
+        effect: 6,
+        aura: kind,
+        misc_value: misc,
+        target_a: 1,
+        ..Default::default()
+    };
+    s
+}
+
+/// Thistle Tea's `Aura.transition` "switching tracking categories replaces
+/// the aura and both projections": one tracking at a time (Find Herbs,
+/// Find Minerals, Track Beasts), each taking the one before off, and the
+/// player's tracking fields (`PLAYER_TRACK_RESOURCES`, `_CREATURES`) are
+/// the one on's bit alone.
+#[tokio::test]
+async fn one_tracking_is_on_at_a_time_and_its_fields_are_its_own() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let modes = [
+        (2383, auras::AURA_TRACK_RESOURCES, 2),
+        (2580, auras::AURA_TRACK_RESOURCES, 3),
+        (1494, auras::AURA_TRACK_CREATURES, 1),
+    ];
+    for (id, kind, misc) in modes {
+        let (on_her, creatures, resources) = on(&map, move |m| {
+            let s = tracker(id, kind, misc);
+            auras::apply_spell(m, ga, ga, &s, &[(0, 0)], auras::Context::default())
+                .expect("put on");
+            let spells: Vec<u32> = auras::auras(m, ga)
+                .map(|a| {
+                    a.holders
+                        .iter()
+                        .map(|h| h.spell)
+                        .filter(|s| [2383, 2580, 1494].contains(s))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let f = &m.players[&ga].fields;
+            (
+                spells,
+                f.get_u32(PLAYER_TRACK_CREATURES),
+                f.get_u32(PLAYER_TRACK_RESOURCES),
+            )
+        })
+        .await;
+        let bit = 1u32 << (misc - 1);
+        assert_eq!(on_her, vec![id], "{id} alone");
+        let creature = kind == auras::AURA_TRACK_CREATURES;
+        assert_eq!(
+            (creatures, resources),
+            if creature { (bit, 0) } else { (0, bit) },
+            "{id}'s fields"
+        );
+    }
+}
+
+/// Thistle Tea's `ObjectSync.sync` "derives scale from the base object
+/// scale and active auras": a creature of scale 1.2 grown half again is
+/// 1.8, and back to 1.2 as it goes.
+#[tokio::test]
+async fn growth_scales_a_creature_from_its_own_size_and_goes() {
+    use crate::game::tests_p3_combat::{BRUTE, aura_of, spawn};
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let (grown, back) = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        m.creature_mut(brute)
+            .unwrap()
+            .fields
+            .set_f32(OBJECT_FIELD_SCALE_X, 1.2);
+        aura_of(m, brute, 96_930, auras::AURA_MOD_SCALE, 0, 50);
+        let grown = m
+            .creature(brute)
+            .unwrap()
+            .fields
+            .get_f32(OBJECT_FIELD_SCALE_X);
+        auras::remove_where(m, brute, |h| h.spell == 96_930);
+        let back = m
+            .creature(brute)
+            .unwrap()
+            .fields
+            .get_f32(OBJECT_FIELD_SCALE_X);
+        (grown, back)
+    })
+    .await;
+    assert!((grown - 1.8).abs() < 1e-4, "{grown}");
+    assert!((back - 1.2).abs() < 1e-4, "{back}");
+}

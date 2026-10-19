@@ -348,3 +348,65 @@ async fn a_script_ends_or_goes_on_by_a_living_creature_near() {
         "on with one living near, else ended"
     );
 }
+
+/// Thistle Tea's `ChaseWatch`: "notifies chasers only after the target
+/// crosses their movement threshold", "updates the watched position after
+/// notifying" and `unwatch` "removes a chaser from all target watches": a
+/// creature chasing its victim paths again only once the victim has gone
+/// past its re-chase distance from where it last aimed, aiming from there
+/// on; and leaving the fight, it watches no one.
+#[tokio::test]
+async fn a_chaser_paths_again_only_past_its_rechase_distance() {
+    use crate::game::map::creature::Motion;
+    let (_realm, mut a, ga, map) =
+        setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    let brute = on(&map, move |m| {
+        let f = &mut m.players.get_mut(&ga).unwrap().fields;
+        f.set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+        f.set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+        let g = spawn(m, ga, BRUTE, 20, 25.0);
+        let c = m.creature_mut(g).unwrap();
+        c.speeds.run = 0.5;
+        c.speeds.walk = 0.5;
+        crate::game::map::ai::attacked(m, g, ga);
+        g
+    })
+    .await;
+    a.sees(brute).await;
+    let aimed = move |m: &Map| m.creature(brute).and_then(|c| c.chase_target_at);
+    until(&map, move |m| {
+        aimed(m).is_some() && matches!(m.creature(brute).unwrap().motion, Motion::Moving(_))
+    })
+    .await;
+    let first = on(&map, move |m| aimed(m)).await.unwrap();
+    let step = |east: f32| {
+        let map = map.clone();
+        async move {
+            on(&map, move |m| {
+                let p = m.players.get_mut(&ga).unwrap();
+                p.movement.position.x += east;
+            })
+            .await;
+            crate::game::harness::an_update(&map).await;
+            crate::game::harness::an_update(&map).await;
+            on(&map, move |m| aimed(m)).await.unwrap()
+        }
+    };
+    assert_eq!(
+        step(0.2).await,
+        first,
+        "a step within its distance: no new path"
+    );
+    let second = step(10.0).await;
+    assert!(
+        (second.x - (first.x + 10.2)).abs() < 0.01,
+        "past it, a new path, aimed where she is: {second:?}"
+    );
+    assert_eq!(step(0.2).await, second, "and from there on");
+    let after = on(&map, move |m| {
+        crate::game::map::ai::enter_evade(m, brute);
+        aimed(m)
+    })
+    .await;
+    assert_eq!(after, None, "out of the fight, watching no one");
+}
