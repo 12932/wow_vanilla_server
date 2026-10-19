@@ -732,13 +732,11 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
     {
         // Gear's and potions' spell damage against a creature type (aura
         // 180, "up to", as spell power: Thistle Tea's `TargetSpellPower`).
+        // Damage done against one (aura 59) is flat ([`bonus`]).
         p += a
             .effects()
             .filter(|(_, x)| {
-                matches!(
-                    x.kind,
-                    AURA_MOD_DAMAGE_DONE_CREATURE | AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS
-                ) && (x.misc as u32) & bit != 0
+                x.kind == AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS && (x.misc as u32) & bit != 0
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
             .sum::<f32>();
@@ -756,17 +754,56 @@ pub fn bonus(
     kind: Kind,
     m: &Mods,
 ) -> f32 {
-    if physical(s) || s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS) {
+    if s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_MODIFIERS) {
         return 0.0;
     }
     let heal = matches!(s.effects[index].effect, 10) || s.effects[index].aura == AURA_PERIODIC_HEAL;
+    // Damage done against the target's creature type (aura 59), flat: a
+    // spell's whole; a weapon's blow's whole after the weapon's
+    // percentages, by the hand's damage done; another ability's (a school
+    // damage effect, one over time) by its coefficient (mangos's
+    // `SpellDamageBonusDone` and `MeleeDamageBonusDone`, through
+    // `SpellBonusWithCoeffs`; Thistle Tea's `TargetDamage`).
+    let versus = if heal {
+        0.0
+    } else {
+        combat::damage_versus(map, caster, target)
+    };
+    if physical(s) {
+        if versus == 0.0 {
+            return 0.0;
+        }
+        let weapon_based = kind == Kind::Direct && !s.has_effect(2);
+        return if weapon_based {
+            let hand = if s.dmg_class == 3 {
+                combat::Hand::Ranged
+            } else if s.attr(3, sd::ATTR_EX3_REQ_OFFHAND) {
+                combat::Hand::Off
+            } else {
+                combat::Hand::Main
+            };
+            versus * combat::hand_damage_pct(map, caster, hand)
+        } else {
+            let table = s.effects[index.min(2)].bonus_coefficient;
+            let creature = map.creature(caster).is_some()
+                && crate::game::map::pets::master(map, caster) == caster;
+            versus
+                * if table > 0.0 {
+                    table
+                } else if creature {
+                    1.0
+                } else {
+                    0.0
+                }
+        };
+    }
     let p = power(map, caster, target, s, heal);
     if p <= 0.0 {
-        return 0.0;
+        return versus;
     }
     let c = coefficient(map, s, index, kind) * (100 + m.pct[mods::OP_SPELL_BONUS_DAMAGE]) as f32
         / 100.0;
-    p * c + m.flat[mods::OP_SPELL_BONUS_DAMAGE] as f32
+    p * c + m.flat[mods::OP_SPELL_BONUS_DAMAGE] as f32 + versus
 }
 
 /// The caster's multiplier on damage of `s`'s school done to `target`:

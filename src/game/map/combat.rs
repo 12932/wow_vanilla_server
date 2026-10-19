@@ -1375,6 +1375,39 @@ pub fn melee_school(map: &Map, g: Guid) -> u32 {
         .map_or(1, |t| 1 << t.damage_school.min(6))
 }
 
+/// The flat damage `attacker` does more against `victim`'s creature type
+/// (aura 59: a weapon's "+damage against beasts").
+pub fn damage_versus(map: &Map, attacker: Guid, victim: Guid) -> f32 {
+    let kind = creature_type_mask(map, victim);
+    if kind == 0 {
+        return 0.0;
+    }
+    auras::auras(map, attacker).map_or(0.0, |a| {
+        a.effects()
+            .filter(|(_, x)| x.kind == AURA_MOD_DAMAGE_DONE_CREATURE && (x.misc as u32) & kind != 0)
+            .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
+            .sum()
+    })
+}
+
+/// A player's physical damage done percentage for `hand`, the weapon in it
+/// fitting and the off hand's half and its bonus with it, as its flat
+/// bonuses take it (mangos's hand `TOTAL_PCT`); 1 for a creature.
+pub fn hand_damage_pct(map: &Map, attacker: Guid, hand: Hand) -> f32 {
+    if !map.players.contains_key(&attacker) {
+        return 1.0;
+    }
+    let Some(a) = auras::auras(map, attacker) else {
+        return 1.0;
+    };
+    let weapon = hand_weapon(map, attacker, hand);
+    let mut pct = crate::game::map::derive::physical_pct_for(a, weapon.as_ref());
+    if hand == Hand::Off {
+        pct *= 0.5 * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+    }
+    pct
+}
+
 /// A blow's weapon damage before armor, with what the attacker deals more
 /// and the victim takes more: (damage, school mask).
 pub fn weapon_damage(
