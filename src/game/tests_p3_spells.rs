@@ -762,7 +762,8 @@ async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_rea
                 spells::checks::check(m, me, &s, &t, None, false, &mods)
             };
             let mut seen = Vec::new();
-            // Stunned, feared, confused: held; Blink frees.
+            // Stunned, feared, confused: held; Blink frees from the stun only, the
+            // control its own immunities cancel (mangos's `CheckCasterAuras`).
             for (aura, label) in [
                 (HAMMER_OF_JUSTICE, "stun"),
                 (PSYCHIC_SCREAM, "fear"),
@@ -784,12 +785,17 @@ async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_rea
             );
             m.now += Duration::from_millis(5_001);
             let unlocked = check(m, FIREBALL, at(kobold));
-            // Charge's least range, in Battle Stance.
+            // Charge's least range, in Battle Stance: 8 yards beyond both
+            // reaches (mangos's `GetMinMaxRange`).
             spells::cast_triggered(m, me, 2457, None);
-            place(m, me, kobold, 3.0);
+            let reaches = [me, kobold]
+                .iter()
+                .filter_map(|&g| m.unit_view(g))
+                .map(|u| u.combat_reach)
+                .sum::<f32>();
+            place(m, me, kobold, 8.0 + reaches - 0.5);
             let close = check(m, CHARGE, at(kobold));
-            // Beyond eight yards and both reaches (round 6's minimum).
-            place(m, me, kobold, 12.0);
+            place(m, me, kobold, 8.0 + reaches + 0.5);
             let charge = check(m, CHARGE, at(kobold));
             clear_all(m, me);
             // Forms: Claw is a cat's; Fireball no shape's; Renew no shadow's.
@@ -903,8 +909,8 @@ async fn a_cast_is_checked_for_its_casters_state_its_form_its_target_and_its_rea
         seen,
         vec![
             ("stun", Some(STUNNED), None),
-            ("fear", Some(FLEEING), None),
-            ("confuse", Some(CONFUSED), None)
+            ("fear", Some(FLEEING), Some(FLEEING)),
+            ("confuse", Some(CONFUSED), Some(CONFUSED))
         ]
     );
     assert_eq!(locked, (Some(SILENCED), None), "fire locked out, frost not");

@@ -2320,6 +2320,7 @@ mod real {
         let template = data.creature_template(6).cloned().expect("Kobold Vermin");
         let p = &m.players[&g];
         let (pos, o) = (p.position(), p.movement.orientation);
+        let reach = p.fields.get_f32(UNIT_FIELD_COMBATREACH);
         // Shoot wants a wand, which no one starts with.
         let ranged = p
             .items
@@ -2350,20 +2351,28 @@ mod real {
             let s = data.spells.get(spell).unwrap();
             let counter = m.next_creature_counter;
             m.next_creature_counter += 1;
-            // Near, or just past a ranged spell's minimum.
-            let d = (data.spells.range(s).0 + 2.0).max(3.0);
-            let at = Vector3d {
+            let mut kobold = Creature::new(
+                guid::unit(6, counter | 0x80_0000),
+                &template,
+                1,
+                pos,
+                o + std::f32::consts::PI,
+            );
+            // Near, or just past a ranged spell's minimum, which is beyond
+            // both reaches (mangos's `GetMinMaxRange`).
+            let min = data.spells.range(s).0;
+            let d = if min > 0.0 {
+                min + 2.0 + reach + kobold.fields.get_f32(UNIT_FIELD_COMBATREACH)
+            } else {
+                3.0
+            };
+            kobold.position = Vector3d {
                 x: pos.x + d * o.cos(),
                 y: pos.y + d * o.sin(),
                 z: pos.z,
             };
-            let kobold = m.add_creature(Creature::new(
-                guid::unit(6, counter | 0x80_0000),
-                &template,
-                1,
-                at,
-                o + std::f32::consts::PI,
-            ));
+            kobold.home = kobold.position;
+            let kobold = m.add_creature(kobold);
             let p = m.players.get_mut(&g).unwrap();
             p.caster = Default::default();
             // A finishing move wants a combo point on its target.

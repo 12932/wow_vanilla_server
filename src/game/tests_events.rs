@@ -581,7 +581,13 @@ async fn triage(realm: &Arc<Realm>) {
     let map = take(realm, &mut c, DOCTOR, QUEST, &[]).await;
     let doctor = map.query(|m| npc(m, DOCTOR)).await.flatten().unwrap().0;
     let mut bandaged: Vec<Guid> = Vec::new();
-    for _ in 0..200 {
+    // Up to a minute by the clock, not 200 tries: hurried, the doctor
+    // still lays down a patient a second at most (his EventAI looks once a
+    // second), so fifteen take fifteen seconds, about what 200 tries took.
+    // Not hurried faster: the bandage has 20 charges, and the event counts
+    // its fifteenth patient a little late.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
         if map.query(move |m| done(m, g, QUEST)).await.unwrap() {
             break;
         }

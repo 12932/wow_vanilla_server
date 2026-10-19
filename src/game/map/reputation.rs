@@ -287,14 +287,26 @@ pub fn modify(map: &mut Map, g: Guid, faction: u32, delta: i32, spillover: bool)
         };
         let (base, _) = def.base(p.row.race, p.row.class);
         let s = entry(p, def);
+        let was = misc::rank(base + s.standing);
         let total = (base + s.standing + delta).clamp(misc::STANDING_MIN, misc::STANDING_MAX);
         s.standing = total - base;
         if s.flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED | FLAG_VISIBLE) == 0 {
             s.flags |= FLAG_VISIBLE;
             shown.push(def.index);
         }
-        if misc::rank(total) <= misc::RANK_HOSTILE {
+        let now = misc::rank(total);
+        if now <= misc::RANK_HOSTILE {
             s.flags |= FLAG_AT_WAR;
+        } else if now >= misc::RANK_NEUTRAL
+            && was < misc::RANK_NEUTRAL
+            && s.flags & (FLAG_HIDDEN | FLAG_INVISIBLE_FORCED) == 0
+        {
+            // Up to Neutral from below, the war is over: else a player
+            // risen from Hated with the Brood of Nozdormu would stay at war
+            // with it, and its Anachronos would not speak to them
+            // (mangos's `SetOneFactionReputation` unticks it; a hidden
+            // faction's war can't change).
+            s.flags &= !FLAG_AT_WAR;
         }
         sent.push((def.index, s.standing));
     }
