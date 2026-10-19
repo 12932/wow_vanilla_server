@@ -4,14 +4,14 @@ The server's settings are `config.toml`, in its working directory, with the envi
 default in the code, so a missing file, or one that sets a single key, is fine.
 [config.example.toml](../config.example.toml) has every key at its default, with its range and meaning; it is
 generated, and a test fails when it drifts. Deployment settings that aren't keys stay environment variables of their
-own: `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY` (`1` starts the Tracy profiler) and `RUST_LOG`.
+own: `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY` (`1` starts the Tracy profiler) and `RUST_LOG`
+(the log's filter, below). No `.env` file is read: set them in the environment the server starts in.
 
 ## Precedence
 
 1. The code's defaults (`src/config.rs`).
 2. `config.toml`, over them.
-3. The environment, over the file: `WVS__SECTION__KEY=value`, from the process or from `.env` (the process wins over
-   `.env`).
+3. The environment, over the file: `WVS__SECTION__KEY=value`, the process's own.
 
 `WVS__RATES__XP_KILL=2` sets `[rates] xp_kill`; `WVS__VISIBILITY__BATTLEGROUND_YARDS=400` sets `[visibility]
 battleground_yards`. The section and key are case-insensitive. A value is read as its key's type: a number, `true` or
@@ -30,6 +30,22 @@ The config is checked once, at load, and again at each reload.
 - **Across keys:** `[players] start_level` and `[gm] start_level` are at most `[players] max_level`. A level in
   `[gm] command_levels` above 3 is refused.
 
+## The log's filter
+
+`RUST_LOG` picks what the log shows. Unset (or empty), it is `info,landmark=off,wow_mpq=warn`: everything at `info`
+and above, without Recast's complaints (`landmark`, thousands in a navmesh build) and the archives' notes (`wow_mpq`)
+below `warn`. Set, it is a comma-separated list of:
+
+- `target=level`: a target is a module path's prefix, so `wow_vanilla_server::game::map=debug` is the maps and
+  everything in them;
+- at most one bare `level`, for every other target;
+
+where a level is `trace`, `debug`, `info`, `warn`, `error` or `off`. For example
+`RUST_LOG=warn,wow_vanilla_server::game::session=debug`. The longest target that matches decides. This is
+`tracing-subscriber`'s `Targets` syntax: no span or field filters (`target[span]=level`, `{field}`) and no regular
+expressions, which are `env-filter`'s and aren't built in. A filter that doesn't read (`wow_vanilla_server=loud`) is
+reported on stderr at start, and the default used.
+
 ## Printing it
 
 `wow_vanilla_server --print-config` prints the effective config (the defaults, the file, the environment) as
@@ -44,8 +60,8 @@ cargo run --bin wow_vanilla_server -- --print-config --defaults > config.example
 ## Hot reload
 
 `.reload config` (GM level 3) and SIGHUP (on Unix) read `config.toml` and the environment again, off the maps'
-threads. The environment is the process's own: `.env` is read once, at start, so a variable changed there waits for a
-restart. A config that doesn't load is reported and changes nothing. Otherwise:
+threads. The environment is the process's own, as it started: a variable can't be changed from outside a running
+process. A config that doesn't load is reported and changes nothing. Otherwise:
 
 - **What changes live:** every key marked *live* below takes its new value. These are the rates, distances, timers,
   the MOTD, new characters' settings, the battleground, anticheat and GM settings.

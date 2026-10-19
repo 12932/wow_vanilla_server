@@ -81,8 +81,9 @@ xp_kill`) say so. An unknown key is an error, and a value out of range is clampe
 
 Any key can be set from the environment, over the file: `WVS__RATES__XP_KILL=2`. `.reload config` (level 3) or
 SIGHUP reads both again and puts in the rates, distances, timers and MOTD; ports, paths and the store need a restart.
-The environment (or `.env`) also sets `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY=1` (the Tracy
-profiler, [docs/PROFILING.md](docs/PROFILING.md)) and `RUST_LOG`. All of it is in [docs/CONFIG.md](docs/CONFIG.md).
+The environment also sets `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY=1` (the Tracy
+profiler, [docs/PROFILING.md](docs/PROFILING.md)) and `RUST_LOG` (`target=level` lists); no `.env` file is read.
+All of it is in [docs/CONFIG.md](docs/CONFIG.md).
 
 Characters are kept in `characters.sqlite` (`[world] characters_db`), saved at logout, every five minutes, and for
 everyone on SIGTERM or Ctrl-C.

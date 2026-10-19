@@ -686,7 +686,7 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Login(_) => "a login",
                 ArrivalKind::Transfer(_) => "a transfer",
             },
-            MapEvent::Packet(_, m) => m.message_name(),
+            MapEvent::Packet(_, m) => packet_name(m),
             MapEvent::Disconnect(_) => "a disconnect",
             MapEvent::Call(_) => "a call",
             MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
@@ -894,13 +894,8 @@ impl Map {
                 self.arrive(*a)
             }
             MapEvent::Packet(guid, msg) => {
-                // wow_messages names a movement packet from the client
-                // `MSG_MOVE_HEARTBEAT_Client`; the opcode is `MSG_MOVE_HEARTBEAT`.
-                let name = msg.message_name();
-                let _z = crate::tracy::Zone::named(
-                    "packet",
-                    name.strip_suffix("_Client").unwrap_or(name),
-                );
+                let _z = crate::tracy::on()
+                    .then(|| crate::tracy::Zone::named("packet", packet_name(&msg)));
                 #[cfg(test)]
                 if self.faults.any() {
                     self.faults.check(&format!("packets of {guid}"));
@@ -1992,4 +1987,36 @@ impl Map {
             chat::send_system(&p.outbound, text);
         }
     }
+}
+
+/// A client packet's opcode, by name, for Tracy's zones and the bench's
+/// probe: wow_messages's `Display` of it, kept once for each name.
+/// wow_messages names a movement packet from the client
+/// `MSG_MOVE_HEARTBEAT_Client`; the opcode is `MSG_MOVE_HEARTBEAT`.
+pub fn packet_name(m: &ClientOpcodeMessage) -> &'static str {
+    use std::fmt::Write;
+    static NAMES: parking_lot::RwLock<Option<ahash::AHashSet<&'static str>>> =
+        parking_lot::RwLock::new(None);
+    let mut name = smallvec::SmallVec::<[u8; 64]>::new();
+    struct Bytes<'a>(&'a mut smallvec::SmallVec<[u8; 64]>);
+    impl Write for Bytes<'_> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.extend_from_slice(s.as_bytes());
+            Ok(())
+        }
+    }
+    let _ = write!(Bytes(&mut name), "{m}");
+    let name = std::str::from_utf8(&name).unwrap_or("a packet");
+    let name = name.strip_suffix("_Client").unwrap_or(name);
+    if let Some(n) = NAMES.read().as_ref().and_then(|n| n.get(name)) {
+        return n;
+    }
+    let mut names = NAMES.write();
+    let names = names.get_or_insert_with(Default::default);
+    if let Some(n) = names.get(name) {
+        return n;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(leaked);
+    leaked
 }

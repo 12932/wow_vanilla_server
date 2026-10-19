@@ -9,15 +9,6 @@ default-run = "wow_vanilla_server"
 [features]
 # Tracy is in the release binary, dormant until `WOW_TRACY=1` (docs/PROFILING.md).
 default = ["tracy"]
-# When set, every outgoing/incoming opcode is serialized to a test-case string
-# and appended to `tests.wowm` (or the matching wowm source). Useful for
-# expanding the wow_messages crate's test corpus from a live session, but
-# walks `../wow_messages` per packet — never enable in a production build.
-wowm-capture = []
-# A sampling profiler (pprof, driven by SIGPROF, so it needs no perf-event
-# permissions): with `WVS_PPROF=<prefix>` the server profiles a window and
-# writes a flame graph and its top functions (`src/profile.rs`).
-pprof = ["dep:pprof"]
 # The whole world awake (`wvs-world-bench`, docs/PERFORMANCE.md): the
 # benchmark's binary, and the maps' probe it reads (`map/bench_probe.rs`).
 world-bench = []
@@ -25,10 +16,10 @@ world-bench = []
 # store show in Tracy's profiler, and without it they cost a flag's load
 # (`src/tracy.rs`, docs/PROFILING.md). Off, with `--no-default-features`, the
 # helpers are nothing and Tracy's C++ isn't built.
-tracy = ["dep:tracy-client"]
+tracy = ["dep:tracy-client", "dep:tracy-client-sys"]
 
 [dependencies]
-tokio = { version = "1.52.3", features = [
+tokio = { version = "1.53.3", features = [
     "net",
     "sync",
     "time",
@@ -39,25 +30,30 @@ tokio = { version = "1.52.3", features = [
     "signal",
 ] }
 wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["tokio"] }
-wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["sync", "tokio", "vanilla", "print-testcase"] }
+wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["sync", "tokio", "vanilla"] }
 wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["extended", "vanilla", "serde"] }
 wow_items = { git = "https://github.com/12932/wow_messages", rev = "5b7f7f6e4ba13fbdf5e1547692bbd7f8b55ac8b3", features = ["vanilla"] }
-wow_srp = { git="https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163" }
+# The revision wow_world_messages pins: its encrypted reads and writes take
+# this wow_srp's header halves, so another would be a second, unlike copy.
+# 1.12 only: no TBC or Wrath headers (and with them no hmac).
+wow_srp = { git = "https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163", default-features = false, features = ["srp-default-math"] }
 walkdir = "2.5.0"
 
 # The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
 # decoded off the map's thread and handed in (`load_nav_file`).
 rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
-glam = "0.34"
+glam = "0.34.1"
 # The navmesh and terrain builds, for the data setup.
 rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "69652f821cfaad1aeb218727ef9c5a847821c15b" }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-serde = { version = "1.0.228", features = ["derive"] }
+# The log's filter is `Targets` (RUST_LOG's `target=level` lists), not
+# `env-filter`, which would bring regex in.
+tracing-subscriber = "0.3.23"
+serde = { version = "1.0.229", features = ["derive"] }
 ahash = "0.8.12"
-rayon = "1.12.0"
 slab = "0.4.12"
-# Tracy's protocol is that of the profiler v0.13.1 (docs/PROFILING.md). On
+# Tracy's protocol is that of the profiler v0.14.1 (docs/PROFILING.md): it is
+# tracy-client-sys's, pinned below, as tracy-client takes several. On
 # demand: it records only while a profiler is connected. Only on localhost:
 # the profile (the call stacks, the log's warnings) is no one else's. System
 # tracing stays because Tracy's call-stack sampling is part of it: both need
@@ -65,7 +61,7 @@ slab = "0.4.12"
 # nothing; on Windows they are the only sampling profiler at hand. No
 # `broadcast` (announcing the server on the network), no `code-transfer`,
 # no `context-switch-tracing`.
-tracy-client = { version = "0.18.4", optional = true, default-features = false, features = [
+tracy-client = { version = "0.19.0", optional = true, default-features = false, features = [
     "enable",
     "manual-lifetime",
     "ondemand",
@@ -74,31 +70,32 @@ tracy-client = { version = "0.18.4", optional = true, default-features = false, 
     "sampling",
     "callstack-inlines",
 ] }
-rusqlite = { version = "0.39.0", features = ["bundled"] }
-rand = "0.10.1"
-dotenvy = "0.15.7"
-chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
-toml = { version = "1.1.2", default-features = false, features = ["parse", "display", "serde"] }
+# 0.30.0 is Tracy v0.14.1's protocol (82). Another release of either is
+# another protocol: change it with the viewer, and docs/PROFILING.md.
+tracy-client-sys = { version = "=0.30.0", optional = true, default-features = false }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rand = "0.10.3"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+toml = { version = "1.1.8", default-features = false, features = ["parse", "display", "serde"] }
 kanal = "0.1.1"
-arc-swap = "1.7.1"
-mimalloc = { version = "0.1", default-features = false }
-smallvec = "1.13"
-parking_lot = "0.12"
-flate2 = "1"
-md-5 = "0.10"
-serde_json = "1"
+arc-swap = "1.9.3"
+mimalloc = { version = "0.1.52", default-features = false }
+smallvec = "1.16.3"
+parking_lot = "0.12.5"
+flate2 = "1.1.10"
+md-5 = "0.11.0"
+serde_json = "1.0.154"
 # The data setup: its questions, its progress bars, and its flags.
-dialoguer = { version = "0.12", default-features = false }
-indicatif = "0.18"
-clap = { version = "4.6", features = ["derive"] }
-pprof = { version = "0.15", features = ["flamegraph"], optional = true }
+dialoguer = { version = "0.12.0", default-features = false }
+indicatif = "0.18.6"
+clap = { version = "4.6.7", features = ["derive"] }
 
 # Free disk space, and on Windows the registry and the fixed drives.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = "0.2.191"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
+windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
 ] }
@@ -136,4 +133,4 @@ codegen-units = 1
 [dev-dependencies]
 # The real world's snapshot for the extended tests (`harness::real_world`).
 ahash = { version = "0.8.12", features = ["serde"] }
-postcard = { version = "1", default-features = false, features = ["use-std"] }
+postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }

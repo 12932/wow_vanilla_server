@@ -1,21 +1,22 @@
 # Profiling
 
-Two profilers: [Tracy](https://github.com/wolfpld/tracy), a frame profiler with a GUI, to see where a map's 50 ms go,
-update by update; and pprof, a sampling profiler that writes a flame graph, for when there is no GUI. Tracy is in
-every build and costs nothing until it is asked for; pprof is a cargo feature.
+[Tracy](https://github.com/wolfpld/tracy), a frame profiler with a GUI, to see where a map's 50 ms go, update by
+update. It is in every build and costs nothing until it is asked for. Without a GUI, Tracy's own command-line tools
+record and summarize a capture (below).
 
 ## Tracy
 
 ### Running it
 
-1. **The profiler.** Download Tracy **v0.13.1**, the release whose protocol the server speaks (the server's
-   `tracy-client` 0.18.4 is built on `tracy-client-sys` 0.28.0, Tracy 0.13.1, protocol 76; another release refuses to
-   connect, or mis-reads what it is sent). On Windows, `windows-0.13.1.zip` from
-   [the release](https://github.com/wolfpld/tracy/releases/tag/v0.13.1) has `tracy-profiler.exe`. On Linux, build it
-   from the release's source: `cmake -B build -S profiler -DCMAKE_BUILD_TYPE=Release && cmake --build build -j`
-   (it wants Wayland or, with `-DLEGACY=ON`, X11 and GLFW), or take a capture with the command-line tool, below, and
-   open it on Windows.
-2. **The server, with `WOW_TRACY=1`.** In `.env`, or the environment:
+1. **The profiler.** Download Tracy **v0.14.1**, the release whose protocol the server speaks (the server's
+   `tracy-client` 0.19.0 is built on `tracy-client-sys` 0.30.0, pinned in `Cargo.toml`: Tracy 0.14.1, protocol 82;
+   another release, 0.13.1 included, refuses to connect, or mis-reads what it is sent). From
+   [the release](https://github.com/wolfpld/tracy/releases/tag/v0.14.1): on Windows, `windows-0.14.1.zip` has
+   `tracy-profiler.exe`; on Linux, `linux-0.14.1.zip` has `tracy-profiler-x86_64.AppImage` (`chmod +x` it, and run
+   it). Both zips have the command-line tools, `tracy-capture` and `tracy-csvexport`, below. To build it from the
+   release's source instead: `cmake -B build -S profiler -DCMAKE_BUILD_TYPE=Release && cmake --build build -j` (it
+   wants Wayland or, with `-DLEGACY=ON`, X11 and GLFW).
+2. **The server, with `WOW_TRACY=1`** in the environment:
 
    ```sh
    WOW_TRACY=1 cargo run --release                        # Linux
@@ -41,14 +42,14 @@ The server listens for the profiler on **127.0.0.1:8086 only**: a profile holds 
 which are no one else's. To watch a server on another machine, tunnel to it (`ssh -L 8086:127.0.0.1:8086 host`) and
 connect to `127.0.0.1`.
 
-**Without the GUI.** Tracy's `capture` tool (in the release's source, `capture/`; a Windows build is in the zip)
-records to a file: `tracy-capture -o run.tracy -a 127.0.0.1 -s 120` for two minutes. `csvexport` turns one into
-zone statistics: `tracy-csvexport run.tracy` (each zone's total, count, mean and maximum), `-e` for self times, `-u`
-for every zone and plot point.
+**Without the GUI.** Tracy's `capture` tool (`tracy-capture`, in the release's zips) records to a file:
+`tracy-capture -o run.tracy -a 127.0.0.1 -s 120` for two minutes. `csvexport` turns one into zone statistics:
+`tracy-csvexport run.tracy` (each zone's total, count, mean and maximum), `-e` for self times, `-u` for every zone
+and plot point.
 
 **Sampling.** Tracy also samples call stacks, which shows where the time goes inside a zone. Sampling is part of
 Tracy's system tracing, and needs the server run as an administrator on Windows (where it is the only sampling
-profiler at hand: pprof is for Unix), or as root on Linux. Without those rights there are no samples, and everything
+profiler at hand), or as root on Linux. Without those rights there are no samples, and everything
 else works. `TRACY_NO_SYS_TRACE=1` in the environment keeps it off even with the rights. Tracy samples at 8 kHz on
 Windows and 10 kHz on Linux.
 
@@ -124,7 +125,7 @@ z.value(units.len() as u64);
 One named at run time, from a `&'static str` (each distinct name is made once, and kept):
 
 ```rust
-let _z = crate::tracy::Zone::named("packet", msg.message_name());
+let _z = crate::tracy::Zone::named("packet", packet_name(&msg));
 ```
 
 A zone isn't `Send`: it is for synchronous code, and can't be held over an `.await` (Tracy wants a zone to end on
@@ -210,17 +211,7 @@ The earlier setup opened no zone of its own, and sent every log line to Tracy, t
   `system-tracing` stays, as Tracy's sampling is part of it: inert without an administrator's (or root's) rights.
   (The captures above were taken without it; a later one with it, unprivileged, was the same.)
 - `ondemand` and `only-localhost` are on, for the reasons above.
+- The `pprof` feature (a sampling profiler on SIGPROF, writing a flame graph, with `WVS_PPROF`) is gone: the sampling
+  profiler is Tracy's, which needs root (or an administrator) where pprof needed nothing, and a capture without the
+  GUI is `tracy-capture`'s.
 
-## pprof
-
-Without a GUI, or for a whole-process view by function: the `pprof` feature, driven by SIGPROF, so it needs no
-permissions (Linux and macOS):
-
-```sh
-CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release --features pprof \
-  --bin wow_vanilla_server --target-dir target/prof
-WVS_PPROF=/tmp/cluster WVS_PPROF_DELAY=75 WVS_PPROF_SECS=100 target/prof/release/wow_vanilla_server
-```
-
-It writes `/tmp/cluster.svg`, a flame graph, and `/tmp/cluster.txt`, the top functions and lines, by self and inclusive
-time. See [PERFORMANCE.md](PERFORMANCE.md#how-it-was-measured) and `src/profile.rs`.

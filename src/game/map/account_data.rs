@@ -124,10 +124,15 @@ pub fn parse_update(body: &[u8]) -> Option<(u8, Vec<u8>)> {
         return Some((kind as u8, Vec::new()));
     }
     let mut out = Vec::with_capacity(size);
-    flate2::read::ZlibDecoder::new(&body[8..])
+    let read = flate2::read::ZlibDecoder::new(&body[8..])
         .take(MAX_SIZE as u64 + 1)
-        .read_to_end(&mut out)
-        .ok()?;
+        .read_to_end(&mut out);
+    // A stream cut off before its checksum still inflates whole: flate2
+    // (from 1.1.10) calls that an error, but the bytes it read are kept, and
+    // all the size said were there.
+    if read.is_err() && out.len() != size {
+        return None;
+    }
     (out.len() <= MAX_SIZE).then_some((kind as u8, out))
 }
 
