@@ -655,3 +655,184 @@ async fn a_masters_modifiers_reach_only_their_pets_passives_they_touch() {
     assert_eq!((out.3, out.4), (Some(15), 1), "its master's, once");
     assert_eq!(out.5, Some(10), "the other's timed aura as it was");
 }
+
+/// Thistle Tea's `Totems.prepare` "snapshots owner timing modifiers for
+/// the summon and its periodic aura", and `State.prepare_worldport`
+/// "dismisses independent wards before changing world": a shaman's talent
+/// takes two seconds off a Fire Nova Totem's five (mangos's
+/// `CalculateSpellDuration` with her modifiers), and two off its pulse's
+/// four (the activation time of the totem's periodic aura, her modifier as
+/// its spell modifier owner); and her ward and her slotted totem go when
+/// she goes to another map.
+#[tokio::test]
+async fn a_shamans_talents_time_her_totem_and_her_totems_stay_behind_a_worldport() {
+    use crate::game::map::{MapKey, auras};
+    const NOVA_TOTEM: u32 = 990_720;
+    const NOVA_TOTEM_SPELL: u32 = 990_721;
+    const NOVA: u32 = 990_722;
+    const NOVA_BLAST: u32 = 990_723;
+    const TALENT: u32 = 990_724;
+    const WARD: u32 = 990_725;
+    let mut d = revive_data();
+    let none = SpellEffect::default();
+    let mut t = tests_pets::template(NOVA_TOTEM, "Fire Nova Totem", 35, 1);
+    t.creature_type = 11;
+    d.creature_templates.insert(NOVA_TOTEM, t);
+    d.pets.totem_spells.insert(NOVA_TOTEM, NOVA);
+    d.spells.durations.insert(
+        5,
+        crate::game::data::spells::SpellDuration {
+            base: 5000,
+            ..Default::default()
+        },
+    );
+    let mut summon = tests_pets::effect(pets::EFFECT_SUMMON_TOTEM_SLOT1, 4, 1);
+    summon.misc_value = NOVA_TOTEM as i32;
+    let mut totem = tests_pets::spell(NOVA_TOTEM_SPELL, "Fire Nova Totem", [summon, none, none]);
+    totem.duration_index = 5;
+    totem.family_name = 11;
+    totem.family_flags = 0x2800_0000;
+    let mut pulse = tests_pets::effect(6, 0, 1);
+    pulse.aura = 23;
+    pulse.amplitude = 4000;
+    pulse.trigger_spell = NOVA_BLAST;
+    let mut nova = tests_pets::spell(NOVA, "Fire Nova", [pulse, none, none]);
+    nova.duration_index = 21;
+    nova.family_name = 11;
+    nova.family_flags = 0x20;
+    let blast = tests_pets::spell(NOVA_BLAST, "Fire Nova", [none, none, none]);
+    let modifier = |op: i32, mask: u64| {
+        let mut e = tests_pets::effect(6, -2001, 1);
+        e.aura = auras::AURA_ADD_FLAT_MODIFIER;
+        e.misc_value = op;
+        e.item_type = mask;
+        e
+    };
+    let mut talent = tests_pets::spell(
+        TALENT,
+        "Improved Fire Nova Totem",
+        [modifier(1, 0x0800_0000), modifier(19, 0x20), none],
+    );
+    talent.family_name = 11;
+    talent.attributes[0] = 0x40;
+    let mut ward_effect = tests_pets::effect(pets::EFFECT_SUMMON_TOTEM, 4, 1);
+    ward_effect.misc_value = tests_pets::STONESKIN_TOTEM as i32;
+    let mut ward = tests_pets::spell(WARD, "Ward", [ward_effect, none, none]);
+    ward.duration_index = 4;
+    for s in [totem, nova, blast, talent, ward] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let realm = crate::game::harness::realm_with(d);
+    let (mut s, gs, map) = enter(&realm, "S", "Shaman", Race::Orc, Class::Shaman).await;
+    learn(&map, gs, &[NOVA_TOTEM_SPELL, WARD]);
+    map.query(move |m| crate::game::map::spells::learn(m, gs, TALENT))
+        .await;
+    cast(&s, NOVA_TOTEM_SPELL, None).await;
+    let mut timing = None;
+    for _ in 0..200 {
+        timing = map
+            .query(move |m| {
+                let t = m.players[&gs].owned.totems[0]?;
+                let left = pets::state(m, t)?.expires?.duration_since(m.now);
+                let period = auras::auras(m, t)?
+                    .holders
+                    .iter()
+                    .find(|h| h.spell == NOVA)?
+                    .effects[0]
+                    .period?;
+                Some((left, period))
+            })
+            .await
+            .flatten();
+        if timing.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (left, period) = timing.expect("the totem and its pulse");
+    assert!(
+        left <= Duration::from_millis(3000) && left > Duration::from_millis(2500),
+        "three seconds: {left:?}"
+    );
+    assert_eq!(period, Duration::from_millis(2000), "a pulse of two");
+    cast(&s, WARD, None).await;
+    let (slotted, wards) = loop {
+        let now = map
+            .query(move |m| {
+                let o = &m.players[&gs].owned;
+                (o.totems[0], o.loose_totems.clone())
+            })
+            .await
+            .unwrap();
+        if !now.1.is_empty() {
+            break now;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let slotted = slotted.expect("the nova totem stands");
+    // An orc's Kalimdor for Northshire.
+    let to = Vector3d {
+        x: -8_949.0,
+        y: -132.0,
+        z: 83.5,
+    };
+    map.call(move |m| m.teleport(gs, MapKey::world(0), to, 0.0));
+    s.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    let left = map
+        .query(move |m| {
+            wards
+                .iter()
+                .chain([&slotted])
+                .filter(|g| m.creature(**g).is_some())
+                .count()
+        })
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "her totems gone with her");
+}
+
+/// Thistle Tea's `MiniPet` "destination summons appear beside the owner
+/// and face back": a companion comes two yards off its owner's front
+/// left, facing them.
+#[tokio::test]
+async fn a_companion_comes_beside_its_owner_facing_them() {
+    const CRITTER: u32 = 990_730;
+    const CALL: u32 = 990_731;
+    let mut d = revive_data();
+    d.creature_templates
+        .insert(CRITTER, tests_pets::template(CRITTER, "Critter", 35, 1));
+    let mut e = tests_pets::effect(pets::EFFECT_SUMMON_CRITTER, 0, 32);
+    e.misc_value = CRITTER as i32;
+    d.spells.spells.insert(
+        CALL,
+        tests_pets::spell(
+            CALL,
+            "Call Critter",
+            [e, SpellEffect::default(), SpellEffect::default()],
+        ),
+    );
+    let realm = crate::game::harness::realm_with(d);
+    let (_c, g, map) = enter(&realm, "C", "Owner", Race::Human, Class::Warrior).await;
+    let (owner, critter) = map
+        .query(move |m| {
+            crate::game::map::spells::cast_triggered(m, g, CALL, Some(g));
+            let p = &m.players[&g];
+            let c = m.creature(p.owned.critter?)?;
+            Some((
+                (p.position(), p.movement.orientation),
+                (c.position, c.orientation),
+            ))
+        })
+        .await
+        .flatten()
+        .expect("a companion");
+    let ((at, o), (pos, facing)) = (owner, critter);
+    let a = o + std::f32::consts::FRAC_PI_4;
+    assert!((pos.x - (at.x + 2.0 * a.cos())).abs() < 0.01, "{pos:?}");
+    assert!((pos.y - (at.y + 2.0 * a.sin())).abs() < 0.01, "{pos:?}");
+    let back = (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+    assert!((facing - back).abs() < 0.01, "facing {facing}, not {back}");
+}

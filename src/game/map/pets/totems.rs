@@ -163,7 +163,14 @@ pub fn summon_totem(
     let g = summon::spawn(map, owner, entry, Kind::Totem, level, at, o);
     let spell = totem_spell(map, entry, s);
     let data = map.realm.data.clone();
-    let duration = data.spells.duration(s, u32::from(level));
+    // Its time, with its shaman's modifiers (mangos's
+    // `CalculateSpellDuration` in `EffectSummonTotem`: Improved Fire Nova
+    // Totem's sooner blast).
+    let mods = crate::game::map::spells::mods::for_spell(map, owner, s);
+    let duration = data
+        .spells
+        .duration(s, u32::from(level))
+        .map(|ms| mods.apply_ms(crate::game::map::spells::mods::OP_DURATION, ms));
     if let Some(c) = map.creature_mut(g) {
         c.speeds.run = 0.0;
         c.speeds.walk = 0.0;
@@ -449,7 +456,23 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
     } else {
         t.level_min
     };
-    let (at, o) = before(map, owner, 1.5);
+    // Two yards off its owner's front left, facing them, whatever the
+    // spell's destination (Thistle Tea's `MiniPet`; mangos-classic's
+    // minion position has no radius, and puts it on its owner).
+    let (at, o) = {
+        let (pos, o) = map
+            .unit_view(owner)
+            .map_or((Vector3d::default(), 0.0), |u| (u.position, u.orientation));
+        let a = o + std::f32::consts::FRAC_PI_4;
+        (
+            Vector3d {
+                x: pos.x + 2.0 * a.cos(),
+                y: pos.y + 2.0 * a.sin(),
+                z: pos.z,
+            },
+            (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU),
+        )
+    };
     let now = map.now;
     let duration = map
         .realm
