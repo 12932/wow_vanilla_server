@@ -202,7 +202,7 @@ Town guards, as mangos-classic calls them: a guard each time a creature that cal
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `despawn_secs` | Seconds a called guard stays once out of combat (mangos-classic's 30); it goes at once when it dies. | `300` | 5 to 86400, clamped | live |  |
-| `wander_yards` | Yards a called guard wanders about where it came, out of combat. | `8.0` | 0 to 30, clamped | live |  |
+| `wander_yards` | Yards a called guard wanders about where it came, out of combat, and again once home from a fight. | `10.0` | 0 to 30, clamped | live |  |
 | `alarm_half_life_secs` | Seconds without a call after which a town's alarm halves. | `300` | 10 to 86400, clamped | live |  |
 | `avoidance_from` | Guards in the alarm from which each new guard comes with Avoidance (spell 23198's aura: area spells miss it that many percent more often). | `20` | 1 to 100000, clamped | live |  |
 | `avoidance_step_pct` | Avoidance, in percent, at the threshold and for each further `avoidance_step_guards` guards. | `5` | 0 to 100, clamped | live |  |

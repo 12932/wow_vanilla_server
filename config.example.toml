@@ -295,9 +295,10 @@ corpse_decay_world_boss = 3600
 # Default 300. Range 5 to 86400, clamped. Changes at a reload.
 despawn_secs = 300
 
-# Yards a called guard wanders about where it came, out of combat.
-# Default 8.0. Range 0 to 30, clamped. Changes at a reload.
-wander_yards = 8.0
+# Yards a called guard wanders about where it came, out of combat,
+# and again once home from a fight.
+# Default 10.0. Range 0 to 30, clamped. Changes at a reload.
+wander_yards = 10.0
 
 # Seconds without a call after which a town's alarm halves.
 # Default 300. Range 10 to 86400, clamped. Changes at a reload.

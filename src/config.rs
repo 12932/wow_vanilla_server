@@ -419,8 +419,9 @@ settings! {
         /// Seconds a called guard stays once out of combat (mangos-classic's
         /// 30); it goes at once when it dies.
         despawn_secs: u64 = 300, Clamp(5.0, 86_400.0), Live, "";
-        /// Yards a called guard wanders about where it came, out of combat.
-        wander_yards: f32 = 8.0, Clamp(0.0, 30.0), Live, "";
+        /// Yards a called guard wanders about where it came, out of combat,
+        /// and again once home from a fight.
+        wander_yards: f32 = 10.0, Clamp(0.0, 30.0), Live, "";
         /// Seconds without a call after which a town's alarm halves.
         alarm_half_life_secs: u64 = 300, Clamp(10.0, 86_400.0), Live, "";
         /// Guards in the alarm from which each new guard comes with
