@@ -538,6 +538,13 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   server, flying or aboard a transport (mangos's `!IsInCombat` and `UNIT_STAT_CAN_NOT_REACT`; aboard would need a
   transport-relative move). Client check passed. **Left:** mangos sets the same flag from 97 other spells' attribute
   (stuns, Polymorph, Sap, Sleep), refusing emotes under them too; wvs only for Feign Death, queued.
+- **M2 and M3 fixed (`fix/m2m3`):** `key_for` holds the copies' lock from choosing a copy to storing it, and
+  those let into a copy count against its limit until they arrive (two of a group entering at once now always go
+  into one copy, and a copy's last place goes to one; mangos has the same limit gap); a refused entry spends no
+  copy id. Shutdown: a map asked for after the close is a stand-in that saves arrivals; a map that has shut down
+  keeps saving late arrivals; the shutdown waits (within its limit) until no one is online before the store's last
+  flush; a session ending during the shutdown still hands on a player it was moving. **Found:** a copy that unloads
+  normally can lose a player sent to it just before it stopped; queued.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
