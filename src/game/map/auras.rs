@@ -2625,9 +2625,13 @@ pub fn resized(map: &mut Map, target: Guid, own: [f32; 3]) {
     }
 }
 
-/// What a unit's auras make it show: its transform's display and creature
-/// (`sync_display`'s choice), and its growth, if it has one.
-fn shown(map: &Map, target: Guid) -> Option<(Option<(u32, Option<u32>)>, Option<f32>)> {
+/// A transform's display and the creature it is of (none for the Orb of
+/// Deception's).
+type Transform = (u32, Option<u32>);
+
+/// What a unit's auras make it show: its transform (`sync_display`'s
+/// choice), and its growth, if it has one.
+fn shown(map: &Map, target: Guid) -> Option<(Option<Transform>, Option<f32>)> {
     let data = &map.realm.data;
     let native = map
         .unit_fields(target)
@@ -2672,12 +2676,7 @@ fn shown(map: &Map, target: Guid) -> Option<(Option<(u32, Option<u32>)>, Option<
 /// mangos's `RestoreDisplayId` and `UpdateModelData` and Thistle Tea's
 /// `Appearance.project` derive them, never from what they were (no
 /// compounding). Its own come back as they were once neither is on.
-fn fit_size(
-    map: &mut Map,
-    target: Guid,
-    transform: Option<(u32, Option<u32>)>,
-    growth: Option<f32>,
-) {
+fn fit_size(map: &mut Map, target: Guid, transform: Option<Transform>, growth: Option<f32>) {
     let data = map.realm.data.clone();
     let Some(f) = map.unit_fields(target) else {
         return;
