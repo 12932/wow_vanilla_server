@@ -769,6 +769,8 @@ mod tests_p7_world_system;
 #[cfg(test)]
 mod tests_p8_combat;
 #[cfg(test)]
+mod tests_p8_combat_block;
+#[cfg(test)]
 mod tests_p8_combat_control;
 #[cfg(test)]
 mod tests_p8_combat_defense;
@@ -778,6 +780,8 @@ mod tests_p8_combat_elemental;
 mod tests_p8_combat_origin;
 #[cfg(test)]
 mod tests_p8_combat_posture;
+#[cfg(test)]
+mod tests_p8_combat_reactive;
 #[cfg(test)]
 mod tests_p8_combat_state;
 #[cfg(test)]

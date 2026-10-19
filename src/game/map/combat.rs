@@ -2349,6 +2349,12 @@ pub fn spell_launched(
 
 /// `UNIT_FIELD_AURASTATE` brought in line: the reactive windows still open,
 /// and health below a fifth.
+/// Alive under a fifth of its health: Execute's and Hammer of Wrath's
+/// state (mangos's `AURA_STATE_HEALTHLESS_20_PERCENT`).
+pub fn healthless(health: u32, max: u32) -> bool {
+    health > 0 && (health as u64) * 5 < max as u64
+}
+
 pub fn sync_aura_state(map: &mut Map, g: Guid) {
     let now = map.now;
     let (defense, parry) = map.combat(g).map_or((false, false), |c| {
@@ -2370,7 +2376,7 @@ pub fn sync_aura_state(map: &mut Map, g: Guid) {
     if parry {
         bits |= AURA_STATE_HUNTER_PARRY;
     }
-    if health > 0 && (health as u64) * 5 < max as u64 {
+    if healthless(health, max) {
         bits |= AURA_STATE_HEALTHLESS_20;
     }
     // A creature's health bands under 15, 10 and 5 percent.
