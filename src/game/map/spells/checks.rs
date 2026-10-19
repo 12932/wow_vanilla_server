@@ -158,6 +158,23 @@ pub fn line_of_sight(map: &mut Map, from: Vector3d, to: Vector3d) -> bool {
     }
 }
 
+/// [`line_of_sight`] on the tiles already read, for a look that can't ask
+/// for one (a tile not in yet hides nothing).
+pub fn sight(map: &Map, from: Vector3d, to: Vector3d) -> bool {
+    if map
+        .spells
+        .walls
+        .iter()
+        .any(|(a, b)| crosses(from, to, *a, *b))
+    {
+        return false;
+    }
+    let eye = |p: Vector3d| Vector3d { z: p.z + 2.0, ..p };
+    map.nav
+        .as_ref()
+        .is_none_or(|nav| nav.sight(eye(from), eye(to)))
+}
+
 /// Whether segment p-q crosses segment a-b, on the ground.
 fn crosses(p: Vector3d, q: Vector3d, a: Vector3d, b: Vector3d) -> bool {
     let side = |o: Vector3d, x: Vector3d, y: Vector3d| {

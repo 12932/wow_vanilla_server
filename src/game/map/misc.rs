@@ -79,6 +79,9 @@ pub struct PlayerMisc {
     /// measured on.
     pub fall_far: bool,
     pub fall_transport: Guid,
+    /// When it last cast a heal: a Stormwind Elite Guard's Charge goes for
+    /// a healer who healed lately (`map/elites.rs`).
+    pub healed_at: Option<Instant>,
 }
 
 /// A summons: to the summoner's side.

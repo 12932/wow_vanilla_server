@@ -9,8 +9,10 @@
 //! Each town keeps an alarm: the guards called there lately, halved for
 //! each `[guards] alarm_half_life_secs` without a call. As it rises the
 //! guards come with Avoidance (aura 160, as spell 23198 has it), a call
-//! brings two of a capital's elite, and Stormwind's (`[guards] jaina_city`)
-//! brings Jaina Proudmoore from Theramore ([`crate::game::jaina`]).
+//! brings two of a capital's elite, Stormwind's (`[guards] jaina_city`)
+//! rising through `elite_from` brings two Stormwind Elite Guards
+//! ([`crate::game::map::elites`]), and at its top Jaina Proudmoore comes
+//! from Theramore ([`crate::game::jaina`]).
 
 use std::time::{Duration, Instant};
 
@@ -34,7 +36,7 @@ pub const SUMMON_RADIUS: f32 = 30.0;
 const TRIES: usize = 100;
 /// The vmangos despawn type of a summon timed out of combat, gone at
 /// death (mangos's `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN`).
-const TIMED_OOC_OR_DEAD: i32 = 2;
+pub(crate) const TIMED_OOC_OR_DEAD: i32 = 2;
 /// Avoidance: an aura of less damage from area spells (aura 160).
 pub const AVOIDANCE: u32 = 23198;
 /// How often a civilian shouts for the guards, at most.
@@ -331,7 +333,18 @@ fn call(map: &mut Map, caller: Guid, victim: Guid) {
             last_call: now,
         },
     );
-    escalated(map, town, cooled_from, before, after, &esc, &cfg);
+    // Rising through `elite_from` in Jaina's city: its Elite Guards, once
+    // for the crossing (they aren't counted in the alarm).
+    let elites = if cfg.jaina_city != 0
+        && town == cfg.jaina_city
+        && before < cfg.elite_from
+        && after >= cfg.elite_from
+    {
+        crate::game::map::elites::crossed(map, caller, victim, avoidance, cfg.elite_count)
+    } else {
+        0
+    };
+    escalated(map, town, cooled_from, before, after, &esc, &cfg, elites);
     if cfg.jaina_city != 0 && town == cfg.jaina_city && after >= cfg.jaina_from {
         let at = map.creature(caller).map(|c| c.position);
         if let Some(at) = at {
@@ -340,7 +353,8 @@ fn call(map: &mut Map, caller: Guid, victim: Guid) {
     }
 }
 
-/// Log the thresholds an alarm crossed, either way.
+/// Log the thresholds an alarm crossed, either way, and the Elite Guards
+/// that came of it.
 #[allow(clippy::too_many_arguments)]
 fn escalated(
     map: &Map,
@@ -350,6 +364,7 @@ fn escalated(
     after: u32,
     esc: &Escalation,
     cfg: &crate::config::GuardsConfig,
+    elites: u32,
 ) {
     let name = map
         .realm
@@ -362,11 +377,13 @@ fn escalated(
         let fell: Vec<&str> = [
             (esc.avoidance_from, "Avoidance"),
             (esc.royal_from, "the elite"),
+            (cfg.elite_from, "Elite Guards"),
             (cfg.jaina_from, "Jaina"),
         ]
         .into_iter()
         .filter(|(t, what)| {
-            cooled_from >= *t && before < *t && (*what != "Jaina" || cfg.jaina_city == town)
+            let city_only = matches!(*what, "Jaina" | "Elite Guards");
+            cooled_from >= *t && before < *t && (!city_only || cfg.jaina_city == town)
         })
         .map(|(_, what)| what)
         .collect();
@@ -388,6 +405,12 @@ fn escalated(
     if crossed(esc.royal_from) {
         info!(
             "{}: {name}'s alarm at {after} guards: a call brings two of its elite",
+            map.key
+        );
+    }
+    if elites > 0 {
+        info!(
+            "{}: {name}'s alarm at {after} guards: {elites} Stormwind Elite Guards come",
             map.key
         );
     }
@@ -519,14 +542,21 @@ pub fn summon(
         c.wander_distance = cfg.wander_yards;
         c.motion = crate::game::map::creature::Motion::Idle { until: Some(now) };
     }
-    if avoidance > 0 {
-        if let Some(s) = crate::game::map::event_ai::scripted_mut(map, guard) {
-            s.guard_avoidance = Some(avoidance as i32);
-        }
-        restore(map, guard);
-    }
+    shield(map, guard, avoidance);
     crate::game::map::ai::attacked(map, guard, victim);
     Some(guard)
+}
+
+/// A guard comes with `avoidance` percent of Avoidance (none for 0), kept
+/// through its evades.
+pub fn shield(map: &mut Map, g: Guid, avoidance: u32) {
+    if avoidance == 0 {
+        return;
+    }
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
+        s.guard_avoidance = Some(avoidance as i32);
+    }
+    restore(map, g);
 }
 
 /// A guard's Avoidance on it (as it came, and back after an evade).

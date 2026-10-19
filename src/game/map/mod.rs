@@ -27,6 +27,7 @@ pub mod creature_motion;
 pub mod death;
 pub mod derive;
 pub mod duel;
+pub mod elites;
 pub mod enchant;
 pub mod environment;
 pub mod escorts;

@@ -17,6 +17,10 @@
 //! (`data/tt_scripts.rs`); in the city her Teleport sends its victim to
 //! the Stockade's door rather than to the top of her tower in Theramore,
 //! and her 40-yard rule is about that door.
+//!
+//! Stormwind Elite Guards come with her (`[guards] jaina_elites`), around
+//! her, walk to her side and guard her, and leave with her
+//! ([`crate::game::map::elites`]).
 
 use std::time::{Duration, Instant};
 
@@ -118,6 +122,8 @@ pub struct Local {
     /// (or at the time given): `send_to_observers` reaches only those
     /// who do, and she is seen at the update.
     pub flash: Option<(Guid, Instant, Option<&'static str>)>,
+    /// Her city: the Elite Guards who came with her.
+    pub elites: Vec<Guid>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -265,6 +271,7 @@ fn arrive(map: &mut Map, near: Vector3d, foe: Guid) {
     if fights && crate::game::map::combat::can_attack(map, g, foe) {
         crate::game::map::ai::attacked(map, g, foe);
     }
+    crate::game::map::elites::with_jaina(map, g);
 }
 
 /// Tell Theramore to bring her spawn back now.
@@ -307,6 +314,7 @@ pub fn creature_died(map: &mut Map, g: Guid) {
     }
     map.guards.jaina.returning = None;
     map.guards.jaina.calm_since = None;
+    crate::game::map::elites::released(map);
     let secs = map.cfg.guards.jaina_respawn_secs;
     info!(
         "{}: Jaina Proudmoore died; back in Theramore in {secs} s",
@@ -422,6 +430,7 @@ pub fn update(map: &mut Map) {
     {
         map.guards.jaina.returning = None;
         crate::game::map::scripts::remove_for_good(map, g);
+        crate::game::map::elites::gone_with_jaina(map);
         bring_home(map);
     }
     if let Some((g, until, words)) = map.guards.jaina.flash
@@ -491,14 +500,16 @@ fn gone_from_home(map: &mut Map, d: Departure) {
 fn watch(map: &mut Map, g: Guid) {
     let now = map.now;
     if map.creature(g).is_none() {
-        // Gone some other way: home.
+        // Gone some other way: home, her Elite Guards left as guards.
         map.realm.social.jaina.lock().place = Place::Returning;
+        crate::game::map::elites::released(map);
         bring_home(map);
         return;
     }
     if map.creature(g).is_some_and(|c| !c.alive()) {
         return;
     }
+    crate::game::map::elites::guard(map, g);
     // Fighting beyond her city, she goes back to where she came.
     let city = map.cfg.guards.jaina_city;
     let fighting = map.creature(g).is_some_and(|c| c.combat.attacking);
@@ -520,6 +531,7 @@ fn watch(map: &mut Map, g: Guid) {
     }
     say(map, g, line(GOING));
     crate::game::map::spells::cast_triggered(map, g, TELEPORT_VISUAL, None);
+    crate::game::map::elites::leaving_with_jaina(map);
     map.guards.jaina.returning = Some((now + VANISH, g));
     map.realm.social.jaina.lock().place = Place::Returning;
     info!("{}: Jaina Proudmoore goes home to Theramore", map.key);

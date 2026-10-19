@@ -269,6 +269,11 @@ pub fn load(dir: &Path) -> GameData {
             let _z = crate::zone!("load: Alterac Valley");
             crate::game::map::battleground::av_scripts::install(&mut data);
         }
+        // The Stormwind Elite Guard, defined in code over the Royal Guard.
+        {
+            let _z = crate::zone!("load: the Elite Guard");
+            crate::game::map::elites::install(&mut data);
+        }
         {
             let _z = crate::zone!("load: linking templates");
             super::scripts_load::link_templates(&mut data);

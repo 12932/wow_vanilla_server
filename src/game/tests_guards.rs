@@ -28,13 +28,13 @@ use crate::game::tests_p3_entity::on;
 use crate::game::tests_p3_entity_objects::until;
 
 /// A civilian of the town that calls the guards, and one of Ironforge.
-const CIVILIAN: u32 = 3_810;
+pub(crate) const CIVILIAN: u32 = 3_810;
 const DWARF: u32 = 3_811;
 /// Stormwind's guard and its Royal Guard, Ironforge's guard, and Jaina.
-const CITY_GUARD: u32 = 68;
-const ROYAL_GUARD: u32 = 1756;
+pub(crate) const CITY_GUARD: u32 = 68;
+pub(crate) const ROYAL_GUARD: u32 = 1756;
 const IRONFORGE_GUARD: u32 = 5595;
-const STORMWIND: u32 = 1519;
+pub(crate) const STORMWIND: u32 = 1519;
 const IRONFORGE: u32 = 1537;
 /// An area spell of fire, of the magic class.
 const FLAMES: u32 = 990_610;
@@ -44,7 +44,7 @@ const ORC_START: (f32, f32, f32) = (-618.518, -4251.67, 38.718);
 /// Her tower's top in Theramore, her Teleport's place.
 const TOWER: (f32, f32, f32) = (-4018.1, -4525.24, 12.0);
 
-fn world() -> GameData {
+pub(crate) fn world() -> GameData {
     let mut d = data();
     for (entry, spawn_x) in [(CIVILIAN, 4.0), (DWARF, -4.0)] {
         let mut t = template(entry, 7);
@@ -154,24 +154,24 @@ fn world() -> GameData {
     d
 }
 
-fn unit(entry: u32) -> Guid {
+pub(crate) fn unit(entry: u32) -> Guid {
     guid::unit(entry, entry)
 }
 
 /// Alice, beyond the guards' harm.
-fn hardy(m: &mut Map, g: Guid) {
+pub(crate) fn hardy(m: &mut Map, g: Guid) {
     let f = &mut m.players.get_mut(&g).unwrap().fields;
     f.set_u32(UNIT_FIELD_MAXHEALTH, 100_000_000);
     f.set_u32(UNIT_FIELD_HEALTH, 100_000_000);
 }
 
 /// A creature standing in `town` (no navmesh here to say so).
-fn in_town(m: &mut Map, g: Guid, town: u32) {
+pub(crate) fn in_town(m: &mut Map, g: Guid, town: u32) {
     m.creature_mut(g).unwrap().zone_area = Some((town, town));
 }
 
 /// The guards of `entry` called, in the order they came.
-fn called(m: &Map, entry: u32) -> Vec<Guid> {
+pub(crate) fn called(m: &Map, entry: u32) -> Vec<Guid> {
     let mut out: Vec<(u32, Guid)> = m
         .creatures
         .iter()
@@ -182,7 +182,7 @@ fn called(m: &Map, entry: u32) -> Vec<Guid> {
     out.into_iter().map(|(_, g)| g).collect()
 }
 
-fn set_alarm(m: &mut Map, town: u32, guards: u32) {
+pub(crate) fn set_alarm(m: &mut Map, town: u32, guards: u32) {
     let now = m.now;
     m.guards.alarms.insert(
         town,
@@ -193,7 +193,7 @@ fn set_alarm(m: &mut Map, town: u32, guards: u32) {
     );
 }
 
-fn avoidance(m: &Map, g: Guid) -> i32 {
+pub(crate) fn avoidance(m: &Map, g: Guid) -> i32 {
     auras::auras(m, g).map_or(0, |a| a.sum(AURA_MOD_AOE_AVOIDANCE))
 }
 
@@ -531,7 +531,7 @@ async fn orc(
     (b, gb, kalimdor)
 }
 
-fn heard(m: &ServerOpcodeMessage, lines: &[&str]) -> bool {
+pub(crate) fn heard(m: &ServerOpcodeMessage, lines: &[&str]) -> bool {
     matches!(m, ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if lines.iter().any(|l| c.message == *l))
 }
 
@@ -541,7 +541,7 @@ fn flash(m: &ServerOpcodeMessage) -> bool {
         if s.spell == jaina::TELEPORT_VISUAL && guid::entry(s.caster) == jaina::JAINA)
 }
 
-fn place(m: &Map) -> Place {
+pub(crate) fn place(m: &Map) -> Place {
     m.realm.social.jaina.lock().place
 }
 
@@ -562,7 +562,7 @@ const ARRIVING: &[&str] = &[
     "Stand fast, Stormwind! Help has come.",
     "Enough of this! Leave this city, or I will see you leave it.",
 ];
-const GOING: &[&str] = &[
+pub(crate) const GOING: &[&str] = &[
     "The city is safe for now. Theramore needs me.",
     "Stormwind can look after itself again. I must return home.",
 ];
@@ -690,13 +690,13 @@ async fn jaina_comes_to_stormwind_at_the_third_threshold_and_goes_home_after() {
 }
 
 /// The Alliance's side (Theramore's, Stormwind's): the Horde's enemy.
-const ALLIANCE: u32 = 960_200;
+pub(crate) const ALLIANCE: u32 = 960_200;
 /// An orc player's faction template.
-const ORCS: u32 = 2;
+pub(crate) const ORCS: u32 = 2;
 
 /// A Horde raider in Stormwind: an orc, brought from the Valley of Trials
 /// to `at` in the Eastern Kingdoms, beyond harm.
-async fn raider(
+pub(crate) async fn raider(
     realm: &std::sync::Arc<crate::game::Realm>,
     name: &str,
     at: (f32, f32, f32),
@@ -929,7 +929,7 @@ const PACK_MAGE: u32 = crate::game::tests_p3_combat::BRUTE;
 
 // The real world, in the extended suite.
 
-static BAKE: std::sync::LazyLock<std::path::PathBuf> =
+pub(crate) static BAKE: std::sync::LazyLock<std::path::PathBuf> =
     std::sync::LazyLock::new(|| harness::real_data("nav"));
 
 /// On the real navmesh, a civilian in Stormwind's Trade District calls a

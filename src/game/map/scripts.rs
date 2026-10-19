@@ -415,6 +415,9 @@ fn players_near(map: &Map, at: Vector3d, radius: f32) -> Vec<Guid> {
 
 /// Thistle Tea's target type for one its owner fights.
 pub const T_OWNER_HOSTILE_RANDOM: u32 = 200;
+/// wvs's for whom a Stormwind Elite Guard charges: a healer in sight and
+/// reach, else its victim in reach (`map/elites.rs`).
+pub const T_ELITE_CHARGE: u32 = 201;
 
 /// Whether a hostile target type may pick `g`: `target_param1`'s flags
 /// (0x1 in sight, 0x2 or 0x200 a player, 0x4 a mana user), and for a
@@ -517,6 +520,7 @@ fn find_target(map: &Map, step: &ScriptStep, source: Guid, provided: Guid) -> Op
             t.retain(|g| *g != victim && alive(map, *g) && hostile_allowed(map, step, source, *g));
             pick(t, &mut rng)
         }
+        T_ELITE_CHARGE => crate::game::map::elites::charge_target(map, source),
         8 => Some(
             map.creature(source)
                 .and_then(|c| c.owner.or(c.scripted.as_deref().and_then(|s| s.summoner)))

@@ -287,7 +287,8 @@ corpse_decay_world_boss = 3600
 # creature that calls the guards takes a victim. A town's alarm
 # counts the guards called there lately and cools when the calls
 # stop; as it rises, the guards grow harder to fight, a capital sends
-# its elite two at a time, and Jaina Proudmoore comes to her city.
+# its elite two at a time, Jaina's city its Elite Guards, and Jaina
+# Proudmoore comes to her city with more of them.
 [guards]
 
 # Seconds a called guard stays once out of combat (mangos-classic's
@@ -330,6 +331,17 @@ avoidance_max_pct = 50
 # Default 40. Range 1 to 100000, clamped. Changes at a reload.
 royal_from = 40
 
+# Guards in the alarm of Jaina's city whose crossing brings
+# `elite_count` Stormwind Elite Guards near the call that crossed
+# it, against its attacker: once each time the alarm rises through
+# it, not at each call.
+# Default 50. Range 1 to 100000, clamped. Changes at a reload.
+elite_from = 50
+
+# Stormwind Elite Guards the crossing of `elite_from` brings.
+# Default 2. Range 0 to 20, clamped. Changes at a reload.
+elite_count = 2
+
 # Guards in the alarm of Jaina's city from which she comes, if she
 # is alive and at home in Theramore.
 # Default 60. Range 1 to 100000, clamped. Changes at a reload.
@@ -344,6 +356,15 @@ jaina_city = 1519
 # out of combat, before she goes home.
 # Default 60. Range 5 to 86400, clamped. Changes at a reload.
 jaina_stays_secs = 60
+
+# Stormwind Elite Guards who come with Jaina, around her, walk to
+# her side fighting what they meet, guard her, and leave with her.
+# Default 4. Range 0 to 20, clamped. Changes at a reload.
+jaina_elites = 4
+
+# Yards from Jaina her Elite Guards come.
+# Default 40.0. Range 5 to 100, clamped. Changes at a reload.
+jaina_elites_yards = 40.0
 
 # Seconds Jaina takes to come back to Theramore once she has died
 # in her city (her spawn's own time, a day).
