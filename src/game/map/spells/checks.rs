@@ -298,6 +298,25 @@ pub fn seated(state: u8) -> bool {
 pub const PREVENTION_SILENCE: u32 = 1;
 pub const PREVENTION_PACIFY: u32 = 2;
 
+/// Whether a silence or a pacify on `caster` keeps `s` from being cast,
+/// by its prevention type (the part of [`check`] a repeating shot meets
+/// again at each shot, as mangos's `CheckCasterAuras` does).
+pub fn prevented(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
+    let kinds: &[u32] = match s.prevention_type {
+        PREVENTION_SILENCE => &[AURA_MOD_SILENCE, AURA_MOD_PACIFY_SILENCE],
+        PREVENTION_PACIFY => &[AURA_MOD_PACIFY, AURA_MOD_PACIFY_SILENCE],
+        _ => return false,
+    };
+    let data = &map.realm.data;
+    auras::auras(map, caster).is_some_and(|a| {
+        a.holders.iter().any(|h| {
+            h.effects
+                .iter()
+                .any(|x| kinds.contains(&x.kind) && !cancels(data, s, h, x))
+        })
+    })
+}
+
 /// Why `caster` can't cast `s` at `t` now, if it can't.
 pub fn check(
     map: &mut Map,
@@ -718,7 +737,7 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
 
 /// Whether `g` is a player or a player's (mangos's
 /// `UNIT_FLAG_PLAYER_CONTROLLED`).
-fn player_side(map: &Map, g: Guid) -> bool {
+pub fn player_side(map: &Map, g: Guid) -> bool {
     guid::is_player(g) || crate::game::map::pets::owner_of(map, g).is_some_and(guid::is_player)
 }
 

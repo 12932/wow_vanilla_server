@@ -18,20 +18,20 @@ use crate::game::store::BAG_PLAYER;
 use crate::game::tests_p3_combat::{BRUTE, START, equip, setup_with, spawn};
 use crate::game::tests_p3_entity::{NONE_WITHIN, SMSG_CAST_RESULT, on};
 
-const BOW: u32 = 64_101;
-const ARROW: u32 = 64_102;
+pub(crate) const BOW: u32 = 64_101;
+pub(crate) const ARROW: u32 = 64_102;
 const BULLET: u32 = 64_103;
 /// Arrows for level 60, for hunters only, and for a skill no one has.
 const HIGH_ARROW: u32 = 64_104;
 const HUNTER_ARROW: u32 = 64_105;
 const SKILLED_ARROW: u32 = 64_106;
-const WAND: u32 = 64_107;
+pub(crate) const WAND: u32 = 64_107;
 /// Throwing knives, a stack; a tomahawk, one of a point of wear.
 const KNIFE: u32 = 64_108;
 const TOMAHAWK: u32 = 64_109;
 
-const AUTO_SHOT: u32 = 75;
-const SHOOT: u32 = 5019;
+pub(crate) const AUTO_SHOT: u32 = 75;
+pub(crate) const SHOOT: u32 = 5019;
 const THROW: u32 = 2764;
 /// A ranged ability (Arcane Shot's kind), and a ranged-class one that
 /// isn't of the ranged slot (Blind's).
@@ -59,7 +59,7 @@ fn damage(lo: f32, hi: f32, school: u32) -> [(f32, f32, u32); 5] {
     d
 }
 
-fn world() -> GameData {
+pub(crate) fn world() -> GameData {
     let mut d = crate::game::tests_p3_combat::data();
     let mut bow = item(BOW, 2, 2, 15);
     bow.ammo_type = 2;
@@ -173,7 +173,7 @@ async fn armed() -> (
     (realm, a, ga, map, brute)
 }
 
-fn count(m: &Map, g: Guid, entry: u32) -> u32 {
+pub(crate) fn count(m: &Map, g: Guid, entry: u32) -> u32 {
     m.players[&g].count_of(entry)
 }
 
@@ -200,13 +200,13 @@ pub(crate) async fn handled(c: &mut Client) {
 }
 
 /// `CMSG_SET_AMMO`, handled.
-async fn choose(c: &mut Client, item: u32) {
+pub(crate) async fn choose(c: &mut Client, item: u32) {
     c.send(CMSG_SET_AMMO { item }).await;
     handled(c).await;
 }
 
 /// Fire `g`'s repeat now, as the update does when it is due.
-fn fire(m: &mut Map, g: Guid) {
+pub(crate) fn fire(m: &mut Map, g: Guid) {
     let now = m.now;
     if let Some(c) = m.combat_mut(g)
         && let Some(a) = c.auto_repeat.as_mut()
@@ -217,7 +217,7 @@ fn fire(m: &mut Map, g: Guid) {
 }
 
 /// How many of `spell`'s shots `c` sees go, in what has come.
-async fn shots(c: &mut Client, spell: u32) -> usize {
+pub(crate) async fn shots(c: &mut Client, spell: u32) -> usize {
     let mut n = 0;
     while c
         .gets(NONE_WITHIN, |m| match m {
@@ -232,7 +232,7 @@ async fn shots(c: &mut Client, spell: u32) -> usize {
     n
 }
 
-fn repeating(m: &Map, g: Guid) -> bool {
+pub(crate) fn repeating(m: &Map, g: Guid) -> bool {
     m.players[&g].combat.auto_repeat.is_some()
 }
 

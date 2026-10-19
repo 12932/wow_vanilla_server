@@ -19,10 +19,10 @@ use crate::game::map::spells::{self, Targets};
 use crate::game::map::{Map, auras, derive};
 use crate::game::tests_p3_combat::*;
 
-const WAND: u32 = 98_301;
+pub(crate) const WAND: u32 = 98_301;
 const WAND_SPECIALIZATION: u32 = 98_302;
 const FIRE_10: u32 = 98_303;
-const SURE: u32 = 98_304;
+pub(crate) const SURE: u32 = 98_304;
 const FIREBALL: u32 = 98_305;
 
 fn effect(aura: u32, amount: i32, misc: i32) -> SpellEffect {
@@ -37,7 +37,7 @@ fn effect(aura: u32, amount: i32, misc: i32) -> SpellEffect {
     }
 }
 
-fn world() -> GameData {
+pub(crate) fn world() -> GameData {
     let mut d = data();
     let mut damages = [(0.0, 0.0, 0); 5];
     damages[0] = (100.0, 100.0, 2);
@@ -126,7 +126,7 @@ fn world() -> GameData {
 
 use crate::game::data::spells as spells_data;
 
-fn put(m: &mut Map, g: Guid, spell: u32) {
+pub(crate) fn put(m: &mut Map, g: Guid, spell: u32) {
     let s = m.realm.data.spells.get(spell).unwrap().clone();
     let effects: Vec<(usize, i32)> = (0..3)
         .filter(|i| s.effects[*i].effect == 6)
@@ -146,7 +146,7 @@ fn shown(m: &Map, g: Guid) -> (f32, f32) {
 
 /// Alice, a mage at 60 with the wand, and a target in front of her
 /// (armored past belief, parrying all).
-async fn alice() -> (
+pub(crate) async fn alice() -> (
     std::sync::Arc<crate::game::Realm>,
     crate::game::harness::Client,
     Guid,
@@ -177,7 +177,7 @@ async fn alice() -> (
 }
 
 /// Shoot at `target` and fire the first shot now: the damage done.
-fn shot(m: &mut Map, g: Guid, target: Guid) -> u32 {
+pub(crate) fn shot(m: &mut Map, g: Guid, target: Guid) -> u32 {
     ranged::start(
         m,
         g,
