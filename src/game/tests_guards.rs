@@ -813,6 +813,64 @@ async fn on_the_navmesh_a_stormwind_civilian_calls_a_guard_it_can_reach() {
     }
 }
 
+/// On the real navmesh: Jaina, fighting in Stormwind, fights on; drawn out
+/// of it (to Goldshire, say), she goes back to where she came.
+#[tokio::test]
+#[ignore = "extended"]
+async fn jaina_is_leashed_to_stormwind() {
+    let bake = BAKE.as_path();
+    if !bake.join("Azeroth.map").exists() {
+        return;
+    }
+    const TRADE: (f32, f32, f32) = (-8816.0, 660.0, 96.0);
+    const GOLDSHIRE: (f32, f32, f32) = (-9464.0, 62.0, 56.0);
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, world(), None);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = on(&map, |m| {
+        let data = m.realm.data.clone();
+        let at = |m: &mut Map, (x, y, z): (f32, f32, f32)| {
+            let z = m.nav.as_mut().and_then(|n| n.ground(x, y, z)).unwrap_or(z);
+            Vector3d { x, y, z }
+        };
+        let (trade, goldshire) = (at(m, TRADE), at(m, GOLDSHIRE));
+        let make = |m: &mut Map, entry: u32, p: Vector3d| {
+            let t = data.creature_template(entry).cloned().unwrap();
+            let counter = m.next_creature_counter;
+            m.next_creature_counter += 1;
+            let c = crate::game::map::creature::Creature::new(
+                guid::unit(entry, counter | 0x80_0000),
+                &t,
+                20,
+                p,
+                0.0,
+            )
+            .with_base();
+            m.add_creature(c)
+        };
+        let mut seen = Vec::new();
+        for p in [trade, goldshire] {
+            let copy = make(m, jaina::JAINA, p);
+            let foe = make(m, HELPER, Vector3d { x: p.x + 2.0, ..p });
+            m.realm.social.jaina.lock().place = Place::Away { map: m.key, copy };
+            ai::attacked(m, copy, foe);
+            m.guards.jaina.look_at = None;
+            jaina::update(m);
+            seen.push(m.creature(copy).unwrap().evading);
+        }
+        m.realm.social.jaina.lock().place = Place::Home;
+        seen
+    })
+    .await;
+    assert_eq!(
+        out,
+        [false, true],
+        "in Stormwind she fights on; beyond it, she goes back"
+    );
+}
+
 /// The real data: what the guards and Jaina are made of is there as the
 /// code takes it. The civilians and Jaina call the guards and the guards
 /// don't; every guard the table names is a creature; the elite are; her
