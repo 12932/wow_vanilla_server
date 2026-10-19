@@ -240,18 +240,21 @@ async fn drek_thar_raises_his_fallen_wolves_when_he_resets() {
         av_scripts::sweep_soon(m);
     })
     .await;
-    let mut up = [0, 0];
-    for _ in 0..200 {
-        up = map
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    loop {
+        let up = map
             .query(|m| WOLVES.map(|w| all_of(m, w).len()))
             .await
             .unwrap();
         if up == [1, 1] {
             break;
         }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "he raises his wolves: {up:?}"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(up, [1, 1], "he raises his wolves");
 }
 
 const BALINDA: u32 = 11949;
