@@ -93,10 +93,6 @@ fn main() -> std::process::ExitCode {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
-    // As the server's own runtime (src/server.rs).
-    let _ = rayon::ThreadPoolBuilder::new()
-        .num_threads(cores)
-        .build_global();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cores)
         .enable_all()
@@ -132,13 +128,18 @@ fn name_of(i: usize) -> String {
 }
 
 async fn run(args: Args) -> std::process::ExitCode {
-    use tracing_subscriber::EnvFilter;
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            // The update's over-50-ms warning would be a line an update.
-            EnvFilter::new("warn,wow_vanilla_server::game::map=error,landmark=off")
-        }))
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                // The update's over-50-ms warning would be a line an update.
+                .with_filter(wow_vanilla_server::server::log_filter(
+                    "warn,wow_vanilla_server::game::map=error,landmark=off",
+                )),
+        )
         .init();
     let cfg = match wow_vanilla_server::config::load(&args.config) {
         Ok(c) => c,
@@ -282,15 +283,6 @@ async fn run(args: Args) -> std::process::ExitCode {
     let cpu0 = process_cpu();
     let io0 = process_io();
     let t0 = Instant::now();
-    // With the `pprof` feature and `WVS_PPROF=<prefix>`, a profile of the
-    // measurement (`WVS_PPROF_SECS`, which it should match).
-    #[cfg(feature = "pprof")]
-    {
-        if let Ok(prefix) = std::env::var("WVS_PPROF") {
-            let _ = std::fs::remove_file(format!("{prefix}.txt"));
-        }
-        wow_vanilla_server::profile::start_from_env();
-    }
     tokio::time::sleep(Duration::from_secs(args.secs)).await;
     let (samples, events) = bench_probe::take();
     bench_probe::disable();
@@ -346,17 +338,6 @@ async fn run(args: Args) -> std::process::ExitCode {
     }
     draining.store(false, Ordering::Relaxed);
     let _ = drainer.join();
-    // The profile's files, written once its time is up.
-    #[cfg(feature = "pprof")]
-    if let Ok(prefix) = std::env::var("WVS_PPROF") {
-        let txt = PathBuf::from(format!("{prefix}.txt"));
-        for _ in 0..120 {
-            if txt.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    }
     std::process::exit(0);
 }
 

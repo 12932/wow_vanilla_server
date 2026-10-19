@@ -7,8 +7,6 @@ pub mod auth;
 pub mod config;
 pub mod game;
 pub mod numeric;
-#[cfg(feature = "pprof")]
-pub mod profile;
 pub mod server;
 pub mod setup;
 pub mod tracy;

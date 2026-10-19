@@ -1,5 +1,5 @@
 //! Server configuration: the code's defaults, then `config.toml`, then the
-//! environment (`WVS__SECTION__KEY=value`, `.env` included).
+//! environment (`WVS__SECTION__KEY=value`).
 //!
 //! Every key is declared once, in a [`settings!`] block: its type, default,
 //! range, whether it changes at a reload, the mangos key it is named after,

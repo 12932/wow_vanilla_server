@@ -4,9 +4,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::setup;
 
@@ -24,15 +25,7 @@ pub fn main(start: Start) -> u8 {
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
-    // Rayon is for start-up work (loading game data); the world runs on
-    // tokio, a task per map and per connection.
-    if let Err(e) = rayon::ThreadPoolBuilder::new()
-        .num_threads(cores)
-        .thread_name(|i| format!("rayon-{i}"))
-        .build_global()
-    {
-        eprintln!("rayon's global pool: {e}");
-    }
+    // The world runs on tokio, a task per map and per connection.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cores)
         .enable_all()
@@ -42,10 +35,6 @@ pub fn main(start: Start) -> u8 {
 }
 
 async fn async_main(start: Start) -> u8 {
-    // `.env` in the working directory, if there is one; the environment
-    // wins over it.
-    let _ = dotenvy::dotenv();
-
     // Tracy only with `WOW_TRACY=1`: without it the profiler stays dormant
     // and opens no port (docs/PROFILING.md).
     crate::tracy::start_from_env();
@@ -55,19 +44,14 @@ async fn async_main(start: Start) -> u8 {
                 .with_target(false)
                 // Past the setup's progress bars while they are drawn.
                 .with_writer(setup::ui::LogWriter)
-                .with_filter(
-                    // Recast's complaints, by the thousand in a navmesh build,
-                    // and a line an archive each time the client is opened.
-                    EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| EnvFilter::new("info,landmark=off,wow_mpq=warn")),
-                ),
+                // Recast's complaints, by the thousand in a navmesh build,
+                // and a line an archive each time the client is opened.
+                .with_filter(log_filter("info,landmark=off,wow_mpq=warn")),
         )
         .with(crate::tracy::messages())
         .init();
     // Panics in the log, with where they happened, once.
     crate::game::supervisor::install_panic_hook();
-    #[cfg(feature = "pprof")]
-    crate::profile::start_from_env();
 
     let mut cfg = match crate::config::load(std::path::Path::new(crate::config::PATH)) {
         Ok(cfg) => cfg,
@@ -121,6 +105,26 @@ async fn async_main(start: Start) -> u8 {
     0
 }
 
+/// The log's filter: `RUST_LOG` if it is set and reads, else `default`.
+/// Its syntax is `Targets`': a comma-separated list of `target=level` and
+/// at most one bare `level`, the default (`trace`, `debug`, `info`, `warn`,
+/// `error` or `off`); a target is a module path's prefix
+/// (`wow_vanilla_server::game::map=debug`). No span or field filters.
+pub fn log_filter(default: &str) -> Targets {
+    filter_from(std::env::var("RUST_LOG").ok().as_deref(), default)
+}
+
+fn filter_from(rust_log: Option<&str>, default: &str) -> Targets {
+    let default = || default.parse().expect("the default log filter reads");
+    match rust_log {
+        Some(s) if !s.trim().is_empty() => s.parse().unwrap_or_else(|e| {
+            eprintln!("RUST_LOG={s:?} doesn't read ({e}): the default filter instead");
+            default()
+        }),
+        _ => default(),
+    }
+}
+
 /// `--print-config`: the effective config (or with `defaults`, the
 /// reference) on stdout, as commented TOML; what was clamped on stderr.
 pub fn print_config(defaults: bool) -> u8 {
@@ -128,7 +132,6 @@ pub fn print_config(defaults: bool) -> u8 {
         print!("{}", crate::config::reference());
         return 0;
     }
-    let _ = dotenvy::dotenv();
     match crate::config::load_full(std::path::Path::new(crate::config::PATH)) {
         Ok(loaded) => {
             for w in &loaded.warnings {
@@ -196,5 +199,53 @@ fn run_setup(opts: &setup::Options, fake: bool, world: &crate::config::WorldConf
             eprintln!("wvs-setup: {e}.");
             Some(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_from;
+    use tracing::Level;
+
+    const DEFAULT: &str = "info,landmark=off,wow_mpq=warn";
+
+    /// Without `RUST_LOG`, the server's default: `info`, Recast's
+    /// `landmark` off and the archives' `wow_mpq` at `warn`.
+    #[test]
+    fn the_default_log_filter_is_info_without_landmark_and_with_wow_mpqs_warnings() {
+        for unset in [None, Some(""), Some("  ")] {
+            let f = filter_from(unset, DEFAULT);
+            assert!(f.would_enable("wow_vanilla_server::game::map", &Level::INFO));
+            assert!(!f.would_enable("wow_vanilla_server::game::map", &Level::DEBUG));
+            assert!(!f.would_enable("landmark", &Level::ERROR));
+            assert!(f.would_enable("wow_mpq::archive", &Level::WARN));
+            assert!(!f.would_enable("wow_mpq::archive", &Level::INFO));
+        }
+    }
+
+    /// `RUST_LOG` takes a bare default level and `target=level`s, a target
+    /// being a module path's prefix; what doesn't read leaves the default.
+    #[test]
+    fn rust_log_takes_a_level_and_target_levels_and_what_doesnt_read_is_the_default() {
+        let f = filter_from(Some("warn,wow_vanilla_server::game::map=debug"), DEFAULT);
+        assert!(f.would_enable("wow_vanilla_server::game::map::ai", &Level::DEBUG));
+        assert!(!f.would_enable("wow_vanilla_server::game::session", &Level::INFO));
+        assert!(f.would_enable("wow_vanilla_server::game::session", &Level::WARN));
+        let f = filter_from(Some("debug"), DEFAULT);
+        assert!(
+            f.would_enable("landmark", &Level::DEBUG),
+            "a bare level is all"
+        );
+        let f = filter_from(Some("off"), DEFAULT);
+        assert!(!f.would_enable("wow_vanilla_server", &Level::ERROR));
+        // A span filter is env-filter's, not Targets': its brackets are part
+        // of a target no module has.
+        let f = filter_from(Some("wow_vanilla_server[login]=debug"), DEFAULT);
+        assert!(!f.would_enable("wow_vanilla_server", &Level::ERROR));
+        // A level that isn't one doesn't read: the default instead.
+        let f = filter_from(Some("wow_vanilla_server=loud"), DEFAULT);
+        assert!(f.would_enable("wow_vanilla_server", &Level::INFO));
+        assert!(!f.would_enable("wow_vanilla_server", &Level::DEBUG));
+        assert!(!f.would_enable("landmark", &Level::ERROR));
     }
 }

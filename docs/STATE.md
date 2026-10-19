@@ -42,10 +42,10 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
 
 ## Measuring it
 - **Tracy** ([PROFILING.md](PROFILING.md)):
-  - set `WOW_TRACY=1` and connect Tracy v0.13.1;
+  - set `WOW_TRACY=1` and connect Tracy v0.14.1 (the protocol `tracy-client-sys` 0.30.0 speaks);
   - you get a frame per map update, a zone per step, packet and transaction, and plots once a second;
   - it costs nothing measurable when off.
-- **pprof:** `--features pprof`, for flame graphs without a GUI.
+- **Without a GUI:** Tracy's `tracy-capture` and `tracy-csvexport`.
 - **Load tests:** with [peon](https://github.com/12932/peon), at most 5 minutes a run:
   - the baselines: idle, cluster, PvP arena, race;
   - `--spread world`, which puts bots all over both continents.

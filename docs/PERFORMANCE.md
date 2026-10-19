@@ -47,20 +47,10 @@ look the client has no texture for (`appearances.valid`): 11 to 19 of 100 bots a
 depending on the slots. With a fresh character store each run, the final comparison gives both builds the same slots,
 so the same bots: 84 or 85 in pvp-arena, 86 in cluster.
 
-**Profiling.** (Tracy, the frame profiler, and this pprof feature are both described in
-[PROFILING.md](PROFILING.md).) `perf_event_paranoid` is 2 here, and neither `perf` nor `samply` will record, so there is now a
-`pprof` cargo feature (off by default; `src/profile.rs`). It is driven by SIGPROF, which needs no permissions:
-
-```sh
-CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release --features pprof \
-  --bin wow_vanilla_server --target-dir target/prof
-WVS_PPROF=/tmp/cluster WVS_PPROF_DELAY=75 WVS_PPROF_SECS=100 target/prof/release/wow_vanilla_server
-```
-
-It writes `/tmp/cluster.svg`, a flame graph, and `/tmp/cluster.txt`: the samples by function and by line, the self
-time charged to the innermost line of wvs's own source, and the inclusive time of wvs's functions. SIGPROF comes at
-the kernel's tick, so whatever `WVS_PPROF_HZ` asks, a process gets about 100 samples a CPU-second: a 100 s profile of
-0.3 cores is about 3,000 samples, enough for the top entries to a percent or two.
+**Profiling.** `perf_event_paranoid` is 2 here, and neither `perf` nor `samply` will record, so the profiles below
+were taken with a `pprof` cargo feature, a sampling profiler on SIGPROF, which needs no permissions: a flame graph and
+the samples by function and by line, about 100 samples a CPU-second. The feature has since been removed, with
+`pprof` itself; profiling is Tracy's now ([PROFILING.md](PROFILING.md)).
 
 ## Where the time went
 
@@ -95,7 +85,7 @@ same looks were most of the CPU: the update was 77% of the cluster's samples and
 Each is its own commit, with its measurement; the numbers there are from runs taken one after the other, before
 and after that commit.
 
-1. **An optional profiler** (`src/profile.rs`, the `pprof` feature), above.
+1. **An optional profiler** (the `pprof` feature, since removed), above.
 2. **The loader reads columns by index** (`data/load.rs`). Every value the loader read by name went through
    rusqlite's lookup by name, a scan of the statement's columns comparing names without regard to case: for
    `spell_template`'s 180-odd columns and 30,000 rows, tens of thousands of comparisons a row. Each statement's names
@@ -330,10 +320,6 @@ cargo build --release --features world-bench --bin wvs-world-bench --target-dir 
 cd runs/worldawake        # a config.toml whose [world] has data_dir, nav_dir and terrain_dir, as above
 wvs-world-bench --config config.toml --points world_points.csv --fraction 0.25 --secs 60 --settle 10 \
   --logins 256 [--walk] [--json out.json]
-# the profile of the measurement:
-CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release --features world-bench,pprof \
-  --bin wvs-world-bench --target-dir target/benchprof
-WVS_PPROF=/tmp/world WVS_PPROF_SECS=30 WVS_PPROF_HZ=100 wvs-world-bench ... --fraction 1.0 --secs 30
 ```
 
 A run takes 1 to 2.5 minutes: 2 to 16 s to populate, 30 to 60 s for the logins, then the settle and the
