@@ -742,3 +742,42 @@ async fn auras_taken_off_any_way_leave_the_same_fields() {
         assert_eq!(after, own, "{how}: as they were");
     }
 }
+
+/// Thistle Tea's `ConditionalTriggers` "ordinary trigger effects stay
+/// unconditional": a spell with two trigger effects, not Linken's
+/// Boomerang and without its script, casts both, every time.
+#[tokio::test]
+async fn ordinary_trigger_effects_always_cast_their_spells() {
+    const THROW: u32 = 97_470;
+    const FIRST: u32 = 97_471;
+    const SECOND: u32 = 97_472;
+    let mut d = data();
+    let mut throw = aura_spell(THROW, 0, 0, 0);
+    for (i, trigger) in [(0, FIRST), (1, SECOND)] {
+        throw.effects[i] = SpellEffect {
+            effect: 64,
+            trigger_spell: trigger,
+            target_a: 1,
+            ..Default::default()
+        };
+    }
+    d.spells.spells.insert(THROW, throw);
+    for id in [FIRST, SECOND] {
+        d.spells
+            .spells
+            .insert(id, aura_spell(id, auras::AURA_DUMMY, 0, 0));
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        (0..20)
+            .map(|_| {
+                crate::game::map::spells::cast_triggered(m, ga, THROW, Some(ga));
+                let both = (has(m, ga, FIRST), has(m, ga, SECOND));
+                auras::remove_where(m, ga, |h| h.spell == FIRST || h.spell == SECOND);
+                both
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    assert!(out.iter().all(|b| *b == (true, true)), "{out:?}");
+}
