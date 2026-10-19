@@ -1890,6 +1890,7 @@ fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
         heartbeat: None,
         triggered: false,
         applied: None,
+        source: None,
     }
 }
 

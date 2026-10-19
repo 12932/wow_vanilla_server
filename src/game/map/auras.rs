@@ -490,6 +490,10 @@ pub struct Holder {
     /// When it was put on (or last refreshed): what a duel did goes at its
     /// end (mangos's `GetAuraApplyTime`).
     pub applied: Option<Instant>,
+    /// The aura (its spell and caster) whose trigger put this lasting one
+    /// on, and with which it goes (Thistle Tea's `TriggeredLifetime`: the
+    /// Badge of the Swarmguard's Insight of the Qiraji, Jom Gabbar's).
+    pub source: Option<(u32, Guid)>,
 }
 
 impl Holder {
@@ -1008,6 +1012,26 @@ pub fn apply_spell(
         ),
         triggered: ctx.triggered,
         applied: Some(now),
+        // A lasting aura that an aura of the caster's on the unit triggers
+        // (its proc's or its pulse's spell) lasts no longer than it: one
+        // that runs out later, or itself goes with another. Not one put on
+        // at its source's last moment (a pulse's at its end), which stays
+        // (Thistle Tea's `TriggeredLifetime.source`).
+        source: (duration.is_none() && !passive && !ctx.linked)
+            .then(|| {
+                existing.holders.iter().find(|s| {
+                    s.caster == caster
+                        && (s.expires.is_some_and(|t| t > now) || s.source.is_some())
+                        && s.effects.iter().any(|x| {
+                            matches!(
+                                x.kind,
+                                AURA_PROC_TRIGGER_SPELL | AURA_PERIODIC_TRIGGER_SPELL
+                            ) && x.trigger == spell.id
+                        })
+                })
+            })
+            .flatten()
+            .map(|s| (s.spell, s.caster)),
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
@@ -1665,6 +1689,15 @@ fn linked(map: &mut Map, target: Guid, h: &Holder, spell: u32) {
         ..Default::default()
     };
     let _ = apply_spell(map, h.caster, target, s, &effects, ctx);
+    // It goes with the aura that holds it, and what it triggers with it.
+    if let Some(a) = auras_mut(map, target)
+        && let Some(child) = a
+            .holders
+            .iter_mut()
+            .find(|x| x.spell == spell && x.caster == h.caster && x.passive)
+    {
+        child.source = Some((h.spell, h.caster));
+    }
 }
 
 /// An aura effect began: what it does at once.
@@ -2213,6 +2246,11 @@ fn dummy_flags(map: &mut Map, target: Guid, spell: u32, on: bool) {
 
 /// A holder came off: what its going does.
 fn removed(map: &mut Map, target: Guid, h: &Holder) {
+    // The lasting auras it triggered go with it, and theirs with them.
+    let source = Some((h.spell, h.caster));
+    if auras(map, target).is_some_and(|a| a.holders.iter().any(|x| x.source == source)) {
+        remove_where(map, target, |x| x.source == source);
+    }
     if !h.positive {
         crate::game::map::spells::dr_aura_gone(map, target, h.spell);
     }

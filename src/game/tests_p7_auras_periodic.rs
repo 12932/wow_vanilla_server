@@ -376,3 +376,209 @@ async fn mark_of_kazzak_leaves_a_warrior_marked_and_unexploded() {
     .await;
     assert_eq!(out, (true, true), "(still marked, not exploded)");
 }
+
+/// A trigger of `trigger` (a proc's, or a pulse's every `pulse` ms).
+fn source_spell(id: u32, trigger: u32, pulse: Option<u32>) -> SpellTemplate {
+    let e = match pulse {
+        Some(ms) => effect(auras::AURA_PERIODIC_TRIGGER_SPELL, 0, ms, trigger),
+        None => effect(auras::AURA_PROC_TRIGGER_SPELL, 0, 0, trigger),
+    };
+    let mut s = spell(id, &[e]);
+    s.custom_flags = CUSTOM_POSITIVE;
+    s
+}
+
+/// What triggered auras' lifetimes need: a three-second proc (`PARENT`)
+/// triggering a lasting `CHILD` that triggers a lasting `GRANDCHILD`; an
+/// `INDEPENDENT` one; a stacking lasting child (`STACKING`, by
+/// `STACKER`), and a finite one (`FINITE`, by `FINITE_STACKER`); a chain
+/// through a linked aura (`LINK_PARENT` to `LINKER`, holding `LINKED`,
+/// which triggers `LINKED_CHILD`); and a three-second pulse (`ONE_TICK`)
+/// of a lasting `TICKED`.
+mod lifetime {
+    pub const PARENT: u32 = 97_500;
+    pub const CHILD: u32 = 97_501;
+    pub const GRANDCHILD: u32 = 97_502;
+    pub const INDEPENDENT: u32 = 97_503;
+    pub const STACKER: u32 = 97_504;
+    pub const STACKING: u32 = 97_505;
+    pub const FINITE_STACKER: u32 = 97_506;
+    pub const FINITE: u32 = 97_507;
+    pub const LINK_PARENT: u32 = 97_508;
+    pub const LINKER: u32 = 97_509;
+    pub const LINKED: u32 = 97_510;
+    pub const LINKED_CHILD: u32 = 97_511;
+    pub const ONE_TICK: u32 = 97_512;
+    pub const TICKED: u32 = 97_513;
+}
+
+fn lifetime_data() -> crate::game::data::GameData {
+    use lifetime::*;
+    let mut d = data();
+    let plain = |id: u32| {
+        let mut s = spell(id, &[effect(auras::AURA_DUMMY, 0, 0, 0)]);
+        s.custom_flags = CUSTOM_POSITIVE;
+        s
+    };
+    let mut stacking = plain(STACKING);
+    stacking.stack_amount = 6;
+    let mut finite = plain(FINITE);
+    finite.duration_index = TWO_SECONDS;
+    let mut linker = spell(LINKER, &[effect(auras::AURA_LINKED, 0, 0, LINKED)]);
+    linker.custom_flags = CUSTOM_POSITIVE;
+    for s in [
+        source_spell(PARENT, CHILD, None),
+        source_spell(CHILD, GRANDCHILD, None),
+        plain(GRANDCHILD),
+        plain(INDEPENDENT),
+        source_spell(STACKER, STACKING, None),
+        stacking,
+        source_spell(FINITE_STACKER, FINITE, None),
+        finite,
+        source_spell(LINK_PARENT, LINKER, None),
+        linker,
+        source_spell(LINKED, LINKED_CHILD, None),
+        plain(LINKED_CHILD),
+        source_spell(ONE_TICK, TICKED, Some(3000)),
+        plain(TICKED),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d
+}
+
+fn for_ms(ms: u32) -> auras::Context {
+    auras::Context {
+        duration: Some(Some(ms)),
+        ..Default::default()
+    }
+}
+
+fn on_her(m: &Map, g: Guid) -> Vec<u32> {
+    auras::auras(m, g).map_or(Vec::new(), |a| {
+        a.holders
+            .iter()
+            .map(|h| h.spell)
+            .filter(|s| (97_500..97_520).contains(s))
+            .collect()
+    })
+}
+
+/// Thistle Tea's `TriggeredLifetime` "removing a permanent trigger also
+/// removes its linked descendants" and "every source removal cleans
+/// permanent children through a trigger chain": a lasting aura a
+/// three-second proc triggered, and the lasting ones it triggered in turn
+/// (a linked one's among them), go when the proc runs out, is taken off or
+/// cancelled; one put on by itself stays.
+#[tokio::test]
+async fn lasting_auras_a_proc_triggered_go_with_it_down_the_chain() {
+    use lifetime::*;
+    let (_realm, _a, ga, map) = setup_with(lifetime_data(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        // Through a linked aura, run out.
+        put(m, ga, ga, LINK_PARENT, 0, for_ms(3000));
+        put(m, ga, ga, LINKER, 0, auras::Context::default());
+        put(m, ga, ga, LINKED_CHILD, 0, auras::Context::default());
+        let linked = on_her(m, ga);
+        pass(m, 3000);
+        let linked_after = on_her(m, ga);
+        // A chain, and one on its own, three ways.
+        let mut chains = Vec::new();
+        for how in 0..3 {
+            put(m, ga, ga, PARENT, 0, for_ms(3000));
+            for id in [CHILD, GRANDCHILD, INDEPENDENT] {
+                put(m, ga, ga, id, 0, auras::Context::default());
+            }
+            let before = on_her(m, ga);
+            match how {
+                0 => auras::remove_where(m, ga, |h| h.spell == PARENT),
+                1 => auras::cancel(m, ga, PARENT),
+                _ => pass(m, 3000),
+            }
+            chains.push((before, on_her(m, ga)));
+            auras::remove_where(m, ga, |h| h.spell == INDEPENDENT);
+        }
+        (linked, linked_after, chains)
+    })
+    .await;
+    let (linked, linked_after, chains) = out;
+    assert_eq!(
+        linked,
+        [
+            lifetime::LINK_PARENT,
+            lifetime::LINKER,
+            lifetime::LINKED,
+            lifetime::LINKED_CHILD
+        ]
+    );
+    assert_eq!(linked_after, Vec::<u32>::new(), "all down the chain");
+    for (how, (before, after)) in chains.into_iter().enumerate() {
+        assert_eq!(before.len(), 4, "{how}");
+        assert_eq!(after, [lifetime::INDEPENDENT], "{how}");
+    }
+}
+
+/// Thistle Tea's `TriggeredLifetime` "source refresh retains its permanent
+/// child but finite buffs expire independently" and "a one-tick periodic
+/// source leaves its permanent result active": a proc put on again keeps
+/// its lasting child's stacks, and the child goes at the proc's new end; a
+/// child with a duration of its own keeps it, whatever the proc does; a
+/// pulse's lasting result from its one tick, at its end, stays.
+#[tokio::test]
+async fn a_triggered_aura_keeps_to_its_source_refreshed_or_its_own_time() {
+    use lifetime::*;
+    let (_realm, _a, ga, map) = setup_with(lifetime_data(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let stacks = |m: &Map| {
+            auras::auras(m, ga)
+                .and_then(|a| a.holders.iter().find(|h| h.spell == STACKING))
+                .map(|h| h.stacks)
+        };
+        put(m, ga, ga, STACKER, 0, for_ms(3000));
+        pass(m, 1000);
+        put(m, ga, ga, STACKING, 0, auras::Context::default());
+        pass(m, 500);
+        put(m, ga, ga, STACKING, 0, auras::Context::default());
+        pass(m, 500);
+        put(m, ga, ga, STACKER, 0, for_ms(3000));
+        let refreshed = stacks(m);
+        pass(m, 1000);
+        let at_three = on_her(m, ga);
+        pass(m, 1999);
+        let before_end = on_her(m, ga);
+        pass(m, 1);
+        let at_end = on_her(m, ga);
+        // A child with its own two seconds outlasts a one-second proc.
+        put(m, ga, ga, FINITE_STACKER, 0, for_ms(1000));
+        put(m, ga, ga, FINITE, 0, auras::Context::default());
+        pass(m, 1000);
+        let own_time = on_her(m, ga);
+        pass(m, 1000);
+        let own_end = on_her(m, ga);
+        // A pulse's one tick, at its end.
+        put(m, ga, ga, ONE_TICK, 0, for_ms(3000));
+        pass(m, 3000);
+        (
+            refreshed,
+            at_three,
+            before_end,
+            at_end,
+            own_time,
+            own_end,
+            on_her(m, ga),
+        )
+    })
+    .await;
+    let (refreshed, at_three, before_end, at_end, own_time, own_end, ticked) = out;
+    assert_eq!(refreshed, Some(2), "its stacks kept");
+    assert_eq!(
+        at_three,
+        [lifetime::STACKER, lifetime::STACKING],
+        "past the first end"
+    );
+    assert_eq!(before_end, [lifetime::STACKER, lifetime::STACKING]);
+    assert_eq!(at_end, Vec::<u32>::new(), "with the refreshed end");
+    assert_eq!(own_time, [lifetime::FINITE], "its own time");
+    assert_eq!(own_end, Vec::<u32>::new());
+    assert_eq!(ticked, [lifetime::TICKED], "the one tick's result stays");
+}
