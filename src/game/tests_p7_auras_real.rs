@@ -455,3 +455,88 @@ async fn azuregos_pulse_marks_without_a_fight() {
         "(marked, Azuregos fighting, the player fighting)"
     );
 }
+
+/// Thistle Tea's `ReactiveArmor` "accepted spells spend charges once and
+/// respect the proc cooldown": Obsidian Armor with two charges answers a
+/// fire spell with its fire resistance, spends one charge and waits its
+/// ten seconds; a frost spell a moment before those are out gets nothing
+/// and spends nothing; one at ten seconds gets the frost resistance and
+/// spends the last charge, the armor with it.
+#[tokio::test]
+#[ignore = "extended"]
+async fn obsidian_armor_spends_a_charge_an_answer_and_waits_its_cooldown() {
+    use crate::game::map::procs::{self, Event};
+    const OBSIDIAN_ARMOR: u32 = 27539;
+    const FIRE_RESISTANCE: u32 = 27533;
+    const FROST_RESISTANCE: u32 = 27534;
+    if !have_data() {
+        return;
+    }
+    // Sure to proc once its cooldown allows.
+    let realm = realm_plus(|d| {
+        if let Some(s) = d.spells.spells.get_mut(&OBSIDIAN_ARMOR) {
+            s.proc_chance = 100;
+        }
+        if let Some(p) = d.spells.proc_events.get_mut(&OBSIDIAN_ARMOR) {
+            p.chance = 100.0;
+        }
+    });
+    let (_c, mage, map) = player(&realm, "P7KR8", "Obsidone", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, mage, 60, &[]);
+            let kobold = dummy(m, mage, 60, 3.0);
+            apply(m, mage, mage, OBSIDIAN_ARMOR);
+            if let Some(a) = auras::auras_mut(m, mage)
+                && let Some(h) = a.holders.iter_mut().find(|h| h.spell == OBSIDIAN_ARMOR)
+            {
+                h.charges = 2;
+            }
+            let hit = |m: &mut Map, spell: u32| {
+                procs::trigger(
+                    m,
+                    Event {
+                        actor: kobold,
+                        target: mage,
+                        actor_flags: procs::PROC_DONE_NEGATIVE_SPELL,
+                        target_flags: procs::PROC_TAKEN_NEGATIVE_SPELL | procs::PROC_TAKEN_DAMAGE,
+                        ex: procs::EX_NORMAL_HIT,
+                        spell: Some(spell),
+                        damage: 10,
+                        school: 1,
+                        ..Default::default()
+                    },
+                );
+                let got = [FIRE_RESISTANCE, FROST_RESISTANCE].map(|a| has(m, mage, a));
+                for a in [FIRE_RESISTANCE, FROST_RESISTANCE] {
+                    auras::remove_spell(m, mage, a, None);
+                }
+                let charges = holder(m, mage, OBSIDIAN_ARMOR).map(|h| h.charges);
+                (got, charges)
+            };
+            let fire = hit(m, 133);
+            pass(m, 9_999);
+            let early = hit(m, 116);
+            pass(m, 1);
+            let frost = hit(m, 116);
+            (fire, early, frost)
+        })
+        .await
+        .unwrap();
+    let (fire, early, frost) = out;
+    assert_eq!(
+        fire,
+        ([true, false], Some(1)),
+        "fire: its answer, a charge spent"
+    );
+    assert_eq!(
+        early,
+        ([false, false], Some(1)),
+        "before its cooldown: nothing"
+    );
+    assert_eq!(
+        frost,
+        ([false, true], None),
+        "frost at ten seconds, the last charge"
+    );
+}
