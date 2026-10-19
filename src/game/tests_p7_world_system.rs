@@ -209,3 +209,88 @@ async fn alteracs_captains_rally_their_sides_every_two_to_six_minutes() {
     .await;
     assert!(again.iter().all(within), "{again:?}");
 }
+
+/// The match `c` is invited to: its instance, from the invitation.
+async fn invited_to(c: &mut Client) -> u32 {
+    let f = c
+        .wait_frame(
+            "the invitation",
+            crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+            |f| f.len() >= 17 && f[13] == 2,
+        )
+        .await;
+    u32::from_le_bytes(f[9..13].try_into().unwrap())
+}
+
+/// Thistle Tea's `Battlegrounds.join_group/3` "creates distinct world
+/// copies for independently matched teams" and "queue cancellation
+/// preserves admitted players and their exit destinations": with one a
+/// side to a Warsong match, Alice, Grom, Bea and Gor are matched in two
+/// copies, one of each side in each; Alice, gone in, asks to leave the queue and is
+/// still in her match, in its map (her way home is
+/// `tests_p7_player_bgs::one_leaving_a_match_goes_back_where_they_accepted`).
+#[tokio::test]
+async fn teams_matched_apart_have_copies_apart_and_leaving_the_queue_inside_keeps_the_match() {
+    let mut d = crate::game::tests_p3_world_bg::gulch();
+    for t in d.battlegrounds.values_mut() {
+        t.max_players = 1;
+    }
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let mut c = player(&realm, "C", "Bea", Race::Human).await;
+    let mut e = player(&realm, "E", "Gor", Race::Orc).await;
+    for x in [&a, &b, &c, &e] {
+        crate::game::tests_pvp::queue(x, Map::WarsongGulch).await;
+    }
+    let mut copies = Vec::new();
+    for x in [&mut a, &mut b, &mut c, &mut e] {
+        copies.push(invited_to(x).await);
+    }
+    // Each map takes its own players' joins: who is matched with whom is
+    // the order they came in.
+    let (mut alliance, mut horde) = ([copies[0], copies[2]], [copies[1], copies[3]]);
+    alliance.sort_unstable();
+    horde.sort_unstable();
+    assert_ne!(
+        alliance[0], alliance[1],
+        "two copies, one of each side in each"
+    );
+    assert_eq!(alliance, horde, "{copies:?}");
+    a.send(CMSG_BATTLEFIELD_PORT {
+        map: Map::WarsongGulch,
+        action: BattlefieldPortAction::EnterBattle,
+    })
+    .await;
+    a.wait_for("SMSG_NEW_WORLD", |m| match m {
+        ServerOpcodeMessage::SMSG_NEW_WORLD(w) => (w.map == Map::WarsongGulch).then_some(()),
+        _ => None,
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    let alice = a.guid;
+    a.sees(alice).await;
+    a.send(CMSG_BATTLEFIELD_PORT {
+        map: Map::WarsongGulch,
+        action: BattlefieldPortAction::LeaveQueue,
+    })
+    .await;
+    a.send(CMSG_BATTLEFIELD_STATUS {}).await;
+    a.wait_frame(
+        "her match in progress",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() >= 17 && f[13] == 3,
+    )
+    .await;
+    let (member, at) = (
+        realm
+            .social
+            .battlegrounds
+            .lock()
+            .match_of(alice)
+            .is_some_and(|m| m.members.contains_key(&alice) && m.id == copies[0]),
+        realm.registry.online(alice).map(|o| o.map().key),
+    );
+    assert!(member, "still in her match");
+    assert_eq!(at.map(|k| (k.map, k.instance)), Some((489, copies[0])));
+}
