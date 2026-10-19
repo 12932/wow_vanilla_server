@@ -1780,25 +1780,21 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             // walk under way stops for it.
             controls_changed(map, target);
         }
-        // A fear under way ends while it lasts (mangos's
-        // `HandlePreventFleeing`: `SetFleeing(false)`).
+        // A fear under way ends while it lasts, and a creature's run (for
+        // help, or a critter's escape) waits, its fleeing flag off (mangos's
+        // `HandlePreventFleeing` and `SetFleeing`, Thistle Tea's critter
+        // held).
         AURA_PREVENTS_FLEEING => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
             }
-            controls_changed(map, target);
-        }
-        // A creature's run (for help, or a critter's escape) waits while it
-        // lasts, its fleeing flag off (mangos's `HandlePreventFleeing` and
-        // `SetFleeing`, Thistle Tea's critter held).
-        AURA_PREVENTS_FLEEING => {
-            if let Some(c) = map.creature_mut(target)
-                && c.engagement.flee.is_some()
+            if map
+                .creature(target)
+                .is_some_and(|c| c.engagement.flee.is_some())
             {
-                c.fields
-                    .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
                 crate::game::map::creature_combat::control_changed(map, target);
             }
+            controls_changed(map, target);
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE => {
             // Only a cast that silence prevents is cut short (mangos's
@@ -2075,8 +2071,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
             controls_changed(map, target);
         }
-        // A creature's run held by it goes on, if it isn't over (mangos's
-        // `HandlePreventFleeing` putting the flight back).
+        // A creature's run held by it goes on, if it isn't over, and the fear
+        // it held back takes hold (mangos's `HandlePreventFleeing` putting the
+        // flight back, `SetFleeing(true)` for the first fear).
         AURA_PREVENTS_FLEEING if !still(map, AURA_PREVENTS_FLEEING) => {
             let now = map.now;
             if let Some(c) = map.creature_mut(target)
@@ -2085,19 +2082,15 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 c.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, true);
                 crate::game::map::creature_combat::control_changed(map, target);
             }
+            if still(map, AURA_MOD_FEAR) {
+                taken_over(map, target, AURA_MOD_FEAR);
+                controls_changed(map, target);
+            }
         }
         AURA_MOD_CONFUSE if !still(map, AURA_MOD_CONFUSE) => {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_CONFUSED, false);
             }
-            controls_changed(map, target);
-        }
-        // The fear it held back takes hold (mangos's `HandlePreventFleeing`:
-        // `SetFleeing(true)` for the first fear).
-        AURA_PREVENTS_FLEEING
-            if !still(map, AURA_PREVENTS_FLEEING) && still(map, AURA_MOD_FEAR) =>
-        {
-            taken_over(map, target, AURA_MOD_FEAR);
             controls_changed(map, target);
         }
         AURA_MOD_SILENCE | AURA_MOD_PACIFY_SILENCE | AURA_MOD_PACIFY => {
