@@ -531,23 +531,51 @@ fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)
         {
             return None;
         }
-        let on_self = t
-            .effects
-            .iter()
-            .filter(|e| e.effect != 0)
-            .all(|e| matches!(e.target_a, 0 | 1 | 20 | 22));
-        let whom: &[Guid] = if on_self {
-            &[g]
-        } else if victim.is_some() {
-            &[s.owner, g]
+        let effects = || t.effects.iter().filter(|e| e.effect != 0);
+        let on_self = effects().all(|e| matches!(e.target_a, 0 | 1 | 20 | 22));
+        let on_master = effects().all(|e| e.target_a == TARGET_MASTER);
+        let whom: Vec<Guid> = if on_self {
+            vec![g]
+        } else if on_master {
+            vec![s.owner]
         } else {
-            &[]
+            let mut whom = allies(map, g, s.owner, data.spells.range(t).1);
+            whom.push(g);
+            whom
         };
-        whom.iter()
-            .copied()
+        whom.into_iter()
             .find(|w| worth(map, g, t, *w, victim))
             .map(|w| (id, w))
     })
+}
+
+/// `TARGET_MASTER`: a spell on the pet's master alone.
+const TARGET_MASTER: u32 = 27;
+
+/// Whom of its master's a pet's spell for a friend may go on, as mangos's
+/// `PetAI::UpdateAllies` and Thistle Tea's `pet_allies`: its master, then
+/// the others of its master's party (in a raid, of their subgroup), each
+/// here, alive, within `range` of it and in its sight.
+fn allies(map: &Map, g: Guid, owner: Guid, range: f32) -> Vec<Guid> {
+    let Some(me) = map.position_of(g) else {
+        return Vec::new();
+    };
+    let mut out = vec![owner];
+    if guid::is_player(owner) {
+        out.extend(
+            crate::game::map::spells::targets::members(map, owner, false)
+                .into_iter()
+                .filter(|m| *m != owner),
+        );
+    }
+    out.retain(|a| {
+        map.unit_view(*a).is_some_and(|u| {
+            u.alive
+                && dist(u.position, me) <= range.max(5.0)
+                && crate::game::map::spells::checks::sight(map, me, u.position)
+        })
+    });
+    out
 }
 
 /// Fire Shield (Thistle Tea's `fire_shield?`).
