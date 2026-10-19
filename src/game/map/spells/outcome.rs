@@ -1030,12 +1030,30 @@ pub fn partial_resist(
     damage: u32,
     tick: bool,
 ) -> u32 {
-    if damage == 0 || s.school == 0 || binary(s) || !rolling(map) {
+    if s.school == 0 || binary(s) {
+        return 0;
+    }
+    resisted_of_school(map, caster, target, school_index(s), damage, tick)
+}
+
+/// Damage of the magic school `school` (an index) from `caster` resisted in
+/// part by `target`'s resistance, less the caster's penetration: a spell's
+/// or an elemental's blow (mangos's `CalculateDamageAbsorbAndResist`), a
+/// tenth as often for a tick.
+pub fn resisted_of_school(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    school: usize,
+    damage: u32,
+    tick: bool,
+) -> u32 {
+    if damage == 0 || school == 0 || !rolling(map) {
         return 0;
     }
     let caster_level = level(map, caster);
     let diff = level(map, target) as i32 - caster_level as i32;
-    let r = resistance(map, caster, target, school_index(s));
+    let r = resistance(map, caster, target, school);
     let mut c = resist_chance(r, caster_level, !guid::is_player(target), diff) * 100.0;
     if tick {
         c *= 0.1;

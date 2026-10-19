@@ -590,7 +590,7 @@ pub fn rage_scaled(damage: u32, level: u32, taken: bool, by: f32) -> u32 {
 
 /// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
 /// flags, which wow_messages reads as one value. `damage` is what got
-/// through, after absorbs; `school` its school's index.
+/// through, after absorbs and resists; `school` its school's index.
 #[allow(clippy::too_many_arguments)]
 pub fn attacker_state_full(
     attacker: Guid,
@@ -600,6 +600,7 @@ pub fn attacker_state_full(
     victim_state: u32,
     blocked: u32,
     absorbed: u32,
+    resisted: u32,
     school: u32,
 ) -> Arc<[u8]> {
     let mut b = Body::default();
@@ -612,7 +613,7 @@ pub fn attacker_state_full(
         .f32(damage as f32)
         .u32(damage)
         .u32(absorbed)
-        .u32(0)
+        .u32(resisted)
         .u32(victim_state)
         .u32(if absorbed > 0 { u32::MAX } else { 0 })
         .u32(0)
@@ -635,6 +636,7 @@ pub fn attacker_state(
         damage,
         victim_state,
         blocked,
+        0,
         0,
         0,
     )
@@ -1579,7 +1581,14 @@ pub fn weapon_damage(
             AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS
         });
         damage += marked.max(0) as f32 / 14.0 * speed;
-        damage += v.sum_mask(AURA_MOD_DAMAGE_TAKEN, school) as f32 + v.sum(flat_kind) as f32;
+        // A magic school's flat cut (Dampen Magic) takes at most half of a
+        // blow, as it does of a spell's (`outcome::taken_of`, Thistle Tea's
+        // `AttackDamageTaken.swing_amount`).
+        let mut school_flat = v.sum_mask(AURA_MOD_DAMAGE_TAKEN, school) as f32;
+        if school & 1 == 0 {
+            school_flat = school_flat.max(-damage.max(0.0) / 2.0);
+        }
+        damage += school_flat + v.sum(flat_kind) as f32;
         damage *= v.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, school) * v.product(pct_kind);
     }
     (damage.max(0.0) as u32, school)
@@ -1931,13 +1940,32 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     // A blow on a unit its school can't touch does nothing.
     let immune = !matches!(outcome, Outcome::Miss | Outcome::Dodge | Outcome::Parry)
         && school_immune(map, victim, school);
-    let (state, damage, blocked) = if immune {
+    let (state, mut damage, blocked) = if immune {
         (VICTIMSTATE_IS_IMMUNE, 0, 0)
     } else {
         (state, damage, blocked)
     };
     if hand == Hand::Off {
         hit_info |= HITINFO_LEFTSWING;
+    }
+    // A blow of a magic school (an elemental's) is resisted in part, as a
+    // spell of it is, before a ward of its school soaks the rest (mangos's
+    // `CalculateDamageAbsorbAndResist` for each of a blow's schools).
+    let resisted = if school & 1 == 0 {
+        crate::game::map::spells::outcome::resisted_of_school(
+            map,
+            attacker,
+            victim,
+            school.trailing_zeros() as usize,
+            damage,
+            false,
+        )
+    } else {
+        0
+    };
+    if resisted > 0 {
+        damage -= resisted;
+        hit_info |= HITINFO_RESIST;
     }
     let (left, absorbed) = if damage > 0 {
         auras::absorb_and_share(map, attacker, victim, damage, school)
@@ -1955,6 +1983,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         state,
         blocked,
         absorbed,
+        resisted,
         school.trailing_zeros(),
     );
     map.send_to_observers(attacker, &frame, true);
@@ -3635,6 +3664,7 @@ mod tests {
             1,
             3,
             5,
+            0,
             0,
         );
         assert_eq!(full.len(), frame.len());
