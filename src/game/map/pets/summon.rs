@@ -835,6 +835,11 @@ pub fn die(map: &mut Map, g: Guid) {
     let kind = c.pet.as_deref().map(|s| s.kind);
     if let Some(s) = c.pet.as_deref_mut() {
         s.dead_at = Some(now);
+        // Its recall and its master's Attack end with it (Thistle Tea's
+        // `PetReturn.enter` on death).
+        s.returning = false;
+        s.commanded = None;
+        s.commanded_at = None;
     }
     if moving {
         map.next_spline_id = map.next_spline_id.wrapping_add(1);

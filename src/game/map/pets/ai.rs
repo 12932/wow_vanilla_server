@@ -31,17 +31,20 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
     };
     let (owner, kind, expires, dead_at) = (s.owner, s.kind, s.expires, s.dead_at);
     let alive = c.alive();
-    // A player's pet goes when they have; a creature's when it has died.
-    let owner_here =
-        map.players.contains_key(&owner) || map.creature(owner).is_some_and(|o| o.alive());
+    // A player's pet goes when they have; a creature's when it has.
+    let owner_here = map.players.contains_key(&owner) || map.creature(owner).is_some();
     if !owner_here {
         summon::remove(map, g);
         return;
     }
+    // A dead master's guardian fights on, or lies, as below; its idle one
+    // goes (Thistle Tea's `CreaturePet.lifetime`, a player's or a
+    // creature's alike).
     let owner_dead = map
         .players
         .get(&owner)
-        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive);
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
+        || map.creature(owner).is_some_and(|o| !o.alive());
     // A guardian's time waits while it fights (Thistle Tea's
     // `TemporarySummon`), and it outlives a dead master while it fights,
     // or as a corpse (`Guardian.lifetime`).
@@ -69,7 +72,9 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         }
         inherit::sync(map, g);
     }
-    if expires.is_some_and(|t| t <= now) && !fighting {
+    // Its time up, a living summon goes; a corpse lies its own time
+    // (Thistle Tea's `Guardian.lifetime`).
+    if expires.is_some_and(|t| t <= now) && !fighting && (alive || kind == Kind::Possessed) {
         // The Explosive Sheep's and the Goblin Bomb's time ends in a blast.
         if crate::game::map::item_scripts::guardian_expired(map, g) {
             return;
@@ -203,6 +208,13 @@ fn act(map: &mut Map, g: Guid, now: Instant) {
             }
             calm(map, g, now);
             buff_self(map, g, now);
+            // A cast under way (its own buff, or one its master told it)
+            // is finished where it stands before it goes anywhere
+            // (Thistle Tea's `:casting`, mangos's `PetAI::UpdateAI`).
+            if map.caster(g).is_some_and(|c| c.casting.is_some()) {
+                stop(map, g);
+                return;
+            }
             let stay = state(map, g).and_then(|s| (s.command == COMMAND_STAY).then_some(s.stay_at));
             match stay {
                 Some(Some(at)) => go_to(map, g, at, now),
@@ -685,7 +697,9 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     if close_enough {
         stop(map, g);
         face(map, g, victim);
-        if standoff.is_none() {
+        // One whose template (or a script) bars its swing holds beside
+        // its victim (Thistle Tea's `melee_enabled?`).
+        if standoff.is_none() && crate::game::map::event_ai::melee(map, g) {
             combat::try_swing(map, g);
         }
         return;
@@ -842,6 +856,25 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     if d <= FOLLOW_DISTANCE * 1.25 {
+        back(map, g);
+        return;
+    }
+    // Beside a master who stands, it stays, however they turn (Thistle
+    // Tea's `Follow.step` settling by a leader at rest).
+    let owner_moving = match map.players.get(&owner) {
+        Some(p) => crate::game::map::spells::checks::moving(&p.movement.flags),
+        None => map
+            .creature(owner)
+            .is_some_and(|c| matches!(c.motion, Motion::Moving(_))),
+    };
+    let radius = |x: Guid| {
+        map.unit_fields(x)
+            .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+            .filter(|r| *r > 0.0)
+            .unwrap_or(0.389)
+    };
+    let slack = 1.4 * FOLLOW_DISTANCE + radius(g) + radius(owner);
+    if !owner_moving && destination(map, g).is_none() && dist(pos, o.position) <= slack {
         back(map, g);
         return;
     }

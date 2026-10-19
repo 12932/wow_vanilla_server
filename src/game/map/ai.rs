@@ -278,7 +278,13 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
         // The next it may fight: not one it can't reach or see.
         let next = pick_victim(map, c);
         combat::stop_attack(map, c);
+        let pet = map.creature(c).is_some_and(|cr| cr.pet.is_some());
         match next {
+            // A pet takes up the next itself (its own AI's choice); with
+            // none, its fight is over where it stands, whole as it is
+            // (Thistle Tea's `drop_threat` for a pet): no evade home.
+            Some(_) if pet => {}
+            None if pet => pet_fight_over(map, c),
             Some(t) => {
                 if let Some(cr) = map.creature_mut(c) {
                     cr.combat.attacking = false;
@@ -294,6 +300,21 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             None => evade(map, c),
         }
     }
+}
+
+/// A pet's last foe gone: it leaves the fight where it is, its health and
+/// auras as they are, its master's Attack over; it follows or stays as it
+/// was told.
+fn pet_fight_over(map: &mut Map, g: Guid) {
+    if let Some(c) = map.creature_mut(g) {
+        c.threat.clear();
+        c.chase_target_at = None;
+        c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+        if let Some(s) = c.pet.as_deref_mut() {
+            s.commanded = None;
+        }
+    }
+    combat::leave_combat(map, g);
 }
 
 /// A taunt: `by` is `creature`'s victim while the taunt lasts, and level
