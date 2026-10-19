@@ -265,6 +265,35 @@ pub fn master(map: &Map, g: Guid) -> Guid {
         .map_or(g, |pos| pos.master)
 }
 
+/// `static_flags2`'s `NO_OWNER_THREAT`: a summon whose fights aren't its
+/// owner's (an Eye of Kilrogg, a Sentry Totem, a battle standard).
+const STATIC2_NO_OWNER_THREAT: u32 = 0x20;
+
+/// The player a fight of `g`'s draws in, when `g` fights for one (a pet,
+/// totem, guardian or charmed unit, a controlled player): one who can join
+/// it, alive, not lying in a believed Feign Death, and not out of every
+/// fight (not attackable, not selectable, on a flight); and not for a
+/// summon whose template keeps its fights its own (mangos's
+/// `CanJoinInAttacking` for the controller in `SetInCombatState` and
+/// `addThreatDirectly`; Thistle Tea's `ControlledCombat`, its
+/// `no_owner_threat?`).
+pub fn drawn_in(map: &Map, g: Guid) -> Option<Guid> {
+    let m = master(map, g);
+    if m == g || !guid::is_player(m) {
+        return None;
+    }
+    let kept_out = map
+        .creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .is_some_and(|t| t.static_flags2 & STATIC2_NO_OWNER_THREAT != 0);
+    let joins = map.unit_view(m).is_some_and(|u| u.alive)
+        && !crate::game::map::combat::feigning(map, m)
+        && map.unit_fields(m).is_some_and(|f| {
+            f.get_u32(UNIT_FIELD_FLAGS) & crate::game::map::combat::UNIT_FLAGS_NOT_ATTACKABLE == 0
+        });
+    (!kept_out && joins).then_some(m)
+}
+
 pub use possess::{not_mover, set_mover};
 pub use totems::immune;
 
@@ -742,13 +771,9 @@ pub fn on_attacked(map: &mut Map, creature: Guid, attacker: Guid) -> bool {
         }
         return true;
     }
-    // Not a master who can't join it: dead, or lying in a believed Feign
-    // Death (mangos's `CanJoinInAttacking`).
-    if let Some(master) = owner_of(map, attacker).filter(|m| {
-        guid::is_player(*m)
-            && map.unit_view(*m).is_some_and(|u| u.alive)
-            && !crate::game::map::combat::feigning(map, *m)
-    }) {
+    // Not a master who can't join it (mangos's `CanJoinInAttacking`), nor
+    // one a summon keeps out of its fights ([`drawn_in`]).
+    if let Some(master) = drawn_in(map, attacker) {
         let realm = map.realm.clone();
         if let Some(c) = map.creature_mut(creature) {
             if c.tapped_by.is_none() {
@@ -982,6 +1007,7 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
             .find(|h| {
                 h.caster == master
                     && (h.has(crate::game::map::auras::AURA_MOD_CHARM)
+                        || h.has(crate::game::map::auras::AURA_AOE_CHARM)
                         || h.has(crate::game::map::auras::AURA_MOD_POSSESS))
             })
             .map(|h| h.spell)

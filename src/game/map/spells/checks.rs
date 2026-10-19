@@ -466,7 +466,9 @@ pub fn check(
             .and_then(|p| p.owned.possessed_by)
             .is_some_and(|pos| !pos.manual);
         if guid::is_player(caster)
-            && (a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM))
+            && (a.has(AURA_MOD_POSSESS)
+                || a.has(AURA_MOD_CHARM)
+                || a.has(crate::game::map::auras::AURA_AOE_CHARM))
             && !charm_ai
         {
             return Some(fail::NOT_IN_CONTROL);

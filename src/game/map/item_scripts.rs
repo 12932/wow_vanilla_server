@@ -97,6 +97,14 @@ const GUARDIAN_LIFETIMES: [(u32, Duration, u32); 2] = [
     (8937, Duration::from_secs(60), 13259),
 ];
 
+/// The engineers' Target Dummies (the plain, the Advanced and the
+/// Masterwork): each one's passive and its spawn's taunt (Thistle Tea's
+/// `@dummy_spells`, vmangos's `npc_target_dummy`).
+pub const TARGET_DUMMIES: [(u32, u32, u32); 3] =
+    [(2673, 4044, 4507), (2674, 4048, 4092), (12426, 19809, 4092)];
+/// A Target Dummy lasts this long, whatever it is in.
+const TARGET_DUMMY_LIFE: Duration = Duration::from_secs(15);
+
 /// What a player's gadgets remember.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gadgets {
@@ -397,13 +405,34 @@ pub fn guardian_passive(entry: u32) -> Option<u32> {
         .map(|(_, p)| *p)
 }
 
+/// Whether `g` is an engineer's Target Dummy ([`TARGET_DUMMIES`]): it
+/// stands where it came, fights no one and answers no blow (vmangos's
+/// `npc_target_dummy`, a no-movement AI; Thistle Tea's passive tree).
+pub fn target_dummy(map: &Map, g: Guid) -> bool {
+    map.creature(g)
+        .is_some_and(|c| TARGET_DUMMIES.iter().any(|(e, _, _)| *e == c.entry))
+}
+
 /// An engineered guardian came: its passive, and the Sheep's and the
-/// Bomb's own time.
+/// Bomb's own time; a Target Dummy's passive (its pull every three
+/// seconds) and its spawn's taunt, and its fifteen seconds.
 pub fn guardian_summoned(map: &mut Map, g: Guid, entry: u32) {
     if let Some((_, passive)) = GUARDIAN_PASSIVES.iter().find(|(e, _)| *e == entry) {
         trigger(map, g, *passive, g);
     }
     let now = map.now;
+    if let Some((_, passive, spawn)) = TARGET_DUMMIES.iter().find(|(e, _, _)| *e == entry) {
+        let at = map.position_of(g);
+        if let Some(st) = map.creature_mut(g).and_then(|c| c.pet.as_deref_mut()) {
+            st.expires = Some(now + TARGET_DUMMY_LIFE);
+            st.react = crate::game::map::pets::REACT_PASSIVE;
+            st.command = crate::game::map::pets::COMMAND_STAY;
+            st.stay_at = at;
+        }
+        trigger(map, g, *passive, g);
+        trigger(map, g, *spawn, g);
+        return;
+    }
     if let Some((_, life, _)) = GUARDIAN_LIFETIMES.iter().find(|(e, _, _)| *e == entry)
         && let Some(st) = map.creature_mut(g).and_then(|c| c.pet.as_deref_mut())
     {
@@ -412,8 +441,19 @@ pub fn guardian_summoned(map: &mut Map, g: Guid, entry: u32) {
 }
 
 /// A guardian's time is up: the Sheep and the Bomb go off, and lie dead
-/// a moment. Whether it was one.
+/// a moment; a Target Dummy falls, in a fight or not (vmangos's
+/// `npc_target_dummy`, Thistle Tea's `death_in_combat?`). Whether it was
+/// one.
 pub fn guardian_expired(map: &mut Map, g: Guid) -> bool {
+    if target_dummy(map, g) {
+        if let Some(st) = map.creature_mut(g).and_then(|c| c.pet.as_deref_mut()) {
+            st.expires = None;
+        }
+        if map.creature(g).is_some_and(|c| c.alive()) {
+            crate::game::map::combat::kill(map, g, g);
+        }
+        return true;
+    }
     let Some(c) = map.creature(g) else {
         return false;
     };

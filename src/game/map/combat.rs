@@ -1129,20 +1129,15 @@ pub fn struck(map: &mut Map, attacker: Guid, victim: Guid) {
         return;
     }
     let pvp = pvp_fight(map, attacker, victim);
-    let mut sides = vec![
-        attacker,
-        victim,
-        crate::game::map::pets::master(map, attacker),
-        crate::game::map::pets::master(map, victim),
-    ];
+    // A master who can't join it (lying in a believed Feign Death, out of
+    // every fight) isn't drawn in by its pet's blows (mangos's
+    // `CanJoinInAttacking`).
+    let mut sides = vec![attacker, victim];
+    sides.extend(crate::game::map::pets::drawn_in(map, attacker));
+    sides.extend(crate::game::map::pets::drawn_in(map, victim));
     sides.sort_unstable();
     sides.dedup();
     for g in sides {
-        // A master lying in a believed Feign Death isn't drawn back in by
-        // its pet's blows (mangos's `CanJoinInAttacking`).
-        if g != attacker && g != victim && feigning(map, g) {
-            continue;
-        }
         if guid::is_player(crate::game::map::pets::master(map, g)) {
             enter(map, g, pvp);
         }
@@ -1217,9 +1212,9 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
         enter(map, x, pvp);
     }
     // A pet's fight is its master's (mangos's `SetInCombatState`), but not
-    // one feigning death's.
-    for m in [ma, mb] {
-        if m != a && m != b && guid::is_player(m) && !feigning(map, m) {
+    // one who can't join it (feigning death, out of every fight).
+    for (u, m) in [(a, ma), (b, mb)] {
+        if m != a && m != b && crate::game::map::pets::drawn_in(map, u) == Some(m) {
             enter(map, m, pvp);
         }
     }
@@ -1753,6 +1748,14 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         return;
     };
     if !vb.alive || !va.alive {
+        stop_attack(map, attacker);
+        return;
+    }
+    // A creature on its way home is no one's to strike, nor to fight by a
+    // blow (mangos's `VICTIMSTATE_EVADES`, no combat from it; Thistle Tea's
+    // evade, no contact): the attack stops, as its evade stops those on its
+    // list.
+    if map.creature(victim).is_some_and(|c| c.evading) {
         stop_attack(map, attacker);
         return;
     }
@@ -3065,10 +3068,27 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     {
         return;
     }
+    // The creatures fighting it, to fight on after.
+    let fighting: Vec<Guid> = map
+        .combat(victim)
+        .map(|c| c.attackers.iter().copied().collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain([killer])
+        .filter(|a| {
+            guid::is_unit(*a)
+                && map
+                    .combat(*a)
+                    .is_some_and(|c| c.attacking && c.victim == victim)
+        })
+        .collect();
     // Being killed, it isn't killed again meanwhile (by a kill's proc).
     DYING.with(|d| d.borrow_mut().push(victim));
     kill_once(map, killer, victim, spell);
     DYING.with(|d| d.borrow_mut().retain(|g| *g != victim));
+    for a in fighting {
+        crate::game::map::ai::victim_died(map, a);
+    }
 }
 
 thread_local! {

@@ -185,6 +185,9 @@ pub const AURA_MOD_RANGED_ATTACK_POWER_PCT: u32 = 167;
 pub const AURA_MOD_DAMAGE_DONE_VERSUS: u32 = 168;
 pub const AURA_MOD_CRIT_PERCENT_VERSUS: u32 = 169;
 pub const AURA_DETECT_AMORE: u32 = 170;
+/// A charm of many (Chains of Kel'Thuzad): a charm all the same (mangos's
+/// `HandleAoECharm`, `TakeCharmOf`).
+pub const AURA_AOE_CHARM: u32 = 177;
 pub const AURA_MOD_SPEED_NOT_STACK: u32 = 171;
 pub const AURA_MOD_MOUNTED_SPEED_NOT_STACK: u32 = 172;
 pub const AURA_ALLOW_CHAMPION_SPELLS: u32 = 173;
@@ -707,6 +710,7 @@ pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEff
                     | AURA_PERIODIC_DAMAGE_PERCENT
                     | AURA_POWER_BURN_MANA
                     | AURA_MOD_CHARM
+                    | AURA_AOE_CHARM
                     | AURA_MOD_POSSESS
                     | AURA_MOD_TAUNT
                     | AURA_MOD_STALKED
@@ -1992,7 +1996,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 f.set_guid(PLAYER_FARSIGHT, h.caster);
             }
         }
-        AURA_MOD_POSSESS | AURA_MOD_CHARM => {
+        AURA_MOD_POSSESS | AURA_MOD_CHARM | AURA_AOE_CHARM => {
             crate::game::map::pets::charmed(map, h.caster, target, kind == AURA_MOD_POSSESS);
         }
         AURA_MOD_POSSESS_PET => {
@@ -2240,7 +2244,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 f.set_guid(PLAYER_FARSIGHT, Guid::zero());
             }
         }
-        AURA_MOD_POSSESS | AURA_MOD_CHARM => {
+        AURA_MOD_POSSESS | AURA_MOD_CHARM | AURA_AOE_CHARM => {
             crate::game::map::pets::uncharmed(map, h.caster, target);
         }
         AURA_MOD_POSSESS_PET => {
