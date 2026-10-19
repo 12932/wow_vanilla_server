@@ -246,6 +246,59 @@ async fn a_feign_death_seen_through_keeps_the_fight_the_list_and_her_auras() {
     assert_eq!(r, (true, true, true, (true, false)));
 }
 
+/// mangos's believed Feign Death with a pet fighting (where Thistle Tea
+/// holds the hunter in the fight six seconds): the hunter's fight ends,
+/// and the pet's blows bring them back into it only once they are up.
+#[tokio::test]
+async fn a_fighting_pets_blows_bring_a_feigning_hunter_back_only_once_up() {
+    let realm = crate::game::harness::realm_with(data());
+    let mut h = crate::game::harness::Client::connect(&realm, "H");
+    let gh = h.enter("Hana", Race::Dwarf, Class::Hunter).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let r = map
+        .query(move |m| {
+            p3::level(m, gh, 60);
+            put(m, gh, off(0.0, 0.0, 0.0));
+            crate::game::map::pets::give_pet(
+                m,
+                gh,
+                crate::game::tests_p7_combat::BEAST_WATCHER,
+                60,
+            )
+            .expect("a pet");
+            let pet = crate::game::map::pets::pet_of(m, gh).unwrap();
+            put(m, pet, off(2.0, 0.0, 0.0));
+            let brute = creature_at(m, gh, BRUTE, off(3.0, 0.0, 0.0));
+            let blow = |m: &mut Map| p3::forced_swing(m, pet, brute, combat::Outcome::Hit);
+            let state = |m: &Map| {
+                (
+                    in_combat(m, gh),
+                    m.creature(brute)
+                        .unwrap()
+                        .threat
+                        .iter()
+                        .any(|(t, _)| *t == gh),
+                )
+            };
+            blow(m);
+            let pulled = state(m);
+            put_on(m, gh, FEIGN);
+            let feigned = state(m);
+            blow(m);
+            let lying = state(m);
+            auras::remove_spell(m, gh, FEIGN, None);
+            blow(m);
+            (pulled, feigned, lying, state(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        r,
+        ((true, true), (false, false), (false, false), (true, true)),
+        "(in the fight, on the list): pulled, feigned, the pet's blow, up"
+    );
+}
+
 /// Thistle Tea's "movement, expiry and death clear both pose and target
 /// protection": moving, the ten seconds running out, or dying, and the
 /// pose and the protection go together.

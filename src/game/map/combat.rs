@@ -1120,6 +1120,11 @@ pub fn struck(map: &mut Map, attacker: Guid, victim: Guid) {
     sides.sort_unstable();
     sides.dedup();
     for g in sides {
+        // A master lying in a believed Feign Death isn't drawn back in by
+        // its pet's blows (mangos's `CanJoinInAttacking`).
+        if g != attacker && g != victim && feigning(map, g) {
+            continue;
+        }
         if guid::is_player(crate::game::map::pets::master(map, g)) {
             enter(map, g, pvp);
         }
@@ -1193,9 +1198,10 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
         }
         enter(map, x, pvp);
     }
-    // A pet's fight is its master's (mangos's `SetInCombatState`).
+    // A pet's fight is its master's (mangos's `SetInCombatState`), but not
+    // one feigning death's.
     for m in [ma, mb] {
-        if m != a && m != b && guid::is_player(m) {
+        if m != a && m != b && guid::is_player(m) && !feigning(map, m) {
             enter(map, m, pvp);
         }
     }

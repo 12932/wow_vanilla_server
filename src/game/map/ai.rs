@@ -133,8 +133,9 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     }
     // The player it fights is in the fight too, as it begins and as it
     // goes on (mangos's `EngageInCombatWith`, `SetInCombatWithVictim`).
+    // Not a pet's master lying in a believed Feign Death, though.
     let master = crate::game::map::pets::master(map, attacker);
-    if guid::is_player(master) {
+    if guid::is_player(master) && (master == attacker || !combat::feigning(map, master)) {
         combat::enter(map, master, false);
     }
     let Some(c) = map.creature_mut(creature) else {
