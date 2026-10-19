@@ -547,6 +547,8 @@ mod tests_p6_player_pets;
 #[cfg(test)]
 mod tests_p6_player_real;
 #[cfg(test)]
+mod tests_p6_scripts;
+#[cfg(test)]
 mod tests_p6_spell;
 #[cfg(test)]
 mod tests_p6_spell_cast;
