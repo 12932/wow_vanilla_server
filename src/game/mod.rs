@@ -657,6 +657,8 @@ mod tests_p7_core;
 #[cfg(test)]
 mod tests_p7_core_loot;
 #[cfg(test)]
+mod tests_p7_core_objects;
+#[cfg(test)]
 mod tests_p7_entity;
 #[cfg(test)]
 mod tests_p7_entity_loot;

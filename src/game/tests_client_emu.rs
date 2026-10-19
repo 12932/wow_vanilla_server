@@ -630,7 +630,9 @@ async fn a_ghost_rising_before_a_stranger_passes_the_client() {
 
 /// Every frame `clients` received, of a kind the checker knows,
 /// deduplicated, back to back; and how many of each opcode.
-fn capture(clients: Vec<&mut Client>) -> (Vec<u8>, std::collections::BTreeMap<u16, u32>) {
+pub(crate) fn capture(
+    clients: Vec<&mut Client>,
+) -> (Vec<u8>, std::collections::BTreeMap<u16, u32>) {
     let mut seen = AHashSet::new();
     let mut capture = Vec::new();
     let mut counts = std::collections::BTreeMap::new();
@@ -649,7 +651,7 @@ fn capture(clients: Vec<&mut Client>) -> (Vec<u8>, std::collections::BTreeMap<u1
 
 /// Run a capture through the client's own parsers, failing if the client
 /// would.
-fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
+pub(crate) fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
     let path = std::env::temp_dir().join(format!("wvs-capture-{}.bin", std::process::id()));
     std::fs::File::create(&path)
         .and_then(|mut f| f.write_all(capture))
@@ -686,7 +688,7 @@ fn run_checker(check_py: &Path, wow_exe: &Path, capture: &[u8]) {
 
 /// `check.py` and `WoW.exe`, or `None` with a reason logged, so a setup
 /// without them fails loudly rather than passing quietly.
-fn checker() -> Option<(PathBuf, PathBuf)> {
+pub(crate) fn checker() -> Option<(PathBuf, PathBuf)> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let check_py = manifest.join("tools/client_check/check.py");
     let wow_exe = manifest.join("tools/client_check/WoW.exe");
