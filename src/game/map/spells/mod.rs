@@ -1136,6 +1136,11 @@ fn execute(
         resolved
     };
     let hits: Vec<Guid> = resolved.iter().map(|(g, _)| *g).collect();
+    // The cast's result before its go, as mangos's `Spell::cast` sends them
+    // (and Thistle Tea queues them).
+    if !triggered {
+        send_cast_result(map, caster, s.id, None);
+    }
     let mut flags = SMSG_SPELL_GO_CastFlags::empty();
     if let Some((display, inventory_type)) = ranged_ammo(map, caster, s) {
         flags = flags.set_ammo(SMSG_SPELL_GO_CastFlags_Ammo {
@@ -1155,7 +1160,6 @@ fn execute(
         map.send_to_observers(caster, &frame, true);
     }
     if !triggered {
-        send_cast_result(map, caster, s.id, None);
         // A heal cast: an Elite Guard's Charge looks for healers.
         if heals(s)
             && let Some(p) = map.players.get_mut(&caster)

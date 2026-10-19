@@ -538,6 +538,8 @@ mod tests_p5_spell_warlock;
 #[cfg(test)]
 mod tests_p6_spell;
 #[cfg(test)]
+mod tests_p6_spell_cast;
+#[cfg(test)]
 mod tests_p6_spell_combat;
 #[cfg(test)]
 mod tests_p6_spell_effects;
