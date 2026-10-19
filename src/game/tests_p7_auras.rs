@@ -271,3 +271,114 @@ async fn a_creatures_weapons_follow_its_transform_and_come_back() {
     assert_eq!(back_to_small, small);
     assert_eq!(back, own, "every field its own");
 }
+
+/// Thistle Tea's `Capacity` "refreshing at capacity preserves the slot and
+/// protects the refreshed aura": of 32 buffs, the oldest put on again
+/// keeps its slot and is the newest, so a thirty-third takes the next
+/// oldest's place instead.
+#[tokio::test]
+async fn a_buff_refreshed_at_capacity_keeps_its_slot_and_the_next_oldest_goes() {
+    const FIRST: u32 = 97_301;
+    const NEWCOMER: u32 = 97_400;
+    let mut d = data();
+    for id in (FIRST..FIRST + 32).chain([NEWCOMER]) {
+        d.spells
+            .spells
+            .insert(id, aura_spell(id, auras::AURA_MOD_STAT, 3, 5));
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let minute = auras::Context {
+            duration: Some(Some(60_000)),
+            ..Default::default()
+        };
+        let put_for = |m: &mut Map, id: u32| {
+            let s = m.realm.data.spells.spells[&id].clone();
+            auras::apply_spell(m, ga, ga, &s, &[(0, 5)], minute).expect("put on");
+        };
+        for id in FIRST..FIRST + 32 {
+            put_for(m, id);
+        }
+        let slot = |m: &Map, id: u32| {
+            auras::auras(m, ga)
+                .and_then(|a| a.holders.iter().find(|h| h.spell == id))
+                .and_then(|h| h.slot)
+        };
+        let first = slot(m, FIRST);
+        crate::game::tests_p3_spells_kit::pass(m, 100);
+        put_for(m, FIRST);
+        crate::game::tests_p3_spells_kit::pass(m, 1);
+        put_for(m, NEWCOMER);
+        let shown = auras::auras(m, ga).map_or(0, |a| {
+            a.holders
+                .iter()
+                .filter(|h| h.positive && h.slot.is_some())
+                .count()
+        });
+        (
+            first,
+            slot(m, FIRST),
+            slot(m, FIRST + 1),
+            slot(m, NEWCOMER),
+            shown,
+        )
+    })
+    .await;
+    let (first, refreshed, next, newcomer, shown) = out;
+    assert_eq!(first, Some(0));
+    assert_eq!(refreshed, Some(0), "the refreshed kept, in its slot");
+    assert_eq!(next, None, "the next oldest gone");
+    assert!(newcomer.is_some());
+    assert_eq!(shown, 32);
+}
+
+/// Thistle Tea's `PercentManaRecovery` "restores underlying mana while
+/// another resource is active": a druid in cat form, showing energy, gets
+/// a tenth of its mana back a tick, its energy left as it was.
+#[tokio::test]
+async fn mana_recovery_restores_a_cat_druids_mana_not_its_energy() {
+    const RECOVERY: u32 = 97_410;
+    const CAT: u32 = 97_411;
+    let mut d = data();
+    let mut recovery = aura_spell(RECOVERY, auras::AURA_OBS_MOD_MANA, 0, 10);
+    recovery.effects[0].amplitude = 1000;
+    d.spells.spells.insert(RECOVERY, recovery);
+    d.spells.spells.insert(
+        CAT,
+        aura_spell(CAT, auras::AURA_MOD_SHAPESHIFT, auras::FORM_CAT as i32, 0),
+    );
+    let realm = crate::game::harness::realm_with(d);
+    let (_c, dr, map) = crate::game::tests_p3_spells_kit::player(
+        &realm,
+        "P7K1",
+        "Catone",
+        Race::NightElf,
+        Class::Druid,
+    )
+    .await;
+    let out = on(&map, move |m| {
+        put(m, dr, CAT);
+        // The aura on, then the pools (its going on works out the
+        // druid's maximum again).
+        put(m, dr, RECOVERY);
+        let f = m.players.get_mut(&dr).unwrap();
+        f.fields.set_u32(UNIT_FIELD_MAXPOWER1, 1000);
+        f.fields.set_u32(UNIT_FIELD_POWER1, 100);
+        f.fields.set_u32(UNIT_FIELD_POWER1 + 3, 20);
+        let max = f.fields.get_u32(UNIT_FIELD_MAXPOWER1);
+        crate::game::tests_p3_spells_kit::pass(m, 1000);
+        let f = &m.players[&dr].fields;
+        (
+            f.get_byte(UNIT_FIELD_BYTES_0, 3),
+            max,
+            f.get_u32(UNIT_FIELD_POWER1),
+            f.get_u32(UNIT_FIELD_POWER1 + 3),
+        )
+    })
+    .await;
+    let (shown, max, mana, energy) = out;
+    assert_eq!(shown, 3, "energy shown");
+    assert!(max > 100);
+    assert_eq!(mana, 100 + max / 10, "a tenth of its mana");
+    assert_eq!(energy, 20, "its energy as it was");
+}
