@@ -38,8 +38,10 @@ pub struct Outbound {
 }
 
 struct OutboundInner {
-    tx: kanal::AsyncSender<Arc<[u8]>>,
-    budget: Arc<Semaphore>,
+    /// tokio's unbounded `mpsc`: its send is sync, from any thread, and
+    /// the writer takes a batch at a time (`recv_many`).
+    tx: mpsc::UnboundedSender<Arc<[u8]>>,
+    shared: Arc<Shared>,
     /// The budget's bytes, all of them.
     capacity: usize,
     overflowed: AtomicBool,
@@ -48,36 +50,97 @@ struct OutboundInner {
     held: parking_lot::Mutex<Vec<Arc<[u8]>>>,
 }
 
+/// What a queue's two ends share.
+struct Shared {
+    /// Bytes that may still be queued; the writer gives back what it takes.
+    budget: Semaphore,
+    /// [`Outbound::close`] was called. tokio's senders can't close their
+    /// channel, so from then on the queue's far end takes nothing more, and
+    /// what was queued is dropped unwritten.
+    closed: AtomicBool,
+}
+
 impl std::fmt::Debug for Outbound {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Outbound")
-            .field("budget", &self.inner.budget.available_permits())
+            .field("budget", &self.inner.shared.budget.available_permits())
             .finish()
     }
 }
 
-impl Outbound {
-    fn new(tx: kanal::AsyncSender<Arc<[u8]>>, budget: Arc<Semaphore>) -> Self {
-        Self {
-            inner: Arc::new(OutboundInner {
-                tx,
-                capacity: budget.available_permits(),
-                budget,
-                overflowed: AtomicBool::new(false),
-                holding: AtomicBool::new(false),
-                held: parking_lot::Mutex::new(Vec::new()),
-            }),
-        }
+/// The far end of an [`Outbound`]: what the writer task drains, or what a
+/// test reads ([`Outbound::detached`]). Once the queue is closed it hands
+/// out nothing more.
+pub struct Frames {
+    rx: mpsc::UnboundedReceiver<Arc<[u8]>>,
+    shared: Arc<Shared>,
+}
+
+impl Frames {
+    fn closed(&self) -> bool {
+        self.shared.closed.load(Ordering::Acquire)
     }
 
+    /// The next frame, once there is one; `None` once the queue is closed
+    /// or every sender has gone.
+    pub async fn recv(&mut self) -> Option<Arc<[u8]>> {
+        if self.closed() {
+            return None;
+        }
+        let frame = self.rx.recv().await?;
+        (!self.closed()).then_some(frame)
+    }
+
+    /// The next frame, if one is queued.
+    pub fn try_recv(&mut self) -> Option<Arc<[u8]>> {
+        if self.closed() {
+            return None;
+        }
+        let frame = self.rx.try_recv().ok()?;
+        (!self.closed()).then_some(frame)
+    }
+
+    /// Frames queued and not yet taken.
+    pub fn len(&self) -> usize {
+        if self.closed() { 0 } else { self.rx.len() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// An outbound queue with `budget` bytes.
+fn queue(budget: usize) -> (Outbound, Frames) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let shared = Arc::new(Shared {
+        budget: Semaphore::new(budget),
+        closed: AtomicBool::new(false),
+    });
+    let outbound = Outbound {
+        inner: Arc::new(OutboundInner {
+            tx,
+            capacity: shared.budget.available_permits(),
+            shared: shared.clone(),
+            overflowed: AtomicBool::new(false),
+            holding: AtomicBool::new(false),
+            held: parking_lot::Mutex::new(Vec::new()),
+        }),
+    };
+    (outbound, Frames { rx, shared })
+}
+
+impl Outbound {
     /// A queue nothing drains, with an unlimited budget, and the receiving
     /// end for tests to read.
-    pub fn detached() -> (Self, kanal::Receiver<Arc<[u8]>>) {
-        let (tx, rx) = kanal::unbounded_async::<Arc<[u8]>>();
-        (
-            Self::new(tx, Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))),
-            rx.to_sync(),
-        )
+    pub fn detached() -> (Self, Frames) {
+        queue(Semaphore::MAX_PERMITS)
+    }
+
+    /// Queue a frame the budget has been taken for: false if the client is
+    /// gone.
+    fn enqueue(&self, frame: Arc<[u8]>) -> bool {
+        !self.inner.shared.closed.load(Ordering::Acquire) && self.inner.tx.send(frame).is_ok()
     }
 
     /// Queue a framed packet. False if the client is gone or over budget;
@@ -88,11 +151,11 @@ impl Outbound {
             let mut held = self.inner.held.lock();
             // Not released since: it waits behind what is held.
             if self.inner.holding.load(Ordering::Acquire) {
-                return match self.inner.budget.try_acquire_many(n) {
+                return match self.inner.shared.budget.try_acquire_many(n) {
                     Ok(permit) => {
                         permit.forget();
                         held.push(frame);
-                        !self.inner.tx.is_closed()
+                        !self.is_closed()
                     }
                     Err(_) => {
                         drop(held);
@@ -112,10 +175,10 @@ impl Outbound {
     /// be waiting for, and is waited on (a pong, a query's answer).
     pub fn send_frame_unheld(&self, frame: Arc<[u8]>) -> bool {
         let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
-        match self.inner.budget.try_acquire_many(n) {
+        match self.inner.shared.budget.try_acquire_many(n) {
             Ok(permit) => {
                 permit.forget();
-                self.inner.tx.try_send(frame).unwrap_or(false)
+                self.enqueue(frame)
             }
             Err(_) => {
                 if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
@@ -148,7 +211,7 @@ impl Outbound {
             self.send_frame_unheld(frame);
         }
         for frame in held.drain(..) {
-            let _ = self.inner.tx.try_send(frame);
+            self.enqueue(frame);
         }
         self.inner.holding.store(false, Ordering::Release);
     }
@@ -168,21 +231,26 @@ impl Outbound {
         }
     }
 
-    /// Close the queue: the writer task ends once it has written what is
-    /// queued, and the connection closes.
+    /// Close the queue: nothing more is queued, what is queued and not yet
+    /// taken is dropped, the writer task ends once the write under way is
+    /// done, and the connection closes.
     pub fn close(&self) {
-        let _ = self.inner.tx.close();
+        if !self.inner.shared.closed.swap(true, Ordering::AcqRel) {
+            // Wakes the writer, which sees the queue closed.
+            let _ = self.inner.tx.send(Arc::from([]));
+        }
     }
 
     /// Bytes queued for the writer, not yet written.
     pub fn queued_bytes(&self) -> usize {
         self.inner
             .capacity
-            .saturating_sub(self.inner.budget.available_permits())
+            .saturating_sub(self.inner.shared.budget.available_permits())
     }
 
+    /// Closed, or the writer has gone.
     pub fn is_closed(&self) -> bool {
-        self.inner.tx.is_closed()
+        self.inner.shared.closed.load(Ordering::Acquire) || self.inner.tx.is_closed()
     }
 
     /// Two handles to the same client.
@@ -225,12 +293,8 @@ pub fn start(stream: TcpStream, crypto: HeaderCrypto) -> Connection {
     let _ = stream.set_nodelay(true);
     let (read, write) = stream.into_split();
     let (encrypter, decrypter) = crypto.split();
-    let (tx, rx) = kanal::unbounded_async::<Arc<[u8]>>();
-    let budget = Arc::new(Semaphore::new(
-        crate::config::config().network.outbound_channel_bytes,
-    ));
-    let outbound = Outbound::new(tx, budget.clone());
-    tokio::spawn(run_writer(write, encrypter, rx, budget));
+    let (outbound, frames) = queue(crate::config::config().network.outbound_channel_bytes);
+    tokio::spawn(run_writer(write, encrypter, frames));
     let (in_tx, in_rx) = mpsc::channel(256);
     tokio::spawn(run_reader(read, decrypter, in_tx, outbound.clone()));
     Connection {
@@ -345,29 +409,19 @@ pub const MAX_AUTH_SESSION: usize = 8 * 1024;
 
 /// Drain queued frames, encrypt each header in order (ARC4 is a stream
 /// cipher) and write each burst with one `write_all`.
-pub(crate) async fn run_writer<W>(
-    mut write: W,
-    mut encrypter: EncrypterHalf,
-    rx: kanal::AsyncReceiver<Arc<[u8]>>,
-    budget: Arc<Semaphore>,
-) where
+pub(crate) async fn run_writer<W>(mut write: W, mut encrypter: EncrypterHalf, mut frames: Frames)
+where
     W: AsyncWrite + Unpin,
 {
     const BATCH_LIMIT: usize = 128;
     let mut staging: Vec<Arc<[u8]>> = Vec::with_capacity(BATCH_LIMIT);
     let mut scratch: Vec<u8> = Vec::with_capacity(16 * 1024);
-    let rx_sync = rx.clone_sync();
     loop {
         staging.clear();
-        match rx.recv().await {
-            Ok(first) => staging.push(first),
-            Err(_) => break,
-        }
-        while staging.len() < BATCH_LIMIT {
-            match rx_sync.try_recv() {
-                Ok(Some(v)) => staging.push(v),
-                Ok(None) | Err(_) => break,
-            }
+        // Waits for a frame, then takes what else is queued: none once every
+        // sender has gone. Closed, what was taken goes unwritten.
+        if frames.rx.recv_many(&mut staging, BATCH_LIMIT).await == 0 || frames.closed() {
+            break;
         }
         scratch.clear();
         let mut written = 0u64;
@@ -383,7 +437,7 @@ pub(crate) async fn run_writer<W>(
             scratch.extend_from_slice(&buf[4..]);
             written += 1;
         }
-        budget.add_permits(drained);
+        frames.shared.budget.add_permits(drained);
         if scratch.is_empty() {
             continue;
         }
@@ -392,7 +446,9 @@ pub(crate) async fn run_writer<W>(
         }
         PACKETS_OUT.fetch_add(written, Ordering::Relaxed);
     }
-    let _ = rx.close();
+    // The senders see the queue closed, and what it held is let go.
+    drop(staging);
+    drop(frames);
     let _ = write.shutdown().await;
 }
 
@@ -464,12 +520,11 @@ mod tests {
         let (encrypter, _) = server.split();
         let (_, mut decrypter) = client.split();
         let (mut a, b) = duplex(64 * 1024);
-        let (tx, rx) = kanal::unbounded_async::<Arc<[u8]>>();
-        let budget = Arc::new(Semaphore::new(1 << 20));
-        let writer = tokio::spawn(run_writer(b, encrypter, rx, budget));
+        let (out, frames) = queue(1 << 20);
+        let writer = tokio::spawn(run_writer(b, encrypter, frames));
         for burst in [1u16, 3, 2] {
             for i in 0..burst {
-                tx.send(frame(100 + i, &[i as u8; 4])).await.unwrap();
+                assert!(out.send_frame(frame(100 + i, &[i as u8; 4])));
             }
             for i in 0..burst {
                 let mut header = [0u8; 4];
@@ -482,8 +537,59 @@ mod tests {
                 assert_eq!(body, [i as u8; 4]);
             }
         }
-        drop(tx);
+        assert_eq!(out.queued_bytes(), 0, "the writer gave the budget back");
+        drop(out);
         writer.await.unwrap();
+    }
+
+    /// Closed, a queue takes nothing more and hands out nothing more, and
+    /// its writer ends and closes the stream.
+    #[tokio::test]
+    async fn a_closed_queue_ends_its_writer_and_the_stream() {
+        let (server, _) = paired_crypto();
+        let (encrypter, _) = server.split();
+        let (mut a, b) = duplex(64 * 1024);
+        let (out, frames) = queue(1 << 20);
+        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        let mut first = [0u8; 8];
+        a.read_exact(&mut first).await.unwrap();
+        out.close();
+        assert!(out.is_closed());
+        assert!(!out.send_frame(frame(2, &[0; 4])));
+        tokio::time::timeout(Duration::from_secs(10), writer)
+            .await
+            .expect("the writer ends")
+            .unwrap();
+        let mut rest = Vec::new();
+        a.read_to_end(&mut rest).await.unwrap();
+        assert!(rest.is_empty(), "nothing after the close: {rest:?}");
+
+        let (out, mut frames) = Outbound::detached();
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        out.close();
+        assert!(frames.try_recv().is_none(), "what was queued is dropped");
+        assert!(!out.send_frame(frame(2, &[0; 4])));
+        assert!(frames.recv().await.is_none());
+    }
+
+    /// A writer that has gone (its client's socket closed) closes the
+    /// queue for its senders.
+    #[tokio::test]
+    async fn a_queue_whose_writer_has_gone_is_closed() {
+        let (server, _) = paired_crypto();
+        let (encrypter, _) = server.split();
+        let (a, b) = duplex(64);
+        drop(a);
+        let (out, frames) = queue(1 << 20);
+        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        tokio::time::timeout(Duration::from_secs(10), writer)
+            .await
+            .expect("the writer ends")
+            .unwrap();
+        assert!(out.is_closed());
+        assert!(!out.send_frame(frame(2, &[0; 4])));
     }
 
     #[tokio::test]
@@ -493,8 +599,7 @@ mod tests {
         let (mut encrypter, _) = client.split();
         let (mut a, b) = duplex(64 * 1024);
         let (tx, mut rx) = mpsc::channel(8);
-        let (out_tx, _out_rx) = kanal::unbounded_async::<Arc<[u8]>>();
-        let outbound = Outbound::new(out_tx, Arc::new(Semaphore::new(1 << 20)));
+        let (outbound, _frames) = queue(1 << 20);
         tokio::spawn(run_reader(b, decrypter, tx, outbound));
         // CMSG_SET_WATCHED_FACTION, read by hand: index 3.
         let body = 3u32.to_le_bytes();
@@ -518,8 +623,7 @@ mod tests {
 
     #[test]
     fn a_client_over_budget_is_disconnected() {
-        let (tx, _rx) = kanal::unbounded_async::<Arc<[u8]>>();
-        let out = Outbound::new(tx, Arc::new(Semaphore::new(10)));
+        let (out, _frames) = queue(10);
         assert!(out.send_frame(frame(1, &[0; 4])));
         assert!(!out.send_frame(frame(1, &[0; 4])));
         assert!(out.is_closed());
@@ -527,7 +631,7 @@ mod tests {
 
     #[test]
     fn what_is_sent_while_held_follows_what_the_hold_was_for_in_order() {
-        let (out, rx) = Outbound::detached();
+        let (out, mut rx) = Outbound::detached();
         assert!(out.send_frame(frame(1, &[0; 4])));
         assert!(out.hold());
         assert!(!out.hold(), "held once");
@@ -538,7 +642,7 @@ mod tests {
         assert_eq!(rx.len(), 1, "the frames wait");
         out.release(vec![frame(2, &[0; 4])]);
         assert!(out.send_frame(frame(5, &[0; 4])));
-        let opcodes: Vec<u16> = std::iter::from_fn(|| rx.try_recv().ok().flatten())
+        let opcodes: Vec<u16> = std::iter::from_fn(|| rx.try_recv())
             .map(|f| u16::from_le_bytes([f[2], f[3]]))
             .collect();
         assert_eq!(opcodes, [1, 2, 3, 4, 5]);
@@ -546,8 +650,7 @@ mod tests {
 
     #[test]
     fn a_held_client_over_budget_is_disconnected() {
-        let (tx, _rx) = kanal::unbounded_async::<Arc<[u8]>>();
-        let out = Outbound::new(tx, Arc::new(Semaphore::new(10)));
+        let (out, _frames) = queue(10);
         out.hold();
         assert!(out.send_frame(frame(1, &[0; 4])));
         assert!(!out.send_frame(frame(1, &[0; 4])));

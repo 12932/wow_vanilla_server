@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use ahash::{AHashMap, AHashSet};
 use std::collections::hash_map::Entry;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 use wow_world_messages::vanilla::Vector3d;
 
@@ -398,7 +399,10 @@ pub struct Terrain {
     tiles: AHashMap<(u8, u8), Slot>,
     /// Where tiles read off the map's thread arrive; `None` to read them at
     /// once.
-    background: Option<(kanal::Sender<Arrival>, kanal::Receiver<Arrival>)>,
+    background: Option<(
+        mpsc::UnboundedSender<Arrival>,
+        mpsc::UnboundedReceiver<Arrival>,
+    )>,
     /// The map's time, as of its last update.
     now: Instant,
 }
@@ -470,7 +474,7 @@ impl Terrain {
     /// From now its tiles are read off the map's thread, and taken in at
     /// [`Terrain::receive`].
     pub fn in_background(&mut self) {
-        self.background = Some(kanal::unbounded());
+        self.background = Some(mpsc::unbounded_channel());
     }
 
     fn key(x: f32, y: f32) -> Option<(u8, u8)> {
@@ -545,10 +549,10 @@ impl Terrain {
     /// How many came in.
     pub fn receive(&mut self, now: Instant) -> usize {
         self.now = now;
-        let Some((_, rx)) = &self.background else {
+        let Some((_, rx)) = &mut self.background else {
             return 0;
         };
-        let arrived: Vec<Arrival> = std::iter::from_fn(|| rx.try_recv().ok().flatten()).collect();
+        let arrived: Vec<Arrival> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let n = arrived.len();
         for (key, tile) in arrived {
             // One let go of meanwhile is asked for again when needed.

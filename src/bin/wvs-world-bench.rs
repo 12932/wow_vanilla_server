@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use ahash::AHashMap;
 use clap::Parser;
 use tokio::sync::mpsc;
-use wow_vanilla_server::game::conn::{Connection, Inbound, Outbound};
+use wow_vanilla_server::game::conn::{Connection, Frames, Inbound, Outbound};
 use wow_vanilla_server::game::map::MapKey;
 use wow_vanilla_server::game::map::bench_probe::{self, Sample};
 use wow_vanilla_server::game::store::Store;
@@ -256,8 +256,8 @@ async fn run(args: Args) -> std::process::ExitCode {
         std::thread::spawn(move || {
             while draining.load(Ordering::Relaxed) {
                 let (mut bytes, mut frames) = (0, 0);
-                for q in &queues {
-                    while let Ok(Some(f)) = q.try_recv() {
+                for q in &mut queues {
+                    while let Some(f) = q.try_recv() {
                         bytes += f.len() as u64;
                         frames += 1;
                     }
@@ -343,7 +343,7 @@ async fn run(args: Args) -> std::process::ExitCode {
 
 /// Wait for a packet `pick` takes, reading `rx`.
 async fn wait_for<T>(
-    rx: &kanal::AsyncReceiver<Arc<[u8]>>,
+    rx: &mut Frames,
     what: &str,
     mut pick: impl FnMut(&ServerOpcodeMessage) -> Option<Result<T, String>>,
 ) -> Result<T, String> {
@@ -352,7 +352,7 @@ async fn wait_for<T>(
         let frame = tokio::time::timeout_at(deadline, rx.recv())
             .await
             .map_err(|_| format!("no {what} within 60 s"))?
-            .map_err(|_| format!("the session closed waiting for {what}"))?;
+            .ok_or_else(|| format!("the session closed waiting for {what}"))?;
         if let Ok(m) = ServerOpcodeMessage::read_unencrypted(&frame[..])
             && let Some(r) = pick(&m)
         {
@@ -369,10 +369,9 @@ async fn place(
     map: u32,
     at: Vector3d,
     gm: bool,
-) -> Result<(Placed, kanal::Receiver<Arc<[u8]>>), String> {
+) -> Result<(Placed, Frames), String> {
     let account = format!("WB{i:05}");
-    let (outbound, rx) = Outbound::detached();
-    let rx = rx.to_async();
+    let (outbound, mut rx) = Outbound::detached();
     let (tx, inbound) = mpsc::channel(256);
     tokio::spawn(session::run(
         realm.clone(),
@@ -403,7 +402,7 @@ async fn place(
         .into(),
     )
     .await?;
-    wait_for(&rx, "SMSG_CHAR_CREATE", |m| match m {
+    wait_for(&mut rx, "SMSG_CHAR_CREATE", |m| match m {
         ServerOpcodeMessage::SMSG_CHAR_CREATE(c) => Some(
             (c.result == WorldResult::CharCreateSuccess)
                 .then_some(())
@@ -413,7 +412,7 @@ async fn place(
     })
     .await?;
     send(CMSG_CHAR_ENUM {}.into()).await?;
-    let guid = wait_for(&rx, "SMSG_CHAR_ENUM", |m| match m {
+    let guid = wait_for(&mut rx, "SMSG_CHAR_ENUM", |m| match m {
         ServerOpcodeMessage::SMSG_CHAR_ENUM(e) => Some(
             e.characters
                 .first()
@@ -424,7 +423,7 @@ async fn place(
     })
     .await?;
     send(CMSG_PLAYER_LOGIN { guid }.into()).await?;
-    wait_for(&rx, "SMSG_LOGIN_VERIFY_WORLD", |m| match m {
+    wait_for(&mut rx, "SMSG_LOGIN_VERIFY_WORLD", |m| match m {
         ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => Some(Ok(())),
         ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(f) => {
             Some(Err(format!("login: {:?}", f.result)))
@@ -445,7 +444,7 @@ async fn place(
         send(say(".gm on".into()).into()).await?;
     }
     send(say(format!(".go xyz {} {} {} {map}", at.x, at.y, at.z)).into()).await?;
-    let new_world = wait_for(&rx, "the teleport", |m| match m {
+    let new_world = wait_for(&mut rx, "the teleport", |m| match m {
         ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) if t.guid == guid => Some(Ok(false)),
         ServerOpcodeMessage::SMSG_NEW_WORLD(_) => Some(Ok(true)),
         ServerOpcodeMessage::SMSG_TRANSFER_ABORTED(a) => {
@@ -468,7 +467,7 @@ async fn place(
         .await?;
     }
     let heading = (i as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
-    Ok((Placed { tx, at, heading }, rx.to_sync()))
+    Ok((Placed { tx, at, heading }, rx))
 }
 
 /// The observers walk at running speed (7 yd/s), a heartbeat every 250 ms,

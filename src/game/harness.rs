@@ -191,7 +191,7 @@ pub fn realm() -> Arc<Realm> {
 pub struct Client {
     pub account: String,
     tx: mpsc::Sender<crate::game::conn::Inbound>,
-    rx: kanal::Receiver<Arc<[u8]>>,
+    rx: crate::game::conn::Frames,
     pub guid: Guid,
     /// Everything received and not yet looked at.
     pub backlog: Vec<ServerOpcodeMessage>,
@@ -268,7 +268,7 @@ impl Client {
     pub fn disconnect(self) {}
 
     fn drain(&mut self) {
-        while let Ok(Some(frame)) = self.rx.try_recv() {
+        while let Some(frame) = self.rx.try_recv() {
             self.frames.push(frame.clone());
             self.captured.push(frame.clone());
             let parsed = ServerOpcodeMessage::read_unencrypted(&frame[..]);
