@@ -1,12 +1,17 @@
 //! Round 8's entity tests of game objects, ported from Thistle Tea's
 //! `test/game/world/entity/game_object/*_test.exs` (docs/parity/matrix.csv):
-//! the Ghost Magnet's call of Magrami Spectres.
+//! the Ghost Magnet's call of Magrami Spectres, and the cheer speakers'
+//! fireworks shows.
 
 use std::time::Duration;
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+
+use crate::game::cheer_sites::{CHEERS, FIREWORKS};
+use crate::game::cheer_speakers::{self as cheer, SPEAKER};
 use crate::game::data::GameData;
 use crate::game::ghost_magnet::{self as gm, AURA, MAGNET, SPECTRE};
 use crate::game::map::Map;
@@ -25,8 +30,13 @@ fn world() -> GameData {
         object(MAGNET, 5, "Ghost Magnet", &[(3, AURA)]),
         object(AURA, 6, "Ghost Magnet Aura", &[]),
         object(OTHER, 5, "Other", &[]),
+        object(SPEAKER, 1, "Cheer Speaker", &[]),
     ] {
         d.gameobject_templates.insert(t.entry, t);
+    }
+    for f in FIREWORKS {
+        d.gameobject_templates
+            .insert(f, object(f, 10, "Firework", &[]));
     }
     let mut spectre = template(SPECTRE, 6);
     spectre.name = "Magrami Spectre".into();
@@ -243,4 +253,118 @@ async fn a_slain_spectre_is_replaced_while_the_magnet_calls() {
     assert_eq!(seen.1, 8, "not at once (the slain one's corpse counted)");
     assert_eq!(seen.2, 9, "a ninth, replacing it");
     assert_eq!(seen.3, 9, "none once its time is up");
+}
+
+/// A cheer speaker's show: as it comes, its first firework is one to two
+/// seconds off, and with it its cheer, one of the four, to those who have
+/// it; another object has no show; leaving (its event over), it cheers
+/// again (Thistle Tea's "cheers and schedules the first firework" and
+/// "leaves other objects alone"; vmangos's `go_cheer_speaker`).
+#[tokio::test]
+async fn a_cheer_speaker_cheers_its_show_in_and_out() {
+    let (_realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let (speaker, other, wait) = map
+        .query(move |m| {
+            let now = m.now;
+            let speaker = set_down(m, ga, SPEAKER);
+            let other = set_down(m, ga, OTHER);
+            let wait = m.speakers[&speaker].next_launch - now;
+            (speaker, other, wait)
+        })
+        .await
+        .unwrap();
+    assert!(
+        (Duration::from_secs(1)..=Duration::from_secs(2)).contains(&wait),
+        "{wait:?}"
+    );
+    let has_other = map
+        .query(move |m| m.speakers.contains_key(&other))
+        .await
+        .unwrap();
+    assert!(!has_other, "another object has no show");
+    a.sees(speaker).await;
+    let sound = |m: &ServerOpcodeMessage| match m {
+        ServerOpcodeMessage::SMSG_PLAY_OBJECT_SOUND(s) if s.guid == speaker => Some(s.sound_id),
+        _ => None,
+    };
+    let opening = a.wait_for("the opening cheer", sound).await;
+    assert!(CHEERS.contains(&opening), "{opening}");
+    map.query(move |m| crate::game::map::objects::despawn(m, speaker))
+        .await
+        .unwrap();
+    let closing = a.wait_for("the closing cheer", sound).await;
+    assert!(CHEERS.contains(&closing), "{closing}");
+    let left = map.query(|m| m.speakers.len()).await.unwrap();
+    assert_eq!(left, 0);
+}
+
+/// A speaker in Stormwind sends up one of the city's fireworks, for half a
+/// second, from one of Stormwind's launch sites, the next due one to two
+/// seconds on; one far from every city sends nothing up (Thistle Tea's
+/// "sends up a city firework and schedules the next").
+#[tokio::test]
+async fn a_cheer_speaker_sends_a_city_firework_up_and_the_next_soon() {
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let seen = map
+        .query(move |m| {
+            let now = m.now;
+            let far = set_down(m, ga, SPEAKER);
+            m.speakers.get_mut(&far).unwrap().next_launch = now;
+            cheer::update(m);
+            let none = m
+                .gameobjects
+                .iter()
+                .filter(|(_, o)| FIREWORKS.contains(&o.entry))
+                .count();
+            let trade_district = Vector3d {
+                x: -8862.0,
+                y: 654.0,
+                z: 96.0,
+            };
+            let speaker =
+                objects::summon(m, None, SPEAKER, trade_district, 0.0, 0, 0, 0, None).unwrap();
+            m.speakers.get_mut(&speaker).unwrap().next_launch = now;
+            cheer::update(m);
+            let sites = cheer::sites(0, trade_district);
+            let sent: Vec<(u32, Vector3d, Option<std::time::Instant>)> = m
+                .gameobjects
+                .iter()
+                .filter(|(_, o)| FIREWORKS.contains(&o.entry))
+                .map(|(_, o)| {
+                    let s = m.objects.summoned.iter().find(|s| s.guid == o.guid);
+                    (o.entry, o.position, s.and_then(|s| s.expires))
+                })
+                .collect();
+            let next = m.speakers[&speaker].next_launch - now;
+            let at_a_site = sent.iter().all(|(_, p, _)| {
+                sites.iter().any(|s| {
+                    dist(
+                        *p,
+                        Vector3d {
+                            x: s[0],
+                            y: s[1],
+                            z: s[2],
+                        },
+                    ) < 0.01
+                })
+            });
+            (
+                none,
+                sites.len(),
+                sent.len(),
+                at_a_site,
+                sent.iter().all(|s| {
+                    s.2 == Some(now + Duration::from_millis(cheer::FIREWORK_LIFETIME_MS.into()))
+                }),
+                (Duration::from_secs(1)..=Duration::from_secs(2)).contains(&next),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen.0, 0, "none from far from a city");
+    assert_eq!(seen.1, 117, "Stormwind's sites");
+    assert_eq!(seen.2, 1, "one firework");
+    assert!(seen.3, "at one of them");
+    assert!(seen.4, "for half a second");
+    assert!(seen.5, "the next one to two seconds on");
 }

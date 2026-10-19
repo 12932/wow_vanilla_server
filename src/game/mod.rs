@@ -1,6 +1,8 @@
 //! The world server: sessions, maps, and what they share.
 
 pub mod battlegrounds;
+pub mod cheer_sites;
+pub mod cheer_speakers;
 pub mod conn;
 pub mod data;
 pub mod elemental;
