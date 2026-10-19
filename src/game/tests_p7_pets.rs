@@ -949,3 +949,166 @@ async fn a_pets_bar_comes_back_as_moved_without_what_it_cant_use() {
     assert_eq!(bar[6], (gore, ACT_ENABLED), "Gore where it was put");
     assert_eq!(autocast, vec![gore], "only Gore on autocast");
 }
+
+/// Thistle Tea's `WildSummon` "summons once on the caster with count and
+/// destination", "uses the forward radius without a destination and
+/// normalizes indefinite lifetime", "a corpse calls up a creature only
+/// with a spell castable while dead", and `TemporarySummon.tick` "defers
+/// timed death until combat ends without extending the deadline": a
+/// creature's wild summon of three at its spell's database place has the
+/// first there and the others within the radius about it, for five
+/// seconds; one at the caster's own place (18) comes there; one of no
+/// place comes its radius ahead, for good (mangos's `EffectSummonWild`).
+/// Dead, the creature calls up none, but by a spell castable while dead.
+/// A summon whose time comes in a fight lives through it, and dies as
+/// soon as it is over.
+#[tokio::test]
+async fn a_wild_summon_comes_at_its_place_or_ahead_and_dies_after_its_fight() {
+    use crate::game::map::event_ai;
+    const SUMMONER: u32 = 990_760;
+    const WILD: u32 = 990_761;
+    const AT_PLACE: u32 = 990_762;
+    const AT_SELF: u32 = 990_763;
+    const AHEAD: u32 = 990_764;
+    const WHILE_DEAD: u32 = 990_765;
+    // A place in Elwynn Forest, where she is.
+    const PLACE: (u32, f32, f32, f32, f32) = (0, -8_940.0, -130.0, 83.0, 0.0);
+    let mut d = revive_data();
+    d.spells.target_positions.insert(AT_PLACE, PLACE);
+    for (entry, name) in [(SUMMONER, "Summoner"), (WILD, "Wild")] {
+        d.creature_templates
+            .insert(entry, tests_pets::template(entry, name, 14, 1));
+    }
+    d.spells.radii.insert(8, 2.0);
+    d.spells.durations.insert(
+        5,
+        crate::game::data::spells::SpellDuration {
+            base: 5000,
+            ..Default::default()
+        },
+    );
+    let none = SpellEffect::default();
+    let wild = |id: u32, count: i32, target: u32, duration: u32| {
+        let mut e = tests_pets::effect(pets::EFFECT_SUMMON_WILD, count - 1, target);
+        e.misc_value = WILD as i32;
+        e.radius_index = 8;
+        let mut s = tests_pets::spell(id, "Summon", [e, none, none]);
+        s.duration_index = duration;
+        s
+    };
+    for s in [
+        wild(AT_PLACE, 3, 17, 5),
+        wild(AT_SELF, 1, 18, 5),
+        wild(AHEAD, 1, 0, 21),
+        {
+            let mut s = wild(WHILE_DEAD, 1, 0, 21);
+            s.attributes[0] |= crate::game::data::spells::ATTR_CASTABLE_WHILE_DEAD;
+            s
+        },
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    let realm = crate::game::harness::realm_with(d);
+    let (_c, g, map) = enter(&realm, "C", "Watcher", Race::Human, Class::Warrior).await;
+    let summoner = place(&map, g, SUMMONER, 0x70_0020, 10.0).await;
+    let out = map
+        .query(move |m| {
+            let at = m.position_of(summoner).unwrap();
+            let o = m.creature(summoner).unwrap().orientation;
+            let place = Vector3d {
+                x: PLACE.1,
+                y: PLACE.2,
+                z: PLACE.3,
+            };
+            let made = |m: &crate::game::map::Map| {
+                event_ai::scripted(m, summoner).map_or(Vec::new(), |s| s.summoned.clone())
+            };
+            let new_ones = |m: &mut crate::game::map::Map, spell: u32| {
+                let before = made(m);
+                crate::game::map::spells::cast(m, summoner, spell, Default::default(), None);
+                let now = m.now;
+                made(m)
+                    .into_iter()
+                    .filter(|x| !before.contains(x))
+                    .map(|x| {
+                        let c = m.creature(x).unwrap();
+                        let left = c
+                            .scripted
+                            .as_deref()
+                            .and_then(|s| s.despawn_at)
+                            .map(|t| t.duration_since(now));
+                        (x, c.position, left)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let three = new_ones(m, AT_PLACE);
+            let own = new_ones(m, AT_SELF);
+            let ahead = new_ones(m, AHEAD);
+            crate::game::map::combat::kill(m, g, summoner);
+            let dead = new_ones(m, AHEAD);
+            let dead_spell = new_ones(m, WHILE_DEAD);
+            (
+                at,
+                o,
+                place,
+                three,
+                own,
+                ahead,
+                dead.len(),
+                dead_spell.len(),
+            )
+        })
+        .await
+        .unwrap();
+    let (at, o, place, three, own, ahead, dead, dead_spell) = out;
+    let d2 = |a: Vector3d, b: Vector3d| crate::game::map::combat::dist(a, b);
+    assert_eq!(three.len(), 3, "three");
+    assert!(d2(three[0].1, place) < 0.01, "the first at the place");
+    for (_, p, left) in &three {
+        assert!(d2(*p, place) <= 2.01, "within the radius: {p:?}");
+        assert_eq!(*left, Some(Duration::from_secs(5)), "for five seconds");
+    }
+    assert!(d2(own[0].1, at) < 0.01, "at the caster's own place");
+    let front = Vector3d {
+        x: at.x + 2.0 * o.cos(),
+        y: at.y + 2.0 * o.sin(),
+        z: at.z,
+    };
+    assert!(d2(ahead[0].1, front) < 0.01, "its radius ahead");
+    assert_eq!(ahead[0].2, None, "for good");
+    assert_eq!(
+        (dead, dead_spell),
+        (0, 1),
+        "dead, only by a spell cast dead"
+    );
+    // Its time in a fight: it lives; the fight over, it dies at once.
+    let summon = three[1].0;
+    let out = map
+        .query(move |m| {
+            crate::game::map::combat::engage(m, g, summon);
+            let now = m.now;
+            if let Some(s) = event_ai::scripted_mut(m, summon) {
+                s.despawn_at = Some(now);
+            }
+            event_ai::update_despawns(m);
+            let fighting = m.creature(summon).map(|c| c.alive());
+            crate::game::map::combat::leave_combat(m, summon);
+            crate::game::map::combat::leave_combat(m, g);
+            fighting
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, Some(true), "alive through its fight");
+    let mut died = false;
+    for _ in 0..100 {
+        died = map
+            .query(move |m| m.creature(summon).is_none_or(|c| !c.alive()))
+            .await
+            .unwrap();
+        if died {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(died, "dead once it is over");
+}

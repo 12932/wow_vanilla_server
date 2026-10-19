@@ -240,6 +240,7 @@ async fn a_script_takes_a_creatures_guardians_of_an_entry_or_all() {
                 0,
                 s.effects[0].base_points + 1,
                 false,
+                &Default::default(),
             );
         }
         let entries = |m: &Map| {
@@ -277,7 +278,7 @@ async fn a_creatures_guardian_is_at_its_level_less_the_offset() {
         for offset in [0.0, -5.0, 1.0, -60.0] {
             let mut s = summoning(TWO_DRAGONLINGS, DRAGONLING, 1);
             s.effects[0].multiple_value = offset;
-            crate::game::map::pets::effect(m, owner, owner, &s, 0, 1, false);
+            crate::game::map::pets::effect(m, owner, owner, &s, 0, 1, false, &Default::default());
             let made = guardians(m, owner);
             let newest = made
                 .iter()

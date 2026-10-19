@@ -70,7 +70,42 @@ fn spot(map: &Map, s: &SpellTemplate, index: usize, pos: Vector3d, o: f32) -> Ve
     }
 }
 
-/// Effect `index` of `s`, cast by creature `caster`: `count` of `entry`.
+/// Where effect `index` of `s`, cast by `caster` at `t`, summons, if at a
+/// place rather than a spot about the caster: the database's (17), the
+/// caster's own (18), its target unit's (53, 63), or the place it was
+/// aimed at (mangos's `EffectSummonWild` with `TARGET_FLAG_DEST_LOCATION`,
+/// Thistle Tea's summon destination).
+pub fn destination(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    t: &Targets,
+) -> Option<Vector3d> {
+    let e = s.effects[index];
+    match e.target_a {
+        17 => map
+            .realm
+            .data
+            .spells
+            .target_positions
+            .get(&s.id)
+            .filter(|p| p.0 == map.key.map)
+            .map(|p| Vector3d {
+                x: p.1,
+                y: p.2,
+                z: p.3,
+            }),
+        18 => map.position_of(caster),
+        53 | 63 => t.unit.and_then(|u| map.position_of(u)).or(t.dest),
+        a if SPOTS.iter().any(|(id, _)| *id == a || *id == e.target_b) => None,
+        _ => t.dest,
+    }
+}
+
+/// Effect `index` of `s`, cast by creature `caster`: `count` of `entry`,
+/// the first at `at` (else at its spot about the caster) and the rest
+/// about it within the effect's radius.
 pub fn summon(
     map: &mut Map,
     caster: Guid,
@@ -78,6 +113,7 @@ pub fn summon(
     s: &SpellTemplate,
     index: usize,
     count: usize,
+    at: Option<Vector3d>,
 ) {
     let data = map.realm.data.clone();
     let Some(t) = data.creature_template(entry) else {
@@ -111,7 +147,7 @@ pub fn summon(
         .duration(s, view.level)
         .filter(|ms| *ms > 0)
         .map(|ms| map.now + Duration::from_millis(u64::from(ms)));
-    let base = spot(map, s, index, view.position, view.orientation);
+    let base = at.unwrap_or_else(|| spot(map, s, index, view.position, view.orientation));
     let radius = data.spells.radius(s.effects[index].radius_index);
     for i in 0..count {
         // The rest about the first, within the effect's radius.
