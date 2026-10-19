@@ -267,6 +267,9 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool, jumped: bool) {
     if mask != 0 {
         crate::game::map::auras::interrupt(map, g, mask);
     }
+    if turned || jumped {
+        crate::game::map::spells::channel_turned(map, g, turned, jumped);
+    }
 }
 
 /// vmangos's safe fall: below this many yards a fall doesn't hurt.

@@ -2453,6 +2453,82 @@ pub fn moved(map: &mut Map, g: Guid) {
     }
 }
 
+/// `AURA_INTERRUPT_FLAG_TURNING` among a channel's interrupt flags.
+const CHANNEL_INTERRUPT_TURNING: u32 = 0x10;
+
+/// A player turned or jumped: a channel stops on a jump, and on a turn if
+/// its channel interrupt flags say so (mangos-classic's `Spell::update` for
+/// `SPELL_STATE_CHANNELING`: `MOVEFLAG_JUMPING`, and
+/// `AURA_INTERRUPT_FLAG_TURNING`).
+pub fn channel_turned(map: &mut Map, g: Guid, turned: bool, jumped: bool) {
+    let Some(spell) = map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .filter(|c| c.channel_until.is_some())
+        .map(|c| c.spell)
+    else {
+        return;
+    };
+    let turns = turned
+        && map
+            .realm
+            .data
+            .spells
+            .get(spell)
+            .is_some_and(|s| s.channel_interrupt_flags & CHANNEL_INTERRUPT_TURNING != 0);
+    if jumped || turns {
+        interrupt(map, g);
+    }
+}
+
+/// A channel at another unit stops once that unit is half its range again
+/// beyond it, past both their reaches (mangos-classic's `Spell::update` for
+/// `SPELL_STATE_CHANNELING`: `IsWithinCombatDistInMap(channelTarget,
+/// m_maxRange * 1.5f)`, the range with its modifiers).
+fn channels_in_reach(map: &mut Map) {
+    let at_other = |g: Guid, c: &Caster| {
+        let x = c.casting.as_ref()?;
+        x.channel_until?;
+        let t = x.targets.unit.filter(|u| *u != g)?;
+        Some((g, x.spell, t))
+    };
+    let mut channels: Vec<(Guid, u32, Guid)> = map
+        .players
+        .values()
+        .filter_map(|p| at_other(p.guid, &p.caster))
+        .collect();
+    if map.rare.casting {
+        channels.extend(
+            map.creatures
+                .iter()
+                .filter_map(|(_, c)| at_other(c.guid, &c.caster)),
+        );
+    }
+    if channels.is_empty() {
+        return;
+    }
+    let data = map.realm.data.clone();
+    for (g, spell, target) in channels {
+        let Some(s) = data.spells.get(spell) else {
+            continue;
+        };
+        let (_, base) = data.spells.range(s);
+        if base <= 0.0 {
+            continue;
+        }
+        let max = mods::for_spell(map, g, s)
+            .apply(mods::OP_RANGE, base)
+            .max(0.0);
+        let (Some(me), Some(u)) = (map.unit_view(g), map.unit_view(target)) else {
+            continue;
+        };
+        let apart = combat::dist(me.position, u.position) - me.combat_reach - u.combat_reach;
+        if apart > max * 1.5 {
+            interrupt(map, g);
+        }
+    }
+}
+
 /// Casts that finish now go off; channels that end, end; areas tick; party
 /// auras follow their casters.
 pub fn update(map: &mut Map) {
@@ -2462,6 +2538,7 @@ pub fn update(map: &mut Map) {
     // run out, takes it away.
     effects::tick_areas(map);
     channel_costs(map);
+    channels_in_reach(map);
     let mut done: Vec<Guid> = map
         .players
         .values()
