@@ -440,6 +440,19 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   caught on a charge land at once; a refreshed or second fear doesn't restart the run; a fear drops the creature's
   target. **To ask you again:** Distract turning players (mangos's `EffectDistract` turns them; DECISIONS.md said
   not to).
+- **7m, the core's other areas, round 7:** a player's death frees what they charm; a pet told to follow or made
+  passive lets go of its target and cast; pick pocket can be resisted, and a caught one breaks stealth and starts
+  the fight; a quest chest shows as usable to one whose quest wants its loot; a Spirit of Redemption leaving a
+  battleground goes home a living priest; a profession's lower rank read after a higher one keeps the higher step
+  and cap (mangos's `SetSkillStep`); an auction search by the chest slot finds robes; an accepted resurrection
+  brings the dead where the caster stood as they cast it (mangos's `setResurrectRequestData`). **My calls:**
+  - **Quest chests** show as usable only to one whose quest wants their loot (mangos); Thistle Tea flags them all.
+  - **A forgotten weapon skill** starts again at 1 when relearned (mangos; `wrong-for-1.12` for Thistle Tea's
+    keeping the old value).
+  - **To ask you:** an emote ends Feign Death (Thistle Tea's, kept); mangos refuses the emote instead
+    (`UNIT_FLAG_PREVENT_ANIM`).
+  - **Left:** a create strips jump and spline-elevation data where both references send it; riding skill caps
+    don't follow `SkillTiers`; the Scourge camps and fireworks; Stratholme's Baron and Aurius.
 
 ## Answered
 - **#10** keep swinging on arrival.
