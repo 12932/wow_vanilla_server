@@ -323,11 +323,9 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>
         cast_failed(map, player, pet, spell, r);
         return;
     }
-    let before = map.caster(pet).map(|c| c.cooldowns.len());
-    crate::game::map::spells::cast(map, pet, spell, targets, None);
-    let cast = map.caster(pet).map(|c| c.cooldowns.len()) != before
-        || map.caster(pet).is_some_and(|c| c.casting.is_some());
-    // A harmful spell starts the fight with its target.
+    let cast = crate::game::map::spells::cast(map, pet, spell, targets, None);
+    // A harmful spell starts the fight with its target, an instant one of
+    // no cooldown too.
     if cast
         && !helpful
         && let Some(u) = unit
