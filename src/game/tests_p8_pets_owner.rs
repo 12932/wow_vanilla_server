@@ -20,15 +20,15 @@ use crate::game::tests_p7_combat::{BEAST_WATCHER, creature_at, in_combat, off};
 
 /// A totem, a guardian, and a summon that keeps its owner out of its
 /// fights (vmangos's `NO_OWNER_THREAT`: a Sentry Totem, an Eye of Kilrogg).
-const TOTEM: u32 = 3770;
-const GUARD: u32 = 3771;
+pub(crate) const TOTEM: u32 = 3770;
+pub(crate) const GUARD: u32 = 3771;
 const SENTRY: u32 = 3772;
 /// A brute no blow touches.
 const IMMUNE: u32 = 3773;
 /// `UNIT_FLAG_NON_ATTACKABLE`.
 const NOT_ATTACKABLE: u32 = 0x2;
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = crate::game::tests_p7_combat::data();
     d.creature_templates.insert(TOTEM, p3::template(TOTEM, 11));
     d.creature_templates.insert(GUARD, p3::template(GUARD, 7));
@@ -42,7 +42,7 @@ fn data() -> GameData {
 }
 
 /// A level-60 hunter at the start, with her pet two yards east.
-async fn hunter() -> (
+pub(crate) async fn hunter() -> (
     std::sync::Arc<crate::game::Realm>,
     crate::game::harness::Client,
     Guid,
@@ -98,7 +98,7 @@ fn look_at(m: &mut Map, g: Guid) {
 }
 
 /// A summon of `kind` and `entry` for `owner` at `at`, in his slots.
-fn summon(m: &mut Map, owner: Guid, entry: u32, kind: Kind, at: Vector3d) -> Guid {
+pub(crate) fn summon(m: &mut Map, owner: Guid, entry: u32, kind: Kind, at: Vector3d) -> Guid {
     let g = crate::game::map::pets::testing::spawn(m, owner, entry, kind, 60, at, 0.0);
     let p = m.players.get_mut(&owner).unwrap();
     match kind {

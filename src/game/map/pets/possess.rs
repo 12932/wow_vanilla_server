@@ -354,11 +354,19 @@ fn fight(map: &mut Map, victim: Guid, master: Guid) {
         crate::game::map::combat::stop_attack(map, victim);
         return;
     }
+    // The foe she fights while she may: the one she strikes, or the one she
+    // has selected (a caster casts from afar), whoever her charmer turns to
+    // (Thistle Tea's "retains a valid victim after the controller changes
+    // targets").
     let current = map
         .combat(victim)
         .filter(|c| c.attacking)
         .map(|c| c.victim)
-        .filter(|t| charm_target(map, victim, master, *t));
+        .or_else(|| {
+            map.unit_fields(victim)
+                .map(|f| f.get_guid(UNIT_FIELD_TARGET))
+        })
+        .filter(|t| !t.is_zero() && charm_target(map, victim, master, *t));
     let target = current.or_else(|| {
         let foes: Vec<Guid> = map
             .creature(master)
@@ -372,8 +380,16 @@ fn fight(map: &mut Map, victim: Guid, master: Guid) {
     });
     let Some(target) = target else {
         crate::game::map::combat::stop_attack(map, victim);
+        if let Some(f) = map.unit_fields_mut(victim) {
+            f.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+        }
         return;
     };
+    // Selected, as she casts at it or strikes it (Thistle Tea's
+    // `unit.target`).
+    if let Some(f) = map.unit_fields_mut(victim) {
+        f.set_guid(UNIT_FIELD_TARGET, target);
+    }
     if map.caster(victim).is_some_and(|c| c.casting.is_some()) {
         return;
     }
