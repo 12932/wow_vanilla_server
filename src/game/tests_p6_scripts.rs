@@ -3048,3 +3048,171 @@ pub(super) async fn answers(c: &mut Client, g: Guid, within: Duration) -> (Vec<u
         }
     }
 }
+
+/// Whether `c` sees `caster` cast `spell` at `at` within a little while.
+async fn cast_at(c: &mut Client, caster: Guid, spell: u32, at: Guid) -> bool {
+    cast_any_of(c, caster, spell, crate::game::harness::WAIT).await == Some(at)
+}
+
+/// The Scourge Invasion: the Mouth of Kel'Thuzad taunts its zone now and
+/// then, proclaims an attack and concedes a defeated zone before it goes;
+/// a death bolt climbs from the camp's relay to the proxy and on to the
+/// necropolis's health, whose third zap kills it, which brings the
+/// necropolis down; a damaged shard falls with Soul Revival and a death
+/// bolt to its relay; disrupting a cultist's ritual takes eight runes and
+/// raises a Shadow of Doom, whose death strikes the damaged shard
+/// (Thistle Tea's `scourge_invasion`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_scourge_invasion_climbs_its_chain_and_its_mouth_speaks() {
+    const MOUTH: u32 = 16995;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Invaded").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let lines = |ids: &[u32]| -> Vec<String> { ids.iter().map(|i| line(&realm, *i)).collect() };
+    // The Mouth.
+    let mouth = summon_near(&map, MOUTH, off(at, 4.0, 0.0)).await;
+    c.sees(mouth).await;
+    map.query(move |m| event_ai::update_despawns(m)).await;
+    assert!(
+        between(timer(&map, mouth, 1699501).await, 150.0, 3600.0),
+        "now and then"
+    );
+    c.clear();
+    fire(&map, mouth, 1699501).await;
+    let taunt = heard(&mut c, mouth, Duration::from_secs(2)).await;
+    assert!(
+        taunt.is_some_and(|t| lines(&[13126, 13124, 13122, 13123]).contains(&t)),
+        "a taunt"
+    );
+    for (event, ids) in [(7, vec![13121, 13125]), (8, vec![13165, 13164, 13163])] {
+        c.clear();
+        map.query(move |m| {
+            event_ai::script_event(m, mouth, event, 0, None);
+            hurry_runs(m, None, Duration::from_millis(100));
+        })
+        .await;
+        let said = heard(&mut c, mouth, Duration::from_secs(2)).await;
+        assert!(
+            said.is_some_and(|s| lines(&ids).contains(&s)),
+            "{event}'s line"
+        );
+    }
+    assert!(
+        until(&map, 2_000, move |m| m
+            .creature(mouth)
+            .is_none_or(|c| c.despawned))
+        .await,
+        "and goes"
+    );
+    // The chain.
+    let [relay, proxy, health, necropolis, shard] = map
+        .query(move |m| {
+            let g = [16386, 16398, 16421, 16401, 16172]
+                .iter()
+                .enumerate()
+                .map(|(i, e)| summon(m, *e, off(at, 4.0 + 3.0 * i as f32, 3.0), 0.0))
+                .collect::<Vec<_>>();
+            event_ai::update_despawns(m);
+            for x in &g {
+                tough(m, *x);
+            }
+            [g[0], g[1], g[2], g[3], g[4]]
+        })
+        .await
+        .unwrap();
+    for g in [relay, proxy, health, necropolis, shard] {
+        c.sees(g).await;
+    }
+    c.clear();
+    map.query(move |m| event_ai::spell_hit(m, relay, me, 28351, 32))
+        .await;
+    assert!(cast_at(&mut c, relay, 28351, proxy).await, "relay to proxy");
+    assert!(
+        cast_at(&mut c, proxy, 28351, health).await,
+        "proxy to the necropolis's health"
+    );
+    assert!(
+        cast_at(&mut c, health, 28386, health).await,
+        "which zaps it"
+    );
+    assert!(
+        until(&map, 2_000, move |m| event_ai::phase(m, health) == 1).await,
+        "the first zap"
+    );
+    let zapped = map
+        .query(move |m| {
+            event_ai::spell_hit(m, health, health, 28386, 32);
+            (
+                event_ai::phase(m, health),
+                m.creature(health).is_some_and(|c| c.alive()),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(zapped, (2, true), "the second");
+    c.clear();
+    let dead = map
+        .query(move |m| {
+            event_ai::spell_hit(m, health, health, 28386, 32);
+            hurry_runs(m, None, Duration::from_millis(100));
+            m.creature(health).is_none_or(|c| !c.alive())
+        })
+        .await
+        .unwrap();
+    assert!(dead, "the third kills it");
+    assert!(
+        cast_at(&mut c, health, 28349, necropolis).await,
+        "and brings the necropolis down"
+    );
+    // The damaged shard, a relay by it again (the last went as its bolt
+    // landed).
+    let relay = summon_near(&map, 16386, off(at, 4.0, 3.0)).await;
+    c.sees(relay).await;
+    c.clear();
+    map.query(move |m| {
+        event_ai::update_despawns(m);
+        kill(m, me, shard);
+    })
+    .await;
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let (spells, _) = answers(&mut c, shard, Duration::from_millis(600)).await;
+        seen.extend(spells);
+    }
+    assert!(
+        seen.contains(&28681) && seen.contains(&28351),
+        "Soul Revival and a death bolt: {seen:?}"
+    );
+    // The cultist's ritual.
+    let cultist = summon_near(&map, 16230, off(at, -4.0, 0.0)).await;
+    c.sees(cultist).await;
+    let (runes, shadow, cultist_dead) = map
+        .query(move |m| {
+            event_ai::update_despawns(m);
+            crate::game::map::inventory::add_item(m, me, 22484, 10, false).unwrap();
+            event_ai::script_event(m, cultist, 7166, 0, Some(me));
+            hurry_runs(m, None, Duration::from_millis(100));
+            event_ai::update_despawns(m);
+            (
+                m.players[&me].count_of(22484),
+                first(m, 16143),
+                m.creature(cultist).is_none_or(|c| !c.alive()),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(runes, 2, "eight runes taken");
+    let shadow = shadow.expect("a Shadow of Doom");
+    assert!(cultist_dead, "the cultist's quiet end");
+    c.sees(shadow).await;
+    c.clear();
+    map.query(move |m| kill(m, me, shadow)).await;
+    let (spells, _) = answers(&mut c, shadow, Duration::from_millis(1500)).await;
+    assert!(
+        spells.contains(&28056),
+        "its death strikes the shard: {spells:?}"
+    );
+}
