@@ -1,5 +1,7 @@
 //! Queries: names, creatures, items, time. All answered at once, from
-//! memory.
+//! memory. A name, creature or item answer names no object a create could
+//! be waiting for, so it goes past a hold; the time's doesn't, so that a
+//! client can take it for the map having sent all it had.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
@@ -17,7 +19,7 @@ pub fn name(map: &Map, out: &Outbound, m: CMSG_NAME_QUERY) {
     let Some(n) = map.realm.registry.name(m.guid) else {
         return;
     };
-    out.send(&SMSG_NAME_QUERY_RESPONSE {
+    out.send_unheld(&SMSG_NAME_QUERY_RESPONSE {
         guid: m.guid,
         character_name: n.name.to_string(),
         realm_name: String::new(),
@@ -48,7 +50,7 @@ pub fn creature(map: &Map, out: &Outbound, m: CMSG_CREATURE_QUERY) {
                 civilian: u8::from(t.civilian),
                 racial_leader: 0,
             });
-    out.send(&SMSG_CREATURE_QUERY_RESPONSE {
+    out.send_unheld(&SMSG_CREATURE_QUERY_RESPONSE {
         creature_entry: m.creature,
         found,
     });
@@ -56,15 +58,15 @@ pub fn creature(map: &Map, out: &Outbound, m: CMSG_CREATURE_QUERY) {
 
 pub fn item(map: &Map, out: &Outbound, m: CMSG_ITEM_QUERY_SINGLE) {
     if let Some(t) = map.realm.data.item(m.item) {
-        out.send_frame(t.query_response());
+        out.send_frame_unheld(t.query_response());
         return;
     }
     match wow_items::vanilla::lookup_item(m.item) {
         Some(item) => {
-            out.send(&item_to_query_response(item));
+            out.send_unheld(&item_to_query_response(item));
         }
         None => {
-            out.send(&SMSG_ITEM_QUERY_SINGLE_RESPONSE {
+            out.send_unheld(&SMSG_ITEM_QUERY_SINGLE_RESPONSE {
                 item: m.item | 0x8000_0000,
                 found: None,
             });
@@ -74,7 +76,7 @@ pub fn item(map: &Map, out: &Outbound, m: CMSG_ITEM_QUERY_SINGLE) {
 
 pub fn item_name(map: &Map, out: &Outbound, m: CMSG_ITEM_NAME_QUERY) {
     if let Some(t) = map.realm.data.item(m.item) {
-        out.send(
+        out.send_unheld(
             &wow_world_messages::vanilla::SMSG_ITEM_NAME_QUERY_RESPONSE {
                 item: m.item,
                 item_name: t.name.clone(),
@@ -83,7 +85,7 @@ pub fn item_name(map: &Map, out: &Outbound, m: CMSG_ITEM_NAME_QUERY) {
         return;
     }
     if let Some(item) = wow_items::vanilla::lookup_item(m.item) {
-        out.send(&item_to_name_query_response(item));
+        out.send_unheld(&item_to_name_query_response(item));
     }
 }
 

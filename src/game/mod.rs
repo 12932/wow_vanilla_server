@@ -84,6 +84,8 @@ mod tests_misc2;
 #[cfg(test)]
 mod tests_objects;
 #[cfg(test)]
+mod tests_order;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

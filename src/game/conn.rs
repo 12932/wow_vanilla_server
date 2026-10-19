@@ -43,6 +43,9 @@ struct OutboundInner {
     /// The budget's bytes, all of them.
     capacity: usize,
     overflowed: AtomicBool,
+    /// Frames wait in `held` (see [`Outbound::hold`]).
+    holding: AtomicBool,
+    held: parking_lot::Mutex<Vec<Arc<[u8]>>>,
 }
 
 impl std::fmt::Debug for Outbound {
@@ -61,6 +64,8 @@ impl Outbound {
                 capacity: budget.available_permits(),
                 budget,
                 overflowed: AtomicBool::new(false),
+                holding: AtomicBool::new(false),
+                held: parking_lot::Mutex::new(Vec::new()),
             }),
         }
     }
@@ -78,6 +83,34 @@ impl Outbound {
     /// Queue a framed packet. False if the client is gone or over budget;
     /// over budget, its connection is closed.
     pub fn send_frame(&self, frame: Arc<[u8]>) -> bool {
+        if self.inner.holding.load(Ordering::Acquire) {
+            let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
+            let mut held = self.inner.held.lock();
+            // Not released since: it waits behind what is held.
+            if self.inner.holding.load(Ordering::Acquire) {
+                return match self.inner.budget.try_acquire_many(n) {
+                    Ok(permit) => {
+                        permit.forget();
+                        held.push(frame);
+                        !self.inner.tx.is_closed()
+                    }
+                    Err(_) => {
+                        drop(held);
+                        if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
+                            warn!("a client's outbound queue is over budget; disconnecting it");
+                        }
+                        self.close();
+                        false
+                    }
+                };
+            }
+        }
+        self.send_frame_unheld(frame)
+    }
+
+    /// Queue a frame past any hold: for what names no object a create could
+    /// be waiting for, and is waited on (a pong, a query's answer).
+    pub fn send_frame_unheld(&self, frame: Arc<[u8]>) -> bool {
         let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
         match self.inner.budget.try_acquire_many(n) {
             Ok(permit) => {
@@ -94,9 +127,43 @@ impl Outbound {
         }
     }
 
+    /// From now on, what is sent waits, in the order it was sent, for
+    /// [`Outbound::release`]. A map holds a client it has queued creates
+    /// for, so that nothing it sends naming those objects arrives before
+    /// them. True if the client wasn't held already.
+    pub fn hold(&self) -> bool {
+        !self.inner.holding.swap(true, Ordering::AcqRel)
+    }
+
+    /// Whether frames are waiting on a hold.
+    pub fn has_held(&self) -> bool {
+        self.inner.holding.load(Ordering::Acquire) && !self.inner.held.lock().is_empty()
+    }
+
+    /// Queue `first` (the blocks the hold was for), then what waited; what
+    /// is sent from now on goes at once again.
+    pub fn release(&self, first: Vec<Arc<[u8]>>) {
+        let mut held = self.inner.held.lock();
+        for frame in first {
+            self.send_frame_unheld(frame);
+        }
+        for frame in held.drain(..) {
+            let _ = self.inner.tx.try_send(frame);
+        }
+        self.inner.holding.store(false, Ordering::Release);
+    }
+
     pub fn send<M: ServerMessage>(&self, m: &M) -> bool {
         match encode(m) {
             Some(frame) => self.send_frame(frame),
+            None => false,
+        }
+    }
+
+    /// [`Outbound::send`] past any hold ([`Outbound::send_frame_unheld`]).
+    pub fn send_unheld<M: ServerMessage>(&self, m: &M) -> bool {
+        match encode(m) {
+            Some(frame) => self.send_frame_unheld(frame),
             None => false,
         }
     }
@@ -225,7 +292,7 @@ pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
         };
         PACKETS_IN.fetch_add(1, Ordering::Relaxed);
         if let ClientOpcodeMessage::CMSG_PING(ping) = &msg {
-            outbound.send(&SMSG_PONG {
+            outbound.send_unheld(&SMSG_PONG {
                 sequence_id: ping.sequence_id,
             });
             continue;
@@ -453,6 +520,35 @@ mod tests {
     fn a_client_over_budget_is_disconnected() {
         let (tx, _rx) = kanal::unbounded_async::<Arc<[u8]>>();
         let out = Outbound::new(tx, Arc::new(Semaphore::new(10)));
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        assert!(!out.send_frame(frame(1, &[0; 4])));
+        assert!(out.is_closed());
+    }
+
+    #[test]
+    fn what_is_sent_while_held_follows_what_the_hold_was_for_in_order() {
+        let (out, rx) = Outbound::detached();
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        assert!(out.hold());
+        assert!(!out.hold(), "held once");
+        assert!(!out.has_held());
+        assert!(out.send_frame(frame(3, &[0; 4])));
+        assert!(out.send_frame(frame(4, &[0; 4])));
+        assert!(out.has_held());
+        assert_eq!(rx.len(), 1, "the frames wait");
+        out.release(vec![frame(2, &[0; 4])]);
+        assert!(out.send_frame(frame(5, &[0; 4])));
+        let opcodes: Vec<u16> = std::iter::from_fn(|| rx.try_recv().ok().flatten())
+            .map(|f| u16::from_le_bytes([f[2], f[3]]))
+            .collect();
+        assert_eq!(opcodes, [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_held_client_over_budget_is_disconnected() {
+        let (tx, _rx) = kanal::unbounded_async::<Arc<[u8]>>();
+        let out = Outbound::new(tx, Arc::new(Semaphore::new(10)));
+        out.hold();
         assert!(out.send_frame(frame(1, &[0; 4])));
         assert!(!out.send_frame(frame(1, &[0; 4])));
         assert!(out.is_closed());

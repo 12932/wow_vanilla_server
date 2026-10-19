@@ -788,3 +788,67 @@ would be at about 37 to 40 ms at p99 standing, inside 50 ms, but that is an esti
   player within reach would take it back.
 - **Walking at 100%**, which the creatures' own work and visibility bound (fixes 5 and 6 above).
 - **Kalimdor, and the whole world, with the navmesh**: to be measured where 13 GB are free.
+
+## Packet order: the hold (DECISIONS 11)
+
+A client the map has queued creates for is held (`Outbound::hold`): what it is sent waits in a queue of its own
+until the update's "held" step, which sends its creates and forgets and then what waited. What it costs:
+
+- **Every send** reads one atomic flag. A held client's frames take a lock and go into its queue, and are moved
+  to the writer's channel once, at the release.
+- **Every introduction** (`visibility::introduce`) holds its observer: an atomic swap, and the observer noted once
+  an update.
+- **Every object added** (a creature, game object, corpse or dynamic object) looks up the players near it in the
+  grid, when the map has any.
+- **The "held" step** goes through the clients held. One that nothing waited for keeps its blocks for the one
+  batch, so the packets per update are as before. One that had frames waiting gets its creates in a packet of
+  their own, and its values in the update's batch, after.
+- **After each event** (`Map::after_events`), with any client held: what the event brought into the map is seen
+  at once, and every held client gets its creates and forgets, then what waited. The exception is a client near
+  a creature whose first turn (its spawned events) is still to come: it is held to the update, which sees the
+  creature after that turn.
+- **Queries' answers** (name, creature, item) and the pong name nothing a create could be waiting for, and go
+  past a hold (`Outbound::send_unheld`).
+
+The first version held a client from a packet's handling to the next update. Under peon that cost latency, not
+CPU: chat and name queries went from 1 ms at p99 to 47 to 91 ms, and movement relays from 2 ms to 6 to 10, in
+pvp-arena and cluster, and pvp-arena's bots killed a fifth fewer of each other (310 and 321 deaths, against 385).
+Letting the clients go at the end of a burst of events took most of that back; name queries near a fresh summons
+(56 ms at p99) and the rest of the burst's wait (movement 1 ms more at p50) went with the last two points.
+
+**peon**, the branch's start and its end alternated run after run, the same bots (slots 6000 and 6200), as
+`runs/perf-srv/run.sh` runs them (a 60 s ramp, a 120 s hold, the server's CPU over 105 s of it), with the navmesh,
+load average 2 to 6. The latencies are peon's, in ms:
+
+| Run | Cores | Login p50/p99 | Movement p50/p99 | Chat p50/p99 | Name query p50/p99 | Deaths | Packets in/s |
+|---|---|---|---|---|---|---|---|
+| pvp-arena, end | 0.163 | 8.6 / 51.7 | 0.0 / 3.0 | 0.0 / 1.0 | 0.5 / 2.3 | 391 | 10,696 |
+| pvp-arena, start | 0.162 | 8.3 / 20.7 | 0.0 / 4.0 | 0.0 / 2.0 | 0.5 / 1.3 | 369 | 10,183 |
+| pvp-arena, start | 0.172 | 8.1 / 20.2 | 0.0 / 3.0 | 0.0 / 1.0 | 0.5 / 1.0 | 434 | 11,741 |
+| pvp-arena, end | 0.161 | 8.6 / 19.7 | 1.0 / 3.0 | 1.0 / 1.0 | 0.5 / 2.0 | 392 | 10,915 |
+| cluster, start | 0.330 | 8.1 / 20.7 | 0.0 / 2.0 | 0.0 / 1.0 | 0.4 / 2.5 | 0 | 28,225 |
+| cluster, end | 0.334 | 8.3 / 19.7 | 0.0 / 2.0 | 0.0 / 2.0 | 0.5 / 1.6 | 0 | 28,209 |
+| cluster, end | 0.331 | 8.6 / 20.2 | 0.0 / 2.0 | 0.0 / 1.0 | 0.5 / 2.2 | 0 | 28,271 |
+| cluster, start | 0.331 | 9.1 / 21.2 | 0.0 / 3.0 | 0.0 / 1.0 | 0.5 / 1.1 | 0 | 28,151 |
+
+The CPU, the packets and the latencies are the same within the runs' spread. peon's latencies are whole
+milliseconds, so a median of 0.0 or 1.0 is a step of the histogram. The login's 51.7 ms p99 is one run; the other
+end run has 19.7, and a login is auth, the character's creation and the world's handshake, none of which is held.
+
+`wvs-world-bench`, without the navmesh, the branch's start (`26032a1`) and its end (`f5f59ed`) alternated run
+after run (the 100% pairs twice, the second in the other order), load average 1 to 4:
+
+| Observers | Walk | Eastern Kingdoms CPU p50/p95/p99/max ms | Kalimdor CPU p50/p95/p99/max ms | Over 50 ms, CPU (EK, Kal) | Load |
+|---|---|---|---|---|---|
+| 1,618 | no | 10/12/13/13 → **10/12/13/15** | 11/13/14/16 → **11/13/15/16** | 0.0%, 0.0% → 0.0%, 0.0% | 3-3, 4-3 |
+| 1,618 | yes | 9.3/12/14/16 → **9.3/13/14/16** | 10/13/15/17 → **10/13/16/18** | 0.0%, 0.0% → 0.0%, 0.0% | 3-2, 2-1 |
+| 6,471 | no | 22/26/27/27 → **22/27/28/30** | 25/31/33/34 → **25/32/34/36** | 0.0%, 0.0% → 0.0%, 0.0% | 2-1, 2-2 |
+| 6,471 | no | 22/26/28/30 → **22/26/27/28** | 25/29/33/34 → **25/30/34/38** | 0.0%, 0.0% → 0.0%, 0.0% | 2-2, 2-2 |
+| 6,471 | yes | 21/32/37/46 → **21/32/39/49** | 24/38/44/52 → **23/39/44/52** | 0.0%, 0.2% → 0.0%, 0.1% | 2-2, 2-3 |
+| 6,471 | yes | 21/31/38/49 → **21/32/39/48** | 24/37/43/55 → **24/38/44/53** | 0.0%, 0.3% → 0.0%, 0.5% | 2-2, 2-2 |
+
+The difference is inside the noise between pairs, but for one step. The frames a second are the same (38,299 and
+38,294 before, 38,208 and 38,290 after, walking at 100%), so the split packets are rare. The visibility step,
+where the introductions hold their observers, costs 0.12 to 0.15 ms more an update walking at 100% (2.15 and 2.16 ms
+on Eastern Kingdoms before, 2.27 and 2.31 after; 2.76 and 2.77 on Kalimdor, 2.88 and 2.89), and the held step
+0.01 ms. Standing, nothing changes past 0.02 ms. The cores are 1.16 before and 1.17 after, walking at 100%.

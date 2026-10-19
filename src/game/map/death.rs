@@ -137,10 +137,11 @@ impl Corpse {
 
 impl Map {
     pub fn add_corpse(&mut self, c: Corpse) {
-        let (g, cell) = (c.guid, c.cell);
+        let (g, cell, at) = (c.guid, c.cell, c.position);
         self.grid.insert(g, cell);
         self.corpses.insert(g, c);
         self.visibility_dirty.insert(g);
+        self.hold_near(g, at);
     }
 
     pub fn remove_corpse(&mut self, g: Guid) {

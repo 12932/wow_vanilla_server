@@ -1440,6 +1440,7 @@ async fn a_slowed_creature_goes_on_slower_and_a_possessed_one_is_told_as_a_playe
     b.heartbeat(START.0, START.1, START.2).await;
     let (k, held) = (kobold(11), kobold(13));
     b.sees(k).await;
+    crate::game::harness::an_update(&map).await;
     a.clear();
     let out = map
         .query(move |m| {

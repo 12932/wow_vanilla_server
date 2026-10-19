@@ -544,6 +544,19 @@ fn objects(m: &ServerOpcodeMessage) -> &[Object] {
     }
 }
 
+/// Wait until `map` has run an update from now. A client is told of what
+/// comes into the map at the end of the event that brought it, before an
+/// update has run its first turn (its spawned events): a test that wants
+/// those waits for this.
+pub async fn an_update(map: &crate::game::map::MapHandle) {
+    let from = map.query(|m| m.stats.updates).await.unwrap_or(0);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while map.query(|m| m.stats.updates).await.unwrap_or(u64::MAX) <= from {
+        assert!(tokio::time::Instant::now() < deadline, "no update");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
 /// The objects an update packet creates.
 pub fn creates(m: &ServerOpcodeMessage) -> Vec<Guid> {
     objects(m)
