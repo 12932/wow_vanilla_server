@@ -657,6 +657,8 @@ mod tests_p7_creature_events;
 #[cfg(test)]
 mod tests_p7_creature_immunity;
 #[cfg(test)]
+mod tests_p7_creature_misc;
+#[cfg(test)]
 mod tests_p7_creature_motion;
 #[cfg(test)]
 mod tests_p7_loader_effects;

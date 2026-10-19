@@ -456,7 +456,10 @@ pub fn check(
         if held(&[AURA_MOD_CONFUSE]) {
             return Some(fail::CONFUSED);
         }
-        if a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM) {
+        // A player under another's control casts nothing of their own; a
+        // creature under a charm casts as its master bids (mangos's
+        // `SPELL_FAILED_CHARMED` is for a client's own cast).
+        if guid::is_player(caster) && (a.has(AURA_MOD_POSSESS) || a.has(AURA_MOD_CHARM)) {
             return Some(fail::NOT_IN_CONTROL);
         }
     }

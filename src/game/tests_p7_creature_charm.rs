@@ -132,11 +132,24 @@ async fn charmed(possess: bool) -> Charmed {
     let g = on(&map, move |m| {
         hardy(m, ga);
         let g = spawn(m, ga, THRALL, 20, 3.0);
-        pets::charmed(m, ga, g, possess);
+        take(m, ga, g, if possess { POSSESS } else { CHARM });
         g
     })
     .await;
     (realm, a, ga, map, g)
+}
+
+/// `master` charms or possesses `g` by `spell`'s aura.
+fn take(m: &mut Map, master: Guid, g: Guid, spell: u32) {
+    let s = m.realm.data.spells.get(spell).cloned().unwrap();
+    let _ = crate::game::map::auras::apply_spell(
+        m,
+        master,
+        g,
+        &s,
+        &[(0, 0)],
+        crate::game::map::auras::Context::default(),
+    );
 }
 
 /// Thistle Tea's `CharmSpells.select`, `attach` and `control_spells`: a
@@ -247,7 +260,7 @@ async fn a_creature_without_charm_abilities_offers_its_own_list() {
     let spells = on(&map, move |m: &mut Map| {
         hardy(m, ga);
         let g = spawn(m, ga, PLAIN, 20, 3.0);
-        pets::charmed(m, ga, g, false);
+        take(m, ga, g, CHARM);
         pets::state(m, g).unwrap().spells.clone()
     })
     .await;
