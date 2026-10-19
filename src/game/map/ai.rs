@@ -133,8 +133,9 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     }
     // The player it fights is in the fight too, as it begins and as it
     // goes on (mangos's `EngageInCombatWith`, `SetInCombatWithVictim`).
+    // Not a pet's master lying in a believed Feign Death, though.
     let master = crate::game::map::pets::master(map, attacker);
-    if guid::is_player(master) {
+    if guid::is_player(master) && (master == attacker || !combat::feigning(map, master)) {
         combat::enter(map, master, false);
     }
     let realm = map.realm.clone();
@@ -364,6 +365,12 @@ pub fn die(map: &mut Map, creature: Guid, tapper: Guid) {
 /// It died to `killer`, `tapper` holding its tap. Its scripts run on to
 /// its corpse's end, as Thistle Tea's do.
 pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
+    die_rewarding(map, creature, tapper, killer, true);
+}
+
+/// [`die_by`]; with `reputation` false, its kill is worth no standing to
+/// anyone (one a player controlled: Thistle Tea's `KillCredit`).
+pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, reputation: bool) {
     // Who a raid's bind is for, as Thistle Tea's `raid_killer` has it: the
     // killer, or the player whose pet it is, or, for one that killed
     // itself, who tapped it. Only a player binds.
@@ -372,7 +379,7 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     } else {
         crate::game::map::pets::master(map, killer)
     };
-    if guid::is_player(tapper) {
+    if reputation && guid::is_player(tapper) {
         crate::game::map::reputation::creature_killed(map, tapper, creature);
     }
     // Honor sees the auras it died with (Honorless Target), before death
@@ -976,6 +983,7 @@ fn aggro_scan(map: &mut Map, g: Guid) {
             player_ok
                 && map.unit_view(*t).is_some_and(|u| u.alive)
                 && *d <= attack_distance(map, g, *t)
+                && !fooled(map, g, *t)
                 && combat::hostile(map, g, *t)
                 && combat::can_attack(map, g, *t)
                 && crate::game::map::spells::stealth::sees(map, g, *t)
@@ -1049,12 +1057,29 @@ fn effective_threat(threat: f32) -> f32 {
     threat.max(0.0)
 }
 
-/// Whether `g` may fight `t`: alive, attackable, and seen through any
-/// stealth or invisibility (Thistle Tea's `valid_victim?`).
+/// Whether `g` may fight `t`: alive, attackable, seen through any stealth
+/// or invisibility (Thistle Tea's `valid_victim?`), and not lying in a
+/// Feign Death `g` believes (mangos's `IsOfflineTarget`).
 fn valid_victim(map: &Map, g: Guid, t: Guid) -> bool {
     map.unit_view(t).is_some_and(|u| u.alive)
         && combat::can_attack(map, g, t)
         && crate::game::map::spells::stealth::sees(map, g, t)
+        && !fooled(map, g, t)
+}
+
+/// `static_flags2`'s `IGNORE_FEIGN_DEATH`.
+const STATIC2_IGNORE_FEIGN_DEATH: u32 = 0x100;
+
+/// Whether `t` lies in a believed Feign Death that `g` doesn't see
+/// through (mangos's `IsIgnoringFeignDeath`): a creature of no player's,
+/// as Thistle Tea's `targetable_by?` lets players and their pets at it.
+fn fooled(map: &Map, g: Guid, t: Guid) -> bool {
+    combat::feigning(map, t)
+        && !guid::is_player(crate::game::map::pets::master(map, g))
+        && !map
+            .creature(g)
+            .and_then(|c| map.realm.data.creature_template(c.entry))
+            .is_some_and(|x| x.static_flags2 & STATIC2_IGNORE_FEIGN_DEATH != 0)
 }
 
 /// Those on `g`'s threat list it may no longer fight come off it, and

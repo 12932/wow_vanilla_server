@@ -633,6 +633,20 @@ mod tests_p6_wspell_requirements;
 #[cfg(test)]
 mod tests_p6_wspell_units;
 #[cfg(test)]
+mod tests_p7_combat;
+#[cfg(test)]
+mod tests_p7_combat_engage;
+#[cfg(test)]
+mod tests_p7_combat_feign;
+#[cfg(test)]
+mod tests_p7_combat_flee;
+#[cfg(test)]
+mod tests_p7_combat_leash;
+#[cfg(test)]
+mod tests_p7_combat_rewards;
+#[cfg(test)]
+mod tests_p7_combat_zone;
+#[cfg(test)]
 mod tests_p7_loader_effects;
 #[cfg(test)]
 mod tests_p7_loader_items;

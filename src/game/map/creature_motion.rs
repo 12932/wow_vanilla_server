@@ -626,51 +626,8 @@ pub fn health_changed(map: &mut Map, g: Guid) {
     if let Some(c) = map.creature_mut(g) {
         c.wounded = factor;
     }
+    // Its run goes on at its new speed (`derive::unit`'s retime).
     crate::game::map::derive::unit(map, g);
-    retime(map, g);
-}
-
-/// A run under way goes on from where it is at the creature's speed now.
-pub fn retime(map: &mut Map, g: Guid) {
-    let now = map.now;
-    let spline_id = map.next_spline_id;
-    let Some(c) = map.creature_mut(g) else {
-        return;
-    };
-    let Motion::Moving(w) = &c.motion else {
-        return;
-    };
-    if !w.run || w.done(now) || w.falling {
-        return;
-    }
-    let (at, _) = w.position_at(now);
-    let travelled = now.duration_since(w.started).as_secs_f32() * w.speed;
-    let rest: Vec<Vector3d> = w
-        .points
-        .iter()
-        .zip(w.lengths())
-        .filter(|(_, l)| **l > travelled)
-        .map(|(p, _)| *p)
-        .collect();
-    if rest.is_empty() {
-        return;
-    }
-    let old = w.spline_id;
-    let fly = w.fly;
-    let mut path = vec![at];
-    path.extend(rest);
-    c.position = at;
-    let frame = c.walk_at(path, true, fly, None, now, spline_id);
-    if let Some(s) = c.scripted.as_deref_mut()
-        && let Some(m) = s.scripted_move.as_mut()
-        && m.spline_id == old
-    {
-        m.spline_id = spline_id;
-    }
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    if let Some(frame) = frame {
-        map.send_to_observers(g, &frame, false);
-    }
 }
 
 /// Whether a creature heeds a distraction (Thistle Tea's

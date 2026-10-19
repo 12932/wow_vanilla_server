@@ -127,13 +127,31 @@ pub struct Leashes {
     swept_at: Option<Instant>,
 }
 
+/// The creature that summoned `c`, or owns it.
+fn summoner_of(c: &crate::game::map::creature::Creature) -> Option<Guid> {
+    c.scripted
+        .as_deref()
+        .and_then(|s| s.summoner)
+        .or(c.owner)
+        .filter(|s| guid::is_unit(*s))
+}
+
 /// `g`'s leash runs on `with`'s clock from now on (`with` gets one if it
-/// has none).
+/// has none). A summon whose summoner is fighting keeps its summoner's:
+/// ownership comes before a call for help (Thistle Tea's owned leash).
 pub fn share_leash(map: &mut Map, g: Guid, with: Guid) {
     if g == with {
         return;
     }
     let now = map.now;
+    if let Some(s) = map.creature(g).and_then(summoner_of)
+        && s != with
+        && map
+            .creature(s)
+            .is_some_and(|o| o.alive() && o.engagement.origin.is_some())
+    {
+        return;
+    }
     let Some(w) = map.creature(with) else {
         return;
     };
@@ -161,7 +179,9 @@ pub fn share_leash(map: &mut Map, g: Guid, with: Guid) {
 
 /// A fight begins for `g`: its leash is its own, unless a creature that
 /// summoned it is fighting, whose clock it runs on (Thistle Tea's summon
-/// source).
+/// source); and its summons fighting already run on its clock from now,
+/// where their fights began kept (Thistle Tea's owned leash linking a
+/// summon that fought first).
 pub fn leash_begins(map: &mut Map, g: Guid) {
     let now = map.now;
     let Some(c) = map.creature_mut(g) else {
@@ -169,19 +189,30 @@ pub fn leash_begins(map: &mut Map, g: Guid) {
     };
     c.engagement.clock = None;
     c.engagement.control_extend_at = Some(now + CONTROL_EXTEND_EVERY);
-    let summoner = c
+    let summoner = summoner_of(c);
+    let summons = c
         .scripted
         .as_deref()
-        .and_then(|s| s.summoner)
-        .or(c.owner)
-        .filter(|s| guid::is_unit(*s));
+        .map(|s| s.summoned.clone())
+        .unwrap_or_default();
     if let Some(s) = summoner {
         share_leash(map, g, s);
+    }
+    for s in summons {
+        if map.creature(s).is_some_and(|x| {
+            x.alive() && x.engagement.origin.is_some() && summoner_of(x) == Some(g)
+        }) {
+            share_leash(map, s, g);
+        }
     }
 }
 
 /// The last time `g`'s leash was extended: by a hostile act on it, or on
 /// any it shares its clock with.
+pub fn leash_extended_at(map: &Map, g: Guid) -> Option<Instant> {
+    map.creature(g).and_then(|c| extended_at(map, c))
+}
+
 fn extended_at(map: &Map, c: &crate::game::map::creature::Creature) -> Option<Instant> {
     let shared = c
         .engagement
@@ -616,13 +647,16 @@ pub fn effect_immune(map: &Map, target: Guid, caster: Guid, mechanic: u32) -> bo
 }
 
 /// Whether fleeing is barred: an aura that prevents it, feigned death,
-/// confusion, or a master's control.
+/// confusion, a master's control, or a distraction holding it (Thistle
+/// Tea's `Flee.blocked?`).
 fn flee_prevented(map: &Map, g: Guid) -> bool {
+    let now = map.now;
     map.creature(g).is_none_or(|c| {
         c.auras.has(AURA_PREVENTS_FLEEING)
             || c.auras.has(AURA_FEIGN_DEATH)
             || c.auras.has(AURA_MOD_CONFUSE)
             || c.owner.is_some()
+            || c.engagement.distracted_until.is_some_and(|t| t > now)
             || !c.alive()
     })
 }
@@ -662,6 +696,9 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
     });
     c.engagement.next_move_at = Some(now);
     c.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, true);
+    // Running, it shows no target, its victim kept (mangos's
+    // `RetreatMovementGenerator` and panic's `SetTarget(nullptr)`).
+    c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
 }
 
 /// A creature's text emote, its name in place of `%s`.
@@ -805,8 +842,12 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     };
     let feared = c.auras.has(AURA_MOD_FEAR);
     let confused = c.auras.has(AURA_MOD_CONFUSE);
+    // Its victim changed (a taunt), dead or gone: the run is for nothing
+    // (Thistle Tea's `SeekAssistance.maintain`).
+    let lost =
+        |f: &Flee| c.combat.victim != f.from || map.unit_view(f.from).is_none_or(|u| !u.alive);
     if let Some(f) = c.engagement.flee
-        && (f.until <= now || feared || confused)
+        && (f.until <= now || feared || confused || lost(&f))
     {
         end_flee(map, g);
     }
@@ -818,9 +859,16 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     let Some(c) = map.creature(g) else {
         return false;
     };
-    // Stunned or rooted: it stands, held.
+    // Stunned or rooted: it stands, held. A run for help goes on the
+    // moment it is free, the rest of its way asked for anew (Thistle Tea's
+    // `SeekAssistance`, mangos's retreat reset); fear and confusion keep
+    // their own pauses.
     if c.auras.has(AURA_MOD_STUN) || c.auras.has(AURA_MOD_ROOT) {
+        let seeking = c.engagement.flee.is_some_and(|f| f.helper.is_some());
         crate::game::map::ai::halt(map, g);
+        if seeking && let Some(c) = map.creature_mut(g) {
+            c.engagement.next_move_at = Some(now);
+        }
         return true;
     }
     match &c.motion {
@@ -944,12 +992,20 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
 }
 
 fn end_flee(map: &mut Map, g: Guid) {
+    // A critter's escape selects no one.
+    let critter = crate::game::map::creature_motion::critter(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    if c.engagement.flee.take().is_some() && !c.auras.has(AURA_MOD_FEAR) {
+    let fled = c.engagement.flee.take().is_some();
+    if fled && !c.auras.has(AURA_MOD_FEAR) {
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
+    }
+    // Its target shown again, if it fights on.
+    if fled && !critter && c.alive() && c.combat.attacking {
+        let victim = c.combat.victim;
+        c.fields.set_guid(UNIT_FIELD_TARGET, victim);
     }
     c.chase_target_at = None;
 }

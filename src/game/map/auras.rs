@@ -1788,6 +1788,9 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             }
         }
         AURA_FEIGN_DEATH => {
+            // Believed or not, its Auto Shot stops, and its client is told
+            // (mangos's `SetFeignDeath`, `InterruptNonMeleeSpells(true)`).
+            crate::game::map::ranged::cancel(map, target, true);
             // The creatures fighting it may see through it (Thistle Tea's
             // `FeignDeath`): then it only stops attacking.
             if crate::game::map::spells::class_scripts::feign_death_resisted(map, target, h.spell) {
@@ -1802,6 +1805,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             } else {
                 crate::game::map::combat::leave_combat(map, target);
                 crate::game::map::ai::forget(map, target);
+                crate::game::map::combat::feigned(map, target);
                 crate::game::map::spells::interrupts::concealed(map, target, h.spell);
             }
             if let Some(f) = map.unit_fields_mut(target) {
@@ -2032,6 +2036,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FEIGN_DEATH, false);
                 f.set_flag(UNIT_DYNAMIC_FLAGS, 0x20, false);
+            }
+            if let Some(c) = map.combat_mut(target) {
+                c.feigning = false;
             }
         }
         AURA_MOD_TAUNT => {

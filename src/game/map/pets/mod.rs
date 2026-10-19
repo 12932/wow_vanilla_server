@@ -728,7 +728,13 @@ pub fn on_attacked(map: &mut Map, creature: Guid, attacker: Guid) -> bool {
         }
         return true;
     }
-    if let Some(master) = owner_of(map, attacker).filter(|m| guid::is_player(*m)) {
+    // Not a master who can't join it: dead, or lying in a believed Feign
+    // Death (mangos's `CanJoinInAttacking`).
+    if let Some(master) = owner_of(map, attacker).filter(|m| {
+        guid::is_player(*m)
+            && map.unit_view(*m).is_some_and(|u| u.alive)
+            && !crate::game::map::combat::feigning(map, *m)
+    }) {
         let realm = map.realm.clone();
         if let Some(c) = map.creature_mut(creature) {
             if c.tapped_by.is_none() {
