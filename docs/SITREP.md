@@ -645,6 +645,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7l: movement and the network | 83.3% | d68535e |
 | 7m: the core\'s other areas, round 7 | merged | aace0cc |
 | Round 8 (8a to 8f) and fix/master1019 | 86.7% | 0.1.28 |
+| 8g, 8i and your two answers (fix/userdec) | 87.1% | 0.1.29 |
 
 **Running now:** round 8 (8g creature scripts, 8h entities, 8i pets); then 8j to 8m, and the full extended suite.
 
