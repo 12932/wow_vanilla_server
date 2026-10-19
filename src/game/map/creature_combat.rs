@@ -647,13 +647,16 @@ pub fn effect_immune(map: &Map, target: Guid, caster: Guid, mechanic: u32) -> bo
 }
 
 /// Whether fleeing is barred: an aura that prevents it, feigned death,
-/// confusion, or a master's control.
+/// confusion, a master's control, or a distraction holding it (Thistle
+/// Tea's `Flee.blocked?`).
 fn flee_prevented(map: &Map, g: Guid) -> bool {
+    let now = map.now;
     map.creature(g).is_none_or(|c| {
         c.auras.has(AURA_PREVENTS_FLEEING)
             || c.auras.has(AURA_FEIGN_DEATH)
             || c.auras.has(AURA_MOD_CONFUSE)
             || c.owner.is_some()
+            || c.engagement.distracted_until.is_some_and(|t| t > now)
             || !c.alive()
     })
 }
@@ -693,6 +696,9 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
     });
     c.engagement.next_move_at = Some(now);
     c.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, true);
+    // Running, it shows no target, its victim kept (mangos's
+    // `RetreatMovementGenerator` and panic's `SetTarget(nullptr)`).
+    c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
 }
 
 /// A creature's text emote, its name in place of `%s`.
@@ -836,8 +842,12 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     };
     let feared = c.auras.has(AURA_MOD_FEAR);
     let confused = c.auras.has(AURA_MOD_CONFUSE);
+    // Its victim changed (a taunt), dead or gone: the run is for nothing
+    // (Thistle Tea's `SeekAssistance.maintain`).
+    let lost =
+        |f: &Flee| c.combat.victim != f.from || map.unit_view(f.from).is_none_or(|u| !u.alive);
     if let Some(f) = c.engagement.flee
-        && (f.until <= now || feared || confused)
+        && (f.until <= now || feared || confused || lost(&f))
     {
         end_flee(map, g);
     }
@@ -849,9 +859,16 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     let Some(c) = map.creature(g) else {
         return false;
     };
-    // Stunned or rooted: it stands, held.
+    // Stunned or rooted: it stands, held. A run for help goes on the
+    // moment it is free, the rest of its way asked for anew (Thistle Tea's
+    // `SeekAssistance`, mangos's retreat reset); fear and confusion keep
+    // their own pauses.
     if c.auras.has(AURA_MOD_STUN) || c.auras.has(AURA_MOD_ROOT) {
+        let seeking = c.engagement.flee.is_some_and(|f| f.helper.is_some());
         crate::game::map::ai::halt(map, g);
+        if seeking && let Some(c) = map.creature_mut(g) {
+            c.engagement.next_move_at = Some(now);
+        }
         return true;
     }
     match &c.motion {
@@ -975,12 +992,20 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
 }
 
 fn end_flee(map: &mut Map, g: Guid) {
+    // A critter's escape selects no one.
+    let critter = crate::game::map::creature_motion::critter(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    if c.engagement.flee.take().is_some() && !c.auras.has(AURA_MOD_FEAR) {
+    let fled = c.engagement.flee.take().is_some();
+    if fled && !c.auras.has(AURA_MOD_FEAR) {
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, false);
+    }
+    // Its target shown again, if it fights on.
+    if fled && !critter && c.alive() && c.combat.attacking {
+        let victim = c.combat.victim;
+        c.fields.set_guid(UNIT_FIELD_TARGET, victim);
     }
     c.chase_target_at = None;
 }

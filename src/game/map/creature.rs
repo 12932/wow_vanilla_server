@@ -797,6 +797,17 @@ impl Creature {
         walk.fly = w.fly;
         walk.face = w.face;
         walk.face_target = w.face_target;
+        // The run is still what it was: a script's move, a flight for help.
+        let old = w.spline_id;
+        if let Some(s) = self.scripted.as_deref_mut()
+            && let Some(m) = s.scripted_move.as_mut()
+            && m.spline_id == old
+        {
+            m.spline_id = spline_id;
+        }
+        if self.engagement.control_spline == Some(old) {
+            self.engagement.control_spline = Some(spline_id);
+        }
         self.position = at;
         let frame = encode(&walk.packet(self.guid, at));
         self.motion = Motion::Moving(walk);
