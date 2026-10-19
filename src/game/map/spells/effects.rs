@@ -1654,7 +1654,8 @@ pub fn run_untargeted(
             }
             // Summons and totems aim at a place: the caster's side.
             _ if crate::game::map::pets::handles(s, index)
-                && super::targets::implicit(e.target_a) == super::targets::Implicit::Location =>
+                && (super::targets::implicit(e.target_a) == super::targets::Implicit::Location
+                    || matches!(e.target_a, 7 | 8)) =>
             {
                 let amount = m.points(s, index, points_with(s, index, level, combo));
                 crate::game::map::pets::effect(map, caster, caster, s, index, amount, triggered);

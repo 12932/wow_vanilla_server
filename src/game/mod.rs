@@ -573,6 +573,8 @@ mod tests_p6_wspell_reception;
 #[cfg(test)]
 mod tests_p6_wspell_requirements;
 #[cfg(test)]
+mod tests_p6_wspell_units;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

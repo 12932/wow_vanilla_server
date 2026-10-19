@@ -401,8 +401,9 @@ async fn the_smaller_spell_scripts() {
             let _ = auras::apply_spell(m, kobold, r, &root, &[(0, 1)], auras::Context::default());
             spells::cast_triggered(m, r, 9033, Some(r));
             let cleansed = !has(m, r, 990_600);
-            // Capturing a creature takes it; two oozes make one.
-            let pup = spawn(m, r, 10221, 10, 6.0);
+            // Capturing a creature takes it, within the spell's five
+            // yards; two oozes make one.
+            let pup = spawn(m, r, 10221, 10, 4.0);
             spells::cast_triggered(m, r, 15998, Some(pup));
             let captured = m.creature(pup).is_none();
             let (a, b) = (spawn(m, r, 6557, 30, 7.0), spawn(m, r, 6557, 30, 8.0));

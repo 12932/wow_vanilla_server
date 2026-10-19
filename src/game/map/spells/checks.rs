@@ -536,6 +536,10 @@ pub fn check(
         if s.script_name == "spell_cannibalize" && !super::scripts::edible_corpse(map, caster, s) {
             return Some(fail::NO_EDIBLE_CORPSES);
         }
+        // A script's creature near the caster wants one there.
+        if targets::script_creature_missing(map, caster, s, t, m) {
+            return Some(fail::BAD_TARGETS);
+        }
         // Without the weapon or item it wants, as mangos's `CheckItems`
         // and Thistle Tea answer it: at an item, that item is what must be
         // of the kind (an enchantment's bracer, not the gear its enchanter
@@ -625,6 +629,11 @@ pub fn at_finish(
 ) -> Option<u8> {
     if let Some(code) = caster_at_finish(map, caster, s) {
         return Some(code);
+    }
+    // A script's creature gone meanwhile (Thistle Tea's launch recheck,
+    // mangos's targets filled again as the cast goes off).
+    if map.players.contains_key(&caster) && targets::script_creature_missing(map, caster, s, t, m) {
+        return Some(fail::BAD_TARGETS);
     }
     let target = t.unit.filter(|u| *u != caster)?;
     let Some(u) = map.unit_view(target) else {
