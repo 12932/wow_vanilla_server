@@ -563,6 +563,8 @@ mod tests_p6_spell_range;
 #[cfg(test)]
 mod tests_p6_world;
 #[cfg(test)]
+mod tests_p6_world_system;
+#[cfg(test)]
 mod tests_p6_world_trade;
 #[cfg(test)]
 mod tests_parity_combat;
