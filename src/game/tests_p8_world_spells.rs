@@ -184,7 +184,26 @@ fn of_entry(m: &Map, entry: u32) -> Vec<(Guid, Vector3d)> {
 /// another map, or none, leaves the place she sent.
 #[tokio::test]
 async fn a_spell_at_its_database_place_is_there_on_its_map() {
-    let (_realm, mut a, ga, map) = setup_with(database_data(), Class::Mage).await;
+    at_the_database_place().await;
+}
+
+/// Its go, naming the place, and the summons there pass the 1.12
+/// client's own parsers (`tools/client_check`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_spell_at_its_database_place_passes_the_client() {
+    use crate::game::tests_client_emu::{capture, checker, run_checker};
+    let (check_py, wow_exe) = checker().expect("the client checker");
+    let (_realm, mut a) = at_the_database_place().await;
+    let (frames, _) = capture(vec![&mut a]);
+    run_checker(&check_py, &wow_exe, &frames);
+}
+
+async fn at_the_database_place() -> (
+    std::sync::Arc<crate::game::Realm>,
+    crate::game::harness::Client,
+) {
+    let (realm, mut a, ga, map) = setup_with(database_data(), Class::Mage).await;
     let out = on(&map, move |m| {
         let mana = |m: &Map| m.players[&ga].fields.get_u32(UNIT_FIELD_POWER1);
         let sent = Targets {
@@ -297,6 +316,7 @@ async fn a_spell_at_its_database_place_is_there_on_its_map() {
         })
         .await;
     assert!(near(go, PLACE), "its go names the place: {go:?}");
+    (realm, a)
 }
 
 /// Thistle Tea's `SpellLocations.resolve_requirements/4` "summons at the
