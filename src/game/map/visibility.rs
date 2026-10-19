@@ -207,9 +207,23 @@ fn observers_of(map: &Map, object: Guid) -> Vec<Guid> {
         .unwrap_or_default()
 }
 
-/// `observer`'s client learns of `object`.
+/// `observer`'s client learns of `object`: a player with quests in their
+/// log as their group's members see them, with the log's ids (mangos's
+/// `UF_FLAG_GROUP_ONLY`), else as anyone does.
 pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
-    let Some(block) = map.public_create(object) else {
+    let block = match map.players.get(&object) {
+        Some(p)
+            if crate::game::fields::has_group_only(&p.fields)
+                && crate::game::map::objects::same_group(map, observer, object) =>
+        {
+            Some(std::sync::Arc::from(update::create_block(
+                &p.create(false),
+                crate::game::fields::Visibility::Group,
+            )))
+        }
+        _ => map.public_create(object),
+    };
+    let Some(block) = block else {
         return;
     };
     let Some(p) = map.players.get_mut(&observer) else {

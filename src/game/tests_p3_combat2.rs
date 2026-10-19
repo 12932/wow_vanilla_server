@@ -145,18 +145,28 @@ async fn an_attack_me_brings_the_taunter_level_with_the_creatures_victim() {
     assert_eq!(seeded, (Some(200.0), true));
 }
 
+/// Fade's reduction is held apart and given back when it ends, but only
+/// what it took (mangos's `threatTemporaryFade`: `max(-threat, amount)`,
+/// the user's #46): 100 less 600 is none, and back it is the 100, not
+/// Thistle Tea's 600; what was earned meanwhile stays.
 #[tokio::test]
-async fn fades_threat_is_held_apart_and_given_back_whole() {
+async fn fades_threat_is_held_apart_and_only_what_it_took_given_back() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;
-    let (clamped, restored, refresh, replaced, untracked, discarded) = map
+    let (clamped, restored, earned, refresh, replaced, untracked, discarded) = map
         .query(move |m| {
             let a = spawn(m, ga, HELPER, 20, 2.0);
-            // 100 less 600 is none; back, it is the 600 whole.
+            // 100 less 600 is none; back, it is the 100 it took.
             let brute = fighting(m, ga, a, &[(a, 100.0)]);
             threat_sync::set_temporary(m, brute, a, -600.0);
             let clamped = threat(m, brute, a);
             threat_sync::set_temporary(m, brute, a, 0.0);
             let restored = threat(m, brute, a);
+            // 50 earned while faded stays, beside the 100 given back.
+            let brute = fighting(m, ga, a, &[(a, 100.0)]);
+            threat_sync::set_temporary(m, brute, a, -600.0);
+            ai::add_threat(m, brute, a, 50.0);
+            threat_sync::set_temporary(m, brute, a, 0.0);
+            let earned = threat(m, brute, a);
             // The same again changes nothing; another undoes the first.
             let brute = fighting(m, ga, a, &[(a, 800.0)]);
             threat_sync::set_temporary(m, brute, a, -200.0);
@@ -205,12 +215,15 @@ async fn fades_threat_is_held_apart_and_given_back_whole() {
                 threat_sync::set_temporary(m, brute, a, 0.0);
                 discarded.push(threat(m, brute, a));
             }
-            (clamped, restored, refresh, replaced, untracked, discarded)
+            (
+                clamped, restored, earned, refresh, replaced, untracked, discarded,
+            )
         })
         .await
         .unwrap();
     assert_eq!(clamped, Some(0.0));
-    assert_eq!(restored, Some(600.0));
+    assert_eq!(restored, Some(100.0), "only the 100 it took");
+    assert_eq!(earned, Some(150.0), "and what was earned meanwhile");
     assert_eq!(refresh, Some(600.0));
     assert_eq!(replaced, Some(500.0));
     assert_eq!(untracked, (None, false));

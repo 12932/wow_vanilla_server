@@ -35,6 +35,29 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     if p.skills_maxed {
         crate::game::map::skills::maximize(p);
     }
+    crate::game::map::rest::restore(p, map.now, &map.cfg.rates);
+    crate::game::map::intoxication::restore(p);
+    crate::game::map::exploration::init(p);
+    send_world(map, p);
+    if p.row.at_login & crate::game::store::AT_LOGIN_FIRST != 0
+        && let Some(c) = map.realm.data.races.get(&p.row.race)
+        && let Ok(id) = wow_world_messages::vanilla::CinematicSequenceId::try_from(c.cinematic)
+    {
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_TRIGGER_CINEMATIC {
+                cinematic_sequence_id: id,
+            });
+        let sequence = c.cinematic;
+        crate::game::map::cinematic::begin(map, p, sequence);
+    }
+    send_world_after(map, p);
+    p.row.at_login &= !crate::game::store::AT_LOGIN_FIRST;
+    debug!("{} ({}) entered {}", p.name, p.guid, map.key);
+}
+
+/// What a client is told of a player in the world, up to their own create
+/// block and their items': at a login, and to a login that takes them over.
+fn send_world(map: &Map, p: &mut Player) {
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_VERIFY_WORLD {
         map: map_enum(map.key.map),
@@ -86,9 +109,6 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     }
     out.send(&SMSG_ACTION_BUTTONS { data: buttons });
     crate::game::map::reputation::send_login(p, &map.realm.data);
-    crate::game::map::rest::restore(p, map.now, &map.cfg.rates);
-    crate::game::map::intoxication::restore(p);
-    crate::game::map::exploration::init(p);
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_SETTIMESPEED {
         datetime: game_time(),
@@ -99,41 +119,31 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         area: Area::try_from(p.zone).unwrap_or_default(),
         states: crate::game::map::world_states::states_for(map, p.zone),
     });
-    let guid = p.guid;
     // The player's own create block, and their items'.
-    {
-        let mut batch = crate::game::update::Batch::new();
-        for item in &p.items {
-            batch.push(&crate::game::update::create_block(
-                &item.create(),
-                Visibility::Owner,
-            ));
-        }
+    let mut batch = crate::game::update::Batch::new();
+    for item in &p.items {
         batch.push(&crate::game::update::create_block(
-            &p.create(true),
+            &item.create(),
             Visibility::Owner,
         ));
-        for frame in batch.finish() {
-            p.outbound.send_frame(frame);
-        }
-        p.fields.clear_dirty();
-        for item in &mut p.items {
-            item.fields.clear_dirty();
-        }
     }
-    if p.row.at_login & crate::game::store::AT_LOGIN_FIRST != 0
-        && let Some(c) = map.realm.data.races.get(&p.row.race)
-        && let Ok(id) = wow_world_messages::vanilla::CinematicSequenceId::try_from(c.cinematic)
-    {
-        p.outbound
-            .send(&wow_world_messages::vanilla::SMSG_TRIGGER_CINEMATIC {
-                cinematic_sequence_id: id,
-            });
-        let sequence = c.cinematic;
-        crate::game::map::cinematic::begin(map, p, sequence);
+    batch.push(&crate::game::update::create_block(
+        &p.create(true),
+        Visibility::Owner,
+    ));
+    for frame in batch.finish() {
+        p.outbound.send_frame(frame);
     }
-    // Temporary enchantments' time left (Thistle Tea's
-    // `send_active_timers`).
+    p.fields.clear_dirty();
+    for item in &mut p.items {
+        item.fields.clear_dirty();
+    }
+}
+
+/// What a client is told after a player's own create: their temporary
+/// enchantments' time left (Thistle Tea's `send_active_timers`) and the
+/// message of the day.
+fn send_world_after(map: &Map, p: &Player) {
     for item in &p.items {
         let e = crate::game::map::enchant::get(item, crate::game::map::enchant::TEMP_SLOT);
         if e.id != 0 && e.duration_ms > 0 {
@@ -142,7 +152,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
                     item: item.guid,
                     slot: crate::game::map::enchant::TEMP_SLOT as u32,
                     duration: e.duration_ms / 1000,
-                    player: guid,
+                    player: p.guid,
                 },
             );
         }
@@ -151,8 +161,90 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     if !motd.is_empty() {
         chat::send_system(&p.outbound, motd);
     }
-    p.row.at_login &= !crate::game::store::AT_LOGIN_FIRST;
-    debug!("{} ({guid}) entered {}", p.name, map.key);
+}
+
+/// A second login of the character still in the world takes them over
+/// from `old`'s session, where they are and as they are, rather than a
+/// save and a fresh load (mangos-classic's `HandlePlayerReconnect`, the
+/// user's #35): `new` is their link to its client from now; the old client
+/// is let go and its connection closed, and the new one is told the world
+/// as at a login, its view of everything around started afresh. A logout
+/// under way stops and a loot window closes, as mangos's do; the chat
+/// channels are left, for the client to join again. The map's handle, or
+/// `None` if the player isn't here on `old`'s session (between maps).
+pub fn take_over(
+    map: &mut Map,
+    guid: Guid,
+    old: &std::sync::Arc<crate::game::registry::Online>,
+    new: std::sync::Arc<crate::game::registry::Online>,
+) -> Option<crate::game::map::MapHandle> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let ours = map
+        .players
+        .get(&guid)
+        .is_some_and(|p| std::sync::Arc::ptr_eq(&p.online, old));
+    if !ours || !map.realm.registry.replace(old, new.clone()) {
+        return None;
+    }
+    // What waited for the old client, and what it knew, go with it.
+    map.let_go(guid);
+    map.batches.remove(&guid);
+    map.forget.remove(&guid);
+    let known: Vec<Guid> = map
+        .players
+        .get_mut(&guid)
+        .map(|p| p.known.drain().collect())
+        .unwrap_or_default();
+    for k in known {
+        map.remove_observer(k, guid);
+    }
+    new.set_map(map.handle.clone());
+    new.zone.store(old.zone(), Relaxed);
+    new.flags.store(old.flags.load(Relaxed), Relaxed);
+    *new.away.lock() = old.away.lock().clone();
+    if let Some(p) = map.players.get_mut(&guid) {
+        p.online = new.clone();
+        p.outbound = new.outbound.clone();
+        p.teleport = None;
+        p.awaiting_worldport = false;
+        p.quest_objects.clear();
+    }
+    let _ = old.session.send(Control::TakenOver);
+    old.outbound.close();
+    cancel_logout(map, guid);
+    if let Some(target) = map.players.get(&guid).and_then(|p| p.looting) {
+        crate::game::map::loot::release(map, guid, target);
+    }
+    crate::game::social::channels::leave_all(&map.realm, &new);
+    let mut p = map.players.remove(&guid)?;
+    // A cinematic under way stops (mangos's `StopCinematic`).
+    p.misc.camera = None;
+    p.misc.view = None;
+    send_world(map, &mut p);
+    send_world_after(map, &p);
+    let at = p.position();
+    p.move_check = Some((at, map.now));
+    map.players.insert(guid, p);
+    crate::game::instances::send_saved(&map.realm, guid, &new.outbound);
+    crate::game::map::social::logged_in(map, guid);
+    // The pet's bar, if they have a pet or a charm.
+    if map
+        .players
+        .get(&guid)
+        .is_some_and(|p| p.owned.pet.is_some() || p.owned.charm.is_some())
+    {
+        crate::game::map::pets::send_spells(map, guid);
+    }
+    crate::game::map::npc::retell_flight(map, guid);
+    // Everything about them, and they to those about them, at the
+    // update's visibility, as at a login.
+    map.hold_near(guid, at);
+    map.visibility_dirty.insert(guid);
+    debug!(
+        "{} ({guid}) taken over by another login in {}",
+        new.name, map.key
+    );
+    Some(map.handle.clone())
 }
 
 /// The in-game clock: the host's local time.

@@ -285,7 +285,6 @@ pub enum Exclusive {
     BattleElixir,
     GuardianElixir,
     Flask,
-    NegativeHaste,
     GeneralsWarcry,
 }
 
@@ -432,18 +431,10 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
             return Some(Exclusive::GuardianElixir);
         }
     }
-    if s.family_name != 13 {
-        let only = |a: u32| aura(a) && s.effects.iter().all(|e| e.effect != 6 || e.aura == a);
-        if only(AURA_MOD_HASTE)
-            && s.effects
-                .iter()
-                .any(|e| e.aura == AURA_MOD_HASTE && e.base_points + e.base_dice < 0)
-        {
-            return Some(Exclusive::NegativeHaste);
-        }
-        // Snares aren't exclusive: they stack, each on as long as it
-        // lasts, and the strongest slows (mangos's `UpdateSpeed`).
-    }
+    // Slows aren't exclusive, as Thistle Tea's `Slow` makes them: snares
+    // stack, each on as long as it lasts, and the strongest slows
+    // (mangos's `UpdateSpeed`, the user's #27); attack-speed slows stack
+    // and multiply (mangos-classic's `ApplyAttackTimePercentMod`, #30).
     None
 }
 
@@ -924,35 +915,6 @@ pub fn apply_spell(
         return Err(Refused::Bounced);
     }
     let excl = exclusive(spell, data.spells.elixirs.get(&spell.id).copied());
-    // A weaker attack-speed slow doesn't take a stronger one's place, nor
-    // one as strong that lasts less: it is passed over, the rest of its
-    // spell landing (Thistle Tea's `Slow`, after vmangos).
-    if let Some(kind @ Exclusive::NegativeHaste) = excl {
-        let aura = AURA_MOD_HASTE;
-        let mine = effects
-            .iter()
-            .filter(|(i, _)| spell.effects[*i].aura == aura)
-            .map(|(_, a)| *a)
-            .min()
-            .unwrap_or(0);
-        let weaker = existing.holders.iter().any(|h| {
-            if h.exclusive != Some(kind) || (h.spell == spell.id && h.caster == caster) {
-                return false;
-            }
-            let theirs = h
-                .effects
-                .iter()
-                .filter(|x| x.kind == aura)
-                .map(|x| x.amount)
-                .min()
-                .unwrap_or(0);
-            theirs < mine
-                || (theirs == mine && duration.unwrap_or(u32::MAX) < h.duration.unwrap_or(u32::MAX))
-        });
-        if weaker {
-            return Ok(());
-        }
-    }
     // A stronger rank of a helpful spell already there blocks a weaker.
     if pos && !passive {
         let blocked = existing.holders.iter().any(|h| {
@@ -3131,21 +3093,40 @@ pub fn held(map: &Map, g: Guid, casting: bool) -> bool {
     })
 }
 
-/// `CMSG_CANCEL_AURA`: a player takes a helpful aura off.
+/// `CMSG_CANCEL_AURA`: a player takes a helpful aura off. A stealth taken
+/// off takes every stealth with it, so cancelling Stealth while Vanish's
+/// own stealth is on leaves the rogue seen (Thistle Tea's `cancel_spell`
+/// and its `stealth_holder?`, the user's #41; mangos's takes the spell
+/// named alone).
 pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
     let data = map.realm.data.clone();
-    let cancelable = map.players.get(&player).is_some_and(|p| {
+    let Some(stealth) = map.players.get(&player).and_then(|p| {
         p.auras
             .holders
             .iter()
-            .any(|h| h.spell == spell && h.positive && !h.passive)
-    }) && !data
+            .find(|h| h.spell == spell && h.positive && !h.passive)
+            .map(stealth_holder)
+    }) else {
+        return;
+    };
+    if data
         .spells
         .get(spell)
-        .is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL));
-    if cancelable {
-        remove_where(map, player, |h| h.spell == spell && !h.passive);
+        .is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL))
+    {
+        return;
     }
+    remove_where(map, player, |h| {
+        !h.passive && (h.spell == spell || (stealth && stealth_holder(h)))
+    });
+}
+
+/// A stealth: its aura, or the form (Thistle Tea's `stealth_holder?`).
+fn stealth_holder(h: &Holder) -> bool {
+    h.effects.iter().any(|x| {
+        x.kind == AURA_MOD_STEALTH
+            || (x.kind == AURA_MOD_SHAPESHIFT && x.misc == i32::from(FORM_STEALTH))
+    })
 }
 
 /// On death every aura but the passive and death-persistent ones goes, and

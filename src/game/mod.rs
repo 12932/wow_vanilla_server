@@ -31,6 +31,8 @@ mod tests_ai5_instances;
 #[cfg(test)]
 mod tests_ai5_spells;
 #[cfg(test)]
+mod tests_answers2;
+#[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
 mod tests_bg5;
@@ -665,6 +667,7 @@ pub struct RealmConfig {
     pub creatures: crate::config::CreaturesConfig,
     pub guards: crate::config::GuardsConfig,
     pub players: crate::config::PlayersConfig,
+    pub quests: crate::config::QuestsConfig,
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
 }
@@ -704,6 +707,7 @@ impl RealmConfig {
             creatures: c.creatures.clone(),
             guards: c.guards.clone(),
             players: c.players.clone(),
+            quests: c.quests.clone(),
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),
         }

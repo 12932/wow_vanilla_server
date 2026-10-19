@@ -145,7 +145,12 @@ impl std::fmt::Display for MapKey {
 pub enum MapEvent {
     Arrive(Box<Arrival>),
     Packet(Guid, ClientOpcodeMessage),
-    Disconnect(Guid),
+    /// A player's client has gone, by the session it went from: one whose
+    /// player another login has taken over since leaves them be.
+    Disconnect(
+        Guid,
+        tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+    ),
     /// Run code on the map: how a service changes something a map owns.
     Call(Box<dyn FnOnce(&mut Map) + Send>),
     /// Save everyone and stop.
@@ -691,7 +696,7 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Transfer(_) => "a transfer",
             },
             MapEvent::Packet(_, m) => packet_name(m),
-            MapEvent::Disconnect(_) => "a disconnect",
+            MapEvent::Disconnect(..) => "a disconnect",
             MapEvent::Call(_) => "a call",
             MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
         };
@@ -909,9 +914,16 @@ impl Map {
                 }
                 self.handle_packet(guid, msg)
             }
-            MapEvent::Disconnect(guid) => {
+            MapEvent::Disconnect(guid, from) => {
                 let _z = crate::zone!("disconnect");
-                self.handle_disconnect(guid)
+                // Taken over by another login since: theirs now.
+                let theirs = self
+                    .players
+                    .get(&guid)
+                    .is_none_or(|p| p.online.session.same_channel(&from));
+                if theirs {
+                    self.handle_disconnect(guid)
+                }
             }
             MapEvent::Call(f) => {
                 let _z = crate::zone!("call");
@@ -1569,6 +1581,7 @@ impl Map {
 
     fn flush_values(&mut self) {
         let batches = &mut self.batches;
+        let realm = &self.realm;
         let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
             if p.awaiting_worldport {
@@ -1588,11 +1601,27 @@ impl Map {
             if let Some(block) = update::values_block(p.guid, &p.fields, Visibility::Owner) {
                 batches.entry(p.guid).or_default().push(&block);
             }
-            if !p.observers.is_empty()
-                && let Some(block) = update::values_block(p.guid, &p.fields, Visibility::Public)
-            {
+            if !p.observers.is_empty() {
+                let public = update::values_block(p.guid, &p.fields, Visibility::Public);
+                // A quest log slot's id changed: the group's members get it
+                // too, in a block of their own (mangos's
+                // `UF_FLAG_GROUP_ONLY`).
+                let group = crate::game::fields::group_only_dirty(&p.fields)
+                    .then(|| update::values_block(p.guid, &p.fields, Visibility::Group))
+                    .flatten();
+                let mates = match group {
+                    Some(_) => realm.social.groups.lock().others(p.guid),
+                    None => Vec::new(),
+                };
                 for o in &p.observers {
-                    batches.entry(*o).or_default().push(&block);
+                    let block = if mates.contains(o) {
+                        group.as_ref()
+                    } else {
+                        public.as_ref()
+                    };
+                    if let Some(block) = block {
+                        batches.entry(*o).or_default().push(block);
+                    }
                 }
             }
             p.fields.clear_dirty();
@@ -1842,6 +1871,9 @@ impl Map {
     pub fn remove_gameobject(&mut self, guid: Guid) -> Option<GameObject> {
         let key = self.gameobject_by_guid.remove(&guid)?;
         let mut g = self.gameobjects.try_remove(key)?;
+        // A script's lock goes with it: one back again starts as its
+        // template has it.
+        self.objects.lock_overrides.remove(&guid);
         self.grid.remove(guid, g.cell);
         for o in g.observers.drain() {
             if let Some(p) = self.players.get_mut(&o) {

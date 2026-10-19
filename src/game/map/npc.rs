@@ -483,7 +483,10 @@ pub fn fits_class_race(
 }
 
 /// Gray if known, red if a level, an earlier rank or a skill is missing,
-/// else green; and a first profession rank's slot.
+/// else green; and a first profession rank's slot. The rank before a
+/// talent's trained rank is the one in the talent's line (Mortal Strike's
+/// second wants the talent), as mangos-classic's `GetTrainerSpellState`
+/// asks for its chain's: vmangos's `spell_chain` doesn't chain them.
 fn teaching(
     data: &crate::game::data::GameData,
     p: &crate::game::map::player::Player,
@@ -492,7 +495,12 @@ fn teaching(
     use crate::game::map::skills;
     let learned = crate::game::map::spells::learns(data, s.spell);
     let step = skill_step(data, s.spell);
-    let rank = data.spells.ranks.get(&learned).copied().unwrap_or_default();
+    let mut rank = data.spells.ranks.get(&learned).copied().unwrap_or_default();
+    if rank.prev == 0
+        && let Some(prev) = data.spells.talent_prev(learned)
+    {
+        rank.prev = prev;
+    }
     let missing = |spell: u32| spell != 0 && !p.spells.contains(&spell);
     let known = p.spells.contains(&learned)
         || step.is_some_and(|(skill, max)| skills::max_value(p, skill).is_some_and(|m| m >= max));
@@ -1330,6 +1338,38 @@ pub fn cancel_flight(map: &mut Map, player: Guid) {
         UNIT_FLAG_TAXI_FLIGHT | UNIT_FLAG_DISABLE_MOVE,
         false,
     );
+}
+
+/// A flight under way told again, to a client that has just taken the
+/// player over (mangos's `TaxiFlightResume`): it goes on from where it
+/// is, as a resumed one does. One about to land lands as it would.
+pub fn retell_flight(map: &mut Map, player: Guid) {
+    let now = map.now;
+    let on = map.key.map;
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let Some(f) = &p.flight else {
+        return;
+    };
+    let points: Vec<(f32, f32, f32)> = f
+        .walk
+        .remaining(now)
+        .into_iter()
+        .map(|v| (v.x, v.y, v.z))
+        .collect();
+    if points.is_empty() {
+        return;
+    }
+    let (destination, mount) = (f.destination, f.mount);
+    p.flight = None;
+    p.row.state.flight = Some(crate::game::store::SavedFlight {
+        map: on,
+        points,
+        destination,
+        mount,
+    });
+    resume_flight(map, player);
 }
 
 /// Players in flight move along; one who lands is let go.

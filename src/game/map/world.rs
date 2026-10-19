@@ -692,6 +692,10 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if locked_chest && !gm {
         return;
     }
+    // A locked door or button opens by hand only with its key carried.
+    if !gm && !crate::game::map::objects::hand_opens(map, player, object) {
+        return;
+    }
     crate::game::map::scripts::object_used(map, player, object);
     // A launcher by Elune's lake counts its fireworks; it launches them too.
     crate::game::omen::use_object(map, object);

@@ -300,6 +300,10 @@ pub struct SpellData {
     /// A talent's rank or a rank trained after it (Mortal Strike's from the
     /// trainer, by the skill line's `superseded_by`) → the talent.
     pub talent_lines: AHashMap<u32, u32>,
+    /// A rank in a talent's line → the rank before it there (Mortal
+    /// Strike's second → the talent's own), as mangos's spell chain links
+    /// them from the skill line and vmangos's `spell_chain` doesn't.
+    pub talent_prevs: AHashMap<u32, u32>,
     /// `creature_spells`: list → its spells.
     pub creature_spells: AHashMap<u32, Vec<CreatureSpell>>,
     /// Spells by the skill line they teach (`SkillLineAbility`): spell → skill.
@@ -458,9 +462,11 @@ impl SpellData {
 
     /// Index each talent's ranks, and the ranks a trainer teaches after
     /// them, by talent (Thistle Tea's `Talent.by_spell` through the chain;
-    /// what mangos's `resetTalents` takes with the talent).
+    /// what mangos's `resetTalents` takes with the talent), and each such
+    /// rank's rank before.
     pub fn index_talent_lines(&mut self) {
         let mut lines = AHashMap::new();
+        let mut prevs = AHashMap::new();
         for t in self.talents.values() {
             for r in t.ranks.iter().filter(|r| **r != 0) {
                 let mut at = *r;
@@ -472,13 +478,23 @@ impl SpellData {
                         .and_then(|a| a.iter().find(|a| a.superseded_by != 0))
                         .map(|a| a.superseded_by);
                     match next {
-                        Some(n) if !lines.contains_key(&n) => at = n,
+                        Some(n) if !lines.contains_key(&n) => {
+                            prevs.insert(n, at);
+                            at = n;
+                        }
                         _ => break,
                     }
                 }
             }
         }
         self.talent_lines = lines;
+        self.talent_prevs = prevs;
+    }
+
+    /// The rank before `spell` in its talent's line: the talent's own
+    /// before its first trained rank.
+    pub fn talent_prev(&self, spell: u32) -> Option<u32> {
+        self.talent_prevs.get(&spell).copied()
     }
 
     /// The talent `spell` is a rank of, or was trained after.

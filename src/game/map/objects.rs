@@ -90,6 +90,10 @@ pub struct Objects {
     /// spell, user).
     pub pending_spells: Vec<(Instant, Guid, u32, Guid)>,
     pub next_trap_look: Option<Instant>,
+    /// A script's lock on an object, over its template's: unlocked
+    /// (`false`, vmangos's object actions 6 and 9) or locked (`true`, 7 and
+    /// 18), as Thistle Tea's `lock_override`.
+    pub lock_overrides: AHashMap<Guid, bool>,
 }
 
 /// An object a spell summoned.
@@ -573,6 +577,38 @@ pub fn lock_of(t: &GameObjectTemplate) -> u32 {
     }
 }
 
+/// Whether `player`'s hand opens `object` if it is a door or a button, as
+/// Thistle Tea's `Gathering.authorize_use` has it (the user's #7): one with
+/// a lock wants one of the lock's item keys carried (worn, in the bags or
+/// on the keyring), unless a script has unlocked it; one a script locked
+/// that has no lock of its own opens to no hand. mangos trusts the client.
+pub fn hand_opens(map: &Map, player: Guid, object: Guid) -> bool {
+    let Some(t) = template(map, object) else {
+        return true;
+    };
+    if !matches!(t.kind, GO_DOOR | GO_BUTTON) {
+        return true;
+    }
+    let lock = lock_of(&t);
+    match map.objects.lock_overrides.get(&object) {
+        Some(false) => true,
+        Some(true) if lock == 0 => false,
+        _ if lock == 0 => true,
+        _ => {
+            let Some(p) = map.players.get(&player) else {
+                return false;
+            };
+            map.realm.data.crafts.locks.get(&lock).is_some_and(|keys| {
+                keys.iter().any(|k| {
+                    k.kind == crate::game::data::crafts::LOCK_KEY_ITEM
+                        && k.index != 0
+                        && p.carried_count_of(k.index) > 0
+                })
+            })
+        }
+    }
+}
+
 /// An object whose lock is opened by attacking it (a battleground's
 /// banner: a skill key of lock type 17): a viewer's state starts fresh.
 pub fn resets_on_sight(map: &Map, object: Guid) -> bool {
@@ -661,11 +697,11 @@ pub fn activate(map: &mut Map, user: Guid, object: Guid, action: u32) {
                 animation_id: action - 1,
             },
         ),
-        6 => set_flag(map, object, GO_FLAG_LOCKED, false),
-        7 => set_flag(map, object, GO_FLAG_LOCKED, true),
+        6 => script_lock(map, object, false),
+        7 => script_lock(map, object, true),
         9 => {
             open(map, object, false, 0);
-            set_flag(map, object, GO_FLAG_LOCKED, false);
+            script_lock(map, object, false);
         }
         10 | 13 => reset(map, object),
         12 => open(map, object, true, 0),
@@ -674,9 +710,18 @@ pub fn activate(map: &mut Map, user: Guid, object: Guid, action: u32) {
         17 => set_flag(map, object, GO_FLAG_NO_INTERACT, false),
         18 => {
             reset(map, object);
-            set_flag(map, object, GO_FLAG_LOCKED, true);
+            script_lock(map, object, true);
         }
         _ => {}
+    }
+}
+
+/// A script locks or unlocks `object`: its flag, and the lock a hand meets
+/// ([`hand_opens`]).
+fn script_lock(map: &mut Map, object: Guid, locked: bool) {
+    set_flag(map, object, GO_FLAG_LOCKED, locked);
+    if map.gameobject(object).is_some() {
+        map.objects.lock_overrides.insert(object, locked);
     }
 }
 

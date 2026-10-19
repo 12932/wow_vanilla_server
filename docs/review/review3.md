@@ -37,7 +37,7 @@ left with what a fix would take).
   was actually taken. (Thistle Tea has the same clamp; it is wrong there too.)
 - **How it shows:** a priest with 100 threat casts Fade (-820): threat 0, then 820 when Fade ends.
 - **Severity:** medium. **Easy.**
-- **State:** left, deliberately. The fix (store the change actually made) is a one-liner, but `tests_p3_combat2::fades_threat_is_held_apart_and_given_back_whole` pins Thistle Tea's "given back whole" behaviour as intended parity. A decision for the parity owner: follow mangos (`threatTemporaryFade` stores `max(-current, amount)`) and change that test, or keep Thistle Tea's.
+- **State:** fixed (the user's #46, 2026-10-19): `set_temporary` holds what the cut changed, `max(-threat, amount)`, as mangos's `threatTemporaryFade`, and gives back only that (test `tests_p3_combat2::fades_threat_is_held_apart_and_only_what_it_took_given_back`, which pinned Thistle Tea's "given back whole" before).
 
 ### R3-4. A cast while channelling replaces the channel without ending it
 - **Where:** `src/game/map/spells/checks.rs:307-312` lets a different spell through during a channel;

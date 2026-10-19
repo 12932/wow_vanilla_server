@@ -438,7 +438,7 @@ fn run(
         }
         let script = crate::game::map::proc_scripts::fire(map, owner, other, &h, e);
         let went_off = script != crate::game::map::proc_scripts::Outcome::Unhandled || {
-            let fired = fire(map, owner, other, &h);
+            let fired = fire(map, owner, other, &h, e.damage);
             let answered = crate::game::map::spells::class_scripts::proc(
                 map, owner, other, &h, e.spell, outgoing,
             );
@@ -514,13 +514,37 @@ fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool 
     })
 }
 
-/// A holder went off: its trigger spells cast, its damage dealt, and the
-/// class scripts the data can't say (Thistle Tea's `Core.Class`). Whether
-/// anything came of it.
-fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder) -> bool {
+/// The chance, in percent, that a blow of `damage` breaks a fear on a unit
+/// of `level` (mangos-classic's `HandleRemoveByDamageChanceProc`): the
+/// damage over 25 a level less 150 past level 8, else over 50; 100 or more
+/// is sure.
+pub fn fear_break_chance(level: u32, damage: u32) -> f32 {
+    let most = if level > 8 { 25 * level - 150 } else { 50 };
+    damage as f32 / most as f32 * 100.0
+}
+
+/// A holder went off on a blow of `damage`: its trigger spells cast, its
+/// damage dealt, a fear broken by chance, and the class scripts the data
+/// can't say (Thistle Tea's `Core.Class`). Whether anything came of it.
+fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, damage: u32) -> bool {
     let mut fired = false;
     for x in &h.effects {
         match x.kind {
+            // A fear whose spell's procFlags name the blow (Psychic
+            // Scream's, Fear's, Intimidating Shout's: every damage taken)
+            // breaks by chance, whatever its interrupt flags (mangos-classic,
+            // the user's #43; mangos does a root and a pacify-silence so
+            // too, which wvs leaves as they are).
+            auras::AURA_MOD_FEAR => {
+                let level = map.unit_view(owner).map_or(1, |u| u.level);
+                let chance = fear_break_chance(level, damage);
+                if chance > 0.0
+                    && (chance >= 100.0 || rand::rng().random_range(0.0f32..100.0) < chance)
+                {
+                    auras::remove_spell(map, owner, h.spell, Some(h.caster));
+                    return true;
+                }
+            }
             auras::AURA_DUMMY => {
                 if let Some((_, strike)) = RIGHTEOUSNESS.iter().find(|(s, _)| *s == h.spell)
                     && x.effect == 0

@@ -476,6 +476,16 @@ settings! {
 }
 
 settings! {
+    /// Quests: which givers show what.
+    pub struct QuestsConfig in "quests" {
+        /// Levels a player may be short of a quest's least level and still
+        /// see its giver's grey "!"; further below, the giver shows nothing
+        /// for it. -1 shows it at any gap.
+        high_level_hide_diff: i32 = 7, Clamp(-1.0, 60.0), Live, "Quests.HighLevelHideDiff";
+    }
+}
+
+settings! {
     /// Battlegrounds' queues and matches.
     pub struct BattlegroundConfig in "battleground" {
         /// Seconds from a match's first arrival to its start.
@@ -599,6 +609,7 @@ pub struct ServerConfig {
     pub creatures: CreaturesConfig,
     pub guards: GuardsConfig,
     pub players: PlayersConfig,
+    pub quests: QuestsConfig,
     pub battleground: BattlegroundConfig,
     pub anticheat: AnticheatConfig,
     pub accounts: AccountsConfig,
@@ -616,6 +627,7 @@ pub const SECTIONS: &[&Section] = &[
     &CreaturesConfig::SECTION,
     &GuardsConfig::SECTION,
     &PlayersConfig::SECTION,
+    &QuestsConfig::SECTION,
     &BattlegroundConfig::SECTION,
     &AnticheatConfig::SECTION,
     &AccountsConfig::SECTION,

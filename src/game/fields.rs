@@ -542,6 +542,9 @@ impl Fields {
 pub enum Visibility {
     /// The object's owner: every field.
     Owner,
+    /// A player's group's members: what anyone sees, and the quest log's
+    /// ids (mangos's `UF_FLAG_GROUP_ONLY`).
+    Group,
     /// Anyone else.
     Public,
 }
@@ -552,12 +555,45 @@ impl Visibility {
     fn mask(self, type_id: TypeId) -> Option<&'static Mask> {
         match (self, type_id) {
             (Visibility::Public, TypeId::Player) => Some(player_public_mask()),
+            (Visibility::Group, TypeId::Player) => Some(player_group_mask()),
             _ => None,
         }
     }
 }
 
-/// The fields of a player other players see (mangos's `updateVisualBits`).
+/// Whether `f` has a changed field only a player's group sees (and the
+/// player): a quest log slot's id (mangos-classic's `PLAYER_QUEST_LOG_*_1`,
+/// flagged `UF_FLAG_GROUP_ONLY`; the user's #47).
+pub fn group_only_dirty(f: &Fields) -> bool {
+    f.type_id == TypeId::Player
+        && (0..QUEST_LOG_ENTRIES).any(|e| {
+            f.dirty()
+                .get(PLAYER_QUEST_LOG_1_1 + e * QUEST_LOG_ENTRY_SIZE)
+        })
+}
+
+/// Whether `f` has a field only a player's group sees, set.
+pub fn has_group_only(f: &Fields) -> bool {
+    f.type_id == TypeId::Player
+        && (0..QUEST_LOG_ENTRIES)
+            .any(|e| f.get_u32(PLAYER_QUEST_LOG_1_1 + e * QUEST_LOG_ENTRY_SIZE) != 0)
+}
+
+/// The fields of a player their group's members see: the public ones and
+/// the quest log's ids.
+fn player_group_mask() -> &'static Mask {
+    static MASK: std::sync::OnceLock<Mask> = std::sync::OnceLock::new();
+    MASK.get_or_init(|| {
+        let mut m = player_public_mask().clone();
+        for entry in 0..QUEST_LOG_ENTRIES {
+            m.set(PLAYER_QUEST_LOG_1_1 + entry * QUEST_LOG_ENTRY_SIZE);
+        }
+        m
+    })
+}
+
+/// The fields of a player other players see (mangos's `updateVisualBits`,
+/// its `UF_FLAG_PUBLIC`): not the quest log's, which are the group's.
 fn player_public_mask() -> &'static Mask {
     static MASK: std::sync::OnceLock<Mask> = std::sync::OnceLock::new();
     MASK.get_or_init(|| {
@@ -579,10 +615,6 @@ fn player_public_mask() -> &'static Mask {
         set_range(UNIT_DYNAMIC_FLAGS, UNIT_MOD_CAST_SPEED + 1);
         set_range(UNIT_FIELD_BYTES_2, UNIT_FIELD_BYTES_2 + 1);
         set_range(PLAYER_DUEL_ARBITER, PLAYER_GUILD_TIMESTAMP + 1);
-        for entry in 0..QUEST_LOG_ENTRIES {
-            let i = PLAYER_QUEST_LOG_1_1 + entry * QUEST_LOG_ENTRY_SIZE;
-            set_range(i, i + 1);
-        }
         for slot in 0..19 {
             let base = PLAYER_VISIBLE_ITEM_1_CREATOR + slot * VISIBLE_ITEM_SIZE;
             // Creator (2), entry and enchants (8), properties (1).

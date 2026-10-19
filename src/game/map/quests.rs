@@ -229,11 +229,15 @@ fn dependencies_met(p: &Player, q: &Quest, data: &GameData) -> bool {
     })
 }
 
-/// Whether `p` could take `q` but for being a few levels short: shown as
-/// unavailable (Thistle Tea's `low_level`, its last check; mangos's
-/// `CanSeeStartQuest`, within its `HighLevelHideDiff`).
-fn soon(p: &Player, q: &Quest, data: &GameData) -> bool {
-    p.level() < q.min_level && p.level() + 4 >= q.min_level && can_take_but_level(p, q, data)
+/// Whether `p` could take `q` but for being short of its level by no more
+/// than `hide_diff` levels, or by any with -1: shown as unavailable, the
+/// grey "!" (mangos's `CanSeeStartQuest` within `Quests.HighLevelHideDiff`,
+/// 7 by default: `[quests] high_level_hide_diff`; Thistle Tea's
+/// `low_level`, its last check, at any gap).
+fn soon(p: &Player, q: &Quest, data: &GameData, hide_diff: i32) -> bool {
+    p.level() < q.min_level
+        && (hide_diff < 0 || u32::from(p.level()) + hide_diff as u32 >= u32::from(q.min_level))
+        && can_take_but_level(p, q, data)
 }
 
 /// The quests `giver` (a creature or object) starts and ends; an event's
@@ -328,6 +332,7 @@ pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
         return QuestGiverStatus::None;
     };
     let data = &map.realm.data;
+    let hide_diff = map.cfg.quests.high_level_hide_diff;
     let (starts, ends) = relations(map, giver);
     let mut best = QuestGiverStatus::None;
     let mut consider = |s: QuestGiverStatus| {
@@ -354,7 +359,7 @@ pub fn status(map: &Map, player: Guid, giver: Guid) -> QuestGiverStatus {
             } else {
                 QuestGiverStatus::Reward2
             });
-        } else if soon(p, q, data) {
+        } else if soon(p, q, data, hide_diff) {
             consider(QuestGiverStatus::Unavailable);
         }
     }

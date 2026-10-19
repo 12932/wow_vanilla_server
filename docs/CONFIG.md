@@ -64,7 +64,7 @@ threads. The environment is the process's own, as it started: a variable can't b
 process. A config that doesn't load is reported and changes nothing. Otherwise:
 
 - **What changes live:** every key marked *live* below takes its new value. These are the rates, distances, timers,
-  the MOTD, new characters' settings, the battleground, anticheat and GM settings.
+  the MOTD, new characters' settings, the quest givers' grey "!", the battleground, anticheat and GM settings.
 - **How:** the realm keeps its settings as an `Arc` behind a lock, with a counter a reload bumps. A map looks at the
   counter at the start of each update (one atomic load) and takes the settings again only when it moved
   (`Map::cfg`), so a reload is seen whole, between updates, never mid-step. Code outside a map reads
@@ -226,6 +226,14 @@ New characters, the level cap, and the realm's type.
 | `characters_per_realm` | Characters an account may have on the realm. | `10` | 1 to 10, clamped | live | `CharactersPerRealm` |
 | `pvp_realm` | A PvP realm: an account's characters are all of one side, and everyone is flagged for PvP. | `false` |  | restart | `GameType` |
 | `always_max_skill_for_level` | Weapon skills and Defense at their caps, at login and each level, rather than raised by use from 1. | `false` |  | live | `AlwaysMaxSkillForLevel` |
+
+### `[quests]`
+
+Quests: which givers show what.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `high_level_hide_diff` | Levels a player may be short of a quest's least level and still see its giver's grey "!"; further below, the giver shows nothing for it. -1 shows it at any gap. | `7` | -1 to 60, clamped | live | `Quests.HighLevelHideDiff` |
 
 ### `[battleground]`
 

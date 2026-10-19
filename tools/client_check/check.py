@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from client import Client
 from update import SMSG_COMPRESSED_UPDATE_OBJECT, SMSG_UPDATE_OBJECT, UpdateCheck
 from monster_move import SMSG_MONSTER_MOVE, MonsterMoveCheck
+from spell_log_miss import SMSG_SPELLLOGMISS, SpellLogMissCheck
 
 DEFAULT_EXE = Path(__file__).resolve().parent / "WoW.exe"
 
@@ -52,6 +53,7 @@ def run(paths, exe: Path, raw: bool, verbose: bool) -> int:
         SMSG_UPDATE_OBJECT: UpdateCheck(c),
         SMSG_COMPRESSED_UPDATE_OBJECT: None,  # filled below, same instance
         SMSG_MONSTER_MOVE: MonsterMoveCheck(c),
+        SMSG_SPELLLOGMISS: SpellLogMissCheck(c),
     }
     checks[SMSG_COMPRESSED_UPDATE_OBJECT] = checks[SMSG_UPDATE_OBJECT]
 

@@ -379,6 +379,15 @@ pvp_realm = false
 # Default false. Changes at a reload. mangos: AlwaysMaxSkillForLevel.
 always_max_skill_for_level = false
 
+# Quests: which givers show what.
+[quests]
+
+# Levels a player may be short of a quest's least level and still
+# see its giver's grey "!"; further below, the giver shows nothing
+# for it. -1 shows it at any gap.
+# Default 7. Range -1 to 60, clamped. Changes at a reload. mangos: Quests.HighLevelHideDiff.
+high_level_hide_diff = 7
+
 # Battlegrounds' queues and matches.
 [battleground]
 
