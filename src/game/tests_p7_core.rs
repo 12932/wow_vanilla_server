@@ -139,3 +139,71 @@ async fn a_hunters_pet_stays_out_through_a_blow_its_master_lives_through() {
     .await;
     assert_eq!(out, (Some(pet), false, true), "the pet stays out");
 }
+
+/// The pet's attack: whether it attacks, whom it targets, and whether it
+/// is in combat.
+fn pet_fight(m: &Map, pet: Guid) -> (bool, Guid, bool) {
+    let c = m.creature(pet).unwrap();
+    (
+        m.combat(pet).is_some_and(|c| c.attacking),
+        c.fields.get_guid(crate::game::fields::UNIT_FIELD_TARGET),
+        c.fields.has_flag(
+            crate::game::fields::UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        ),
+    )
+}
+
+/// Thistle Tea's pet commands "follow stops attacking while retaining
+/// recent combat contact" and "passive immediately stops attacking while
+/// retaining recent combat contact": told to follow, or made passive, a
+/// pet at its foe stops its attack and lets go of its target, still in
+/// combat (mangos's `HandlePetAction`: `AttackStop(true, true)`, the
+/// target cleared and the cast interrupted, the combat left to time out).
+#[tokio::test]
+async fn a_pet_told_to_follow_or_made_passive_stops_attacking_but_stays_in_combat() {
+    use crate::game::map::pets::{ACT_COMMAND, ACT_REACTION, COMMAND_ATTACK, COMMAND_FOLLOW};
+    let (_realm, h, _gh, map, pet, wolf) = crate::game::tests_pets::tamed().await;
+    // The wolf outlasts the test.
+    on(&map, move |m| {
+        let f = m.unit_fields_mut(wolf).unwrap();
+        f.set_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH, 1_000_000);
+        f.set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 1_000_000);
+    })
+    .await;
+    for stop in [
+        pets::button(u32::from(COMMAND_FOLLOW), ACT_COMMAND),
+        pets::button(u32::from(pets::REACT_PASSIVE), ACT_REACTION),
+    ] {
+        h.send(CMSG_PET_ACTION {
+            pet,
+            data: pets::button(u32::from(COMMAND_ATTACK), ACT_COMMAND),
+            target: wolf,
+        })
+        .await;
+        until(&map, "the pet at the wolf, in combat", move |m| {
+            pet_fight(m, pet) == (true, wolf, true)
+        })
+        .await;
+        h.send(CMSG_PET_ACTION {
+            pet,
+            data: stop,
+            target: Guid::zero(),
+        })
+        .await;
+        until(&map, "its attack stopped", move |m| !pet_fight(m, pet).0).await;
+        let after = on(&map, move |m| pet_fight(m, pet)).await;
+        assert_eq!(
+            after,
+            (false, Guid::zero(), true),
+            "{stop:#x}: no target, in combat"
+        );
+        // Aggressive again for the next round.
+        on(&map, move |m| {
+            if let Some(s) = pets::state_mut(m, pet) {
+                s.react = pets::REACT_DEFENSIVE;
+            }
+        })
+        .await;
+    }
+}
