@@ -495,6 +495,8 @@ pub struct Map {
     /// The Elemental Invasion's rifts and their invaders.
     pub rifts: AHashMap<Guid, crate::game::elemental::Rift>,
     pub rifts_checked_at: Option<Instant>,
+    /// Ghost Magnets calling their spectres.
+    pub magnets: AHashMap<Guid, crate::game::ghost_magnet::Magnet>,
     /// Gurubashi Arena's battles and Booty Run (on its continent).
     pub arena: arena::Arena,
     /// Objects spells summoned, traps, rituals and quest objects.
@@ -890,6 +892,7 @@ impl Map {
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
+            magnets: AHashMap::new(),
             arena: Default::default(),
             objects: Default::default(),
             holding: Vec::new(),
@@ -1415,6 +1418,7 @@ impl Map {
         self.step("creatures' combat", combat::update_creatures);
         self.step("escorts", escorts::update);
         self.step("elemental invasion", crate::game::elemental::update);
+        self.step("ghost magnets", crate::game::ghost_magnet::update);
         self.step("the dead", ai::update_dead);
         self.step("visibility", visibility::refresh_dirty);
         self.step("quest objects", quests::update_objects);

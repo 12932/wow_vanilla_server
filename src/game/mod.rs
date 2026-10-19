@@ -6,6 +6,7 @@ pub mod data;
 pub mod elemental;
 pub mod events;
 pub mod fields;
+pub mod ghost_magnet;
 pub mod guid;
 #[cfg(test)]
 pub mod harness;
@@ -788,6 +789,8 @@ mod tests_p8_ai_retreat;
 mod tests_p8_ai_scripts;
 #[cfg(test)]
 mod tests_p8_ai_spells;
+#[cfg(test)]
+mod tests_p8_entity_objects;
 #[cfg(test)]
 mod tests_p8_entity_pvp;
 #[cfg(test)]
