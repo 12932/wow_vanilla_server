@@ -683,7 +683,7 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
     for (i, _, max) in costs {
         p.items[i].fields.set_u32(ITEM_FIELD_DURABILITY, max);
     }
-    p.gear_dirty = true;
+    broke(p, &data);
 }
 
 /// Wear on everything worn: `fraction` of each item's full durability, at
@@ -713,7 +713,7 @@ fn wear_where(map: &mut Map, player: Guid, fraction: f32, pick: impl Fn(&Item) -
         it.fields
             .set_u32(ITEM_FIELD_DURABILITY, now.saturating_sub(loss));
     }
-    p.gear_dirty = true;
+    broke(p, &map.realm.data);
 }
 
 /// An item's durability after a spell's wear of `amount` (Thistle Tea's
@@ -777,7 +777,15 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
         }
         it.fields.set_u32(ITEM_FIELD_DURABILITY, now - 1);
         if now == 1 {
-            p.gear_dirty = true;
+            broke(p, &map.realm.data);
         }
     }
+}
+
+/// Gear worn or mended where it is: what it gives is worked out again,
+/// its stats and a weapon's talents (mangos's `_ApplyItemMods` at breaking
+/// and repairing), and its auras at the next update.
+fn broke(p: &mut crate::game::map::player::Player, data: &GameData) {
+    p.apply_stats(data);
+    p.gear_dirty = true;
 }

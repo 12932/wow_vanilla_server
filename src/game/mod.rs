@@ -735,6 +735,8 @@ mod tests_p7_world_system;
 #[cfg(test)]
 mod tests_p8_player_bank;
 #[cfg(test)]
+mod tests_p8_player_gear;
+#[cfg(test)]
 mod tests_p8_player_login;
 #[cfg(test)]
 mod tests_p8_player_session;

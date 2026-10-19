@@ -1301,11 +1301,17 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             Some(format!("Cleared {} cooldowns.", spells.len()))
         }
         ["durability", percent, ..] => {
-            let Ok(percent) = percent.parse::<f32>() else {
-                return Some("Usage: .debug durability <percent>".into());
+            // A percent of 0 to 100; anything else is refused (Thistle
+            // Tea's `.debug durability`).
+            let Some(percent) = percent
+                .parse::<f32>()
+                .ok()
+                .filter(|p| (0.0..=100.0).contains(p))
+            else {
+                return Some("Usage: .debug durability <percent, 0 to 100>".into());
             };
             let to = player_target(map, g);
-            crate::game::map::vendor::wear(map, to, (percent / 100.0).clamp(0.0, 1.0));
+            crate::game::map::vendor::wear(map, to, percent / 100.0);
             Some(format!("Wore gear down {percent}%."))
         }
         ["events"] => {
