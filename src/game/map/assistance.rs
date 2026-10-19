@@ -284,9 +284,11 @@ fn flee_from_help(map: &mut Map, g: Guid, enemy: Guid) {
     let (Some(c), Some(e)) = (map.creature(g), map.unit_view(enemy)) else {
         return;
     };
+    // Rooted or stunned, it stays (Thistle Tea's recheck of roots).
     let free = c.alive()
         && !fighting(map, g)
         && !c.evading
+        && !crate::game::map::creature_combat::immobile(map, g)
         && c.movement_type == crate::game::map::creature::MOVEMENT_RANDOM
         && c.scripted
             .as_deref()

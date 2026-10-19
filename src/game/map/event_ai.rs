@@ -747,6 +747,13 @@ pub fn scripted_move_ended(map: &mut Map, g: Guid) {
     if moving.is_some() || dist(c.position, m.to) > 2.0 {
         return;
     }
+    // Its distance kept, its spell list tries again at once (Thistle
+    // Tea's `Distancing.tick` releasing the list's deadline).
+    if m.distancing
+        && let Some(l) = c.caster.spell_list.as_deref_mut()
+    {
+        l.next_at = None;
+    }
     if let Some(o) = m.face {
         c.orientation = o;
         map.visibility_dirty.insert(g);

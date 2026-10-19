@@ -508,3 +508,185 @@ async fn the_clock_of_a_victim_out_of_reach_ends_with_a_way_a_new_victim_a_root_
     assert_eq!(evades, [false, false, true], "owned and exempt stay");
     assert_eq!(standing, None, "a caster standing starts none");
 }
+
+/// A creature of a faction that flees from calls for help.
+const SHY: u32 = 3_762;
+const SHY_FACTION: u32 = 41;
+
+/// Thistle Tea's `Assistance.flee_from_help` "retreats from a nearby
+/// enemy without joining combat", "requires wandering and rechecks roots,
+/// distance and faction" and "passive creatures and critters may retreat
+/// even when they cannot assist": called for help, a wanderer of a
+/// faction that flees backs off to ten yards past the enemy's edge,
+/// joining no fight; not one that doesn't wander, one rooted, or one ten
+/// yards off already; one pacified as well.
+#[tokio::test]
+async fn a_shy_wanderer_called_for_help_backs_away_from_the_enemy_and_joins_no_fight() {
+    use crate::game::map::creature::{MOVEMENT_IDLE, MOVEMENT_RANDOM};
+    let mut d = data();
+    d.faction_templates.insert(
+        SHY_FACTION,
+        crate::game::data::FactionTemplate {
+            flags: 0x400,
+            ..crate::game::tests_p3_combat::faction(SHY_FACTION, 0x2, 0x1)
+        },
+    );
+    let mut shy = crate::game::tests_p3_combat::template(SHY, 1);
+    shy.faction = SHY_FACTION;
+    d.creature_templates.insert(SHY, shy);
+    let (_realm, _a, ga, map) = world(d).await;
+    let out = map
+        .query(move |m| {
+            stand(m, ga, at(0.0, 0.0));
+            let caller = spawn(m, ga, BRUTE, 20, 10.0);
+            ai::attacked(m, caller, ga);
+            let backs = |m: &mut Map, yards: f32, how: &dyn Fn(&mut Map, Guid)| {
+                let g = spawn(m, ga, SHY, 20, yards);
+                m.creature_mut(g).unwrap().movement_type = MOVEMENT_RANDOM;
+                how(m, g);
+                crate::game::map::assistance::call_friends(m, caller, ga, 20.0);
+                let c = m.creature(g).unwrap();
+                let to = c
+                    .scripted
+                    .as_deref()
+                    .and_then(|s| s.scripted_move)
+                    .map(|s| s.to);
+                let calm = !c.combat.attacking
+                    && c.threat.is_empty()
+                    && !c.fields.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    );
+                ai::die(m, g, ga);
+                (to, calm)
+            };
+            let plain = backs(m, 3.0, &|_, _| {});
+            let idle = backs(m, 3.0, &|m, g| {
+                m.creature_mut(g).unwrap().movement_type = MOVEMENT_IDLE;
+            });
+            let rooted = backs(m, 3.0, &|m, g| {
+                crate::game::tests_p3_combat::aura_of(
+                    m,
+                    g,
+                    95_301,
+                    crate::game::map::auras::AURA_MOD_ROOT,
+                    0,
+                    0,
+                );
+            });
+            let far = backs(m, 11.0, &|_, _| {});
+            let pacified = backs(m, 3.0, &|m, g| {
+                m.creature_mut(g)
+                    .unwrap()
+                    .fields
+                    .set_flag(UNIT_FIELD_FLAGS, 0x2_0000, true);
+            });
+            let edge = m
+                .unit_fields(ga)
+                .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS));
+            (plain, idle, rooted, far, pacified, edge)
+        })
+        .await
+        .unwrap();
+    let (plain, idle, rooted, far, pacified, edge) = out;
+    let to = plain.0.expect("it backs away");
+    assert!(
+        (dist(to, at(0.0, 0.0)) - (10.0 + edge)).abs() < 0.01,
+        "ten yards past her edge: {to:?}"
+    );
+    assert!(plain.1, "joining no fight");
+    assert_eq!(idle.0, None, "not one that doesn't wander");
+    assert_eq!(rooted.0, None, "nor one rooted");
+    assert_eq!(far.0, None, "nor one ten yards off");
+    assert!(
+        pacified.0.is_some() && pacified.1,
+        "one pacified backs away too"
+    );
+}
+
+/// Thistle Tea's distancing "finishes at the requested distance and
+/// releases the spell-list deadline" and "death and combat exit clear
+/// distancing": a creature backing off from its victim (movement 19)
+/// stops at its distance, and its spell list tries again at once; an
+/// evade, or its death, ends a retreat under way.
+#[tokio::test]
+async fn a_retreat_ends_at_its_distance_freeing_the_spell_list_or_with_an_evade_or_a_death() {
+    use crate::game::map::spells::lists;
+    let (_realm, _a, ga, map) = world(data()).await;
+    let out = map
+        .query(move |m| {
+            stand(m, ga, at(0.0, 0.0));
+            let away = crate::game::data::scripts::ScriptStep {
+                x: 8.0,
+                ..crate::game::tests_p3_entity::step(20, [19, 0, 0, 0])
+            };
+            // A caster that stands where it is.
+            let retreat = |m: &mut Map| {
+                let k = spawn(m, ga, BRUTE, 20, 3.0);
+                crate::game::map::event_ai::scripted_mut(m, k)
+                    .unwrap()
+                    .no_combat_movement = true;
+                ai::attacked(m, k, ga);
+                crate::game::map::scripts::execute(m, &away, k, ga);
+                k
+            };
+            // To its distance; its list's deadline gone.
+            let k = retreat(m);
+            let started = lists::distancing(m, k);
+            let later = m.now + Duration::from_secs(10);
+            m.creature_mut(k).unwrap().caster.spell_list = Some(Box::new(lists::ListState {
+                next_at: Some(later),
+                ..Default::default()
+            }));
+            turns(m, 80);
+            let edge = m
+                .unit_fields(ga)
+                .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS));
+            let arrived = (
+                lists::distancing(m, k),
+                (dist(m.position_of(k).unwrap(), at(0.0, 0.0)) - (8.0 + edge)).abs() < 0.1,
+                m.creature(k)
+                    .unwrap()
+                    .caster
+                    .spell_list
+                    .as_deref()
+                    .map(|l| l.next_at),
+            );
+            // One that chases again once there: its list freed first.
+            let c = retreat(m);
+            crate::game::map::event_ai::scripted_mut(m, c)
+                .unwrap()
+                .no_combat_movement = false;
+            m.creature_mut(c).unwrap().caster.spell_list = Some(Box::new(lists::ListState {
+                next_at: Some(later),
+                ..Default::default()
+            }));
+            turns(m, 80);
+            let chaser = m
+                .creature(c)
+                .unwrap()
+                .caster
+                .spell_list
+                .as_deref()
+                .map(|l| l.next_at);
+            ai::die(m, c, ga);
+            // An evade, a death: over.
+            let e = retreat(m);
+            ai::enter_evade(m, e);
+            turns(m, 1);
+            let evaded = lists::distancing(m, e);
+            let d = retreat(m);
+            ai::die(m, d, ga);
+            turns(m, 1);
+            let died = lists::distancing(m, d);
+            (started, arrived, chaser, evaded, died)
+        })
+        .await
+        .unwrap();
+    let (started, arrived, chaser, evaded, died) = out;
+    assert!(started, "it backs off");
+    assert_eq!(arrived, (false, true, Some(None)), "there, its list free");
+    assert_eq!(chaser, Some(None), "a chaser's too, before it chases");
+    assert!(!evaded, "an evade ends it");
+    assert!(!died, "a death ends it");
+}

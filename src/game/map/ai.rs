@@ -1254,9 +1254,18 @@ fn fight_step(map: &mut Map, g: Guid) {
         crate::game::map::guards::attack_started(map, g, victim);
     }
     advance_motion(map, g);
-    // A script's move goes on until it gets there.
+    // A script's move goes on until it gets there; there, its arrival is
+    // told before the fight moves it on (a retreat's end frees its spell
+    // list, a point is informed).
     if scripted_moving(map, g) {
         return;
+    }
+    if map.creature(g).is_some_and(|c| {
+        c.scripted
+            .as_deref()
+            .is_some_and(|s| s.scripted_move.is_some())
+    }) {
+        crate::game::map::event_ai::scripted_move_ended(map, g);
     }
     // Stunned, or casting: it stands where it is.
     crate::game::map::spells::creature_cast(map, g, victim);
