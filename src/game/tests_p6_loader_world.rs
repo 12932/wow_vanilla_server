@@ -413,3 +413,93 @@ fn real_texts_emotes_intros_portals_and_relations_load() {
         .unwrap();
     assert!(hidden.despawned);
 }
+
+const ONYXIA: u32 = 10_184;
+const KING_MUKLA: u32 = 1559;
+const SPIRIT_HEALER: u32 = 6491;
+
+/// Thistle Tea's mob builder and model geometry (`mob/builder_test.exs`,
+/// `model_geometry_test.exs`, `model_geometry_dbc_test.exs`,
+/// `creature_template_vmangos_test.exs`, `elemental_creature_vmangos_test.exs`):
+/// Onyxia, drawn at 2.0 where her model's own size is 1.8, reaches 26
+/// yards (her addon's 23.4 by 2.0 / 1.8) with a radius of 2, at a scale of
+/// 2; King Mukla, at his display's own size, keeps his addon's reach and
+/// radius. Display 50's model is 1.913 high (CreatureModelData's height,
+/// mangos's `GetCollisionHeight`); 4617 and 6921 may be mounted in, 7550
+/// may not. Unending Breath breathes water, the Forsaken's Underwater
+/// Breathing holds it four times as long. The spirit healer's query says
+/// it is seen by ghosts (type flag 0x2) and no more. The Fire, Water and
+/// Shadow elementals strike with their schools and are immune to them,
+/// the Rock Elemental strikes with its fists and is immune to nature.
+#[tokio::test]
+#[ignore = "extended"]
+async fn real_models_reach_breathe_and_show_as_they_should() {
+    if !have_data() {
+        return;
+    }
+    let d = real().unwrap();
+    assert!((d.display_info[&50].height - 1.913).abs() < 0.001);
+    assert!(d.display_info[&4617].can_mount);
+    assert!(d.display_info[&6921].can_mount);
+    assert!(!d.display_info[&7550].can_mount);
+    let aura = |spell: u32| {
+        let s = d.spells.get(spell).unwrap();
+        s.effects
+            .iter()
+            .find(|e| e.aura != 0)
+            .map(|e| (e.aura, e.base_points + e.base_dice))
+            .unwrap()
+    };
+    use crate::game::map::auras::{AURA_MOD_WATER_BREATHING, AURA_WATER_BREATHING};
+    assert_eq!(aura(5697).0, AURA_WATER_BREATHING);
+    assert_eq!(aura(5227), (AURA_MOD_WATER_BREATHING, 300));
+    for (entry, school, immune) in [(575, 2, 4), (691, 4, 16), (703, 5, 32), (92, 0, 8)] {
+        let t = d.creature_template(entry).unwrap();
+        assert_eq!(
+            (t.damage_school, t.school_immune_mask),
+            (school, immune),
+            "{entry}"
+        );
+    }
+
+    let realm = realm();
+    let mut c = Client::connect(&realm, "P6LMODEL");
+    let g = c.enter("Modela", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let sizes = on(&map, move |m| {
+        let at = m.players[&g].position();
+        [ONYXIA, KING_MUKLA].map(|entry| {
+            let c = crate::game::map::scripts::summon(m, Guid::zero(), entry, at, 0.0, None)
+                .expect("the creature");
+            let f = &m.creature(c).unwrap().fields;
+            (
+                f.get_f32(OBJECT_FIELD_SCALE_X),
+                f.get_f32(UNIT_FIELD_COMBATREACH),
+                f.get_f32(UNIT_FIELD_BOUNDINGRADIUS),
+            )
+        })
+    })
+    .await;
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let (scale, reach, radius) = sizes[0];
+    assert!(
+        near(scale, 2.0) && near(reach, 26.0) && near(radius, 2.0),
+        "{sizes:?}"
+    );
+    let (_, reach, radius) = sizes[1];
+    assert!(near(reach, 5.625) && near(radius, 4.725), "{sizes:?}");
+    c.send(CMSG_CREATURE_QUERY {
+        creature: SPIRIT_HEALER,
+        guid: Guid::zero(),
+    })
+    .await;
+    let flags = c
+        .wait_for("SMSG_CREATURE_QUERY_RESPONSE", |m| match m {
+            ServerOpcodeMessage::SMSG_CREATURE_QUERY_RESPONSE(r) => {
+                r.found.as_ref().map(|f| f.type_flags)
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(flags, 0x2);
+}
