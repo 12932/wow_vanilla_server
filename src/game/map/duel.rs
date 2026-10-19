@@ -39,6 +39,8 @@ pub struct Duel {
     pub phase: Phase,
     pub initiator: bool,
     pub out_of_bounds_since: Option<Instant>,
+    /// When the fight began: the harm done since goes at its end.
+    pub started: Option<Instant>,
 }
 
 /// Whether `a` and `b` are fighting a duel with each other.
@@ -149,7 +151,11 @@ pub fn challenge(map: &mut Map, caster: Guid, target: Guid) {
                 phase: Phase::Requested,
                 initiator,
                 out_of_bounds_since: None,
+                started: None,
             });
+            // The arbiter is known from the challenge, the sides from the
+            // fight (mangos's `EffectDuel` and `UpdateDuelFlag`).
+            p.fields.set_guid(PLAYER_DUEL_ARBITER, flag);
             p.outbound.send(&SMSG_DUEL_REQUESTED {
                 initiator: flag,
                 target: caster,
@@ -211,6 +217,26 @@ fn end(map: &mut Map, loser: Guid, how: Option<DuelWinnerReason>) {
         return;
     };
     let winner = d.opponent;
+    // What each side did the other in the fight is undone: the harmful
+    // auras the other or their pet put on since it began, and combo
+    // points on the other or their pet (mangos's `DuelComplete`; Thistle
+    // Tea's `Dueling.finish` takes the pet's too).
+    if let Some(since) = d.started {
+        for (g, other) in [(loser, winner), (winner, loser)] {
+            let pet = crate::game::map::pets::pet_of(map, other);
+            let theirs = |c: Guid| c == other || Some(c) == pet;
+            crate::game::map::auras::remove_where(map, g, |h| {
+                !h.positive && theirs(h.caster) && h.applied.is_some_and(|t| t >= since)
+            });
+            if map
+                .players
+                .get(&g)
+                .is_some_and(|p| !p.caster.combo_target.is_zero() && theirs(p.caster.combo_target))
+            {
+                crate::game::map::spells::clear_combo_points(map, g);
+            }
+        }
+    }
     for p in [loser, winner] {
         if let Some(p) = map.players.get_mut(&p) {
             p.duel = None;
@@ -267,7 +293,9 @@ pub fn soften(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) -> u32 {
         .players
         .get(&victim)
         .map_or(0, |p| p.fields.get_u32(UNIT_FIELD_HEALTH));
-    if damage < health {
+    // One left at 1 or less has lost (mangos's `DealDamage`, `damage >=
+    // health - 1`).
+    if damage.saturating_add(1) < health {
         return damage;
     }
     if let Some(p) = map.players.get_mut(&victim) {
@@ -293,6 +321,7 @@ pub fn update(map: &mut Map) {
                     && let Some(duel) = p.duel.as_mut()
                 {
                     duel.phase = Phase::Fighting;
+                    duel.started = Some(now);
                     p.fields.set_guid(PLAYER_DUEL_ARBITER, d.flag);
                     p.fields
                         .set_u32(PLAYER_DUEL_TEAM, if d.initiator { 1 } else { 2 });

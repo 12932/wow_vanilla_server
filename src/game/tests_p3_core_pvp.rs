@@ -261,6 +261,7 @@ async fn a_duels_blows_flag_no_one() {
                 phase: crate::game::map::duel::Phase::Fighting,
                 initiator: me == a,
                 out_of_bounds_since: None,
+                started: None,
             });
         }
         m.unit_fields_mut(b)

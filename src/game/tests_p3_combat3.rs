@@ -216,6 +216,7 @@ fn duel(m: &mut Map, a: Guid, b: Guid) {
             phase: Phase::Fighting,
             initiator,
             out_of_bounds_since: None,
+            started: None,
         });
     }
 }

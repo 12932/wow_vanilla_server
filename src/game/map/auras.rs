@@ -487,6 +487,9 @@ pub struct Holder {
     pub heartbeat: Option<crate::game::map::spells::heartbeat::Heartbeat>,
     /// From a triggered spell (worth less when the bar is full).
     pub triggered: bool,
+    /// When it was put on (or last refreshed): what a duel did goes at its
+    /// end (mangos's `GetAuraApplyTime`).
+    pub applied: Option<Instant>,
 }
 
 impl Holder {
@@ -997,6 +1000,7 @@ pub fn apply_spell(
             map, caster, target, spell, pos, duration,
         ),
         triggered: ctx.triggered,
+        applied: Some(now),
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);

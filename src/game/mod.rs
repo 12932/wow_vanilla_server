@@ -555,6 +555,8 @@ mod tests_p6_loader_world;
 #[cfg(test)]
 mod tests_p6_misc;
 #[cfg(test)]
+mod tests_p6_misc_duel;
+#[cfg(test)]
 mod tests_p6_player;
 #[cfg(test)]
 mod tests_p6_player_copies;
