@@ -737,6 +737,8 @@ mod tests_p8_player_bank;
 #[cfg(test)]
 mod tests_p8_player_login;
 #[cfg(test)]
+mod tests_p8_player_session;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
