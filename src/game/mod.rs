@@ -633,6 +633,8 @@ mod tests_p6_wspell_requirements;
 #[cfg(test)]
 mod tests_p6_wspell_units;
 #[cfg(test)]
+mod tests_p7_ai_motion;
+#[cfg(test)]
 mod tests_p7_player;
 #[cfg(test)]
 mod tests_p7_player_bgs;

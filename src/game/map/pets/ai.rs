@@ -358,11 +358,15 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
                 .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
                 && combat::can_attack(map, g, *v)
                 && !avoids_breaking(map, g, *v)
+                // Where its habitat lets it go (Thistle Tea's
+                // `Acquisition.nearest`, `CreatureMovement.accessible?`).
+                && crate::game::map::creature_motion::may_reach(map, g, *v)
         })
+        // The nearest, the lower guid of two as near (Thistle Tea's).
         .min_by(|a, b| {
             let da = map.position_of(*a).map_or(f32::MAX, |p| dist(p, pos));
             let db = map.position_of(*b).map_or(f32::MAX, |p| dist(p, pos));
-            da.total_cmp(&db)
+            da.total_cmp(&db).then(a.guid().cmp(&b.guid()))
         })
 }
 
