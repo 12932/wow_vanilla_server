@@ -47,7 +47,7 @@ async fn a_swim_a_jump_and_a_spline_elevation_reach_others_as_sent() {
     .await;
     let told = b
         .wait_for("Alice's swim", |m| match m {
-            ServerOpcodeMessage::MSG_MOVE_START_SWIM(s) if s.guid == ga => Some(s.info.clone()),
+            ServerOpcodeMessage::MSG_MOVE_START_SWIM(s) if s.guid == ga => Some(s.info),
             _ => None,
         })
         .await;
@@ -75,7 +75,7 @@ async fn a_swim_a_jump_and_a_spline_elevation_reach_others_as_sent() {
     .await;
     let told = b
         .wait_for("Alice's jump", |m| match m {
-            ServerOpcodeMessage::MSG_MOVE_JUMP(s) if s.guid == ga => Some(s.info.clone()),
+            ServerOpcodeMessage::MSG_MOVE_JUMP(s) if s.guid == ga => Some(s.info),
             _ => None,
         })
         .await;
@@ -96,7 +96,7 @@ async fn a_swim_a_jump_and_a_spline_elevation_reach_others_as_sent() {
     .await;
     let told = b
         .wait_for("Alice's heartbeat", |m| match m {
-            ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(s) if s.guid == ga => Some(s.info.clone()),
+            ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(s) if s.guid == ga => Some(s.info),
             _ => None,
         })
         .await;
