@@ -615,6 +615,8 @@ mod tests_p7_spell_checks;
 #[cfg(test)]
 mod tests_p7_spell_effects;
 #[cfg(test)]
+mod tests_p7_spell_forms;
+#[cfg(test)]
 mod tests_p7_spell_groups;
 #[cfg(test)]
 mod tests_p7_spell_proc_sides;
