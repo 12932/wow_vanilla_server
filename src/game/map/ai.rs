@@ -954,6 +954,7 @@ fn aggro_scan(map: &mut Map, g: Guid) {
             player_ok
                 && map.unit_view(*t).is_some_and(|u| u.alive)
                 && *d <= attack_distance(map, g, *t)
+                && !fooled(map, g, *t)
                 && combat::hostile(map, g, *t)
                 && combat::can_attack(map, g, *t)
                 && crate::game::map::spells::stealth::sees(map, g, *t)
@@ -1027,12 +1028,29 @@ fn effective_threat(threat: f32) -> f32 {
     threat.max(0.0)
 }
 
-/// Whether `g` may fight `t`: alive, attackable, and seen through any
-/// stealth or invisibility (Thistle Tea's `valid_victim?`).
+/// Whether `g` may fight `t`: alive, attackable, seen through any stealth
+/// or invisibility (Thistle Tea's `valid_victim?`), and not lying in a
+/// Feign Death `g` believes (mangos's `IsOfflineTarget`).
 fn valid_victim(map: &Map, g: Guid, t: Guid) -> bool {
     map.unit_view(t).is_some_and(|u| u.alive)
         && combat::can_attack(map, g, t)
         && crate::game::map::spells::stealth::sees(map, g, t)
+        && !fooled(map, g, t)
+}
+
+/// `static_flags2`'s `IGNORE_FEIGN_DEATH`.
+const STATIC2_IGNORE_FEIGN_DEATH: u32 = 0x100;
+
+/// Whether `t` lies in a believed Feign Death that `g` doesn't see
+/// through (mangos's `IsIgnoringFeignDeath`): a creature of no player's,
+/// as Thistle Tea's `targetable_by?` lets players and their pets at it.
+fn fooled(map: &Map, g: Guid, t: Guid) -> bool {
+    combat::feigning(map, t)
+        && !guid::is_player(crate::game::map::pets::master(map, g))
+        && !map
+            .creature(g)
+            .and_then(|c| map.realm.data.creature_template(c.entry))
+            .is_some_and(|x| x.static_flags2 & STATIC2_IGNORE_FEIGN_DEATH != 0)
 }
 
 /// Those on `g`'s threat list it may no longer fight come off it, and

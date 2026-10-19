@@ -142,6 +142,9 @@ pub struct Combat {
     /// out at its first swing in reach, and again for each new victim
     /// (Thistle Tea's `attack_started`).
     pub announced: Option<Guid>,
+    /// A Feign Death believed holds: no creature notices it or picks it
+    /// while it lasts ([`feigned`]).
+    pub feigning: bool,
 }
 
 /// A repeating ranged attack.
@@ -3395,6 +3398,58 @@ pub fn update_creatures(map: &mut Map) {
         sync_aura_state(map, g);
     }
     crate::game::map::creature_combat::update(map);
+}
+
+/// `g` feigned death and was believed (mangos's `SetFeignDeath` with
+/// `UNIT_STAT_FEIGN_DEATH`, Thistle Tea's `FeignDeath.target_lost`): while
+/// it lasts no creature notices it or picks it (mangos's
+/// `CanAttackOnSight` and `IsOfflineTarget`), and now every cast at it is
+/// interrupted, and the players swinging or shooting at it stop, in their
+/// fight still. Its own fight is the aura's to end.
+pub fn feigned(map: &mut Map, g: Guid) {
+    if let Some(c) = map.combat_mut(g) {
+        c.feigning = true;
+    }
+    let at_it = |caster: &crate::game::map::spells::Caster| {
+        caster
+            .casting
+            .as_ref()
+            .is_some_and(|c| c.targets.unit == Some(g))
+    };
+    let mut casting: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| p.guid != g && at_it(&p.caster))
+        .map(|p| p.guid)
+        .collect();
+    casting.extend(
+        map.creatures
+            .iter()
+            .filter(|(_, c)| c.guid != g && at_it(&c.caster))
+            .map(|(_, c)| c.guid),
+    );
+    for c in casting {
+        crate::game::map::spells::interrupt(map, c);
+    }
+    let attacking: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| {
+            p.guid != g
+                && ((p.combat.attacking && p.combat.victim == g)
+                    || p.combat.auto_repeat.is_some_and(|a| a.target == g))
+        })
+        .map(|p| p.guid)
+        .collect();
+    for p in attacking {
+        stop_attack(map, p);
+        crate::game::map::ranged::cancel(map, p, true);
+    }
+}
+
+/// Whether a believed Feign Death holds `g` (see [`feigned`]).
+pub fn feigning(map: &Map, g: Guid) -> bool {
+    map.combat(g).is_some_and(|c| c.feigning)
 }
 
 /// A unit stops fighting: out of combat, attacking nothing.

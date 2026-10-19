@@ -1759,6 +1759,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             } else {
                 crate::game::map::combat::leave_combat(map, target);
                 crate::game::map::ai::forget(map, target);
+                crate::game::map::combat::feigned(map, target);
                 crate::game::map::spells::interrupts::concealed(map, target, h.spell);
             }
             if let Some(f) = map.unit_fields_mut(target) {
@@ -1989,6 +1990,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FEIGN_DEATH, false);
                 f.set_flag(UNIT_DYNAMIC_FLAGS, 0x20, false);
+            }
+            if let Some(c) = map.combat_mut(target) {
+                c.feigning = false;
             }
         }
         AURA_MOD_TAUNT => {

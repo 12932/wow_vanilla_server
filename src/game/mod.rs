@@ -623,6 +623,8 @@ mod tests_p6_wspell_units;
 #[cfg(test)]
 mod tests_p7_combat;
 #[cfg(test)]
+mod tests_p7_combat_feign;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
