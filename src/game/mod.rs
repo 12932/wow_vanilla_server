@@ -775,6 +775,8 @@ mod tests_p8_combat_control;
 #[cfg(test)]
 mod tests_p8_combat_defense;
 #[cfg(test)]
+mod tests_p8_combat_disarm;
+#[cfg(test)]
 mod tests_p8_combat_elemental;
 #[cfg(test)]
 mod tests_p8_combat_origin;

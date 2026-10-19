@@ -689,6 +689,18 @@ pub fn at_finish(
     if let Some(code) = caster_at_finish(map, caster, s) {
         return Some(code);
     }
+    // A player's weapon still in hand as it ends, not disarmed of it
+    // meanwhile (mangos's `CheckItems` again at `Spell::cast`, Thistle
+    // Tea's "rejects a weapon cast disarmed during preparation").
+    if map.players.contains_key(&caster)
+        && t.item.is_none()
+        && (!equipped_ok(map, caster, s)
+            || (s.equipped_item_class == 2
+                && s.dmg_class == 2
+                && auras::auras(map, caster).is_some_and(|a| a.has(AURA_MOD_DISARM))))
+    {
+        return Some(fail::EQUIPPED_ITEM_CLASS);
+    }
     // A script's creature gone meanwhile (Thistle Tea's launch recheck,
     // mangos's targets filled again as the cast goes off).
     if map.players.contains_key(&caster) && targets::script_creature_missing(map, caster, s, t, m) {
