@@ -417,6 +417,10 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
+    // A corpse is no one's quest giver, vendor or trainer: its NPC flags
+    // go, and its respawn has its template's (mangos's
+    // `Creature::SetDeathState`). A dead quest giver kept its "!".
+    c.fields.set_u32(UNIT_NPC_FLAGS, 0);
     // A run ends with its death: a critter's escape, a flight for help
     // (Thistle Tea's `Critter.clear` and `flee_until` at death).
     c.engagement.flee = None;
@@ -662,6 +666,7 @@ pub fn lie_dead_if_spawned_so(map: &mut Map, g: Guid, spawn: &crate::game::data:
         respawn_at: never,
     };
     c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
+    c.fields.set_u32(UNIT_NPC_FLAGS, 0);
     map.dead_creatures.push(g);
 }
 

@@ -329,3 +329,105 @@ async fn a_rabbits_death_is_one_values_update_the_client_sees() {
         .await
         .unwrap();
 }
+
+const DEPUTY_WILLEM: u32 = 823;
+
+/// The quest status `c` is told for `giver`, asked now.
+async fn quest_status(c: &mut harness::Client, giver: Guid) -> QuestGiverStatus {
+    c.send(CMSG_QUESTGIVER_STATUS_QUERY { guid: giver }).await;
+    c.wait_for("the quest status", |m| match m {
+        ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(s) if s.guid == giver => Some(s.status),
+        _ => None,
+    })
+    .await
+}
+
+/// Deputy Willem dead shows no "!": his NPC flags go with his life, in
+/// his death's update, and the status query answers none; he offers no
+/// gossip nor quest. Respawned, he has his template's flags and his quest again
+/// (mangos's `Creature::SetDeathState`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_dead_quest_giver_shows_no_quest_and_offers_nothing() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, me, map) = player(&realm, "B6QG", "Questone", Race::Human, Class::Warrior).await;
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let deputy = map
+        .query(move |m| {
+            let g = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == DEPUTY_WILLEM)
+                .map(|(_, c)| c.guid)
+                .expect("the deputy");
+            let p = &m.players[&me];
+            let (at, o) = (p.position(), p.movement.orientation);
+            let before = Vector3d {
+                x: at.x + 2.0 * o.cos(),
+                y: at.y + 2.0 * o.sin(),
+                z: at.z,
+            };
+            crate::game::map::scripts::place(m, g, before, o + std::f32::consts::PI);
+            g
+        })
+        .await
+        .unwrap();
+    c.sees_on(&map, deputy).await;
+    assert_eq!(
+        quest_status(&mut c, deputy).await,
+        QuestGiverStatus::Available,
+        "his quest for her"
+    );
+    c.clear();
+    map.query(move |m| combat::kill(m, me, deputy))
+        .await
+        .unwrap();
+    let flags = c
+        .wait_for("his death", |m| {
+            blocks(m).into_iter().find_map(|b| match b {
+                Block::Values(g, f) if g == deputy && f.get(&UNIT_FIELD_HEALTH) == Some(&0) => {
+                    Some(f.get(&UNIT_NPC_FLAGS).copied())
+                }
+                _ => None,
+            })
+        })
+        .await;
+    assert_eq!(flags, Some(0), "his NPC flags go with his death");
+    assert_eq!(
+        quest_status(&mut c, deputy).await,
+        QuestGiverStatus::None,
+        "the dead give no quest"
+    );
+    c.send(CMSG_GOSSIP_HELLO { guid: deputy }).await;
+    c.send(CMSG_QUESTGIVER_HELLO { guid: deputy }).await;
+    let offered = c
+        .gets(Duration::from_millis(500), |m| match m {
+            ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(_)
+            | ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(_)
+            | ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_DETAILS(_) => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(offered.is_none(), "a corpse offers nothing");
+    // Back as new, a quest giver again.
+    c.clear();
+    map.query(move |m| crate::game::map::ai::respawn_now(m, deputy))
+        .await
+        .unwrap();
+    let flags = c
+        .wait_for("his respawn", |m| {
+            blocks(m).into_iter().find_map(|b| match b {
+                Block::Create(g, f) if g == deputy => Some(f.get(&UNIT_NPC_FLAGS).copied()),
+                _ => None,
+            })
+        })
+        .await;
+    assert_eq!(flags, Some(2), "his template's flags");
+    assert_eq!(
+        quest_status(&mut c, deputy).await,
+        QuestGiverStatus::Available
+    );
+}
