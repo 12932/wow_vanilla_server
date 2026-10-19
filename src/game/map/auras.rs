@@ -1692,10 +1692,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     true,
                 );
             }
-            if let Some(p) = map.players.get(&target) {
-                p.outbound
-                    .send_frame(crate::game::map::movement::root_frame(target, true));
-            }
+            crate::game::map::movement::send_root(map, target, true);
             if kind == AURA_MOD_STUN {
                 crate::game::map::spells::interrupt(map, target);
             }
@@ -1861,19 +1858,19 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     AURA_WATER_WALK => {
                         p.outbound.send(&SMSG_MOVE_WATER_WALK {
                             guid: target,
-                            counter: 0,
+                            counter: p.outbound.next_order(),
                         });
                     }
                     AURA_FEATHER_FALL => {
                         p.outbound.send(&SMSG_MOVE_FEATHER_FALL {
                             guid: target,
-                            counter: 0,
+                            counter: p.outbound.next_order(),
                         });
                     }
                     _ => {
                         p.outbound.send(&SMSG_MOVE_SET_HOVER {
                             guid: target,
-                            counter: 0,
+                            counter: p.outbound.next_order(),
                         });
                     }
                 }
@@ -1970,9 +1967,8 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     stunned,
                 );
             }
-            if !rooted && let Some(p) = map.players.get(&target) {
-                p.outbound
-                    .send_frame(crate::game::map::movement::root_frame(target, false));
+            if !rooted {
+                crate::game::map::movement::send_root(map, target, false);
             }
             if !rooted {
                 crate::game::map::creature_combat::freed(map, target);
@@ -2080,7 +2076,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_LAND_WALK {
                     guid: target,
-                    counter: 0,
+                    counter: p.outbound.next_order(),
                 });
             }
         }
@@ -2088,7 +2084,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_NORMAL_FALL {
                     guid: target,
-                    counter: 0,
+                    counter: p.outbound.next_order(),
                 });
             }
         }
@@ -2096,7 +2092,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if let Some(p) = map.players.get(&target) {
                 p.outbound.send(&SMSG_MOVE_UNSET_HOVER {
                     guid: target,
-                    counter: 0,
+                    counter: p.outbound.next_order(),
                 });
             }
         }

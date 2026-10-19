@@ -12,15 +12,57 @@ use crate::game::conn::encode;
 use crate::game::map::player::PendingTeleport;
 use crate::game::map::{Map, grid, visibility};
 
-/// `SMSG_FORCE_MOVE_ROOT` or `SMSG_FORCE_MOVE_UNROOT`: 1.12's GUID is
-/// packed (mangos-zero's SetRoot, mangos-classic's and Thistle Tea's).
-pub fn root_frame(guid: Guid, root: bool) -> Arc<[u8]> {
+/// `SMSG_FORCE_MOVE_ROOT` or `SMSG_FORCE_MOVE_UNROOT` for `guid` to the
+/// client `to` that moves it, with that client's next order counter:
+/// 1.12's GUID is packed (mangos-zero's SetRoot, mangos-classic's and
+/// Thistle Tea's).
+pub fn root_to(to: &crate::game::conn::Outbound, guid: Guid, root: bool) {
+    let counter = to.next_order();
     let frame = if root {
-        encode(&SMSG_FORCE_MOVE_ROOT { guid, counter: 0 })
+        encode(&SMSG_FORCE_MOVE_ROOT { guid, counter })
     } else {
-        encode(&SMSG_FORCE_MOVE_UNROOT { guid, counter: 0 })
+        encode(&SMSG_FORCE_MOVE_UNROOT { guid, counter })
     };
-    frame.expect("a root encodes")
+    if let Some(frame) = frame {
+        to.send_frame(frame);
+    }
+}
+
+/// [`root_to`] the client that moves `g`, if one does: a player's own, or
+/// the possessor's of a unit a player's client moves (mangos-classic's
+/// `SetImmobilizedState` to `GetClientControlling`). A creature no client
+/// moves, charmed or not, is sent none (Thistle Tea's
+/// `MovementRootChanged`).
+pub fn send_root(map: &Map, g: Guid, root: bool) {
+    if let Some(p) = controller(map, g) {
+        root_to(&p.outbound, g, root);
+    }
+}
+
+/// The player whose client moves `g`: a player, unless another player
+/// possesses them; a creature, the player whose active mover it is
+/// (Mind Control, Eyes of the Beast, the Eye of Kilrogg).
+pub fn controller(map: &Map, g: Guid) -> Option<&crate::game::map::player::Player> {
+    if let Some(p) = map.players.get(&g) {
+        return match p.owned.possessed_by {
+            Some(pos) if pos.manual => map
+                .players
+                .get(&pos.master)
+                .filter(|m| m.owned.mover == Some(g)),
+            _ => Some(p),
+        };
+    }
+    let c = map.creature(g)?;
+    [
+        c.fields.get_guid(crate::game::fields::UNIT_FIELD_CHARMEDBY),
+        c.fields
+            .get_guid(crate::game::fields::UNIT_FIELD_SUMMONEDBY),
+        c.fields.get_guid(crate::game::fields::UNIT_FIELD_CREATEDBY),
+    ]
+    .into_iter()
+    .chain(c.owner)
+    .filter_map(|o| map.players.get(&o))
+    .find(|p| p.owned.mover == Some(g))
 }
 
 /// The map enum for a map id; maps the protocol doesn't name are taken as
@@ -399,7 +441,7 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.fall_from = None;
     p.outbound.send(&MSG_MOVE_TELEPORT_ACK_Server {
         guid,
-        movement_counter: 0,
+        movement_counter: p.outbound.next_order(),
         info: p.movement,
     });
     let old_cell = p.cell;

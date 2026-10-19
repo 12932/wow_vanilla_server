@@ -222,12 +222,19 @@ async fn spell_logs_are_laid_out_as_1_12_has_them() {
         crate::game::map::auras::remove_spell(m, g, ROOT, None);
     })
     .await;
+    // Each with the client's next order counter (mangos's
+    // `GetOrderCounter`): the unroot's past the root's.
     let rooted = a.wait_frame("SMSG_FORCE_MOVE_ROOT", 0x0E8, |_| true).await;
-    assert_eq!(rooted, [packed(g), 0u32.to_le_bytes().to_vec()].concat());
+    let n = packed(g).len();
+    assert_eq!(rooted.len(), n + 4);
+    assert_eq!(&rooted[..n], &packed(g)[..]);
+    let order = u32::from_le_bytes(rooted[n..].try_into().unwrap());
     let unroot = a
         .wait_frame("SMSG_FORCE_MOVE_UNROOT", 0x0EA, |_| true)
         .await;
-    assert_eq!(unroot, [packed(g), 0u32.to_le_bytes().to_vec()].concat());
+    assert_eq!(unroot.len(), n + 4);
+    assert_eq!(&unroot[..n], &packed(g)[..]);
+    assert!(u32::from_le_bytes(unroot[n..].try_into().unwrap()) > order);
     // Auto Shot cancelled.
     on_map(&realm, move |m| {
         let now = m.now;
@@ -894,6 +901,7 @@ async fn a_knockback_is_laid_out_as_1_12_has_it() {
     })
     .await;
     let launch = b.wait_frame("SMSG_MOVE_KNOCK_BACK", 0x0EF, |_| true).await;
+    // Bob's first order: the counter starts at 0.
     let mut want = packed(gb);
     want.extend_from_slice(&0u32.to_le_bytes());
     let tail: Vec<u8> = [0.6f32, 0.8, 12.0, -7.0]

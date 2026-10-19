@@ -3,7 +3,7 @@
 //! to the client through an [`Outbound`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -48,6 +48,9 @@ struct OutboundInner {
     /// Frames wait in `held` (see [`Outbound::hold`]).
     holding: AtomicBool,
     held: parking_lot::Mutex<Vec<Arc<[u8]>>>,
+    /// The connection's order counter: the next forced movement's (see
+    /// [`Outbound::next_order`]).
+    orders: AtomicU32,
 }
 
 /// What a queue's two ends share.
@@ -125,12 +128,23 @@ fn queue(budget: usize) -> (Outbound, Frames) {
             overflowed: AtomicBool::new(false),
             holding: AtomicBool::new(false),
             held: parking_lot::Mutex::new(Vec::new()),
+            orders: AtomicU32::new(0),
         }),
     };
     (outbound, Frames { rx, shared })
 }
 
 impl Outbound {
+    /// The counter for the next forced movement this client is sent (a
+    /// root, a forced speed, water walking, a knockback, a teleport): 0
+    /// first, then one more each, as mangos-classic's session numbers its
+    /// orders (`GetOrderCounter`, `IncrementOrderCounter`) and Thistle
+    /// Tea's `movement_counter` stamps them, so the client's
+    /// acknowledgement names the order it answers.
+    pub fn next_order(&self) -> u32 {
+        self.inner.orders.fetch_add(1, Ordering::Relaxed)
+    }
+
     /// A queue nothing drains, with an unlimited budget, and the receiving
     /// end for tests to read.
     pub fn detached() -> (Self, Frames) {

@@ -125,7 +125,7 @@ fn pull(map: &mut Map, caster: Guid, target: Guid, speed: f32) {
     p.fall_from = None;
     let mut b = crate::game::data::items::Body::default();
     crate::game::update::write_packed_guid(&mut b.0, target);
-    b.u32(0)
+    b.u32(p.outbound.next_order())
         .f32(angle.cos())
         .f32(angle.sin())
         .f32(speed)
