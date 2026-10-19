@@ -50,6 +50,7 @@ pub mod fail {
     pub const NOT_STANDING: u8 = 0x3e;
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_EDIBLE_CORPSES: u8 = 0x86;
+    pub const NO_PET: u8 = 0x4c;
     pub const NO_POWER: u8 = 0x4d;
     pub const NOTHING_TO_DISPEL: u8 = 0x4e;
     pub const ONLY_BATTLEGROUNDS: u8 = 0x87;
@@ -792,6 +793,33 @@ fn check_target(
                 return Some(fail::TOO_CLOSE);
             }
             if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, d) {
+                return Some(fail::LINE_OF_SIGHT);
+            }
+        }
+        // A spell at the caster's pet wants it out, alive, in range and in
+        // sight, whatever unit the client named (mangos's `CheckCast` for
+        // `TARGET_UNIT_CASTER_PET`, Thistle Tea's implicit pet range).
+        if !triggered
+            && s.effects
+                .iter()
+                .any(|e| e.effect != 0 && targets::implicit(e.target_a) == Implicit::Pet)
+        {
+            let Some(pet) = crate::game::map::pets::pet_of(map, caster) else {
+                return Some(fail::NO_PET);
+            };
+            let (Some(me), Some(u)) = (map.unit_view(caster), map.unit_view(pet)) else {
+                return Some(fail::NO_PET);
+            };
+            if !u.alive {
+                return Some(fail::TARGETS_DEAD);
+            }
+            let (_, base) = map.realm.data.spells.range(s);
+            let max = m.apply(mods::OP_RANGE, base).max(0.0);
+            if base > 0.0 && dist(me.position, u.position) > max + me.combat_reach + u.combat_reach
+            {
+                return Some(fail::OUT_OF_RANGE);
+            }
+            if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, u.position) {
                 return Some(fail::LINE_OF_SIGHT);
             }
         }
