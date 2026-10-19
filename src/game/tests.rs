@@ -4442,13 +4442,15 @@ pub(crate) mod transports {
                 && (docked.position.y - ratchet_dock.1).abs() < 1.0,
             "{docked:?}"
         );
+        // Standing still on deck, she is carried there with it.
         skip_to(&route, ratchet.arrive_ms + 1000);
-        tokio::time::sleep(crate::game::transports::TICK * 3).await;
-        let still = kalimdor
-            .query(move |m| m.globals.contains(&boat))
-            .await
-            .unwrap();
-        assert!(still, "docked at Ratchet, on Kalimdor");
+        let at_dock = move |m: &crate::game::map::Map| {
+            let at = m.players[&ga].position();
+            m.globals.contains(&boat)
+                && ((at.x - ratchet_dock.0).powi(2) + (at.y - ratchet_dock.1).powi(2)).sqrt() < 10.0
+        };
+        crate::game::tests_p3_entity_objects::until(&kalimdor, "Alice docked at Ratchet", at_dock)
+            .await;
     }
 
     /// In an update packet, `player`'s create, aboard: whether `transport`'s

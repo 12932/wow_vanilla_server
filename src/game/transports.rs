@@ -646,13 +646,15 @@ pub fn start(realm: &Arc<Realm>) {
         // rest sail on. Before, a panic stopped them all.
         let mut watch: Vec<crate::game::supervisor::Backoff> =
             routes.iter().map(|_| Default::default()).collect();
+        // Where each last took those aboard.
+        let mut carried: Vec<Option<Vector3d>> = routes.iter().map(|_| None).collect();
         loop {
             tick.tick().await;
             let Some(realm) = weak.upgrade() else {
                 return;
             };
             let (now, at) = (crate::game::uptime_ms(), std::time::Instant::now());
-            for (r, b) in routes.iter_mut().zip(&mut watch) {
+            for ((r, b), last) in routes.iter_mut().zip(&mut watch).zip(&mut carried) {
                 b.run("a transport's clock", at, || {
                     #[cfg(test)]
                     realm.social.faults.check("transport");
@@ -660,6 +662,10 @@ pub fn start(realm: &Arc<Realm>) {
                     if pose.map != r.map {
                         cross(&realm, r, pose);
                         r.map = pose.map;
+                        *last = Some(pose.position);
+                    } else if *last != Some(pose.position) {
+                        carry(&realm, r, pose);
+                        *last = Some(pose.position);
                     }
                 });
             }
@@ -752,10 +758,40 @@ pub fn settle_aboard(map: &mut Map, g: Guid) {
         return;
     };
     let pose = route.pose_at(crate::game::uptime_ms());
-    if pose.map != map.key.map {
-        return;
+    if pose.map == map.key.map {
+        on_deck(map, g, t.position, t.orientation, &pose);
     }
-    let (at, facing) = passenger_world(t.position, t.orientation, &pose);
+}
+
+/// Those aboard a ship that has moved move with it, each where their place
+/// on deck now is (mangos's `UpdatePassengerPositions`): one standing still
+/// on deck sends nothing, and without it would be where they boarded, to
+/// see and be seen there, until they stepped.
+fn carry(realm: &Arc<Realm>, route: &Route, pose: Pose) {
+    let g = route.guid;
+    realm.maps.get(realm, MapKey::world(route.map)).call(move |m| {
+        let aboard: Vec<(Guid, Vector3d, f32)> = m
+            .players
+            .values()
+            .filter(|p| !p.awaiting_worldport && p.teleport.is_none())
+            .filter_map(|p| {
+                let t = p.movement.flags.get_on_transport()?;
+                (t.transport.guid == g).then_some((
+                    p.guid,
+                    t.transport.position,
+                    t.transport.orientation,
+                ))
+            })
+            .collect();
+        for (p, offset, o) in aboard {
+            on_deck(m, p, offset, o, &pose);
+        }
+    });
+}
+
+/// `g` in the world at `offset` on the deck of a ship at `pose`.
+fn on_deck(map: &mut Map, g: Guid, offset: Vector3d, o: f32, pose: &Pose) {
+    let (at, facing) = passenger_world(offset, o, pose);
     let now = map.now;
     let Some(p) = map.players.get_mut(&g) else {
         return;
@@ -763,9 +799,14 @@ pub fn settle_aboard(map: &mut Map, g: Guid) {
     p.movement.position = at;
     p.movement.orientation = facing;
     p.move_check = Some((at, now));
-    let (old, new) = (p.cell, crate::game::map::grid::cell_of(at.x, at.y));
+    let (anchor, old, new) = (
+        p.vis_anchor,
+        p.cell,
+        crate::game::map::grid::cell_of(at.x, at.y),
+    );
     p.cell = new;
     map.grid.relocate(g, old, new);
+    crate::game::map::visibility::moved(map, g, anchor, at);
 }
 
 impl Map {
