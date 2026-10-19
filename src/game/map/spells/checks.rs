@@ -652,6 +652,11 @@ pub fn at_finish(
     if !map.players.contains_key(&caster) {
         return None;
     }
+    // A player's side gone from sight meanwhile (into stealth), as mangos's
+    // `CheckCast(false)` has it "since the time of cast start".
+    if harmful && player_side(map, target) && !super::stealth::sees(map, caster, target) {
+        return Some(fail::BAD_TARGETS);
+    }
     let me = map.unit_view(caster)?;
     let (_, base) = map.realm.data.spells.range(s);
     let max = m.apply(mods::OP_RANGE, base).max(0.0);
@@ -706,6 +711,12 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
         return Some(fail::REQUIRES_AREA);
     }
     None
+}
+
+/// Whether `g` is a player or a player's (mangos's
+/// `UNIT_FLAG_PLAYER_CONTROLLED`).
+fn player_side(map: &Map, g: Guid) -> bool {
+    guid::is_player(g) || crate::game::map::pets::owner_of(map, g).is_some_and(guid::is_player)
 }
 
 /// What a spell reaches beyond its range when caster and target both run
@@ -827,8 +838,25 @@ fn check_target(
         } else {
             combat::can_attack_dead(map, caster, target)
         };
+        // A friend is TARGET_FRIENDLY; one who can't be attacked else (not
+        // attackable, immune to the caster's side, a neutral of no war)
+        // BAD_TARGETS, as mangos's harmful target filter and Thistle Tea's
+        // `validate_target` have it.
         if (requires_enemy || harmful && !resurrects(s)) && !attackable && !s.has_effect(95) {
-            return Some(fail::TARGET_FRIENDLY);
+            return Some(if combat::friendly(map, caster, target) {
+                fail::TARGET_FRIENDLY
+            } else {
+                fail::BAD_TARGETS
+            });
+        }
+        // A player's harmful spell at a player's side it can't see (in
+        // stealth, invisible), as mangos's `CheckCast` refuses it.
+        if harmful
+            && map.players.contains_key(&caster)
+            && player_side(map, target)
+            && !super::stealth::sees(map, caster, target)
+        {
+            return Some(fail::BAD_TARGETS);
         }
         if requires_friend && combat::can_attack(map, caster, target) {
             return Some(fail::TARGET_ENEMY);
@@ -836,6 +864,16 @@ fn check_target(
         if requires_friend && !combat::can_assist(map, caster, target) {
             return Some(fail::BAD_TARGETS);
         }
+    } else if s
+        .effects
+        .iter()
+        .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy))
+        && !triggered
+        && map.players.contains_key(&caster)
+    {
+        // A spell at an enemy isn't cast at oneself (mangos's harmful target
+        // filter: one can't attack oneself).
+        return Some(fail::BAD_TARGETS);
     }
     if let Some(c) = map.creature(target) {
         let creature_type = map
@@ -924,7 +962,11 @@ fn check_target(
         let max = m.apply(mods::OP_RANGE, max).max(0.0);
         let d = dist(me.position, u.position);
         let melee = s.melee_or_ranged() && max <= 5.0;
-        let reach = if melee {
+        let reach = if s.on_next_swing() {
+            // A strike on the next swing is queued from afar, its swing to
+            // reach (mangos's `GetMinMaxRange`, strict: a hundred yards).
+            100.0
+        } else if melee {
             combat::melee_range(&me, &u)
         } else {
             max + me.combat_reach + u.combat_reach

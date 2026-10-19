@@ -358,3 +358,115 @@ async fn area_rules_take_any_alternative_and_want_a_player_for_a_players_rule() 
     assert_eq!(taken, (true, false), "taken: only the active rule");
     assert_eq!(rewarded, (true, true));
 }
+
+/// An instant kill at any unit, a bolt at an enemy, a strike on the next
+/// swing, and a stealth that can't be seen through.
+const SLAY: u32 = 990_915;
+const ENEMY_BOLT: u32 = 990_916;
+const NEXT_SWING: u32 = 990_917;
+const DEEP_STEALTH: u32 = 990_918;
+
+fn targets(d: &mut GameData) {
+    use crate::game::data::spells::ATTR_ON_NEXT_SWING;
+    use crate::game::map::auras::AURA_MOD_STEALTH;
+    spells(d);
+    let mut slay = bare(SLAY, 0);
+    effect(
+        &mut slay,
+        0,
+        SpellEffect {
+            effect: 1,
+            target_a: 25,
+            ..Default::default()
+        },
+    );
+    let mut bolt = bare(ENEMY_BOLT, 2);
+    effect(&mut bolt, 0, damage(10));
+    let mut next = bare(NEXT_SWING, 0);
+    next.dmg_class = 2;
+    next.range_index = 2;
+    next.attributes[0] |= ATTR_ON_NEXT_SWING;
+    effect(&mut next, 0, damage(10));
+    let mut stealth = bare(DEEP_STEALTH, 0);
+    stealth.duration_index = LASTS_LONG;
+    effect(&mut stealth, 0, aura(AURA_MOD_STEALTH, 0, 1_000, 1));
+    insert(d, [slay, bolt, next, stealth]);
+}
+
+/// A harmful spell wants a unit it may attack: one not attackable, not
+/// selectable or immune to players is BAD_TARGETS, as is one immune to
+/// creatures for a creature's spell (one immune to players isn't, for
+/// it); a player can't aim a spell at an enemy at themselves, nor at an
+/// enemy player in stealth they can't see, nor at no one or nothing; a
+/// strike on the next swing is queued from afar (Thistle Tea's target
+/// flags, concealment and next-swing checks; mangos's harmful target
+/// filter, `CheckCast`'s visibility and `GetMinMaxRange`).
+#[tokio::test]
+async fn a_harmful_spell_wants_an_enemy_it_may_attack_and_see() {
+    use crate::game::map::player::UNIT_FLAG_PVP;
+    let realm = fast_realm(targets);
+    let (_c, a, map) = human(&realm, "P6SD", "Slayer", Class::Warrior).await;
+    let (_d, b, _) = human(&realm, "P6SE", "Sneaky", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[SLAY, ENEMY_BOLT, NEXT_SWING]);
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            let flagged = |m: &mut Map, flags: u32| {
+                if let Some(f) = m.unit_fields_mut(kobold) {
+                    f.set_u32(UNIT_FIELD_FLAGS, flags);
+                }
+            };
+            let mut by_flags = Vec::new();
+            for flags in [0, 0x2, 0x1_0000, 0x0200_0000, 0x100] {
+                flagged(m, flags);
+                by_flags.push(why(m, a, SLAY, kobold, false));
+            }
+            // A creature's spell at another creature.
+            let other = kit::dummy(m, a, 60, 6.0);
+            let mut creature = Vec::new();
+            for flags in [0x200, 0x100] {
+                flagged(m, flags);
+                creature.push(why(m, other, SLAY, kobold, false));
+            }
+            flagged(m, 0);
+            let at_self = why(m, a, ENEMY_BOLT, a, false);
+            kit::fresh(m, a);
+            let s = m.realm.data.spells.get(ENEMY_BOLT).cloned().unwrap();
+            let no_one =
+                checks::check(m, a, &s, &Default::default(), None, false, &Mods::default());
+            let nothing = why(m, a, ENEMY_BOLT, Guid::new(0xF130_0000_00FF_FFFF), false);
+            // The rogue of the other side, flagged, four yards off.
+            let near = m.players[&a].position();
+            let o = m.players[&a].movement.orientation;
+            let p = m.players.get_mut(&b).unwrap();
+            p.team = crate::game::registry::Team::Horde;
+            p.fields.set_u32(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP);
+            p.movement.position.x = near.x + 4.0 * o.cos();
+            p.movement.position.y = near.y + 4.0 * o.sin();
+            p.movement.position.z = near.z;
+            let seen = why(m, a, ENEMY_BOLT, b, false);
+            kit::apply(m, b, b, DEEP_STEALTH);
+            let unseen = why(m, a, ENEMY_BOLT, b, false);
+            // The kobold forty yards off: a strike queued for it.
+            let far = kit::dummy(m, a, 60, 40.0);
+            let queued = why(m, a, NEXT_SWING, far, false);
+            (
+                by_flags, creature, at_self, no_one, nothing, seen, unseen, queued,
+            )
+        })
+        .await
+        .unwrap();
+    let (by_flags, creature, at_self, no_one, nothing, seen, unseen, queued) = out;
+    let bad = Some(fail::BAD_TARGETS);
+    assert_eq!(by_flags, [None, bad, bad, bad, bad], "by its unit flags");
+    assert_eq!(
+        creature,
+        [bad, None],
+        "a creature's, at the immune to creatures"
+    );
+    assert_eq!(at_self, bad, "an enemy's spell at oneself");
+    assert_eq!(no_one, Some(fail::BAD_IMPLICIT_TARGETS));
+    assert_eq!(nothing, bad, "no such unit");
+    assert_eq!((seen, unseen), (None, bad), "an enemy player in stealth");
+    assert_eq!(queued, None, "the next swing's strike, from afar");
+}
