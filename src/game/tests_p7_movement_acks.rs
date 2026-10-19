@@ -733,13 +733,14 @@ async fn a_launch_ack_settles_once_for_the_launch_sent() {
     assert!(pending(&kalimdor, gb).await.is_empty());
 }
 
-/// A hunter's pet she moves (Eyes of the Beast), feared: her client is
-/// told it no longer moves it, what it sends for it moves nothing, and
-/// she has it back when the fear goes (Thistle Tea's "possessed creatures
-/// reject input and notify the controller"; mangos's
-/// `AbstractRandomMovementGenerator`: `UpdateClientControl`).
-#[tokio::test]
-async fn a_feared_unit_is_taken_from_the_client_that_moves_it() {
+/// A hunter, her wolf, and her client moving it (Eyes of the Beast).
+async fn hunter_moving_her_pet() -> (
+    std::sync::Arc<crate::game::Realm>,
+    Client,
+    Guid,
+    Guid,
+    MapHandle,
+) {
     let realm = crate::game::harness::realm_with(world());
     let mut a = Client::connect(&realm, "H");
     let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
@@ -768,15 +769,74 @@ async fn a_feared_unit_is_taken_from_the_client_that_moves_it() {
             s.loyalty_at = later;
             s.happiness_at = later;
         }
-        let s = |id| m.realm.data.spells.get(id).cloned().unwrap();
-        let (eyes, fear) = (s(EYES), s(FEAR));
+        let eyes = m.realm.data.spells.get(EYES).cloned().unwrap();
         auras::apply(m, h, pet, &eyes, 0, 0);
         crate::game::map::pets::set_mover(m, h, pet);
         assert_eq!(m.players[&h].owned.mover, Some(pet), "she moves it");
-        auras::apply(m, h, pet, &fear, 0, 0);
         pet
     })
     .await;
+    (realm, a, h, pet, map)
+}
+
+/// A launch goes to the client that moves the unit: a pet its master's
+/// client moves is launched by that client, its acknowledgement for the
+/// pet settles it and those who see it watch it fly; a creature no client
+/// moves is sent no launch at all (Thistle Tea's "supports possessed units
+/// and leaves ordinary creature movement to the server"; mangos's
+/// `KnockBackFrom` to `GetClientControlling`).
+#[tokio::test]
+async fn a_launch_goes_to_the_client_that_moves_the_unit() {
+    let (realm, mut a, h, pet, map) = hunter_moving_her_pet().await;
+    // Bob beside her, where dwarves start.
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Dwarf, Class::Warrior).await;
+    b.sees(pet).await;
+    let free = on(&map, move |m| {
+        let free = spawn(m, h, BRUTE, 10, 8.0);
+        crate::game::map::spells::cast_triggered(m, h, KNOCK, Some(pet));
+        crate::game::map::spells::cast_triggered(m, h, KNOCK, Some(free));
+        free
+    })
+    .await;
+    let body = a
+        .wait_frame("SMSG_MOVE_KNOCK_BACK", 0x0EF, |_| true)
+        .await;
+    let mut i = 0;
+    assert_eq!(packed_guid(&body, &mut i), Some(pet), "the pet's launch");
+    let counter = u32::from_le_bytes(body[i..i + 4].try_into().unwrap());
+    let f = |n: usize| f32::from_le_bytes(body[i + 4 + 4 * n..i + 8 + 4 * n].try_into().unwrap());
+    let impulse = [f(0), f(1), f(2), f(3)];
+    let launches = |c: &mut Client| {
+        c.captured()
+            .iter()
+            .filter(|f| u16::from_le_bytes([f[2], f[3]]) == 0x0EF)
+            .count()
+    };
+    tokio::time::sleep(NONE_WITHIN).await;
+    assert_eq!(launches(&mut a), 1, "none for the creature no client moves");
+    assert_eq!(launches(&mut b), 0);
+    let _ = free;
+    let at = on(&map, move |m| m.creature(pet).unwrap().position).await;
+    a.send(launched(pet, counter, impulse, at)).await;
+    b.wait_frame("the pet flies", crate::game::map::misc::MSG_MOVE_KNOCK_BACK, |b| {
+        let mut i = 0;
+        packed_guid(b, &mut i) == Some(pet)
+    })
+    .await;
+    assert!(pending(&map, h).await.is_empty());
+}
+
+/// A hunter's pet she moves (Eyes of the Beast), feared: her client is
+/// told it no longer moves it, what it sends for it moves nothing, and
+/// she has it back when the fear goes (Thistle Tea's "possessed creatures
+/// reject input and notify the controller"; mangos's
+/// `AbstractRandomMovementGenerator`: `UpdateClientControl`).
+#[tokio::test]
+async fn a_feared_unit_is_taken_from_the_client_that_moves_it() {
+    let (_realm, mut a, h, pet, map) = hunter_moving_her_pet().await;
+    let fear = on(&map, |m| m.realm.data.spells.get(FEAR).cloned().unwrap()).await;
+    on(&map, move |m| auras::apply(m, h, pet, &fear, 0, 0)).await;
     let control = move |m: &ServerOpcodeMessage| match m {
         ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(c) if c.guid == pet => {
             Some(c.allow_movement)
