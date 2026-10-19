@@ -304,6 +304,8 @@ pub struct Flee {
     pub helper: Option<Guid>,
     /// When it reached its helper and called it.
     pub called_at: Option<Instant>,
+    /// A script's (movement 10): it runs whoever its victim is.
+    pub scripted: bool,
 }
 
 fn template(map: &Map, g: Guid) -> Option<&crate::game::data::CreatureTemplate> {
@@ -706,6 +708,7 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
         until: now + FLEE_FOR,
         helper,
         called_at: None,
+        scripted: false,
     });
     c.engagement.next_move_at = Some(now);
     c.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FLEEING, true);
@@ -873,8 +876,9 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     let confused = c.auras.has(AURA_MOD_CONFUSE);
     // Its victim changed (a taunt), dead or gone: the run is for nothing
     // (Thistle Tea's `SeekAssistance.maintain`).
-    let lost =
-        |f: &Flee| c.combat.victim != f.from || map.unit_view(f.from).is_none_or(|u| !u.alive);
+    let lost = |f: &Flee| {
+        (!f.scripted && c.combat.victim != f.from) || map.unit_view(f.from).is_none_or(|u| !u.alive)
+    };
     if let Some(f) = c.engagement.flee
         && (f.until <= now || feared || confused || lost(&f))
     {

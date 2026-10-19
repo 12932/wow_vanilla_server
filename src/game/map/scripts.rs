@@ -205,12 +205,30 @@ fn advance(map: &mut Map, i: usize) {
                 }
             }
         }
+        // Its source gone to another map (or gone): the rest of it is
+        // dropped (Thistle Tea's run left behind by a world change).
+        if (guid::is_player(run.source) || guid::is_unit(run.source)) && !present(map, run.source) {
+            map.scripts.runs[i].next = usize::MAX;
+            return;
+        }
         if !execute(map, step, run.source, run.target)
             && let Some(r) = map.scripts.runs.get_mut(i)
         {
             r.next = usize::MAX;
             if let Some((g, event)) = r.checked {
                 event_ai::retry(map, g, event);
+            }
+            // Ended, it ends every run of the same script from the same
+            // source on the same target (vmangos's `Map::TerminateScript`,
+            // Thistle Tea's matching invocations); others go on.
+            for r in map.scripts.runs.iter_mut() {
+                if r.table == run.table
+                    && r.id == run.id
+                    && r.source == run.source
+                    && r.target == run.target
+                {
+                    r.next = usize::MAX;
+                }
             }
             return;
         }
@@ -1301,6 +1319,15 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
 /// The bounding radius Thistle Tea takes for a unit with none.
 const DEFAULT_BOUNDING_RADIUS: f32 = 0.389;
 
+/// Half a map's width, and the highest a point may be (mangos's
+/// `MAP_HALFSIZE` and `MAX_HEIGHT`).
+const MAP_HALF_SIZE: f32 = 32.0 * 533.333_3;
+const MAX_HEIGHT: f32 = 100_000.0;
+
+/// A script door's least time before it goes back (mangos-classic's
+/// `SCRIPT_COMMAND_OPEN_DOOR`).
+const DOOR_RESET_LEAST: u32 = 15;
+
 /// `UNIT_FLAG_PACIFIED`: a master so can't send its pet in.
 const UNIT_FLAG_PACIFIED_SCRIPT: u32 = 0x0002_0000;
 
@@ -1495,6 +1522,16 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // The source teleports: a player to map datalong, a creature where
         // it is (a creature's script that wants its player sent swaps).
         6 => {
+            // Nowhere on a map, nothing (mangos's `IsValidMapCoord` at
+            // load, Thistle Tea's malformed payload).
+            let valid = |v: f32, bound: f32| v.is_finite() && v.abs() <= bound;
+            if !(valid(pos.x, MAP_HALF_SIZE)
+                && valid(pos.y, MAP_HALF_SIZE)
+                && valid(pos.z, MAX_HEIGHT)
+                && step.o.is_finite())
+            {
+                return false;
+            }
             if guid::is_player(source) && map.players.contains_key(&source) {
                 map.teleport(source, MapKey::world(d1), pos, step.o);
                 return true;
@@ -1617,11 +1654,26 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             let Some(door) = door else {
                 return false;
             };
-            set_object_state(map, door, if step.command == 11 { 0 } else { 1 });
+            // One already as it would be is left as it is, its time to go
+            // back too (mangos's open of an open door).
+            let want = if step.command == 11 { 0 } else { 1 };
+            if map
+                .gameobject(door)
+                .is_some_and(|o| o.fields.get_u32(GAMEOBJECT_STATE) == want)
+            {
+                return true;
+            }
+            set_object_state(map, door, want);
+            // Back after datalong2 seconds, fifteen at least; with none it
+            // stays (the rows that open a boss's door for good).
             if d2 > 0 {
-                let back = if step.command == 11 { 1 } else { 0 };
-                map.object_resets
-                    .push((map.now + Duration::from_secs(u64::from(d2)), door, back));
+                let back = 1 - want;
+                let after = d2.max(DOOR_RESET_LEAST);
+                map.object_resets.push((
+                    map.now + Duration::from_secs(u64::from(after)),
+                    door,
+                    back,
+                ));
             }
             true
         }

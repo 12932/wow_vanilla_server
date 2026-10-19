@@ -799,6 +799,7 @@ pub fn critter_hit(map: &mut Map, g: Guid, source: Guid) {
         until: now + ESCAPE,
         helper: None,
         called_at: None,
+        scripted: false,
     });
     c.engagement.next_move_at = Some(now);
     // Held from fleeing, its escape is kept but it doesn't run, nor show
