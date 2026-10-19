@@ -431,7 +431,7 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
 
     Debug builds, and so every test, name a missed hook. Release builds would silently skip that creature.
     - **Other choices:** dependencies build at opt-level 2 in dev, which costs one rebuild. An optional `pprof`
-      feature adds a profiler.
+      feature added a profiler; it was removed on 2026-10-19 (decision 64), Tracy covering it.
     - **Left for later:** four looks through every creature remain (despawn timers, regeneration, pets, the
       creature half of flushing values). So does the 2 KB `Creature` struct, whose split would make them cheap.
     - **peon's release binary** was built before the appearance fix, which is why 11-19% of bots failed character
@@ -736,7 +736,7 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
     - **Rifts** replace an invader that despawned.
     - **Demonic Sacrifice** ends with a new demon.
 
-48. **Tracy, reworked** (your ask; `docs/PROFILING.md`). Set `WOW_TRACY=1` and connect Tracy v0.13.1.
+48. **Tracy, reworked** (your ask; `docs/PROFILING.md`). Set `WOW_TRACY=1` and connect Tracy v0.13.1 (v0.14.1 since decision 64).
     - **What you see:**
       - a frame per map update, named by the map;
       - a zone per update step, packet (by opcode), store transaction and load stage;
@@ -963,5 +963,38 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
       Weapons train as other weapons (mangos makes them a 1/1 skill counted as Unarmed).
     - **Left:** mangos holds a spell's caster in combat from launch for its travel and 500 ms (wvs, when it lands);
       a pet unsummoned by a same-map teleport past 50 yards; skill values kept for forgotten talents.
+
+63. **The packet order** (question 11; `fix/order`). A client gets an object's create before anything naming it.
+    - **The hold:** a client is held (`Outbound::hold`, one atomic flag a send checks) when an object is introduced
+      to it, added within its view (`Map::hold_near`), or as it logs in, lands from a worldport or teleports within
+      the map. What is sent meanwhile waits, in order. It is let go at the end of the event that held it
+      (`Map::after_events`, which works out visibility for what the event added first), else at the update's "held"
+      step, or when it leaves the map; creates and forgets go first. A client nothing waited for keeps its one batch.
+    - **Exceptions:** a creature whose spawned events haven't run is still seen at the update (seen sooner, it could
+      be attacked before its events started); a pong and the name, creature and item queries' answers skip a hold
+      (`send_unheld`); a client awaiting a worldport is never held, and its pet's bar is sent at the acknowledgement.
+    - **Forgets first:** a packet about an object forgotten in the same update reaches the client after the forget,
+      and is dropped; the other order would put a corpse's create before its owner's forget, which crashed it.
+    - **Cost:** within the noise, in `wvs-world-bench` (1,618 and 6,471 observers, standing and walking) and peon's
+      arena and cluster. A first version that held clients to the next update cost no CPU but added latency (chat
+      p99 47–91 ms); the release at each event's end took it away.
+    - **Left:** packets sent by distance (a yell) to a player who learns of the object later by their own move.
+
+64. **Dependencies** (2026-10-19; `chore/deps`, and peon's). Every crate at its newest release.
+    - **The majors:** rusqlite 0.40 (SQLite 3.53.2), md-5 0.11, tracy-client 0.19 with tracy-client-sys pinned at
+      0.30, so **Tracy's viewer is v0.14.1** (protocol 82), and changes only with that pin.
+    - **Removed:** rayon (nothing in wvs used it), the `wowm-capture` feature, wow_world_messages' `print-testcase`
+      (its `message_name()` replaced by a name from `Display`, kept once per opcode), pprof and `src/profile.rs`,
+      dotenvy (no `.env` is read), and the `env-filter` log filter (`RUST_LOG` now takes a bare level and
+      `target=level` entries, through `Targets`; regex and its kin leave the build). wow_srp is without its TBC and
+      Wrath headers (hmac goes).
+    - **Not taken:** wow_srp 0.7 (`25ffab6`): wow_world_messages pins 0.6, and their encryption types must match,
+      so it waits on the fork. A flate2 change (a zlib stream ending before its checksum is now an error) is met in
+      `account_data::parse_update`.
+    - **The tree:** 211 crates before, 212 after. Gone: dotenvy, hmac, matchers, regex-automata, regex-syntax.
+      Added: md-5 0.11's digest stack beside the 0.10 that wow-mpq and wow_srp still use. Clean release build
+      3m 19s to 3m 18s; binary 20.9 to 20.3 MB. peon: 110 to 107 crates, `rust-version` 1.92 (rustigator's).
+    - **Next:** rustigator's dependencies (wow-mpq's rsa and old rand, parry3d's second glam, the old digest), and
+      the parking_lot investigation.
 
 ## Left for later, and why

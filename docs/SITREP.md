@@ -112,8 +112,9 @@ Until you answer, wvs keeps what the line says.
   - **#33** a teleport within the map ends the fight, but for mangos's near teleports under 100 yards, Blink's
     among them (DECISIONS 62).
   - **#39** new weapon skills start at 1, and skills are now saved (DECISIONS 62).
-- **2026-10-19, being done now:**
-  - **#11** fix the packet order: nothing reaches a client about an object before its create.
+  - **#11** nothing reaches a client about an object before its create (DECISIONS 63).
+- **2026-10-19, dependencies:** every crate at its newest release, and `rayon`, `pprof`, `dotenvy`, the regex log
+  filter and two unused features gone (DECISIONS 64). **Tracy now needs viewer v0.14.1.** No `.env` is read.
 - **2026-10-19, kept as they are:** #53 login and world listen on every interface ("absolutely fine"); #38
   vmangos's spell corrections; #22 an abandoned quest's collected items.
 

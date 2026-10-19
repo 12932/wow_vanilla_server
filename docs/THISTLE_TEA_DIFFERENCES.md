@@ -207,8 +207,9 @@ Thistle Tea, with these exceptions:
 - **wow_messages** comes from 12932's fork (`12932/wow_messages`, branch `vanilla-1.12-layouts`), as it does for
   rustigator and peon: gtker's `e8dc643` with 1.12's own layouts for the game object query, who, loot, the cast
   result, quest details (reward items with their display id, strings past 256 bytes) and the battlefield status.
-- **Update blocks go at the end of an update,** after the packets sent during it. A packet naming an object made in
-  that update can reach the client before its create.
+- **Forgets go first:** a packet about an object, sent before the object was forgotten in the same update, reaches
+  the client after the forget, and the client drops it. The other order would put a corpse's create before its
+  owner's forget, which crashed the client. (A create now always comes before anything naming it: decision 63.)
 - A flyer's `SMSG_MONSTER_MOVE` is laid out by hand, in whole points as the 1.12 client reads them; wow_messages
   (and so peon and the harness) can't read it.
 - wow_messages types the client's fall time as a float; it is a u32 of milliseconds, so wvs reads the raw bits.

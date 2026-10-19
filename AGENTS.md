@@ -43,7 +43,9 @@ There is no world tick.
   what time drives, works out visibility, and flushes changed fields.
 - **Update fields** (`src/game/fields.rs`, `src/game/update.rs`): each object's fields are a flat array with dirty
   bits. A values block is encoded once and shared by every observer; a player's own client gets its private fields
-  in a second block. Blocks are batched per observer per update; big batches are compressed.
+  in a second block. Blocks are batched per observer per update; big batches are compressed. A client with creates
+  waiting for it is held (`Outbound::hold`): what is sent to it meanwhile waits, in order, until it is let go at the
+  event's end (`Map::after_events`) or at the update's "held" step, creates and forgets first.
 - **Visibility** (`visibility.rs`): a 50-yard grid, an exact distance test at `[world] visibility_yards` (100), and
   a 10-yard margin before an object is forgotten. Worked out for an object when it has moved 8 yards, or arrived.
   A creature no player sees doesn't move.
@@ -79,6 +81,8 @@ There is no world tick.
 
 - **Packets out are encoded once** and the frame shared: `conn::encode`, `Map::send_to_observers`. No per-viewer
   re-encoding.
+- **Only an answer naming no map object** (a pong, a name or item query's answer) may skip a hold, with
+  `send_unheld`.
 - **Packets wow_messages lays out unlike 1.12 are encoded by hand** (`data::items::Body`), as mangos-zero lays
   them out: the item and game object queries, the loot window, `SMSG_CAST_RESULT`, channel notices, friend status,
   `/who`, party member stats, raid icons and the battlefield status. Everything else uses wow_messages' types, so
@@ -112,7 +116,7 @@ There is no world tick.
 
 ## Configuration
 
-`config.toml` (every key optional; an unknown key is an error), with the environment over it, as described in
+`config.toml` (every key optional; an unknown key is an error), with the environment over it (no `.env` file is read), as described in
 [docs/CONFIG.md](docs/CONFIG.md). Each key is declared once, in a `settings!` block in `src/config.rs` (its type,
 default, range, whether a reload changes it, its mangos name and its meaning); `config.example.toml` is generated from
 those (`cargo run --bin wow_vanilla_server -- --print-config --defaults > config.example.toml`), and a test fails when
@@ -124,7 +128,7 @@ that is policy, not 1.12's rule, goes there rather than in a constant.
 | `WVS__SECTION__KEY` | any config key, over the file: `WVS__RATES__XP_KILL=2`. An unknown one is an error. |
 | `WOW_REALM_ADDRESS` | `host:port` in the realm list. Defaults to `localhost:8085`. |
 | `WOW_TRACY` | `1` starts Tracy: a frame per map update, a zone per step, packet and save ([docs/PROFILING.md](docs/PROFILING.md)). |
-| `RUST_LOG` | the log filter. |
+| `RUST_LOG` | the log filter: a bare level and `target=level` entries (tracing-subscriber's `Targets`, no regular expressions). |
 | `WVS_DATA` | the tests' real world: a `data/` with `db`, `nav` and `terrain` (the extended suite's). |
 
 ## Pull-request checklist
