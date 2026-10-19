@@ -256,3 +256,202 @@ async fn every_rank_of_heart_of_the_wild_gives_its_share_in_each_form() {
         }
     }
 }
+
+const LEADER_OF_THE_PACK: u32 = 17007;
+const PACK_AURA: u32 = 24932;
+const MOONKIN: u32 = 24858;
+
+fn count(m: &Map, g: Guid, spell: u32) -> usize {
+    auras::auras(m, g).map_or(0, |a| a.holders.iter().filter(|h| h.spell == spell).count())
+}
+
+fn crit(m: &Map, g: Guid) -> f32 {
+    m.players[&g].fields.get_f32(PLAYER_CRIT_PERCENTAGE)
+}
+
+/// Thistle Tea's `FormLinks` "Bear to Dire Bear refreshes shared boosts
+/// without losing or duplicating them" and "death removes form boosts
+/// while retaining the parent passive": a druid with Heart of the Wild and
+/// Leader of the Pack going from bear to dire bear form has one of each
+/// boost, a fifth more stamina and the pack's 3% more crit; dying in bear
+/// form takes the boost and leaves the talent; raised at half health, in
+/// bear form again, the boost is back and the share of health kept.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_druids_form_boosts_carry_from_bear_to_dire_bear_and_go_with_death() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, dr, map) = player(&realm, "P7KR4", "Packone", Race::NightElf, Class::Druid).await;
+    let out = map
+        .query(move |m| {
+            ready(m, dr, 60, &[]);
+            let stamina = stat(m, dr, 2);
+            let own_crit = crit(m, dr);
+            spells::learn(m, dr, 24894);
+            spells::learn(m, dr, LEADER_OF_THE_PACK);
+            spells::cast_triggered(m, dr, BEAR, None);
+            spells::cast_triggered(m, dr, DIRE_BEAR, None);
+            let dire = (
+                auras::form(m, dr),
+                count(m, dr, BEAR_BOOST),
+                count(m, dr, PACK_AURA),
+                stat(m, dr, 2),
+                crit(m, dr) - own_crit,
+            );
+            auras::remove_spell(m, dr, DIRE_BEAR, None);
+            spells::cast_triggered(m, dr, BEAR, None);
+            let brute = dummy(m, dr, 60, 5.0);
+            combat::kill(m, brute, dr);
+            let dead = (
+                has(m, dr, 24894),
+                has(m, dr, BEAR_BOOST),
+                has(m, dr, PACK_AURA),
+            );
+            crate::game::map::death::resurrect(m, dr, 0.5);
+            spells::cast_triggered(m, dr, BEAR, None);
+            let f = &m.players[&dr].fields;
+            let share =
+                f.get_u32(UNIT_FIELD_HEALTH) as f32 / f.get_u32(UNIT_FIELD_MAXHEALTH).max(1) as f32;
+            let raised = (has(m, dr, BEAR_BOOST), stat(m, dr, 2), share);
+            (stamina, dire, dead, raised)
+        })
+        .await
+        .unwrap();
+    let (stamina, dire, dead, raised) = out;
+    let grown = stamina as f32 * 1.2;
+    assert_eq!(
+        (dire.0, dire.1, dire.2),
+        (auras::FORM_DIREBEAR, 1, 1),
+        "one of each"
+    );
+    assert!(near(dire.3, grown), "stamina {} of {stamina}", dire.3);
+    assert!((dire.4 - 3.0).abs() < 0.01, "the pack's crit: {}", dire.4);
+    assert_eq!(
+        dead,
+        (true, false, false),
+        "(the talent, the boost, the pack's)"
+    );
+    assert!(raised.0 && near(raised.1, grown), "{raised:?}");
+    assert!(
+        (raised.2 - 0.5).abs() < 0.01,
+        "half its health: {}",
+        raised.2
+    );
+}
+
+/// What `c` is told of party commands is let pass; it takes the
+/// invitation it has, and is in.
+async fn joins(by: &mut harness::Client, c: &mut harness::Client, name: &str) {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    by.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+    c.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    c.send(CMSG_GROUP_ACCEPT {}).await;
+    c.wait_for("SMSG_GROUP_LIST", |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+        _ => None,
+    })
+    .await;
+}
+
+use crate::game::harness;
+
+/// Thistle Tea's `FormLinks` "party aura sources retain visibility,
+/// refresh recipients and never stack with another source" (and the DBC
+/// test's "learning Leader of the Pack in form creates the visible party
+/// source"): a druid in cat form with Leader of the Pack shows the pack's
+/// aura, 3% more crit, and its party member near gets one of it, kept as
+/// the pulses come; out of cat form (into moonkin), the druid's goes with
+/// the form, the talent stays, and the member's goes at the next pulse.
+#[tokio::test]
+#[ignore = "extended"]
+async fn leader_of_the_pack_shows_on_the_druid_and_reaches_the_party() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut c, dr, map) = player(&realm, "P7KR5", "Leadone", Race::NightElf, Class::Druid).await;
+    let (mut w, warrior, _) =
+        player(&realm, "P7KR6", "Followone", Race::NightElf, Class::Warrior).await;
+    joins(&mut c, &mut w, "Followone").await;
+    let out = map
+        .query(move |m| {
+            ready(m, dr, 60, &[]);
+            ready(m, warrior, 60, &[]);
+            spells::learn(m, dr, LEADER_OF_THE_PACK);
+            let own_crit = crit(m, warrior);
+            spells::cast_triggered(m, dr, CAT, None);
+            let shown = holder(m, dr, PACK_AURA).map(|h| (h.slot.is_some(), h.passive));
+            let leader_crit = crit(m, dr);
+            pass(m, 1000);
+            pass(m, 1000);
+            let member = (count(m, warrior, PACK_AURA), crit(m, warrior) - own_crit);
+            pass(m, 3000);
+            let kept = count(m, warrior, PACK_AURA);
+            auras::remove_spell(m, dr, CAT, None);
+            spells::cast_triggered(m, dr, MOONKIN, None);
+            let moonkin = (has(m, dr, PACK_AURA), has(m, dr, LEADER_OF_THE_PACK));
+            pass(m, 1000);
+            pass(m, 1000);
+            (
+                shown,
+                leader_crit,
+                member,
+                kept,
+                moonkin,
+                has(m, warrior, PACK_AURA),
+            )
+        })
+        .await
+        .unwrap();
+    let (shown, leader_crit, member, kept, moonkin, member_after) = out;
+    assert_eq!(shown, Some((true, false)), "seen, not a passive");
+    assert!(leader_crit > 0.0);
+    assert_eq!(member.0, 1, "one on the member");
+    assert!((member.1 - 3.0).abs() < 0.01, "its crit: {}", member.1);
+    assert_eq!(kept, 1, "kept, not stacked, as the pulses come");
+    assert_eq!(moonkin, (false, true), "(the pack's, the talent)");
+    assert!(!member_after, "the member's gone at the next pulse");
+}
+
+/// Thistle Tea's `PeriodicTrigger` "pulses as aura-triggered spells so an
+/// idle Azuregos engages nobody": Azuregos's Mark of Frost pulse marks the
+/// player near him, and neither is put in a fight by it.
+#[tokio::test]
+#[ignore = "extended"]
+async fn azuregos_pulse_marks_without_a_fight() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, g, map) = player(&realm, "P7KR7", "Frostone", Race::NightElf, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let azuregos = spawn(m, g, 6109, 63, 6.0);
+            if !has(m, azuregos, 23184) {
+                apply(m, azuregos, azuregos, 23184);
+            }
+            pass(m, 10_000);
+            let fighting = |m: &Map, u: Guid| {
+                m.unit_fields(u).is_some_and(|f| {
+                    f.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    )
+                })
+            };
+            (has(m, g, 23183), fighting(m, azuregos), fighting(m, g))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, false, false),
+        "(marked, Azuregos fighting, the player fighting)"
+    );
+}
