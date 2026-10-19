@@ -357,3 +357,222 @@ async fn a_bandage_heals_through_its_lockout_which_bars_the_next() {
     assert_eq!(struck, (99, false, true), "damage ends the healing");
     assert_eq!(other, None, "the medic's lockout bars no one else");
 }
+
+/// A gun and a vest of 100 durability; a mend of the ranged slot by
+/// 50,000; a kill and a wear of the chest by 5%; a wear of other slots.
+const GUN: u32 = 9_101;
+const VEST: u32 = 9_102;
+const MEND_RANGED: u32 = 990_938;
+const KILL_AND_WEAR: u32 = 990_939;
+const WEAR_SLOT: u32 = 990_940;
+
+fn durability(d: &mut GameData) {
+    use crate::game::data::items::ItemTemplate;
+    for (entry, class, inventory_type) in [(GUN, 2, 26), (VEST, 4, 5)] {
+        d.items.insert(
+            entry,
+            ItemTemplate {
+                entry,
+                class,
+                inventory_type,
+                name: format!("Item {entry}"),
+                display_id: 1000 + entry,
+                stackable: 1,
+                allowable_class: -1,
+                allowable_race: -1,
+                max_durability: 100,
+                ..Default::default()
+            },
+        );
+    }
+    let wear = |effect: u32, points: i32, slot: i32| SpellEffect {
+        effect,
+        base_points: points - 1,
+        base_dice: 1,
+        misc_value: slot,
+        target_a: 25,
+        ..Default::default()
+    };
+    let mut mend = bare(MEND_RANGED, 0);
+    mend.attributes[2] |= crate::game::data::spells::ATTR_EX2_ALLOW_DEAD_TARGET;
+    effect(
+        &mut mend,
+        0,
+        wear(spells::EFFECT_DURABILITY_DAMAGE, -50_000, 17),
+    );
+    let mut kill = bare(KILL_AND_WEAR, 0);
+    effect(
+        &mut kill,
+        0,
+        SpellEffect {
+            effect: 1,
+            target_a: 25,
+            ..Default::default()
+        },
+    );
+    effect(
+        &mut kill,
+        1,
+        wear(spells::EFFECT_DURABILITY_DAMAGE_PCT, 5, 4),
+    );
+    insert(d, [mend, kill]);
+    d.spells.spells.insert(WEAR_SLOT, {
+        let mut s = bare(WEAR_SLOT, 0);
+        effect(&mut s, 0, wear(spells::EFFECT_DURABILITY_DAMAGE, 5, 15));
+        s
+    });
+}
+
+/// Durability effects: a kill and a wear of the chest in one spell both
+/// land, the wear on the one just killed; a mend by negative points
+/// repairs a dead player's ranged weapon; a wear at a creature does
+/// nothing, nor one of a slot that isn't gear (Thistle Tea's durability
+/// effects; mangos's `EffectDurabilityDamage`, which skips creatures and
+/// slots past the bags).
+#[tokio::test]
+async fn durability_effects_reach_the_dead_and_only_a_players_gear() {
+    use crate::game::map::player::Item;
+    use crate::game::store::BAG_PLAYER;
+    let realm = fast_realm(durability);
+    let (_c, a, map) = human(&realm, "P6EF", "Worn", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[]);
+            let d = m.realm.data.clone();
+            let mut worn = Vec::new();
+            for (entry, slot) in [(GUN, 17u8), (VEST, 4)] {
+                let counter = m
+                    .realm
+                    .next_item
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let g = crate::game::guid::item(counter);
+                let p = m.players.get_mut(&a).unwrap();
+                p.items.retain(|i| !(i.bag == BAG_PLAYER && i.slot == slot));
+                p.items
+                    .push(Item::new(&d, g, a, entry, BAG_PLAYER, slot, 1));
+                worn.push(slot);
+            }
+            let durability = |m: &Map, slot: u8| {
+                m.players[&a]
+                    .items
+                    .iter()
+                    .find(|i| i.bag == BAG_PLAYER && i.slot == slot)
+                    .map(|i| i.fields.get_u32(ITEM_FIELD_DURABILITY))
+            };
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            if let Some(i) = m
+                .players
+                .get_mut(&a)
+                .unwrap()
+                .items
+                .iter_mut()
+                .find(|i| i.slot == 17)
+            {
+                i.fields.set_u32(ITEM_FIELD_DURABILITY, 10);
+            }
+            spells::cast_triggered(m, kobold, KILL_AND_WEAR, Some(a));
+            let killed = (m.unit_view(a).is_some_and(|u| u.alive), durability(m, 4));
+            spells::cast_triggered(m, kobold, MEND_RANGED, Some(a));
+            let mended = durability(m, 17);
+            spells::cast_triggered(m, kobold, WEAR_SLOT, Some(kobold));
+            spells::cast_triggered(m, kobold, WEAR_SLOT, Some(a));
+            (killed, mended, durability(m, 4), durability(m, 17))
+        })
+        .await
+        .unwrap();
+    let (killed, mended, vest, gun) = out;
+    assert_eq!(
+        killed,
+        (false, Some(85)),
+        "killed (a death's 10%), and worn by 5% more"
+    );
+    assert_eq!(mended, Some(100), "a dead player's gun mended");
+    assert_eq!(
+        (vest, gun),
+        (Some(85), Some(100)),
+        "slot 15 is empty: nothing"
+    );
+}
+
+/// A spell whose effect triggers a bolt of 10; an instant fire blast of
+/// 5; 70 more fire damage; a quest's completion by spell.
+const TRIGGERING: u32 = 990_941;
+const TRIGGERED_BOLT: u32 = 990_942;
+const FIRE_BLAST: u32 = 990_943;
+const FIRE_POWER: u32 = 990_944;
+const COMPLETES: u32 = 990_945;
+const QUEST: u32 = 2_561;
+
+fn triggers(d: &mut GameData) {
+    use crate::game::map::auras::AURA_MOD_DAMAGE_DONE;
+    let mut triggering = bare(TRIGGERING, 0);
+    effect(
+        &mut triggering,
+        0,
+        SpellEffect {
+            effect: spells::EFFECT_TRIGGER_SPELL,
+            trigger_spell: TRIGGERED_BOLT,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
+    let mut bolt = bare(TRIGGERED_BOLT, 2);
+    effect(&mut bolt, 0, damage(10));
+    let mut blast = bare(FIRE_BLAST, 2);
+    blast.spell_level = 20;
+    effect(&mut blast, 0, damage(5));
+    let mut power = bare(FIRE_POWER, 0);
+    power.duration_index = LASTS_LONG;
+    effect(&mut power, 0, aura(AURA_MOD_DAMAGE_DONE, 4, 70, 1));
+    let mut completes = bare(COMPLETES, 0);
+    effect(
+        &mut completes,
+        0,
+        SpellEffect {
+            effect: spells::EFFECT_QUEST_COMPLETE,
+            misc_value: QUEST as i32,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    insert(d, [triggering, bolt, blast, power, completes]);
+}
+
+/// A trigger effect casts its spell at the unit it lands on; an instant's
+/// spell damage bonus is by the least coefficient, a cast of a second and
+/// a half's, 70 giving 30; a quest-completing effect credits the player
+/// it lands on (Thistle Tea's trigger, coefficient and quest-complete
+/// effects; mangos's `EffectTriggerSpell`, `SpellBonusWithCoeffs` and
+/// `EffectQuestComplete`).
+#[tokio::test]
+async fn a_trigger_casts_an_instant_takes_the_least_coefficient_a_quest_completes() {
+    let realm = fast_realm(triggers);
+    let (_c, a, map) = human(&realm, "P6EG", "Triggered", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[TRIGGERING, FIRE_BLAST, COMPLETES]);
+            let kobold = kit::dummy(m, a, 60, 5.0);
+            cast_fresh(m, a, TRIGGERING, at(kobold));
+            let triggered = 1_000_000 - health(m, kobold);
+            kit::apply(m, a, a, FIRE_POWER);
+            set_health(m, kobold, 1_000_000);
+            cast_fresh(m, a, FIRE_BLAST, at(kobold));
+            let blast = 1_000_000 - health(m, kobold);
+            m.players
+                .get_mut(&a)
+                .unwrap()
+                .journal
+                .add(crate::game::map::quests::Logged {
+                    quest: QUEST,
+                    ..Default::default()
+                });
+            cast_fresh(m, a, COMPLETES, Default::default());
+            let p = &m.players[&a];
+            let credited = p.journal.slot_of(QUEST).map(|i| p.journal.log[i].explored);
+            (triggered, blast, credited)
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (10, 35, Some(true)));
+}
