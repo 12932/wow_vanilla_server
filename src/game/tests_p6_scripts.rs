@@ -121,6 +121,34 @@ pub(super) async fn hears(c: &mut Client, realm: &Realm, speaker: Guid, id: u32)
     .is_some()
 }
 
+/// The lines `c` hears said or yelled over `within`: who, and what.
+pub(super) async fn lines_by(c: &mut Client, within: Duration) -> Vec<(Guid, String)> {
+    let mut out = Vec::new();
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return out;
+        }
+        let seen = c
+            .gets(left, |m| match m {
+                ServerOpcodeMessage::SMSG_MESSAGECHAT(s) => match &s.chat_type {
+                    SMSG_MESSAGECHAT_ChatType::MonsterSay { sender1, .. }
+                    | SMSG_MESSAGECHAT_ChatType::MonsterYell { sender1, .. } => {
+                        Some((*sender1, s.message.clone()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .await;
+        match seen {
+            Some(l) => out.push(l),
+            None => return out,
+        }
+    }
+}
+
 /// Every script run `by` on, and what is due run.
 pub(super) async fn hurry_all(map: &MapHandle, secs: f32) {
     let by = Duration::from_secs_f32(secs);
@@ -2372,5 +2400,234 @@ async fn garr_casts_on_each_of_his_living_firesworn() {
         map.query(move |m| has(m, living_one, SEPARATION_ANXIETY))
             .await
             .unwrap()
+    );
+}
+
+const BLY: u32 = 7604;
+const WEEGLI: u32 = 7607;
+const BLYS_CREW: [u32; 3] = [7605, 7606, 7608];
+
+/// The menu `c` is shown by `npc` at its hello, and the id of its option
+/// reading `text`, if any.
+async fn menu_with(c: &mut Client, npc: Guid, text: &'static str) -> (u32, Option<u32>) {
+    let (title, options) = menu(c, npc).await;
+    (
+        title,
+        options
+            .iter()
+            .find(|(_, t)| t.contains(text))
+            .map(|(i, _)| *i),
+    )
+}
+
+/// Zul'Farrak's pyramid, Weegli Blastfuse: on reaching the stairs, or
+/// home again while the cages stand open, he cries the trolls are coming,
+/// marks the event under way and goes to watch the stairs; once the
+/// trolls are dead his menu offers the end door, and he runs for it,
+/// plants a charge there, sets it off from cover (the door's done) and
+/// leaves; in a fight he throws a bomb every ten seconds (Thistle Tea's
+/// `zul_farrak`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn weegli_starts_the_waves_and_blows_the_end_door() {
+    use super::tests_p4_scripts_dungeons::{data, inside, set};
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = inside(&realm, "Blastfuse", 209, WEEGLI).await;
+    let weegli = map.query(|m| first(m, WEEGLI)).await.flatten().unwrap();
+    c.sees(weegli).await;
+    // At the stairs, and home with the cages open.
+    for home in [false, true] {
+        c.clear();
+        let marked = map
+            .query(move |m| {
+                set(m, 1, 1);
+                if home {
+                    event_ai::reached_home(m, weegli);
+                } else {
+                    event_ai::movement_inform(m, weegli, 9, 1);
+                }
+                data(m, 1)
+            })
+            .await
+            .unwrap();
+        // Arrived (2), the pyramid's script starts the first wave (3).
+        assert_eq!(marked, 3, "home {home}: the waves under way");
+        assert!(
+            hears(&mut c, &realm, weegli, 3744).await,
+            "home {home}: here they come"
+        );
+    }
+    // Home with the cages shut: nothing.
+    c.clear();
+    let quiet = map
+        .query(move |m| {
+            set(m, 1, 0);
+            event_ai::reached_home(m, weegli);
+            data(m, 1)
+        })
+        .await
+        .unwrap();
+    assert_eq!(quiet, 0);
+    // His menu, the trolls dead: the end door.
+    let (text, door) = menu_with(&mut c, weegli, "door").await;
+    assert_eq!((text, door), (1511, None), "the event not begun");
+    map.query(|m| set(m, 1, 8)).await;
+    let (text, door) = menu_with(&mut c, weegli, "door").await;
+    assert_eq!(text, 1514, "the trolls dead");
+    c.clear();
+    choose(&c, weegli, door.expect("the end door offered")).await;
+    assert!(hears(&mut c, &realm, weegli, 3785).await, "here I go");
+    assert_eq!(map.query(move |m| faction(m, weegli)).await.unwrap(), 35);
+    // At the door, the charge; clear of the blast, it goes off.
+    let charge = map
+        .query(move |m| {
+            let door = Vector3d {
+                x: 1858.57,
+                y: 1146.35,
+                z: 14.745,
+            };
+            crate::game::map::scripts::place(m, weegli, door, 0.0);
+            event_ai::movement_inform(m, weegli, 9, 10);
+            hurry_runs(m, None, Duration::from_millis(100));
+            m.gameobjects
+                .iter()
+                .find(|(_, o)| o.entry == 144065)
+                .map(|(_, o)| o.guid)
+        })
+        .await
+        .flatten()
+        .expect("a charge planted");
+    let blown = map
+        .query(move |m| {
+            let clear = Vector3d {
+                x: 1863.77,
+                y: 1176.99,
+                z: 9.993,
+            };
+            crate::game::map::scripts::place(m, weegli, clear, 0.0);
+            event_ai::movement_inform(m, weegli, 9, 11);
+            hurry_runs(m, None, Duration::from_millis(100));
+            (
+                m.gameobject(charge)
+                    .map(|o| o.fields.get_u32(GAMEOBJECT_STATE)),
+                data(m, 3),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(blown, (Some(0), 3), "set off, the door done");
+    let gone = map
+        .query(move |m| {
+            event_ai::movement_inform(m, weegli, 9, 12);
+            hurry_runs(m, None, Duration::from_millis(100));
+            m.creature(weegli).is_none_or(|c| c.despawned || !c.alive())
+        })
+        .await
+        .unwrap();
+    assert!(gone, "and he leaves");
+    // In a fight, his bombs.
+    let (g, d) = map
+        .query(move |m| {
+            let at = m.players[&me].position();
+            let g = summon(m, WEEGLI, off(at, 3.0, 0.0), 0.0);
+            let d = dummy(m, off(at, 5.0, 0.0));
+            tough(m, g);
+            crate::game::map::scripts::set_faction(m, g, 14);
+            crate::game::map::ai::attacked(m, g, d);
+            (g, d)
+        })
+        .await
+        .unwrap();
+    c.sees(g).await;
+    kit_on(
+        &mut c,
+        &map,
+        g,
+        d,
+        &[(760707, 8858, (10.0, 10.0), (10.0, 10.0), true)],
+    )
+    .await;
+}
+
+/// Zul'Farrak's pyramid, Sergeant Bly: his menu by the event's state, and
+/// once the trolls are dead an option to settle up, at which he turns on
+/// the player: he speaks twice, five seconds apart, and ten seconds on
+/// Weegli cries out and runs, and Bly's crew and he are friendly, then
+/// hostile, and on the player (Thistle Tea's `zul_farrak`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn bly_turns_his_crew_on_the_player_once_the_trolls_are_dead() {
+    use super::tests_p4_scripts_dungeons::{inside, set};
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = inside(&realm, "Betrayed", 209, BLY).await;
+    let bly = map.query(|m| first(m, BLY)).await.flatten().unwrap();
+    let weegli = map.query(|m| first(m, WEEGLI)).await.flatten().unwrap();
+    c.sees(bly).await;
+    // His crew beside him, in sight.
+    let crew: Vec<Guid> = map
+        .query(move |m| {
+            m.players.get_mut(&me).unwrap().gm = false;
+            let at = m.position_of(bly).unwrap();
+            crate::game::map::scripts::place(m, weegli, off(at, 2.0, 2.0), 0.0);
+            BLYS_CREW
+                .iter()
+                .filter_map(|e| {
+                    let g = first(m, *e)?;
+                    crate::game::map::scripts::place(m, g, off(at, -2.0, 2.0), 0.0);
+                    Some(g)
+                })
+                .collect()
+        })
+        .await
+        .unwrap();
+    assert_eq!(crew.len(), 3, "his crew");
+    let (text, fight) = menu(&mut c, bly).await;
+    assert_eq!((text, fight.len()), (1515, 0), "not begun");
+    map.query(|m| set(m, 1, 2)).await;
+    let (text, fight) = menu(&mut c, bly).await;
+    assert_eq!((text, fight.len()), (1516, 0), "under way");
+    map.query(|m| set(m, 1, 8)).await;
+    let (text, options) = menu(&mut c, bly).await;
+    assert_eq!(text, 1517, "the trolls dead");
+    let option = options.first().map(|(i, _)| *i).expect("the fight offered");
+    c.clear();
+    choose(&c, bly, option).await;
+    let early = lines_by(&mut c, Duration::from_millis(800)).await;
+    hurry_all(&map, 5.0).await;
+    let later = lines_by(&mut c, Duration::from_millis(800)).await;
+    let said = |all: &[(Guid, String)], who: Guid, id: u32| {
+        let l = line(&realm, id);
+        all.iter().any(|(g, s)| *g == who && *s == l)
+    };
+    assert!(said(&early, bly, 3882), "betrayed: {early:?}");
+    assert!(
+        said(&later, bly, 3884),
+        "never liked you, five seconds on: {later:?}"
+    );
+    hurry_all(&map, 5.0).await;
+    let last = lines_by(&mut c, Duration::from_millis(800)).await;
+    assert!(
+        said(&last, weegli, 3811),
+        "Weegli's out of here, ten on: {last:?}"
+    );
+    let turned = map
+        .query(move |m| {
+            let mut all = crew.clone();
+            all.push(bly);
+            (
+                all.iter().map(|g| faction(m, *g)).collect::<Vec<_>>(),
+                victim(m, bly) == me,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        turned,
+        (vec![14, 14, 14, 14], true),
+        "hostile, and on the player"
     );
 }
