@@ -516,6 +516,12 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   size and fits the growths and transform again (mangos's `GetNativeScale` is the current entry's). Henze Faulk's
   test cast Symbol of Life from beyond the spell's range (6e's range rule, mangos's). The trap and bound-gear
   flakes were test races (a fight left running killed the hero; the map's once-a-second item check), now fixed.
+- **8g, creature scripts, round 8:** **a fight's temporary war ends once nothing holds the player, and is never
+  saved** (it leaked: a character could stay at war with Booty Bay with no fight, 6f's find); a creature's line at
+  another creature names it for `$n` (Kindal's "Quickly! $n attacks!"); Alterac Valley's 15 rows: the war riders'
+  spells wait for a victim within 30 yards, Balinda's casting spot needs sight, a ritual needs its living invoker;
+  the cavalry, infantry, lords and wing commanders tested. **My calls:** the temporary war is Thistle Tea's (mangos
+  has none), without the leak; `$r` and `$c` stay as written for a creature (mangos gives no rule).
 
 ## Answered
 - **#10** keep swinging on arrival.
