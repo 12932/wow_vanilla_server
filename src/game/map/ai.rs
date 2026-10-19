@@ -236,6 +236,7 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
         None if amount < 0.0 => {}
         None => {
             c.threat.push((from, amount));
+            map.note_fighting(creature);
             if guid::is_player(from) {
                 crate::game::map::reputation::temporary_war(map, from, creature);
             }
@@ -300,6 +301,7 @@ pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     // creature's target for the taunt (Thistle Tea's `apply_taunt`).
     if !c.threat.iter().any(|(g, _)| *g == by) {
         c.threat.push((by, 0.0));
+        map.note_fighting(creature);
     }
     crate::game::map::spells::threat_sync::taunted(map, creature, by);
     let Some(c) = map.creature_mut(creature) else {

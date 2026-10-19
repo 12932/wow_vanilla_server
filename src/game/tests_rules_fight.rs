@@ -368,3 +368,28 @@ async fn a_teleport_to_another_map_ends_the_fight_though_it_says_keep_it() {
         .unwrap();
     assert_eq!(fighting, Some(false));
 }
+
+/// A creature no one sees, and fighting no one, still holds whom its threat
+/// list holds. The awake set (perf2) didn't count a threat list, so the
+/// fight's look missed such a creature and let the player go; the debug
+/// check caught it in the chaos test.
+#[tokio::test]
+async fn a_creature_unseen_and_idle_still_holds_whom_its_threat_list_holds() {
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let held = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 1.0);
+            forced_swing(m, ga, brute, Outcome::Hit);
+            if let Some(c) = m.creature_mut(brute) {
+                c.combat.attacking = false;
+                c.combat.attackers.clear();
+                c.observers.clear();
+            }
+            // A fresh update, whose first look prunes the awake set.
+            m.stats.updates += 1;
+            later(m, combat::COMBAT_CHECK);
+            in_combat(m, ga)
+        })
+        .await;
+    assert_eq!(held, Some(true), "held by the brute's threat list");
+}

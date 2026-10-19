@@ -619,11 +619,13 @@ fn every_creature_where<T>(
         .collect()
 }
 
-/// Whether `c` is awake (see `Map::awake`): seen, or in a fight.
+/// Whether `c` is awake (see `Map::awake`): seen, or in a fight, a threat
+/// list held counting as one (it holds those on it in theirs).
 pub fn awake(c: &Creature) -> bool {
     !c.observers.is_empty()
         || c.combat.attacking
         || !c.combat.attackers.is_empty()
+        || !c.threat.is_empty()
         || c.evading
         || c.scripted
             .as_deref()
