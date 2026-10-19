@@ -72,7 +72,7 @@ async fn trader(realm: &Arc<Realm>, name: &str, x: f32) -> (Client, Guid) {
 /// The next trade status `c` is told.
 async fn trade_status(c: &mut Client) -> SMSG_TRADE_STATUS_TradeStatus {
     c.wait_for("SMSG_TRADE_STATUS", |m| match m {
-        ServerOpcodeMessage::SMSG_TRADE_STATUS(s) => Some(s.status.clone()),
+        ServerOpcodeMessage::SMSG_TRADE_STATUS(s) => Some(s.status),
         _ => None,
     })
     .await
