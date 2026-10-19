@@ -363,6 +363,45 @@ fn an_event_quest_waits_on_its_event() {
     assert_eq!(pets::rods::tame_of(1515), None);
 }
 
+/// `.pet` over the real data: a level-60 hunter's cat or wolf of their
+/// level, and the tamer's spells, Revive Pet's among them.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_pet_command_gives_a_real_hunter_a_beast_of_their_level() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(crate::game::harness::load_real(DB.as_path()));
+    let mut c = Client::connect(&realm, "PETH");
+    let g: Guid = c.enter("Pethunt", Race::Dwarf, Class::Hunter).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    c.say(".character level 60").await;
+    c.system_message("Level 60").await;
+    c.say(".pet").await;
+    let said = c.system_message("Tamed").await;
+    assert!(said.ends_with("level 60."), "{said}");
+    let (family, level, knows) = map
+        .query(move |m| {
+            let p = &m.players[&g];
+            let pet = p.owned.pet.expect("a pet out");
+            let c = m.creature(pet).expect("the pet");
+            let family = m.realm.data.creature_template(c.entry).map(|t| t.family);
+            (
+                family,
+                c.fields.get_u32(crate::game::fields::UNIT_FIELD_LEVEL),
+                pets::TAMER_SPELLS.map(|s| p.spells.contains(&s)),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(matches!(family, Some(1 | 2)), "a wolf or a cat: {family:?}");
+    assert_eq!(level, 60);
+    assert_eq!(
+        knows, [true; 5],
+        "Tame Beast, Call, Dismiss, Revive and Feed Pet"
+    );
+}
+
 #[tokio::test]
 async fn a_hunter_learns_to_teach_the_passives_their_pet_came_with() {
     use crate::game::data::pets::PetAbility;

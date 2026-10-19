@@ -102,52 +102,13 @@ pub fn tame(map: &mut Map, hunter: Guid, beast: Guid, spell: u32) {
         return;
     }
     let now = map.now;
-    let data = map.realm.data.clone();
     let Some(c) = map.creature(beast) else {
         return;
     };
     let entry = c.entry;
     let level = c.fields.get_u32(UNIT_FIELD_LEVEL).clamp(1, 60) as u8;
     let display = c.fields.get_u32(UNIT_FIELD_NATIVEDISPLAYID);
-    let template = data.creature_template(entry).cloned().unwrap_or_default();
-    let number = summon::next_number(map, hunter);
-    let spells = summon::spellbook(&data, entry, level, true, template.family);
-    let autocast: Vec<u32> = spells
-        .iter()
-        .copied()
-        .filter(|s| data.spells.get(*s).is_some_and(control::autocastable))
-        .collect();
-    // What it knows is paid for out of the points its loyalty will bring:
-    // a fresh pet owes them (mangos's `InitPetCreateSpells`, `SetTP(-used)`;
-    // Thistle Tea's spell profile).
-    let owed: i32 = spells
-        .iter()
-        .map(|s| {
-            ability_entries(&data, *s)
-                .first()
-                .map_or(0, |a| a.cost as i32)
-        })
-        .sum();
-    let r = PetRecord {
-        number,
-        entry,
-        kind: KIND_HUNTER,
-        name: template.name.clone(),
-        level,
-        happiness: TAMED_HAPPINESS,
-        loyalty: 1,
-        loyalty_points: 1_000,
-        training_points: -owed,
-        bar: control::default_bar(&data, &spells, &autocast, false).to_vec(),
-        spells,
-        autocast,
-        react: REACT_DEFENSIVE,
-        command: COMMAND_FOLLOW,
-        summon_spell: spell,
-        display_id: display,
-        family: template.family,
-        ..Default::default()
-    };
+    let r = tamed(map, hunter, entry, level, display, spell);
     // The wild beast goes, to come back in its time.
     crate::game::map::combat::leave_combat(map, beast);
     crate::game::map::ai::forget(map, beast);
@@ -167,6 +128,130 @@ pub fn tame(map: &mut Map, hunter: Guid, beast: Guid, spell: u32) {
         map.dead_creatures.push(beast);
     }
     summon::from_record(map, hunter, &r);
+}
+
+/// The record of a beast of `entry` just tamed by `hunter` with `spell`, at
+/// `level`, looking as `display` (0: as its template has it).
+fn tamed(
+    map: &mut Map,
+    hunter: Guid,
+    entry: u32,
+    level: u8,
+    display: u32,
+    spell: u32,
+) -> PetRecord {
+    let data = map.realm.data.clone();
+    let template = data.creature_template(entry).cloned().unwrap_or_default();
+    let number = summon::next_number(map, hunter);
+    let spells = summon::spellbook(&data, entry, level, true, template.family);
+    let autocast: Vec<u32> = spells
+        .iter()
+        .copied()
+        .filter(|s| data.spells.get(*s).is_some_and(control::autocastable))
+        .collect();
+    // What it knows is paid for out of the points its loyalty will bring:
+    // a fresh pet owes them (mangos's `InitPetCreateSpells`, `SetTP(-used)`;
+    // Thistle Tea's spell profile).
+    let owed: i32 = spells
+        .iter()
+        .map(|s| {
+            ability_entries(&data, *s)
+                .first()
+                .map_or(0, |a| a.cost as i32)
+        })
+        .sum();
+    PetRecord {
+        number,
+        entry,
+        kind: KIND_HUNTER,
+        name: template.name.clone(),
+        level,
+        happiness: TAMED_HAPPINESS,
+        loyalty: 1,
+        loyalty_points: 1_000,
+        training_points: -owed,
+        bar: control::default_bar(&data, &spells, &autocast, false).to_vec(),
+        spells,
+        autocast,
+        react: REACT_DEFENSIVE,
+        command: COMMAND_FOLLOW,
+        summon_spell: spell,
+        display_id: display,
+        family: template.family,
+        ..Default::default()
+    }
+}
+
+/// The hunter's pet spells a tamer learns (1.12's "Taming the Beast"
+/// quests'): Tame Beast, Call Pet, Dismiss Pet, Revive Pet and Feed Pet.
+pub const TAMER_SPELLS: [u32; 5] = [SPELL_TAME_BEAST, 883, 2641, 982, 6991];
+
+/// A tameable beast for a hunter of `level`: a cat or a wolf of the level,
+/// a common one (the lowest entry, as the world has several); else any
+/// tameable beast of the level; else any cat or wolf.
+pub fn beast_for(data: &GameData, level: u8) -> Option<u32> {
+    let tameable =
+        |t: &&crate::game::data::CreatureTemplate| t.type_flags & TYPE_FLAG_TAMEABLE != 0;
+    let of_level = |t: &&crate::game::data::CreatureTemplate| {
+        t.level_min <= level && level <= t.level_max && t.rank == 0
+    };
+    let cat_or_wolf = |t: &&crate::game::data::CreatureTemplate| matches!(t.family, 1 | 2);
+    let pick = |f: &dyn Fn(&&crate::game::data::CreatureTemplate) -> bool| {
+        data.creature_templates
+            .values()
+            .filter(tameable)
+            .filter(|t| f(t))
+            .map(|t| t.entry)
+            .min()
+    };
+    pick(&|t| of_level(t) && cat_or_wolf(t))
+        .or_else(|| pick(&of_level))
+        .or_else(|| pick(&cat_or_wolf))
+}
+
+/// `.pet`: `hunter` given a tamed beast of `entry` at `level`, out at their
+/// side, as Tame Beast's (mangos's `.npc tame` casts its effect on a
+/// selected beast; here the beast needs no finding): the pet they had, out
+/// or put away, is let go. They learn the tamer's spells they lack. The
+/// pet's name, or why there is none.
+pub fn give_pet(map: &mut Map, hunter: Guid, entry: u32, level: u8) -> Result<String, String> {
+    let data = map.realm.data.clone();
+    let Some(template) = data.creature_template(entry) else {
+        return Err(format!("No creature {entry}."));
+    };
+    if template.type_flags & TYPE_FLAG_TAMEABLE == 0 {
+        return Err(format!("{} isn't tameable.", template.name));
+    }
+    if map.players.get(&hunter).is_none_or(|p| p.row.class != 3) {
+        return Err("Only a hunter has a pet.".into());
+    }
+    if let Some(old) = map.players.get(&hunter).and_then(|p| p.owned.pet) {
+        summon::unsummon(map, old, false);
+    }
+    for spell in TAMER_SPELLS {
+        if map
+            .players
+            .get(&hunter)
+            .is_some_and(|p| !p.spells.contains(&spell))
+        {
+            crate::game::map::spells::learn(map, hunter, spell);
+        }
+    }
+    let r = tamed(
+        map,
+        hunter,
+        entry,
+        level.clamp(1, MAX_LEVEL),
+        0,
+        SPELL_TAME_BEAST_TAME,
+    );
+    if let Some(p) = map.players.get_mut(&hunter) {
+        p.row.state.pets.current = Some(r.clone());
+        p.row.state.pets.active = true;
+    }
+    summon::from_record(map, hunter, &r)
+        .map(|_| format!("Tamed {}, level {}.", r.name, r.level))
+        .ok_or_else(|| "The pet couldn't come.".into())
 }
 
 /// The hunter's kill: their pet earns the experience of it, if it is below
