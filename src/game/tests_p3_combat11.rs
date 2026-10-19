@@ -162,7 +162,10 @@ async fn weapon_hit_talents_count_for_their_weapon_and_a_feral_form_takes_them_a
             weapon_aura(m, ga, 90_411, AURA_MOD_CRIT_PERCENT, 5, Some(1 << 15), 1);
             weapon_aura(m, ga, 90_412, AURA_MOD_CRIT_PERCENT, 3, None, 1);
             let armed = (m.players[&ga].derived.hit, crits(m, ga).0);
-            // In cat form, the paw holds no dagger: only the generic three.
+            // In cat form, the paw holds no dagger: only the generic three
+            // of crit. Its hit goes by the dagger held still (mangos's
+            // `UpdateWeaponHitChances`, Thistle Tea's "hit talents retain
+            // equipped identity through disarm, breakage, and forms").
             m.players
                 .get_mut(&ga)
                 .unwrap()
@@ -175,6 +178,6 @@ async fn weapon_hit_talents_count_for_their_weapon_and_a_feral_form_takes_them_a
         .await
         .unwrap();
     assert_eq!(r.0.0, 5.0);
-    assert_eq!(r.1.0, 0.0, "no dagger in a paw");
+    assert_eq!(r.1.0, 5.0, "the dagger's hit, held in a form");
     assert!((r.0.1 - r.1.1 - 5.0).abs() < 0.5, "{r:?}");
 }

@@ -1310,28 +1310,44 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         .players
         .get(&victim)
         .is_some_and(|p| p.fields.get_byte(UNIT_FIELD_BYTES_2, 0) == 0);
+    // Each hand's own skill; against a player, a player's skills are at
+    // least their caps (mangos's `GetWeaponSkillValue` and
+    // `GetDefenseSkillValue`). A player's skill is as it is, 0 too.
+    let pvp = va.is_player && vb.is_player;
+    let skill = match (hand, pvp) {
+        (Hand::Main, false) => da.weapon_skill,
+        (Hand::Main, true) => da.pvp_weapon_skill,
+        (Hand::Off, false) => da.off_skill,
+        (Hand::Off, true) => da.pvp_off_skill,
+        (Hand::Ranged, false) => da.ranged_skill,
+        (Hand::Ranged, true) => da.pvp_ranged_skill,
+    };
+    let defense = if pvp { dv.pvp_defense } else { dv.defense };
     Some(Roll {
-        attacker_skill: or_level(
-            if ranged {
-                da.ranged_skill
-            } else {
-                da.weapon_skill
-            },
-            va.level,
-        ),
+        attacker_skill: if va.is_player {
+            skill as i32
+        } else {
+            or_level(skill, va.level)
+        },
         // A creature without defense meets every blow with none (Thistle
         // Tea's `Skills.defense_value`).
         victim_defense: if static_flags(map, victim) & STATIC_NO_DEFENSE != 0 {
             0
+        } else if vb.is_player {
+            defense as i32
         } else {
-            or_level(dv.defense, vb.level)
+            or_level(defense, vb.level)
         },
         attacker_is_player: va.is_player,
         victim_is_player: vb.is_player,
         attacker_level: va.level as i32,
         victim_level: vb.level as i32,
         crit: if ranged { da.ranged_crit } else { da.crit } + attacker_crit,
-        hit: if ranged { da.ranged_hit } else { da.hit },
+        hit: match hand {
+            Hand::Main => da.hit,
+            Hand::Off => da.off_hit,
+            Hand::Ranged => da.ranged_hit,
+        },
         dodge: dv.dodge,
         parry: dv.parry,
         block: dv.block,
@@ -1357,6 +1373,39 @@ pub fn melee_school(map: &Map, g: Guid) -> u32 {
     map.creature(g)
         .and_then(|c| map.realm.data.creature_template(c.entry))
         .map_or(1, |t| 1 << t.damage_school.min(6))
+}
+
+/// The flat damage `attacker` does more against `victim`'s creature type
+/// (aura 59: a weapon's "+damage against beasts").
+pub fn damage_versus(map: &Map, attacker: Guid, victim: Guid) -> f32 {
+    let kind = creature_type_mask(map, victim);
+    if kind == 0 {
+        return 0.0;
+    }
+    auras::auras(map, attacker).map_or(0.0, |a| {
+        a.effects()
+            .filter(|(_, x)| x.kind == AURA_MOD_DAMAGE_DONE_CREATURE && (x.misc as u32) & kind != 0)
+            .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
+            .sum()
+    })
+}
+
+/// A player's physical damage done percentage for `hand`, the weapon in it
+/// fitting and the off hand's half and its bonus with it, as its flat
+/// bonuses take it (mangos's hand `TOTAL_PCT`); 1 for a creature.
+pub fn hand_damage_pct(map: &Map, attacker: Guid, hand: Hand) -> f32 {
+    if !map.players.contains_key(&attacker) {
+        return 1.0;
+    }
+    let Some(a) = auras::auras(map, attacker) else {
+        return 1.0;
+    };
+    let weapon = hand_weapon(map, attacker, hand);
+    let mut pct = crate::game::map::derive::physical_pct_for(a, weapon.as_ref());
+    if hand == Hand::Off {
+        pct *= 0.5 * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+    }
+    pct
 }
 
 /// A blow's weapon damage before armor, with what the attacker deals more
@@ -2034,6 +2083,11 @@ pub fn after_outcome(map: &mut Map, attacker: Guid, victim: Guid, outcome: Outco
     if !matches!(outcome, Outcome::Dodge | Outcome::Parry | Outcome::Block) {
         return;
     }
+    // The dead open nothing (mangos's `ProcSkillsAndReactives` wants a
+    // living victim).
+    if !map.unit_view(victim).is_some_and(|u| u.alive) {
+        return;
+    }
     let class = map.players.get(&victim).map(|p| p.row.class);
     if let Some(class) = class
         && let Some(c) = map.combat_mut(victim)
@@ -2334,6 +2388,9 @@ pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: 
 /// A critter's creature type.
 pub const CREATURE_TYPE_CRITTER: u32 = 8;
 
+/// A fishing pole's weapon subclass.
+pub const SUBCLASS_FISHING_POLE: u32 = 20;
+
 /// A melee or ranged ability that hit, or was missed, dodged, parried or
 /// blocked, trains the skill of the weapon it was made with and the
 /// target's defense, once, as a swing does (mangos's
@@ -2390,7 +2447,9 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
             )
         });
         let usable = !feral && !(hand == Hand::Main && disarmed);
+        // A fishing pole trains nothing (mangos's `UpdateWeaponSkill`).
         let skill = match hand_weapon(map, attacker, hand).filter(|_| usable) {
+            Some(w) if w.subclass == SUBCLASS_FISHING_POLE => None,
             Some(w) => Some(crate::game::map::derive::weapon_skill(w.subclass)),
             None if hand == Hand::Main => Some(162),
             None => None,
@@ -2842,9 +2901,23 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
 /// Suicide (27965), wears nothing down (Thistle Tea's
 /// `Durability.death_loss?`).
 pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
-    if map.unit_view(victim).is_none_or(|u| !u.alive) {
+    if map.unit_view(victim).is_none_or(|u| !u.alive)
+        || DYING.with(|d| d.borrow().contains(&victim))
+    {
         return;
     }
+    // Being killed, it isn't killed again meanwhile (by a kill's proc).
+    DYING.with(|d| d.borrow_mut().push(victim));
+    kill_once(map, killer, victim, spell);
+    DYING.with(|d| d.borrow_mut().retain(|g| *g != victim));
+}
+
+thread_local! {
+    /// The units being killed now, on this thread.
+    static DYING: std::cell::RefCell<Vec<Guid>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     let attackers: Vec<Guid> = map
         .combat(victim)
         .map(|c| c.attackers.iter().copied().collect())
@@ -2893,9 +2966,27 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     }
     let worth = kill_procs(map, killer, victim);
     // A pet's kill is its master's too (mangos's `Unit::Kill` procs the
-    // killer's owner as well).
+    // killer's owner as well). The killer's procs of the kill come before
+    // the victim's death takes its auras (mangos's `Unit::Kill`, before
+    // `RemoveAllAurasOnDeath`): a Drain Soul ended by it still procs.
     let master = crate::game::map::pets::master(map, killer);
     let master_worth = master != killer && kill_procs(map, master, victim);
+    if killer != victim {
+        for (by, counts) in [(master, master_worth && master != victim), (killer, worth)] {
+            if counts {
+                procs::trigger(
+                    map,
+                    procs::Event {
+                        actor: by,
+                        target: victim,
+                        actor_flags: procs::PROC_KILL,
+                        ex: procs::EX_NORMAL_HIT,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
     if guid::is_unit(killer) {
         crate::game::map::event_ai::kill(map, killer, victim);
     }
@@ -2955,24 +3046,11 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         crate::game::map::ai::die_by(map, victim, tapper, killer);
     }
     if killer != victim {
-        if master_worth && master != victim {
-            procs::trigger(
-                map,
-                procs::Event {
-                    actor: master,
-                    target: victim,
-                    actor_flags: procs::PROC_KILL,
-                    ex: procs::EX_NORMAL_HIT,
-                    ..Default::default()
-                },
-            );
-        }
         procs::trigger(
             map,
             procs::Event {
                 actor: killer,
                 target: victim,
-                actor_flags: if worth { procs::PROC_KILL } else { 0 },
                 target_flags: procs::PROC_KILLED,
                 ex: procs::EX_NORMAL_HIT,
                 ..Default::default()

@@ -355,15 +355,27 @@ pub fn leeched(map: &mut Map, target: Guid, h: &Holder, power: u16) {
     auras::remove_spell(map, target, MARK_OF_KAZZAK, Some(h.caster));
 }
 
-/// Deep Wounds' trigger: the bleed, a share of the weapon's average blow
-/// over four ticks. Whether `trigger` was one.
-pub fn deep_wounds(map: &mut Map, owner: Guid, other: Guid, trigger: u32) -> bool {
+/// Deep Wounds' trigger: the bleed, a share of the average blow of the
+/// hand that dealt the crit (Thistle Tea's; mangos guesses the hand by its
+/// timers) over its four ticks. Whether `trigger` was one.
+pub fn deep_wounds(
+    map: &mut Map,
+    owner: Guid,
+    other: Guid,
+    trigger: u32,
+    hand: combat::Hand,
+) -> bool {
     let Some((_, pct)) = DEEP_WOUNDS.iter().find(|(s, _)| *s == trigger) else {
         return false;
     };
-    let average = map.unit_fields(owner).map_or(0.0, |f| {
-        (f.get_f32(UNIT_FIELD_MINDAMAGE) + f.get_f32(UNIT_FIELD_MAXDAMAGE)) / 2.0
-    });
+    let (lo, hi) = if hand == combat::Hand::Off {
+        (UNIT_FIELD_MINOFFHANDDAMAGE, UNIT_FIELD_MAXOFFHANDDAMAGE)
+    } else {
+        (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_MAXDAMAGE)
+    };
+    let average = map
+        .unit_fields(owner)
+        .map_or(0.0, |f| (f.get_f32(lo) + f.get_f32(hi)) / 2.0);
     let tick = (average * *pct as f32 / 100.0 / DEEP_WOUND_TICKS as f32) as i32;
     if tick > 0 && map.unit_view(other).is_some_and(|u| u.alive) {
         aura_with(map, owner, other, DEEP_WOUND_BLEED, tick);
