@@ -163,6 +163,7 @@ pub fn test_config() -> RealmConfig {
         arena: Default::default(),
         rates: Default::default(),
         creatures: Default::default(),
+        guards: Default::default(),
         // The tests' players fight with their weapon skills and Defense at
         // their caps, at every level a test gives them (mangos's
         // `AlwaysMaxSkillForLevel`): a new skill starts at 1 otherwise. A

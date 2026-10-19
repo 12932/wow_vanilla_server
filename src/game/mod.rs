@@ -12,6 +12,7 @@ pub mod harness;
 pub mod honor;
 pub mod instances;
 pub mod invasion;
+pub mod jaina;
 pub mod map;
 pub mod omen;
 pub mod registry;
@@ -73,6 +74,8 @@ mod tests_gear;
 mod tests_ghost;
 #[cfg(test)]
 mod tests_gifts;
+#[cfg(test)]
+mod tests_guards;
 #[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
@@ -655,6 +658,7 @@ pub struct RealmConfig {
     pub arena: crate::game::map::arena::ArenaConfig,
     pub rates: crate::config::RatesConfig,
     pub creatures: crate::config::CreaturesConfig,
+    pub guards: crate::config::GuardsConfig,
     pub players: crate::config::PlayersConfig,
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
@@ -692,6 +696,7 @@ impl RealmConfig {
             arena: c.arena.clone(),
             rates: c.rates.clone(),
             creatures: c.creatures.clone(),
+            guards: c.guards.clone(),
             players: c.players.clone(),
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),

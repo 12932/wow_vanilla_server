@@ -404,6 +404,51 @@ impl CreaturesConfig {
 }
 
 settings! {
+    /// Town guards, as mangos-classic calls them: a guard each time a
+    /// creature that calls the guards takes a victim. A town's alarm
+    /// counts the guards called there lately and cools when the calls
+    /// stop; as it rises, the guards grow harder to fight, a capital sends
+    /// its elite two at a time, and Jaina Proudmoore comes to her city.
+    pub struct GuardsConfig in "guards" {
+        /// Seconds a called guard stays once out of combat (mangos-classic's
+        /// 30); it goes at once when it dies.
+        despawn_secs: u64 = 300, Clamp(5.0, 86_400.0), Live, "";
+        /// Yards a called guard wanders about where it came, out of combat.
+        wander_yards: f32 = 8.0, Clamp(0.0, 30.0), Live, "";
+        /// Seconds without a call after which a town's alarm halves.
+        alarm_half_life_secs: u64 = 300, Clamp(10.0, 86_400.0), Live, "";
+        /// Guards in the alarm from which each new guard comes with
+        /// Avoidance (spell 23198's aura: area spells miss it that many
+        /// percent more often).
+        avoidance_from: u32 = 20, Clamp(1.0, 100_000.0), Live, "";
+        /// Avoidance, in percent, at the threshold and for each further
+        /// `avoidance_step_guards` guards.
+        avoidance_step_pct: u32 = 5, Clamp(0.0, 100.0), Live, "";
+        /// Guards in the alarm per step of Avoidance.
+        avoidance_step_guards: u32 = 10, Clamp(1.0, 100_000.0), Live, "";
+        /// The most Avoidance a guard comes with, in percent.
+        avoidance_max_pct: u32 = 50, Clamp(0.0, 100.0), Live, "";
+        /// Guards in the alarm from which a call brings two of the town's
+        /// elite (Stormwind's Royal Guard, Orgrimmar's Kor'kron, Undercity's
+        /// Royal Dreadguard, Thunder Bluff's Honor Guard), or two of its
+        /// guards where it has none.
+        royal_from: u32 = 40, Clamp(1.0, 100_000.0), Live, "";
+        /// Guards in the alarm of Jaina's city from which she comes, if she
+        /// is alive and at home in Theramore.
+        jaina_from: u32 = 60, Clamp(1.0, 100_000.0), Live, "";
+        /// The area of the city Jaina comes to: 1519, Stormwind City; 0,
+        /// she never leaves Theramore.
+        jaina_city: u32 = 1519, Any, Live, "";
+        /// Seconds Jaina stays once she has no one left to fight and is
+        /// out of combat, before she goes home.
+        jaina_stays_secs: u64 = 60, Clamp(5.0, 86_400.0), Live, "";
+        /// Seconds Jaina takes to come back to Theramore once she has died
+        /// in her city (her spawn's own time, a day).
+        jaina_respawn_secs: u64 = 86_400, Clamp(5.0, 2_592_000.0), Live, "";
+    }
+}
+
+settings! {
     /// New characters, the level cap, and the realm's type.
     pub struct PlayersConfig in "players" {
         /// The level new characters start at (no higher than `max_level`).
@@ -545,6 +590,7 @@ pub struct ServerConfig {
     pub visibility: VisibilityConfig,
     pub rates: RatesConfig,
     pub creatures: CreaturesConfig,
+    pub guards: GuardsConfig,
     pub players: PlayersConfig,
     pub battleground: BattlegroundConfig,
     pub anticheat: AnticheatConfig,
@@ -561,6 +607,7 @@ pub const SECTIONS: &[&Section] = &[
     &VisibilityConfig::SECTION,
     &RatesConfig::SECTION,
     &CreaturesConfig::SECTION,
+    &GuardsConfig::SECTION,
     &PlayersConfig::SECTION,
     &BattlegroundConfig::SECTION,
     &AnticheatConfig::SECTION,

@@ -98,6 +98,16 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - dead bodies that stay put, and `.spawn` with its creature's weapons and stats;
   - ahash's maps only, enforced by clippy.
 
+## Guards and Jaina (19 October)
+- **Guards as mangos-classic calls them** (`map/guards.rs`, replacing vmangos's posts): a guard each time a civilian
+  takes a victim, at a reachable point within 30 yards, gone five minutes out of combat or at its death, wandering
+  about where it came meanwhile. No charges, no cooldown; no guard roused where the table names no town.
+- **Each town's alarm** (`[guards]`, [CONFIG.md](CONFIG.md)): the guards called there lately, halved for each five
+  minutes without a call. From 20, guards come with Avoidance (5% per ten, to 50%); from 40, a call brings two of
+  the capital's elite; from 60 in Stormwind, Jaina Proudmoore comes from Theramore (`jaina.rs`), fights, goes home a
+  minute after the fight, and dead, is back in Theramore a day later. Each threshold crossed, and each of her moves,
+  is logged at `info`.
+
 ## What's left
 - **Parity:** 2,652 rows are still gap. The biggest areas:
   - the world's entities (players, creatures and objects in the world), about 590;

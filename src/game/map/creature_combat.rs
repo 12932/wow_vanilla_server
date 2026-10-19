@@ -82,10 +82,8 @@ pub struct Engagement {
     /// A script set it drawing its dungeon in (`zone_combat_pulse`), for
     /// this fight.
     pub zone_scripted: bool,
-    /// Its call for the guards, answered.
-    pub guard_call: Option<GuardCall>,
-    /// When a civilian next looks about for enemies.
-    pub watch_at: Option<Instant>,
+    /// When it may next shout for the guards.
+    pub guard_shout_at: Option<Instant>,
     /// When a frightened critter's escape ends.
     pub escape_at: Option<Instant>,
     /// Until when a distraction holds it.
@@ -265,15 +263,6 @@ impl RareStates {
         self.casting |= c.caster.casting.is_some();
         self.pet |= c.pet.is_some();
     }
-}
-
-/// A civilian's call for the guards, answered: it makes one at a time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuardCall {
-    /// A post's guard came: it is quiet until that guard is gone.
-    Summoned(Guid),
-    /// A guard near was roused (or none was): quiet until it respawns.
-    Held,
 }
 
 /// A creature running: from `from`, to `helper` if it found one.
@@ -926,239 +915,6 @@ fn end_flee(map: &mut Map, g: Guid) {
     c.chase_target_at = None;
 }
 
-/// `static_flags1`: it calls the guards; `flags_extra`: it is a guard.
-const STATIC_CALLS_GUARDS: u32 = 0x0800_0000;
-const EXTRA_GUARD: u32 = 0x400;
-/// How far a call for the guards carries.
-pub const GUARD_CALL_RADIUS: f32 = 50.0;
-/// How often a civilian looks about, and how far above or below it sees.
-const WATCH_EVERY: Duration = Duration::from_secs(1);
-const WATCH_HEIGHT: f32 = 3.0;
-
-/// Whether a civilian may call the guards now: it calls them, it's its
-/// own, and it has no call answered (or its guard has gone).
-fn guard_call_ready(map: &Map, caller: Guid) -> bool {
-    let Some(c) = map.creature(caller) else {
-        return false;
-    };
-    let ready = match c.engagement.guard_call {
-        None => true,
-        Some(GuardCall::Summoned(g)) => map.creature(g).is_none_or(|g| !g.alive()),
-        Some(GuardCall::Held) => false,
-    };
-    ready
-        && c.alive()
-        && c.owner.is_none()
-        && template(map, caller).is_some_and(|t| t.static_flags1 & STATIC_CALLS_GUARDS != 0)
-}
-
-/// Thistle Tea's `GuardCall`: a civilian that calls the guards, entering
-/// a fight with a player or seeing one of the enemy, shouts and has its
-/// town's post send a guard of the other side five yards off to fight them
-/// for two minutes; with no post for its area it rouses the nearest guard.
-/// A post spent or cooling down refuses, and it may call again.
-pub fn call_guards(map: &mut Map, caller: Guid, enemy: Guid) {
-    if !guid::is_player(enemy) || !guard_call_ready(map, caller) {
-        return;
-    }
-    let Some(c) = map.creature(caller) else {
-        return;
-    };
-    let (at, facing, faction) = (
-        c.position,
-        c.orientation,
-        c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
-    );
-    let area = map
-        .nav
-        .as_mut()
-        .and_then(|n| n.zone_and_area(at))
-        .map(|(_, area)| area);
-    if let Some(area) = area.filter(|a| crate::game::map::guard_posts::posted(*a)) {
-        let key = (map.key.map, map.key.instance, area);
-        if !crate::game::map::guard_posts::take(key, map.now) {
-            return;
-        }
-        if let Some(text) = crate::game::map::guard_posts::text(area, faction) {
-            crate::game::map::scripts::talk(map, caller, text, enemy, None);
-        }
-        let enemy_alliance = map
-            .players
-            .get(&enemy)
-            .is_some_and(|p| p.team == crate::game::registry::Team::Alliance);
-        let guard = crate::game::map::guard_posts::guard(area, !enemy_alliance)
-            .and_then(|entry| summon_guard(map, caller, entry, at, facing, enemy));
-        answered(
-            map,
-            caller,
-            guard.map_or(GuardCall::Held, GuardCall::Summoned),
-        );
-        return;
-    }
-    rouse_nearest_guard(map, caller, at, enemy);
-    answered(map, caller, GuardCall::Held);
-}
-
-fn answered(map: &mut Map, caller: Guid, answer: GuardCall) {
-    if let Some(c) = map.creature_mut(caller) {
-        c.engagement.guard_call = Some(answer);
-    }
-}
-
-/// Civilians that call the guards look about for enemy players: within
-/// their detection range, level with them, in sight and seen; in a fight,
-/// only for whom they fight.
-fn watch_for_enemies(map: &mut Map) {
-    let now = map.now;
-    let data = map.realm.data.clone();
-    // Only a creature some player sees watches.
-    let watching: Vec<Guid> = map.awake_where(
-        |c| {
-            c.alive()
-                && !c.evading
-                && c.pet.is_none()
-                && !c.observers.is_empty()
-                && (c.combat.attacking || !c.hostile_to_players)
-                && c.engagement.watch_at.is_none_or(|t| t <= now)
-                && data
-                    .creature_template(c.entry)
-                    .is_some_and(|t| t.static_flags1 & STATIC_CALLS_GUARDS != 0)
-        },
-        |_, c| c.guid,
-    );
-    for g in watching {
-        // Each on its own phase of the second (`next_beat`).
-        let next = crate::game::map::next_beat(map.started, g, WATCH_EVERY, now);
-        if let Some(c) = map.creature_mut(g) {
-            c.engagement.watch_at = Some(next);
-        }
-        if !guard_call_ready(map, g) {
-            continue;
-        }
-        if let Some(enemy) = sighted_enemy(map, g) {
-            call_guards(map, g, enemy);
-        }
-    }
-}
-
-/// The nearest enemy player a civilian sees.
-fn sighted_enemy(map: &mut Map, g: Guid) -> Option<Guid> {
-    let c = map.creature(g)?;
-    let (at, fighting, victim) = (c.position, c.combat.attacking, c.combat.victim);
-    let range = template(map, g).map_or(20.0, |t| t.detection_range);
-    let enemy = map
-        .players_near(at, range)
-        .into_iter()
-        .filter(|p| !fighting || *p == victim)
-        .filter_map(|p| {
-            let pl = map.players.get(&p)?;
-            let pos = pl.position();
-            (pl.death == crate::game::map::death::Death::Alive
-                && !pl
-                    .fields
-                    .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM)
-                && !pl.awaiting_worldport
-                && (pos.z - at.z).abs() <= WATCH_HEIGHT
-                && dist(pos, at) <= range
-                && crate::game::map::spells::stealth::sees(map, g, p)
-                && crate::game::map::combat::hostile(map, g, p)
-                && crate::game::map::combat::can_attack(map, g, p))
-            .then(|| (p, pos, dist(pos, at)))
-        })
-        .min_by(|a, b| a.2.total_cmp(&b.2))?;
-    let in_sight = match map.nav.as_mut() {
-        Some(nav) => {
-            let eye = |v: Vector3d| Vector3d { z: v.z + 1.5, ..v };
-            nav.line_of_sight(eye(at), eye(enemy.1))
-        }
-        None => true,
-    };
-    in_sight.then_some(enemy.0)
-}
-
-/// A post's guard, five yards in front of the civilian, facing it.
-pub fn summon_guard(
-    map: &mut Map,
-    caller: Guid,
-    entry: u32,
-    at: Vector3d,
-    facing: f32,
-    enemy: Guid,
-) -> Option<Guid> {
-    let spot = Vector3d {
-        x: at.x + 5.0 * facing.cos(),
-        y: at.y + 5.0 * facing.sin(),
-        z: at.z,
-    };
-    let spot = match map.nav.as_mut() {
-        Some(nav) => nav
-            .path(at, spot)
-            .and_then(|p| p.last().copied())
-            .unwrap_or(spot),
-        None => spot,
-    };
-    // Despawn type 1: after its time, or dead.
-    let lifetime = crate::game::map::guard_posts::GUARD_LIFETIME;
-    let guard = crate::game::map::scripts::summon(
-        map,
-        caller,
-        entry,
-        spot,
-        facing + std::f32::consts::PI,
-        Some((lifetime, 1)),
-    )?;
-    crate::game::map::ai::attacked(map, guard, enemy);
-    Some(guard)
-}
-
-/// Whether two creatures are on one side: one faction, or factions
-/// friendly to each other.
-fn friendly(map: &Map, a: Guid, b: Guid) -> bool {
-    let faction = |g: Guid| {
-        map.unit_fields(g)
-            .map(|f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
-    };
-    let (fa, fb) = (faction(a), faction(b));
-    if fa.is_some() && fa == fb {
-        return true;
-    }
-    let templates = &map.realm.data.faction_templates;
-    match (
-        fa.and_then(|f| templates.get(&f)),
-        fb.and_then(|f| templates.get(&f)),
-    ) {
-        (Some(x), Some(y)) => x.friendly_to(y),
-        _ => false,
-    }
-}
-
-/// The nearest guard of the civilian's side within fifty yards joins in.
-fn rouse_nearest_guard(map: &mut Map, caller: Guid, at: Vector3d, enemy: Guid) {
-    let guard = map
-        .grid
-        .around(at.x, at.y, GUARD_CALL_RADIUS)
-        .filter(|g| guid::is_unit(*g) && *g != caller)
-        .filter_map(|g| {
-            let c = map.creature(g)?;
-            (c.alive()
-                && !c.combat.attacking
-                && map
-                    .realm
-                    .data
-                    .creature_template(c.entry)
-                    .is_some_and(|t| t.flags_extra & EXTRA_GUARD != 0)
-                && friendly(map, g, caller)
-                && crate::game::map::combat::can_attack(map, g, enemy))
-            .then(|| (g, dist(c.position, at)))
-        })
-        .filter(|(_, d)| *d <= GUARD_CALL_RADIUS)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(g, _)| g);
-    if let Some(g) = guard {
-        crate::game::map::ai::attacked(map, g, enemy);
-    }
-}
-
 /// Whether a creature is polymorphed: a mage's confusion that transforms.
 pub fn polymorphed(map: &Map, g: Guid) -> bool {
     let data = &map.realm.data;
@@ -1296,8 +1052,8 @@ pub fn update(map: &mut Map) {
         sweep_leashes(map);
     }
     {
-        let _z = crate::zone!("watching for enemies");
-        watch_for_enemies(map);
+        let _z = crate::zone!("guards and Jaina");
+        crate::game::jaina::update(map);
     }
     {
         let _z = crate::zone!("assistance");

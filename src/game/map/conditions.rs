@@ -573,6 +573,8 @@ fn leaf(map: &Map, c: &Condition, source: Option<Guid>, target: Option<Guid>, de
                 .get(&c.entry)
                 .copied()
                 .unwrap_or(c.values.map(|v| v as f32));
+            // Jaina in her city measures from its stand-in for her tower.
+            let [x, y, z] = crate::game::jaina::stand_in(map, target, [x, y, z]);
             position(target)
                 .map(|at| dist(at, Vector3d { x, y, z }) <= r)
                 .into()

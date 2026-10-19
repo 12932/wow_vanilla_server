@@ -39,7 +39,7 @@ pub mod gameobject;
 pub mod gm;
 pub mod gm_dev;
 pub mod grid;
-pub mod guard_posts;
+pub mod guards;
 pub mod handlers;
 mod instance_adapters;
 pub mod instance_script;
@@ -492,6 +492,8 @@ pub struct Map {
     pub trigger_cooldowns: AHashMap<u32, Instant>,
     /// The leash clocks creatures in one fight share.
     pub leashes: creature_combat::Leashes,
+    /// The towns' alarms, and Jaina's comings and goings here.
+    pub guards: guards::Guards,
     /// Who has panicked lately, and when the map has had enough.
     pub health: supervise::Health,
     /// What Tracy shows of the map, while Tracy is on.
@@ -876,6 +878,7 @@ impl Map {
             fresh: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
+            guards: Default::default(),
             health: Default::default(),
             profile,
             #[cfg(test)]

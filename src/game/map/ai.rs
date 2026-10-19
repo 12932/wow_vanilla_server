@@ -216,7 +216,7 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         crate::game::map::event_ai::aggro(map, creature, attacker);
         crate::game::map::creature_combat::entered(map, creature, attacker);
     }
-    crate::game::map::creature_combat::call_guards(map, creature, attacker);
+    crate::game::map::guards::attack_started(map, creature, attacker);
 }
 
 /// Damage from `from` raises its threat on `creature`; a cut (Feint)
@@ -307,9 +307,13 @@ pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
+    let switched = c.combat.attacking && c.combat.victim != by;
     c.combat.victim = by;
     c.fields.set_guid(UNIT_FIELD_TARGET, by);
     attacked(map, creature, by);
+    if switched {
+        crate::game::map::guards::attack_started(map, creature, by);
+    }
 }
 
 /// A taunt ended: what it borrowed goes back, and the victim is the
@@ -379,6 +383,7 @@ pub fn die_by(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid) {
     );
     if let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) {
         crate::game::invasion::creature_died(map, entry, at);
+        crate::game::jaina::creature_died(map, creature);
         crate::game::elemental::creature_died(map, creature, entry);
         crate::game::omen::creature_died(map, entry);
     }
@@ -1191,6 +1196,9 @@ fn fight_step(map: &mut Map, g: Guid) {
     {
         c.combat.victim = victim;
         c.fields.set_guid(UNIT_FIELD_TARGET, victim);
+        // Another victim: one that calls the guards calls one (mangos's
+        // `AttackStart` from `SelectHostileTarget`).
+        crate::game::map::guards::attack_started(map, g, victim);
     }
     advance_motion(map, g);
     // A script's move goes on until it gets there.
