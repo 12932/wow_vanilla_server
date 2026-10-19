@@ -312,6 +312,81 @@ async fn the_elite_guards_packets_pass_the_client() {
     run_checker(&check_py, &wow_exe, &capture);
 }
 
+/// A passenger's creates, with 1.12's transport in their movement (its
+/// flag, the boat's whole GUID, the place on deck): the one Bob, on
+/// Kalimdor, is told as the boat brings Alice there, and her own after the
+/// crossing, the boat's before it; they pass the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_passengers_creates_pass_the_client() {
+    use crate::game::tests::transports::{BOAT, aboard_in, data};
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let realm = harness::realm_with(data());
+    let boat = crate::game::guid::make(crate::game::guid::HighGuid::MoTransport, 0, BOAT);
+    // Bob waits on Kalimdor, where the boat comes.
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.say(".go xyz 1000 1005 83.5312 1").await;
+    b.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    b.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    b.sees(gb).await;
+    // Alice boards on Eastern Kingdoms.
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    a.sees(boat).await;
+    a.send(MSG_MOVE_HEARTBEAT_Client {
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::empty().set_on_transport(
+                MovementInfo_MovementFlags_OnTransport {
+                    transport: TransportInfo {
+                        guid: boat,
+                        position: Vector3d {
+                            x: 1.0,
+                            y: 0.5,
+                            z: 2.0,
+                        },
+                        orientation: 0.0,
+                        timestamp: 0,
+                    },
+                },
+            ),
+            timestamp: 0,
+            position: Vector3d {
+                x: START.0 + 1.0,
+                y: START.1,
+                z: START.2,
+            },
+            orientation: 0.0,
+            fall_time: 0.0,
+        },
+    })
+    .await;
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    let (first, _) = a
+        .wait_for("her own create, aboard", |m| aboard_in(m, ga, boat))
+        .await;
+    assert!(first, "the boat's create before hers");
+    b.wait_for("hers, aboard", |m| aboard_in(m, ga, boat)).await;
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "the creates were captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
 /// A Defias Thug of Northshire, for the Elite Guard to charge, and its
 /// Charge.
 const DEFIAS_THUG: u32 = 38;

@@ -240,6 +240,21 @@ fn observers_of(map: &Map, object: Guid) -> Vec<Guid> {
 /// log as their group's members see them, with the log's ids (mangos's
 /// `UF_FLAG_GROUP_ONLY`), else as anyone does.
 pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
+    // One aboard a boat the observer doesn't know yet: the boat first, so
+    // the create naming it doesn't come before it.
+    if let Some(t) = map
+        .players
+        .get(&object)
+        .and_then(|p| p.movement.flags.get_on_transport())
+        .map(|t| t.transport.guid)
+        && map.gameobject(t).is_some()
+        && map
+            .players
+            .get(&observer)
+            .is_some_and(|p| !p.known.contains(&t))
+    {
+        introduce(map, observer, t);
+    }
     let block = match map.players.get(&object) {
         Some(p)
             if crate::game::fields::has_group_only(&p.fields)
@@ -305,10 +320,29 @@ pub fn part(map: &mut Map, observer: Guid, object: Guid) {
 /// The create blocks a player gets for themselves and their items, sent at
 /// once (at login, and after a worldport).
 pub fn send_self(map: &mut Map, guid: Guid) {
+    // Aboard a transport on the map: its create first, in the same packet,
+    // so the client puts the player on its deck (mangos's `SendInitSelf`);
+    // the player's own says where on it.
+    let aboard = map
+        .players
+        .get(&guid)
+        .and_then(|p| p.movement.flags.get_on_transport())
+        .map(|t| t.transport.guid)
+        .filter(|t| map.gameobject(*t).is_some());
+    let transport = aboard.and_then(|t| Some((t, map.public_create(t)?)));
+    if let Some((t, _)) = transport
+        && let Some(o) = map.observers_mut(t)
+    {
+        o.insert(guid);
+    }
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
     let mut batch = update::Batch::new();
+    if let Some((t, block)) = &transport {
+        batch.push_for(*t, block);
+        p.known.insert(*t);
+    }
     for item in &p.items {
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
     }

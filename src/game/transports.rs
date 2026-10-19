@@ -531,7 +531,11 @@ pub fn animation_position(
 
 /// Every route, from the game data.
 pub fn routes(realm: &Realm) -> Vec<Route> {
-    let data = &realm.data;
+    routes_in(&realm.data)
+}
+
+/// Every route in `data`.
+pub fn routes_in(data: &crate::game::data::GameData) -> Vec<Route> {
     data.transports
         .iter()
         .filter_map(|t| {
@@ -555,6 +559,15 @@ pub fn routes(realm: &Realm) -> Vec<Route> {
 /// The route of transport `entry`.
 pub fn route_of(realm: &Realm, entry: u32) -> Option<Route> {
     routes(realm).into_iter().find(|r| r.entry == entry)
+}
+
+/// A transport's entry from its GUID: a boat's or zeppelin's is its
+/// counter (its GUID has no entry of its own), an elevator's its entry.
+pub fn entry_of(g: Guid) -> u32 {
+    match guid::high(g) {
+        Some(HighGuid::MoTransport) => guid::counter(g),
+        _ => guid::entry(g),
+    }
 }
 
 /// A player who logged out aboard a transport comes back on its deck,
@@ -675,16 +688,19 @@ pub fn restore(map: &mut crate::game::map::Map) {
     }
 }
 
-/// The transport goes from its map to the pose's, with those aboard.
+/// The transport goes from its map to the pose's, with those aboard, as
+/// mangos's `Transport::TeleportTransport` takes it: on the new map first,
+/// so that it is there when they come; then each passenger's far teleport
+/// with it, to their place on its deck; then it leaves the old map, so
+/// those aboard are never told it has gone.
 fn cross(realm: &Arc<Realm>, route: &Route, pose: Pose) {
     let (to, pos) = (pose.map, pose.position);
     let g = route.guid;
     let entry = route.entry;
     let from = realm.maps.get(realm, MapKey::world(route.map));
     let target = MapKey::world(to);
+    place(realm, route, to, pos);
     from.call(move |m| {
-        m.globals.retain(|x| *x != g);
-        m.remove_gameobject(g);
         let aboard: Vec<(Guid, Vector3d, f32)> = m
             .players
             .values()
@@ -711,8 +727,45 @@ fn cross(realm: &Arc<Realm>, route: &Route, pose: Pose) {
             let (at, facing) = passenger_world(offset, o, &pose);
             m.teleport_aboard(p, target, at, facing, entry, offset);
         }
+        m.globals.retain(|x| *x != g);
+        m.remove_gameobject(g);
     });
-    place(realm, route, to, pos);
+}
+
+/// A passenger come to a map with their transport, as their client takes
+/// it (the worldport's acknowledgement): in the world where their place on
+/// deck is now, the ship having sailed on while they loaded (mangos's
+/// `UpdatePassengerPosition` there).
+pub fn settle_aboard(map: &mut Map, g: Guid) {
+    let Some(t) = map
+        .players
+        .get(&g)
+        .and_then(|p| p.movement.flags.get_on_transport())
+        .map(|t| t.transport)
+    else {
+        return;
+    };
+    if map.gameobject(t.guid).is_none() {
+        return;
+    }
+    let Some(route) = route_of(&map.realm, entry_of(t.guid)) else {
+        return;
+    };
+    let pose = route.pose_at(crate::game::uptime_ms());
+    if pose.map != map.key.map {
+        return;
+    }
+    let (at, facing) = passenger_world(t.position, t.orientation, &pose);
+    let now = map.now;
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    p.movement.position = at;
+    p.movement.orientation = facing;
+    p.move_check = Some((at, now));
+    let (old, new) = (p.cell, crate::game::map::grid::cell_of(at.x, at.y));
+    p.cell = new;
+    map.grid.relocate(g, old, new);
 }
 
 impl Map {
@@ -832,6 +885,48 @@ mod tests {
             let _ = r.pose_at(0);
         }
         assert!(route.is_none());
+    }
+
+    /// Every two-map transport on the real data (the boats from Booty Bay,
+    /// Menethil and Auberdine, the zeppelins): it crosses twice a round,
+    /// once each way, and stops at a dock on each side.
+    #[test]
+    #[ignore = "extended"]
+    fn every_two_map_transport_crosses_both_ways_and_docks_on_each_side() {
+        let Some(data) = crate::game::data::load::real_data() else {
+            return;
+        };
+        let routes = routes_in(data);
+        let two: Vec<&Route> = routes.iter().filter(|r| r.maps().len() == 2).collect();
+        let entries: Vec<u32> = two.iter().map(|r| r.entry).collect();
+        // Booty Bay to Ratchet, Orgrimmar to Undercity, Grom'Gol to
+        // Orgrimmar, Menethil to Theramore, Menethil to Auberdine.
+        for e in [20808, 164871, 175080, 176231, 176310] {
+            assert!(entries.contains(&e), "{e} in {entries:?}");
+        }
+        for r in two {
+            let mut crossings = Vec::new();
+            let mut on = r.pose_at(0).map;
+            for t in (100..r.period).step_by(100).chain([r.period]) {
+                let pose = r.pose_at(t);
+                assert!(pose.position.x.is_finite() && pose.position.y.is_finite());
+                if pose.map != on {
+                    crossings.push((on, pose.map));
+                    on = pose.map;
+                }
+            }
+            crossings.sort_unstable();
+            assert_eq!(crossings, vec![(0, 1), (1, 0)], "{}", r.entry);
+            for map in [0, 1] {
+                let stop = r
+                    .frames
+                    .iter()
+                    .find(|f| f.stop && f.map == map)
+                    .unwrap_or_else(|| panic!("{} stops on map {map}", r.entry));
+                let docked = r.pose_at(stop.arrive_ms + 1000);
+                assert_eq!((docked.map, docked.moving), (map, false), "{}", r.entry);
+            }
+        }
     }
 
     #[test]

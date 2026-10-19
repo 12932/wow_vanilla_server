@@ -729,6 +729,7 @@ impl Creature {
                 fall_time: 0.0,
                 speeds: self.speeds,
                 spline,
+                transport: None,
             },
             fields: &self.fields,
             is_self: false,

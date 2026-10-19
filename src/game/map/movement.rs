@@ -36,7 +36,10 @@ macro_rules! relays {
         match $msg {
             $(ClientOpcodeMessage::$name(m) => Some((
                 &m.info,
-                (|guid, info| encode(&$server { guid, info })) as Relay,
+                (|guid, info| {
+                    encode(&$server { guid, info })
+                        .map(crate::game::movement_wire::relay_to_client)
+                }) as Relay,
             )),)*
             _ => None,
         }
@@ -428,7 +431,11 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
         return;
     }
     p.awaiting_worldport = false;
-    let at = p.position();
+    crate::game::transports::settle_aboard(map, guid);
+    let at = map
+        .players
+        .get(&guid)
+        .map_or_else(Default::default, |p| p.position());
     visibility::send_self(map, guid);
     // What follows waits for the world around them.
     map.hold_near(guid, at);
