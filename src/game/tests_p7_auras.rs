@@ -648,3 +648,97 @@ async fn a_modifier_kept_through_a_relog_is_told_again() {
         .await;
     assert_eq!(frame, told);
 }
+
+/// Thistle Tea's `Aura.transition` "reconciles identical removals
+/// consistently for every cause": auras that grow a player, add to their
+/// armor, track creatures and herbs and stealth them leave every field
+/// they touched as it was before them, whether taken off, cancelled, run
+/// out or ended by death.
+#[tokio::test]
+async fn auras_taken_off_any_way_leave_the_same_fields() {
+    const SHAPING: u32 = 97_460;
+    const TRACKING: u32 = 97_461;
+    let mut d = data();
+    let mut shaping = aura_spell(SHAPING, auras::AURA_MOD_SCALE, 0, 50);
+    shaping.effects[1] = SpellEffect {
+        effect: 6,
+        aura: auras::AURA_MOD_RESISTANCE,
+        misc_value: 1,
+        base_points: 19,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    shaping.effects[2] = SpellEffect {
+        effect: 6,
+        aura: auras::AURA_MOD_STEALTH,
+        base_points: 9,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    let mut tracking = aura_spell(TRACKING, auras::AURA_TRACK_CREATURES, 2, 0);
+    tracking.effects[1] = SpellEffect {
+        effect: 6,
+        aura: auras::AURA_TRACK_RESOURCES,
+        misc_value: 7,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(SHAPING, shaping);
+    d.spells.spells.insert(TRACKING, tracking);
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let fields = |m: &Map| {
+            let f = &m.players[&ga].fields;
+            (
+                f.get_f32(OBJECT_FIELD_SCALE_X).to_bits(),
+                f.get_u32(UNIT_FIELD_RESISTANCES),
+                f.get_u32(PLAYER_TRACK_CREATURES),
+                f.get_u32(PLAYER_TRACK_RESOURCES),
+                f.get_byte(UNIT_FIELD_BYTES_1, 3),
+                f.get_u32(PLAYER_FIELD_BYTES2),
+            )
+        };
+        let own = fields(m);
+        let mut seen = Vec::new();
+        for how in 0..4 {
+            let ten = auras::Context {
+                duration: Some(Some(10_000)),
+                ..Default::default()
+            };
+            for (id, points) in [
+                (SHAPING, [(0, 50), (1, 20), (2, 10)]),
+                (TRACKING, [(0, 0), (1, 0), (2, 0)]),
+            ] {
+                let s = m.realm.data.spells.spells[&id].clone();
+                let effects: Vec<(usize, i32)> = points
+                    .into_iter()
+                    .filter(|(i, _)| s.effects[*i].aura != 0)
+                    .collect();
+                auras::apply_spell(m, ga, ga, &s, &effects, ten).expect("put on");
+            }
+            let on_her = fields(m);
+            match how {
+                0 => auras::remove_where(m, ga, |h| h.spell == SHAPING || h.spell == TRACKING),
+                1 => {
+                    auras::cancel(m, ga, SHAPING);
+                    auras::cancel(m, ga, TRACKING);
+                }
+                2 => crate::game::tests_p3_spells_kit::pass(m, 10_000),
+                _ => {
+                    crate::game::map::death::kill(m, ga);
+                    crate::game::map::death::resurrect(m, ga, 1.0);
+                }
+            }
+            seen.push((on_her != own, fields(m)));
+        }
+        (own, seen)
+    })
+    .await;
+    let (own, seen) = out;
+    for (how, (changed, after)) in seen.into_iter().enumerate() {
+        assert!(changed, "{how}: the auras changed the fields");
+        assert_eq!(after, own, "{how}: as they were");
+    }
+}
