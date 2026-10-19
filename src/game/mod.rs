@@ -1246,9 +1246,8 @@ impl Realm {
     /// long again for the store: a hung map is left behind, and what the
     /// others saved is still written.
     pub async fn shutdown_within(&self, limit: Duration) {
-        self.maps.close();
         let mut waits = Vec::new();
-        for map in self.maps.all() {
+        for map in self.maps.close() {
             let (tx, rx) = tokio::sync::oneshot::channel();
             if map.send(MapEvent::Shutdown(tx)) {
                 waits.push((map.key, rx));
@@ -1262,6 +1261,21 @@ impl Realm {
                     limit.as_secs()
                 );
             }
+        }
+        // One between maps as it began (taken from one, their session yet
+        // to hand them to the next) is saved by the map they go to, which
+        // does so for whoever comes now (`Maps::get`, `map::finish`), and
+        // goes offline once saved: waited for, within the same limit, so
+        // that their save is written with the rest.
+        while self.registry.online_count() > 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let left = self.registry.online_count();
+        if left > 0 {
+            tracing::error!(
+                "{left} still online after {} s (between maps, or in a hung map); shutting down without them",
+                limit.as_secs()
+            );
         }
         // Honor earned since the last sweep (a kill, a battleground's win)
         // is kept too: the sweep that writes it runs only every so often.
