@@ -648,6 +648,9 @@ pub fn execute(
             }
             EFFECT_PICKPOCKET => {
                 if let Some(unit) = t.unit {
+                    if pocket_noticed(map, caster, unit, s) {
+                        continue;
+                    }
                     pick_pocket(map, caster, unit);
                 }
             }
@@ -897,6 +900,29 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
 }
 
 /// Picking a living creature's pockets: once a life.
+/// A pocket's picking fails as its spell is resisted, a spell's hit as
+/// any (mangos's `EffectPickPocket`: "failure is handled through normal
+/// spell resist"); the failure brings the rogue out of stealth and the
+/// creature down on them (`CasterHitTargetWithSpell`: a miss of a spell
+/// that `FAILURE_BREAKS_STEALTH` and makes threat only on a miss).
+/// Whether it failed.
+fn pocket_noticed(map: &mut Map, caster: Guid, creature: Guid, s: &SpellTemplate) -> bool {
+    use crate::game::map::spells::{mods, outcome};
+    let m = mods::for_spell(map, caster, s);
+    let hit = outcome::roll_hit(map, caster, creature, s, &m);
+    if hit.lands() {
+        return false;
+    }
+    outcome::send_miss(map, caster, creature, s.id, hit);
+    crate::game::map::auras::remove_where(map, caster, |h| h.dispel == DISPEL_STEALTH);
+    crate::game::map::ai::attacked(map, creature, caster);
+    crate::game::map::combat::struck(map, caster, creature);
+    true
+}
+
+/// Stealth's dispel type.
+const DISPEL_STEALTH: u32 = 5;
+
 fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     let data = map.realm.data.clone();
     let Some((entry, level)) = map
