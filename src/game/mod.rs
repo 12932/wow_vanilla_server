@@ -675,6 +675,10 @@ mod tests_p7_loader_spells;
 #[cfg(test)]
 mod tests_p7_loader_world;
 #[cfg(test)]
+mod tests_p7_pets;
+#[cfg(test)]
+mod tests_p7_pets_real;
+#[cfg(test)]
 mod tests_p7_player;
 #[cfg(test)]
 mod tests_p7_player_bgs;

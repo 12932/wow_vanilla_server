@@ -186,6 +186,10 @@ pub struct Caster {
     pub combo_points: u8,
     /// Spells whose cooldown starts when their aura goes (Stealth).
     pub pending_cooldowns: Vec<u32>,
+    /// The times those wait to start, as the cast had them (an item's
+    /// own, for an engineer's Mechanical Dragonling): (spell, recovery,
+    /// category, the category's recovery), milliseconds.
+    pub pending_times: Vec<(u32, u32, u32, u32)>,
     /// Schools an interrupt locks out: (school mask, until).
     pub school_lockout: Vec<(u32, Instant)>,
     /// A next-swing ability waiting for the next melee swing.

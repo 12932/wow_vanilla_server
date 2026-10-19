@@ -51,8 +51,9 @@ fn holding_spell(map: &Map, master: Guid, unit: Guid) -> Option<u32> {
 }
 
 /// The spells a charmed player is given to cast: their harmful class
-/// spells, each at its best rank (Thistle Tea's `PlayerCharm.spells`).
-fn charm_spells(map: &Map, player: Guid) -> Vec<u32> {
+/// spells shown in the spellbook, each at its best rank (Thistle Tea's
+/// `PlayerCharm.spells`).
+pub(crate) fn charm_spells(map: &Map, player: Guid) -> Vec<u32> {
     let data = &map.realm.data;
     let Some(p) = map.players.get(&player) else {
         return Vec::new();
@@ -62,6 +63,7 @@ fn charm_spells(map: &Map, player: Guid) -> Vec<u32> {
         let usable = s.family_name != 0
             && !crate::game::map::auras::positive(s)
             && !s.passive()
+            && !s.attr(0, crate::game::data::spells::ATTR_HIDDEN)
             && s.aura_interrupt_flags & crate::game::map::auras::INTERRUPT_DAMAGE == 0
             && s.attributes[1] & 0x2_0000 == 0;
         if !usable {
@@ -135,11 +137,13 @@ pub fn take(map: &mut Map, master: Guid, victim: Guid) {
     crate::game::map::player_motion::control(map, victim);
 }
 
-/// The bar a possessor commands a player from: attack, and the player's
-/// harmful spells.
-pub fn bar(map: &Map, victim: Guid) -> [u32; 10] {
-    let spells = charm_spells(map, victim);
-    control::default_bar(&map.realm.data, &spells, &[], true)
+/// The bar a possessor commands a player from: attack, and nothing else
+/// (mangos's `InitPossessCreateSpells`: "possessed players don't have
+/// spells"; Thistle Tea's `SmsgPetSpells.for_possession`).
+pub fn bar(_map: &Map, _victim: Guid) -> [u32; 10] {
+    let mut bar = [control::button(0, ACT_PASSIVE); 10];
+    bar[0] = control::button(u32::from(COMMAND_ATTACK), ACT_COMMAND);
+    bar
 }
 
 /// Player `victim` is theirs again.
@@ -153,16 +157,28 @@ pub fn release(map: &mut Map, victim: Guid) {
     };
     crate::game::map::combat::stop_attack(map, victim);
     crate::game::map::spells::interrupt(map, victim);
+    // Under a fear or a confusion its client has no control back (mangos's
+    // `UpdateClientControl` checks `IsClientControlled`): the server moves
+    // it still, and gives it back when that ends.
+    let driven = matches!(
+        crate::game::map::player_motion::driven_by(map, victim),
+        Some(
+            crate::game::map::player_motion::Mode::Fear
+                | crate::game::map::player_motion::Mode::Confusion { .. }
+        )
+    );
     if let Some(p) = map.players.get_mut(&victim) {
         p.fields
             .set_u32(UNIT_FIELD_FACTIONTEMPLATE, pos.was_faction);
         p.fields.set_guid(UNIT_FIELD_CHARMEDBY, Guid::zero());
         p.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, false);
-        p.outbound.send(&SMSG_CLIENT_CONTROL_UPDATE {
-            guid: victim,
-            allow_movement: true,
-        });
+        if !driven {
+            p.outbound.send(&SMSG_CLIENT_CONTROL_UPDATE {
+                guid: victim,
+                allow_movement: true,
+            });
+        }
     }
     if let Some(m) = map.players.get_mut(&pos.master) {
         if m.owned.charm == Some(victim) {
@@ -325,6 +341,14 @@ fn charm_target(map: &Map, victim: Guid, master: Guid, t: Guid) -> bool {
 /// its blade till the next try. With no foe it follows.
 fn fight(map: &mut Map, victim: Guid, master: Guid) {
     let now = map.now;
+    // Stunned, it does nothing (Thistle Tea's "stuns suspend the charm
+    // AI").
+    if crate::game::map::auras::auras(map, victim)
+        .is_some_and(|a| a.has(crate::game::map::auras::AURA_MOD_STUN))
+    {
+        crate::game::map::combat::stop_attack(map, victim);
+        return;
+    }
     let current = map
         .combat(victim)
         .filter(|c| c.attacking)

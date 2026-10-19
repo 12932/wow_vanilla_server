@@ -188,6 +188,11 @@ pub fn driven(map: &Map, g: Guid) -> bool {
     map.players.get(&g).is_some_and(|p| p.driven.is_some())
 }
 
+/// Why the server moves this player, if it does.
+pub fn driven_by(map: &Map, g: Guid) -> Option<Mode> {
+    map.players.get(&g)?.driven.as_ref().map(|d| d.mode)
+}
+
 /// Bring a player's control in line with its auras and charm: the server
 /// takes its movement, or gives it back.
 pub fn control(map: &mut Map, g: Guid) {

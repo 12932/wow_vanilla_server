@@ -480,6 +480,7 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         } else {
             control::default_bar(&data, &s.spells, &s.autocast, false)
         };
+        control::restore(&data, s);
     }
     apply_level(&data, c, level);
     // Its cooldowns ran on while it was away.
@@ -523,30 +524,47 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
     // Tea's `PetTraining.discover_passives`).
     if kind == Kind::Hunter {
         for spell in &passives {
-            hunter::used(map, g, *spell);
+            hunter::discover_passive(map, g, *spell);
         }
     }
     for spell in passives {
-        if let Some(t) = data.spells.get(spell) {
-            let effects: Vec<(usize, i32)> = (0..3)
-                .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
-                .map(|i| (i, crate::game::map::spells::points(t, i, u32::from(level))))
-                .collect();
-            let _ = crate::game::map::auras::apply_spell(
-                map,
-                g,
-                g,
-                t,
-                &effects,
-                crate::game::map::auras::Context {
-                    duration: Some(None),
-                    ..Default::default()
-                },
-            );
-        }
+        apply_passive(map, g, spell);
     }
     inherit::sync(map, g);
     Some(g)
+}
+
+/// Pet `g`'s passive `spell` takes hold, its amounts by its level and its
+/// master's modifiers (mangos's `CalculateSpellEffectValue` through
+/// `GetSpellModOwner`: Endurance Training on the tamed pets' health
+/// passive).
+pub(super) fn apply_passive(map: &mut Map, g: Guid, spell: u32) {
+    let data = map.realm.data.clone();
+    let Some(t) = data.spells.get(spell) else {
+        return;
+    };
+    let level = map.unit_view(g).map_or(1, |u| u.level);
+    let mods = crate::game::map::spells::mods::for_spell(map, g, t);
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
+        .map(|i| {
+            (
+                i,
+                mods.points(t, i, crate::game::map::spells::points(t, i, level)),
+            )
+        })
+        .collect();
+    let _ = crate::game::map::auras::apply_spell(
+        map,
+        g,
+        g,
+        t,
+        &effects,
+        crate::game::map::auras::Context {
+            duration: Some(None),
+            ..Default::default()
+        },
+    );
 }
 
 /// `pet` becomes `owner`'s: their summon field, and its bar to their
@@ -681,8 +699,9 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
         spells: s.spells.clone(),
         autocast: s.autocast.clone(),
         bar: s.bar.to_vec(),
-        react: s.react,
-        command: s.command,
+        // Under Eyes of the Beast, the stance it goes back to.
+        react: s.eyes.map_or(s.react, |(react, _)| react),
+        command: s.eyes.map_or(s.command, |(_, command)| command),
         dead: !c.alive(),
         summon_spell: s.summon_spell,
         display_id: f.get_u32(UNIT_FIELD_NATIVEDISPLAYID),
@@ -704,6 +723,14 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
 /// hands.
 pub fn remove(map: &mut Map, g: Guid) {
     let owner = owner_of(map, g);
+    guardian_gone(map, g);
+    // Seen through, its master sees through their own eyes again
+    // (Thistle Tea's `Companion.suspend` clears the possession).
+    if let Some(owner) = owner
+        && state(map, g).is_some_and(|s| s.eyes.is_some())
+    {
+        super::eyes::look_away(map, owner, g);
+    }
     let totem = state(map, g).map(|s| s.kind) == Some(Kind::Totem);
     if totem {
         totems::lift_auras(map, g);
@@ -812,9 +839,25 @@ pub fn dismiss(map: &mut Map, pet: Guid) {
     }
 }
 
+/// A player's guardian died or went: the cooldown of the spell that
+/// summoned it, waiting on it, starts now (mangos's `RemoveGuardian` and
+/// `SendCooldownEvent`; Thistle Tea's `Guardians.on_death` and
+/// `dismiss_all`): an engineer's Mechanical Dragonling may be used again
+/// in its item's time. Once, for the first of a cast's to go.
+fn guardian_gone(map: &mut Map, g: Guid) {
+    let Some((owner, spell)) = state(map, g)
+        .filter(|s| s.kind == Kind::Guardian && guid::is_player(s.owner))
+        .map(|s| (s.owner, s.summon_spell))
+    else {
+        return;
+    };
+    crate::game::map::spells::cooldowns::release(map, owner, spell, true);
+}
+
 /// A controlled creature dies: it falls and stays a while.
 pub fn die(map: &mut Map, g: Guid) {
     let now = map.now;
+    guardian_gone(map, g);
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::combat::leave_combat(map, g);
     let spline = map.next_spline_id;

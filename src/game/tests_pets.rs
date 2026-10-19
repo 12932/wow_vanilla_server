@@ -873,17 +873,30 @@ async fn a_hunter_trains_their_pet_and_learns_what_it_uses() {
         .await
         .flatten();
     assert_eq!(points, Some(4), "nothing spent on what it knows");
-    // Forgotten by the hunter, and taught again when the pet uses it.
+    // Forgotten by the hunter, and taught again as the pet uses it: by a
+    // chance of ten in 101 a use (mangos's `Pet::CheckLearning`), so,
+    // with the rolls on, within some hundreds of uses.
     map.query(move |m| {
         if let Some(p) = m.players.get_mut(&gh) {
             p.spells.retain(|s| *s != TRAIN_GORE);
         }
+        m.spells.rolls = Some(true);
     })
     .await;
     h.send(CMSG_PET_ACTION {
         pet,
         data: pets::button(GORE, pets::ACT_ENABLED),
         target: wolf,
+    })
+    .await;
+    map.query(move |m| {
+        let gore = m.realm.data.spells.get(GORE).cloned().unwrap();
+        for _ in 0..500 {
+            if m.players[&gh].spells.contains(&TRAIN_GORE) {
+                break;
+            }
+            pets::before_effects(m, pet, &gore, &Default::default());
+        }
     })
     .await;
     h.wait_for("SMSG_LEARNED_SPELL", |m| match m {

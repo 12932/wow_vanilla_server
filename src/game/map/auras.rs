@@ -1902,6 +1902,7 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 a.misc.max(0) as usize,
                 kind == AURA_ADD_PCT_MODIFIER,
             );
+            crate::game::map::pets::master_mods_changed(map, target, h.spell, a.mask);
         }
         AURA_MOD_TOTAL_THREAT => crate::game::map::spells::threat_sync::fade_changed(map, target),
         AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE => {
@@ -2125,6 +2126,7 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 a.misc.max(0) as usize,
                 a.kind == AURA_ADD_PCT_MODIFIER,
             );
+            crate::game::map::pets::master_mods_changed(map, target, h.spell, a.mask);
         }
         AURA_MOD_TOTAL_THREAT => crate::game::map::spells::threat_sync::fade_changed(map, target),
         AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE if !still(map, a.kind) => {

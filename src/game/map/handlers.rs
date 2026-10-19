@@ -28,6 +28,24 @@ impl Map {
             }
             Err(msg) => msg,
         };
+        // A player another holds plays nothing of their own: no swing,
+        // cast, item, pet or selection from their client, while chat,
+        // queries and the logout are theirs still (Thistle Tea's
+        // `Input.allowed?`; mangos's client has no control to send them).
+        if p.owned.possessed_by.is_some()
+            && matches!(
+                msg,
+                ClientOpcodeMessage::CMSG_ATTACKSWING(_)
+                    | ClientOpcodeMessage::CMSG_ATTACKSTOP
+                    | ClientOpcodeMessage::CMSG_CAST_SPELL(_)
+                    | ClientOpcodeMessage::CMSG_USE_ITEM(_)
+                    | ClientOpcodeMessage::CMSG_PET_ACTION(_)
+                    | ClientOpcodeMessage::CMSG_SET_SELECTION(_)
+            )
+        {
+            trace!("{guid} is held by another: {msg} dropped");
+            return;
+        }
         let Some(msg) = crate::game::map::misc::handle_all(self, guid, msg) else {
             return;
         };

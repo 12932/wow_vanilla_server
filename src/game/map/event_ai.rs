@@ -886,6 +886,8 @@ const GONE_AT_DEATH: [i32; 3] = [2, 5, 10];
 const TIMER_FROM_DEATH: [i32; 2] = [4, 6];
 /// A summon whose time came in a fight looks again this much later.
 const DESPAWN_RECHECK: Duration = Duration::from_secs(10);
+/// A wild summon whose death came in a fight looks again this much later.
+const TIMED_DEATH_RECHECK: Duration = Duration::from_millis(100);
 /// Thistle Tea's own type for a creature's wild summon (spell effect 41)
 /// with a duration: at its time, out of a fight, it dies (`TemporarySummon`),
 /// its corpse left as any's.
@@ -1015,6 +1017,10 @@ pub fn update_despawns(map: &mut Map) {
                 None
             }
             // Fighting, it waits; the fight's end starts its time again.
+            // A wild summon's death waits on the fight alone: it dies as
+            // soon as that is over, its time not drawn out (Thistle Tea's
+            // `TemporarySummon.next_at`, a tenth of a second on).
+            Due::Wait if kind == TIMED_DEATH => Some(now + TIMED_DEATH_RECHECK),
             Due::Wait => Some(now + DESPAWN_RECHECK),
             Due::Ignore => None,
         };

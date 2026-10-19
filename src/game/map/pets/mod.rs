@@ -34,11 +34,12 @@ mod wild;
 pub(crate) use ai::breakable_cc;
 /// A pet sent at a target, or stopped where it is: for scripts.
 pub use ai::{attack as attack_target, stop as stop_where};
-pub use control::{button, handle, learn, send_spells};
+pub use control::{button, handle, learn, send_spells, unpack};
 pub use hunter::{
     NPC_FLAG_STABLEMASTER, TAMER_SPELLS, beast_for, change_loyalty, give_pet, list_stable,
     pet_xp_to_level, untrain_offer,
 };
+pub use inherit::master_mods_changed;
 /// A family's passives, learned when tamed: for the tests.
 #[cfg(test)]
 pub(crate) use summon::family_passives;
@@ -355,8 +356,9 @@ pub fn taught(s: &SpellTemplate) -> Option<u32> {
         .map(|i| s.effects[i].trigger_spell)
 }
 
-/// Effect `index` of `s`, cast by `caster` on `target`; `triggered` if
-/// another spell or an aura cast it.
+/// Effect `index` of `s`, cast by `caster` on `target` (aimed at `t`);
+/// `triggered` if another spell or an aura cast it.
+#[allow(clippy::too_many_arguments)]
 pub fn effect(
     map: &mut Map,
     caster: Guid,
@@ -365,6 +367,7 @@ pub fn effect(
     index: usize,
     amount: i32,
     triggered: bool,
+    t: &Targets,
 ) {
     let e = s.effects[index];
     // The stacking trinkets' hit scripts ride the same hook.
@@ -400,7 +403,8 @@ pub fn effect(
                 // A creature's demon is a guardian of its own, beside any
                 // it has (mangos-classic's `EffectSummonPet`, a
                 // `GUARDIAN_PET` for a caster no player).
-                wild::summon(map, caster, e.misc_value as u32, s, index, 1);
+                let at = wild::destination(map, caster, s, index, t);
+                wild::summon(map, caster, e.misc_value as u32, s, index, 1, at);
             } else if e.misc_value > 0 {
                 summon::summon_demon(map, caster, e.misc_value as u32, s.id);
             } else {
@@ -438,7 +442,8 @@ pub fn effect(
             if e.effect == EFFECT_SUMMON_WILD
                 || (e.effect == EFFECT_SUMMON_GUARDIAN && wild::by_creature(map, caster))
             {
-                wild::summon(map, caster, e.misc_value.max(0) as u32, s, index, count);
+                let at = wild::destination(map, caster, s, index, t);
+                wild::summon(map, caster, e.misc_value.max(0) as u32, s, index, count, at);
                 return;
             }
             let entry = e.misc_value.max(0) as u32;
@@ -790,6 +795,11 @@ pub fn owner_killed(map: &mut Map, owner: Guid, victim: Guid, share: KillShare) 
 
 /// `master` takes control of `unit` (charm or possession).
 pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
+    // No one holds themselves (Thistle Tea's "self possession does not
+    // acquire control").
+    if master == unit {
+        return;
+    }
     if map.players.contains_key(&unit) {
         possess::take(map, master, unit);
         return;
@@ -888,6 +898,16 @@ pub fn uncharmed(map: &mut Map, master: Guid, unit: Guid) {
         .is_some_and(|s| matches!(s.kind, Kind::Charmed | Kind::Possessed) && s.owner == master);
     if charmed {
         release(map, master, unit);
+    }
+}
+
+/// `master` died: what they charm or possess is let go at once, a
+/// creature or a player (mangos's `BreakCharmOutgoing` in
+/// `Unit::SetDeathState`, Thistle Tea's `Companion.dismiss` at the
+/// owner's death).
+pub fn master_died(map: &mut Map, master: Guid) {
+    if let Some(unit) = map.players.get(&master).and_then(|p| p.owned.charm) {
+        uncharmed(map, master, unit);
     }
 }
 
@@ -1042,7 +1062,7 @@ pub mod testing {
     pub use super::control::good_name;
     pub use super::hunter::{
         HAPPINESS_TICK, change_happiness, change_loyalty, gain_xp, kill_xp, on_death,
-        pet_xp_to_level, revive, show_training_points, tame, tick, train_check, untrain,
+        pet_xp_to_level, revive, show_training_points, tame, teaches, tick, train_check, untrain,
     };
     pub use super::summon::{
         UNIT_FLAG_PET_ABANDON, UNIT_FLAG_PET_RENAME, die, from_record, record_of, spawn,
