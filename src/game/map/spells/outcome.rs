@@ -1046,12 +1046,30 @@ pub fn partial_resist(
     damage: u32,
     tick: bool,
 ) -> u32 {
-    if damage == 0 || s.school == 0 || binary(s) || !rolling(map) {
+    if s.school == 0 || binary(s) {
+        return 0;
+    }
+    resisted_of_school(map, caster, target, school_index(s), damage, tick)
+}
+
+/// Damage of the magic school `school` (an index) from `caster` resisted in
+/// part by `target`'s resistance, less the caster's penetration: a spell's
+/// or an elemental's blow (mangos's `CalculateDamageAbsorbAndResist`), a
+/// tenth as often for a tick.
+pub fn resisted_of_school(
+    map: &Map,
+    caster: Guid,
+    target: Guid,
+    school: usize,
+    damage: u32,
+    tick: bool,
+) -> u32 {
+    if damage == 0 || school == 0 || !rolling(map) {
         return 0;
     }
     let caster_level = level(map, caster);
     let diff = level(map, target) as i32 - caster_level as i32;
-    let r = resistance(map, caster, target, school_index(s));
+    let r = resistance(map, caster, target, school);
     let mut c = resist_chance(r, caster_level, !guid::is_player(target), diff) * 100.0;
     if tick {
         c *= 0.1;
@@ -1243,7 +1261,8 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
         ex |= procs::EX_ABSORB;
     }
     let (done, taken_flag) = proc_flags(s);
-    procs::trigger(
+    // With the spell's other effects on the target, once (`effects::run`).
+    procs::spell_hit(
         map,
         procs::Event {
             actor: caster,
@@ -1259,7 +1278,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
             extra_attack: false,
         },
     );
-    let items = death_items(map, target, left);
+    let items = death_items(map, target, caster, left);
     if left > 0 {
         // Its threat by the auras of its school (`super::threat`).
         combat::deal_damage_by(map, caster, target, left, s.school_mask(), Some(s.id));
@@ -1269,9 +1288,10 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
 }
 
 /// The items a unit's death under `AURA_CHANNEL_DEATH_ITEM` leaves its
-/// casters (Drain Soul's and Shadowburn's soul shards), if `damage` kills
-/// it: only for a death that gives experience or honor.
-pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)> {
+/// casters (Drain Soul's and Shadowburn's soul shards), if `damage` from
+/// `by` kills it: only for a death that gives experience or honor, the
+/// killing blow's part in it counted.
+pub fn death_items(map: &Map, target: Guid, by: Guid, damage: u32) -> Vec<(Guid, u32, u32)> {
     let health = map
         .unit_fields(target)
         .map(|f| f.get_u32(UNIT_FIELD_HEALTH))
@@ -1288,9 +1308,11 @@ pub fn death_items(map: &Map, target: Guid, damage: u32) -> Vec<(Guid, u32, u32)
     // A soul shard only from a death worth something to its caster (Thistle
     // Tea's `DeathItem.eligible?`, mangos's `isHonorOrXPTarget`): not grey,
     // a player or tapped, not a pet or a totem, nor a creature worth no
-    // experience.
+    // experience, nor one mostly the NPCs' kill, its killing blow counted
+    // (Thistle Tea's `DamageOrigin` before the shard).
     let shard_target = creature.is_none_or(|c| {
         c.pet.is_none()
+            && crate::game::map::creature_combat::loot_allowed_with(map, target, by, damage)
             && crate::game::map::pets::owner_of(map, target).is_none()
             && data
                 .creature_template(c.entry)

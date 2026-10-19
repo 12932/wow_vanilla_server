@@ -789,6 +789,32 @@ mod tests_p8_ai_scripts;
 #[cfg(test)]
 mod tests_p8_ai_spells;
 #[cfg(test)]
+mod tests_p8_combat;
+#[cfg(test)]
+mod tests_p8_combat_block;
+#[cfg(test)]
+mod tests_p8_combat_control;
+#[cfg(test)]
+mod tests_p8_combat_defense;
+#[cfg(test)]
+mod tests_p8_combat_disarm;
+#[cfg(test)]
+mod tests_p8_combat_elemental;
+#[cfg(test)]
+mod tests_p8_combat_extra;
+#[cfg(test)]
+mod tests_p8_combat_heal;
+#[cfg(test)]
+mod tests_p8_combat_origin;
+#[cfg(test)]
+mod tests_p8_combat_posture;
+#[cfg(test)]
+mod tests_p8_combat_reactive;
+#[cfg(test)]
+mod tests_p8_combat_share;
+#[cfg(test)]
+mod tests_p8_combat_state;
+#[cfg(test)]
 mod tests_p8_loader_combat;
 #[cfg(test)]
 mod tests_p8_loader_limits;

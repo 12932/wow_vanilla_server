@@ -170,8 +170,8 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     if attacking {
         return;
     }
-    let first =
-        c.combat_start.is_none() || !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    let fresh = !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+    let first = c.combat_start.is_none() || fresh;
     // A passive one is in the fight, but takes no victim and calls no one.
     if passive && c.owner.is_none() {
         if first {
@@ -181,6 +181,9 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
         c.engagement.last_hostile = Some(now);
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+        if fresh {
+            crate::game::map::spells::combat_began(map, creature);
+        }
         if first {
             crate::game::map::creature_combat::leash_begins(map, creature);
             crate::game::map::creature_combat::stand_up(map, creature);
@@ -204,6 +207,11 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     }
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, true);
+    // What a fight's start stops: a cast not for one (mangos's
+    // `SetInCombatState`, for every unit).
+    if fresh {
+        crate::game::map::spells::combat_began(map, creature);
+    }
     if first {
         crate::game::map::creature_combat::leash_begins(map, creature);
         crate::game::map::creature_combat::stand_up(map, creature);

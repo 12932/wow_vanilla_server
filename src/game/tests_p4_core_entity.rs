@@ -275,8 +275,8 @@ async fn a_warlocks_two_drains_on_a_kill_give_one_shard_and_a_blow_short_of_it_n
                 auras::apply_spell(m, g, brute, &s, &[(0, 1)], Default::default()).unwrap();
             }
             let hp = health(m, brute);
-            let short = crate::game::map::spells::outcome::death_items(m, brute, hp - 1);
-            let lethal = crate::game::map::spells::outcome::death_items(m, brute, hp);
+            let short = crate::game::map::spells::outcome::death_items(m, brute, g, hp - 1);
+            let lethal = crate::game::map::spells::outcome::death_items(m, brute, g, hp);
             (short, lethal)
         })
         .await

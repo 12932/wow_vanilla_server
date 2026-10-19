@@ -1834,9 +1834,6 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::interrupt(map, target);
             }
             // Both at once pacifies as well (Thistle Tea's `CombatControl`).
-            if a.kind == AURA_MOD_PACIFY_SILENCE {
-                crate::game::map::combat::stop_attack(map, target);
-            }
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SILENCED, true);
                 if a.kind == AURA_MOD_PACIFY_SILENCE {
@@ -1844,8 +1841,12 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 }
             }
         }
+        // A pacified unit's fight goes on: its blows are held while it lasts,
+        // its queued strike and the extra attacks it is owed with them
+        // (mangos's `HandleAuraModPacify` sets the flag alone, and
+        // `AttackerStateUpdate` swings nothing under it; Thistle Tea's
+        // `melee_attack_with_context`).
         AURA_MOD_PACIFY => {
-            crate::game::map::combat::stop_attack(map, target);
             if let Some(f) = map.unit_fields_mut(target) {
                 f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED, true);
             }

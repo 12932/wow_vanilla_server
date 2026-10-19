@@ -256,15 +256,15 @@ async fn a_soul_shard_is_of_a_death_worth_something_to_a_warlock() {
             m.creature_mut(g).unwrap().tapped_by = Some(gw);
             drain(m, gw, g);
         }
-        let worth = death_items(m, brute, 10_000_000);
-        let none = death_items(m, worthless, 10_000_000);
+        let worth = death_items(m, brute, gw, 10_000_000);
+        let none = death_items(m, worthless, gw, 10_000_000);
         // Bob, level 1 as she is: no tap to ask for.
         drain(m, gw, gb);
-        let bob = death_items(m, gb, 10_000_000);
+        let bob = death_items(m, gb, gw, 10_000_000);
         // A creature's own drain on another: nothing for it.
         let other = spawn(m, gw, BRUTE, 20, 5.0);
         drain(m, brute, other);
-        let given = death_items(m, other, 10_000_000);
+        let given = death_items(m, other, brute, 10_000_000);
         crate::game::map::spells::outcome::give_death_items(m, other, given);
         (worth, none, bob)
     })

@@ -554,7 +554,7 @@ async fn a_soul_shard_is_for_the_tap_and_its_group() {
         let tap = |m: &mut Map, by: Option<Guid>| {
             m.creature_mut(wolf).unwrap().tapped_by = by;
         };
-        let shards = |m: &Map| death_items(m, wolf, 1_000_000);
+        let shards = |m: &Map| death_items(m, wolf, ga, 1_000_000);
         drain(m, ga, wolf, DRAIN, 1);
         drain(m, ga, wolf, DRAIN, 1);
         tap(m, Some(gb));
@@ -584,7 +584,7 @@ async fn a_soul_shard_is_for_the_tap_and_its_group() {
     let none = on_map(&realm, move |m| {
         let wolf = unit(2);
         drain(m, ga, wolf, DRAIN, 0);
-        death_items(m, wolf, 1_000_000)
+        death_items(m, wolf, ga, 1_000_000)
     })
     .await;
     assert_eq!(none, vec![], "none of nothing");

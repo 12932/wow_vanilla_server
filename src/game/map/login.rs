@@ -37,6 +37,17 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
     }
     crate::game::map::rest::restore(p, map.now, &map.cfg.rates);
     crate::game::map::intoxication::restore(p);
+    // Under a fifth of the health saved: healthless from the first (mangos
+    // keeps the state each update), no window nor combo point of before.
+    let (health, max) = (
+        p.fields.get_u32(UNIT_FIELD_HEALTH),
+        p.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+    );
+    p.fields.set_flag(
+        UNIT_FIELD_AURASTATE,
+        crate::game::map::combat::AURA_STATE_HEALTHLESS_20,
+        crate::game::map::combat::healthless(health, max),
+    );
     crate::game::map::exploration::init(p);
     send_world(map, p);
     if p.row.at_login & crate::game::store::AT_LOGIN_FIRST != 0

@@ -349,7 +349,9 @@ impl Roll {
 }
 
 fn bp(chance: f32) -> i32 {
-    (chance * 100.0) as i32
+    // To the nearest hundredth, as mangos's `chance_u` has it: 4.8% is 480,
+    // not the 479 its float would be cut to.
+    (chance * 100.0).round() as i32
 }
 
 /// Walk the table's steps with a roll in hundredths of a percent.
@@ -590,7 +592,7 @@ pub fn rage_scaled(damage: u32, level: u32, taken: bool, by: f32) -> u32 {
 
 /// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
 /// flags, which wow_messages reads as one value. `damage` is what got
-/// through, after absorbs; `school` its school's index.
+/// through, after absorbs and resists; `school` its school's index.
 #[allow(clippy::too_many_arguments)]
 pub fn attacker_state_full(
     attacker: Guid,
@@ -600,6 +602,7 @@ pub fn attacker_state_full(
     victim_state: u32,
     blocked: u32,
     absorbed: u32,
+    resisted: u32,
     school: u32,
 ) -> Arc<[u8]> {
     let mut b = Body::default();
@@ -612,7 +615,7 @@ pub fn attacker_state_full(
         .f32(damage as f32)
         .u32(damage)
         .u32(absorbed)
-        .u32(0)
+        .u32(resisted)
         .u32(victim_state)
         .u32(if absorbed > 0 { u32::MAX } else { 0 })
         .u32(0)
@@ -635,6 +638,7 @@ pub fn attacker_state(
         damage,
         victim_state,
         blocked,
+        0,
         0,
         0,
     )
@@ -857,6 +861,16 @@ pub fn can_assist(map: &Map, a: Guid, b: Guid) -> bool {
     if ma == mb {
         return true;
     }
+    // One immune to players' side takes no help from it, though a
+    // creature's it takes (Thistle Tea's `can_assist?`; mangos's
+    // `CanAssist` helps no such NPC of a player's either).
+    if guid::is_player(ma)
+        && map
+            .unit_fields(b)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER))
+    {
+        return false;
+    }
     // The duel's arbiter and side: a duel's two sides help neither each
     // other nor anyone outside it (mangos's `PLAYER_DUEL_ARBITER` and
     // `PLAYER_DUEL_TEAM`).
@@ -1038,6 +1052,10 @@ pub fn chase_distance(reach: f32) -> f32 {
 /// How far its victim may go from where a chaser last aimed before it
 /// paths again (Thistle Tea's `chase_rechase_distance`): three quarters of
 /// the reach, less the victim's bounding radius.
+/// Within this of its victim, an attack owed needn't face it (Thistle
+/// Tea's overlap distance).
+const OVERLAP_YARDS: f32 = 1.4;
+
 pub fn rechase_distance(reach: f32, bounding: f32) -> f32 {
     (reach * 0.75 - bounding).max(0.0)
 }
@@ -1585,7 +1603,14 @@ pub fn weapon_damage(
             AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS
         });
         damage += marked.max(0) as f32 / 14.0 * speed;
-        damage += v.sum_mask(AURA_MOD_DAMAGE_TAKEN, school) as f32 + v.sum(flat_kind) as f32;
+        // A magic school's flat cut (Dampen Magic) takes at most half of a
+        // blow, as it does of a spell's (`outcome::taken_of`, Thistle Tea's
+        // `AttackDamageTaken.swing_amount`).
+        let mut school_flat = v.sum_mask(AURA_MOD_DAMAGE_TAKEN, school) as f32;
+        if school & 1 == 0 {
+            school_flat = school_flat.max(-damage.max(0.0) / 2.0);
+        }
+        damage += school_flat + v.sum(flat_kind) as f32;
         damage *= v.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, school) * v.product(pct_kind);
     }
     (damage.max(0.0) as u32, school)
@@ -1755,6 +1780,35 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     if casting && !extra {
         return;
     }
+    // The extra attacks owed go in reach, a player's facing their victim
+    // or so close that facing doesn't count (Thistle Tea's overlap, 1.4
+    // yards; mangos's `DoExtraAttacks` asks reach alone).
+    let close = (va.position.x - vb.position.x).powi(2) + (va.position.y - vb.position.y).powi(2)
+        <= OVERLAP_YARDS * OVERLAP_YARDS;
+    let extra_done = extra
+        && va.standing
+        && in_melee_range(&va, &vb)
+        && (!va.is_player || close || facing(&va, &vb));
+    if extra_done {
+        let owed = map.combat(attacker).map_or(0, |c| c.extra_attacks);
+        if let Some(c) = map.combat_mut(attacker) {
+            c.extra_attacks = 0;
+            c.in_extra_attack = true;
+        }
+        for _ in 0..owed {
+            if !still_swinging(map, attacker, victim) {
+                break;
+            }
+            swing(map, attacker, victim, Hand::Main, true);
+        }
+        if let Some(c) = map.combat_mut(attacker) {
+            c.in_extra_attack = false;
+        }
+    }
+    // Casting, the regular swings wait without a word.
+    if casting || (extra_done && !main_due && !off_due) {
+        return;
+    }
     let error = if !va.standing {
         Some(SWING_ERROR_NOT_STANDING)
     } else if !in_melee_range(&va, &vb) {
@@ -1768,10 +1822,6 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         let Some(c) = map.combat_mut(attacker) else {
             return;
         };
-        // Casting, the attacks owed wait without a word.
-        if casting {
-            return;
-        }
         // Told once while it lasts, again when it changes (mangos's
         // `UpdateMeleeAttackingState`); the hands stay due, and try again
         // at the next update.
@@ -1788,25 +1838,6 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     }
     if let Some(c) = map.combat_mut(attacker) {
         c.last_swing_error = None;
-    }
-    if extra {
-        let owed = map.combat(attacker).map_or(0, |c| c.extra_attacks);
-        if let Some(c) = map.combat_mut(attacker) {
-            c.extra_attacks = 0;
-            c.in_extra_attack = true;
-        }
-        for _ in 0..owed {
-            if !still_swinging(map, attacker, victim) {
-                break;
-            }
-            swing(map, attacker, victim, Hand::Main, true);
-        }
-        if let Some(c) = map.combat_mut(attacker) {
-            c.in_extra_attack = false;
-        }
-    }
-    if casting {
-        return;
     }
     // A script's melee spell stands in for the blow.
     if main_due && let Some(spell) = crate::game::map::event_ai::melee_spell(map, attacker) {
@@ -1937,13 +1968,32 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     // A blow on a unit its school can't touch does nothing.
     let immune = !matches!(outcome, Outcome::Miss | Outcome::Dodge | Outcome::Parry)
         && school_immune(map, victim, school);
-    let (state, damage, blocked) = if immune {
+    let (state, mut damage, blocked) = if immune {
         (VICTIMSTATE_IS_IMMUNE, 0, 0)
     } else {
         (state, damage, blocked)
     };
     if hand == Hand::Off {
         hit_info |= HITINFO_LEFTSWING;
+    }
+    // A blow of a magic school (an elemental's) is resisted in part, as a
+    // spell of it is, before a ward of its school soaks the rest (mangos's
+    // `CalculateDamageAbsorbAndResist` for each of a blow's schools).
+    let resisted = if school & 1 == 0 {
+        crate::game::map::spells::outcome::resisted_of_school(
+            map,
+            attacker,
+            victim,
+            school.trailing_zeros() as usize,
+            damage,
+            false,
+        )
+    } else {
+        0
+    };
+    if resisted > 0 {
+        damage -= resisted;
+        hit_info |= HITINFO_RESIST;
     }
     let (left, absorbed) = if damage > 0 {
         auras::absorb_and_share(map, attacker, victim, damage, school)
@@ -1961,6 +2011,7 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         state,
         blocked,
         absorbed,
+        resisted,
         school.trailing_zeros(),
     );
     map.send_to_observers(attacker, &frame, true);
@@ -2324,6 +2375,12 @@ pub fn spell_launched(
 
 /// `UNIT_FIELD_AURASTATE` brought in line: the reactive windows still open,
 /// and health below a fifth.
+/// Alive under a fifth of its health: Execute's and Hammer of Wrath's
+/// state (mangos's `AURA_STATE_HEALTHLESS_20_PERCENT`).
+pub fn healthless(health: u32, max: u32) -> bool {
+    health > 0 && (health as u64) * 5 < max as u64
+}
+
 pub fn sync_aura_state(map: &mut Map, g: Guid) {
     let now = map.now;
     let (defense, parry) = map.combat(g).map_or((false, false), |c| {
@@ -2345,7 +2402,7 @@ pub fn sync_aura_state(map: &mut Map, g: Guid) {
     if parry {
         bits |= AURA_STATE_HUNTER_PARRY;
     }
-    if health > 0 && (health as u64) * 5 < max as u64 {
+    if healthless(health, max) {
         bits |= AURA_STATE_HEALTHLESS_20;
     }
     // A creature's health bands under 15, 10 and 5 percent.
@@ -3641,6 +3698,7 @@ mod tests {
             1,
             3,
             5,
+            0,
             0,
         );
         assert_eq!(full.len(), frame.len());

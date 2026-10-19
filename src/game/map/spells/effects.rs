@@ -265,9 +265,55 @@ fn absorb_bonus(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, index:
     (power.max(0.0) * 0.1 * outcome::level_penalty(s)) as i32
 }
 
-/// The effects of `s` that land on `target` (those `which` marks).
+/// The effects of `s` that land on `target` (those `which` marks), then
+/// their procs, once for the target whatever its effects did (mangos's
+/// `DoAllEffectOnTarget`, Thistle Tea's one weapon hit a target): two
+/// effects of damage, or damage and a harmful aura, set off a weapon's
+/// chance on hit once. A harmful hit that dealt nothing and put nothing on
+/// procs as a hit too.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    which: [bool; 3],
+    l: &Landing,
+    chain: &mut [f32; 3],
+    item: Option<Guid>,
+    t: &Targets,
+) {
+    let gathering = crate::game::map::procs::gather(caster, target, s.id);
+    run_effects(map, caster, target, s, which, l, chain, item, t);
+    match gathering.finish() {
+        Some(e) => crate::game::map::procs::trigger(map, e),
+        None if target != caster && !auras::positive(s) => {
+            let (done, taken) = outcome::proc_flags(s);
+            let mut ex = l.hit.proc_ex();
+            if l.crit {
+                ex |= crate::game::map::procs::EX_CRITICAL_HIT;
+            }
+            crate::game::map::procs::trigger(
+                map,
+                crate::game::map::procs::Event {
+                    actor: caster,
+                    target,
+                    actor_flags: done,
+                    target_flags: taken,
+                    ex,
+                    spell: Some(s.id),
+                    school: s.school_mask(),
+                    ranged: s.dmg_class == 3,
+                    ..Default::default()
+                },
+            );
+        }
+        None => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_effects(
     map: &mut Map,
     caster: Guid,
     target: Guid,
@@ -432,7 +478,7 @@ fn apply_auras(
         }
         if !auras::positive(s) {
             let (done, taken) = outcome::proc_flags(s);
-            crate::game::map::procs::trigger(
+            crate::game::map::procs::spell_hit(
                 map,
                 crate::game::map::procs::Event {
                     actor: caster,
