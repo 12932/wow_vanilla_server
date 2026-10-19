@@ -166,7 +166,7 @@ pub struct Battlegrounds {
 }
 
 impl Battlegrounds {
-    fn queued(&self, g: Guid) -> bool {
+    pub fn queued(&self, g: Guid) -> bool {
         self.queues.values().flatten().any(|q| q.guid == g)
     }
 
