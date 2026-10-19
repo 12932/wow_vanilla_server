@@ -61,7 +61,7 @@ pub(super) async fn hero_by(
 ) -> (Client, Guid, MapHandle, Guid) {
     let (mut c, me, _) = hero(realm, name).await;
     let (id, at) = spawn_of(realm, entry);
-    let map = go(realm, &mut c, id, off(at, 2.0, 0.0)).await;
+    let map = travel(realm, &mut c, id, off(at, 2.0, 0.0)).await;
     assert!(
         until(&map, 5_000, move |m| first(m, entry)
             .and_then(|g| m.creature(g))
@@ -71,6 +71,17 @@ pub(super) async fn hero_by(
     );
     let g = map.query(move |m| first(m, entry)).await.flatten().unwrap();
     (c, me, map, g)
+}
+
+/// `c` at `at` in map `id`'s world, across maps or within one: the map
+/// they are in then.
+pub(super) async fn travel(realm: &Arc<Realm>, c: &mut Client, id: u32, at: Vector3d) -> MapHandle {
+    let from = realm.registry.online(c.guid).unwrap().map();
+    if from.query(|m| m.key.map).await == Some(id) {
+        relocate(&from, c, at).await;
+        return from;
+    }
+    go(realm, c, id, at).await
 }
 
 /// The line of broadcast text `id`.
@@ -722,4 +733,494 @@ async fn lady_jaina_fights_with_fire_frost_and_her_elementals() {
         let threat = map.query(move |m| threat(m, jaina, d)).await.unwrap();
         assert_eq!(threat > 0.0, kept, "her victim kept {kept}: {threat}");
     }
+}
+
+/// The map's events looked at now: run out, failed or succeeded.
+pub(super) fn check_events(m: &mut Map) {
+    m.map_events.next_check = None;
+    crate::game::map::map_events::update(m);
+}
+
+/// `quest` turned in at `ender` by `me`, its items in hand, as though
+/// taken: whether it was.
+pub(super) fn turn_in(m: &mut Map, me: Guid, ender: Guid, quest: u32) -> bool {
+    let q = m.realm.data.npc.quests[&quest].clone();
+    m.players
+        .get_mut(&me)
+        .unwrap()
+        .journal
+        .rewarded
+        .remove(&quest);
+    logs(m, me, quest);
+    for (item, count) in q.required_items.into_iter().filter(|(i, _)| *i != 0) {
+        crate::game::map::inventory::add_item(m, me, item, count, false).unwrap();
+    }
+    quests::choose_reward(m, me, ender, quest, 0);
+    m.players[&me].journal.rewarded.contains(&quest)
+}
+
+const UNBAGWA: u32 = 1449;
+const STRANGLETHORN_FEVER: u32 = 349;
+const SILVERBACK: u32 = 1511;
+const KONDA: u32 = 1516;
+const MOKK: u32 = 1514;
+
+/// Stranglethorn Fever: the fangs turned in, Witch Doctor Unbagwa stops
+/// offering quests and stands passive while three waves of apes come at
+/// him, ten seconds after each starts: three silverbacks, then four with
+/// Konda, then five with Mokk. Each wave's dead count toward it, and the
+/// next comes once all of it is down; the last down, he goes back to
+/// work, as he does if a wave runs out of time (Thistle Tea's
+/// `witch_doctor_unbagwa`, vmangos's `npc_witch_doctor_unbagwa`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn unbagwas_fever_brings_three_waves_of_apes() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map, unbagwa) = hero_by(&realm, "Feverish", UNBAGWA).await;
+    let usual = map.query(move |m| faction(m, unbagwa)).await.unwrap();
+    let taken = map
+        .query(move |m| {
+            tough(m, unbagwa);
+            turn_in(m, me, unbagwa, STRANGLETHORN_FEVER)
+        })
+        .await
+        .unwrap();
+    assert!(taken, "turned in");
+    let passive = map
+        .query(move |m| (npc_flags(m, unbagwa) & 0x2, faction(m, unbagwa)))
+        .await
+        .unwrap();
+    assert_eq!(passive, (0, 113), "no quests, passive");
+    for (event, silverbacks, leader) in [
+        (34901, 3, None),
+        (34902, 4, Some(KONDA)),
+        (34903, 5, Some(MOKK)),
+    ] {
+        assert!(
+            map.query(move |m| crate::game::map::map_events::active(m, event))
+                .await
+                .unwrap(),
+            "{event} under way"
+        );
+        let before = map.query(|m| living(m, SILVERBACK).len()).await.unwrap();
+        hurry_all(&map, 9.5).await;
+        assert_eq!(
+            map.query(|m| living(m, SILVERBACK).len()).await.unwrap(),
+            before,
+            "{event}: ten seconds first"
+        );
+        hurry_all(&map, 0.6).await;
+        let apes = map
+            .query(move |m| {
+                let mut apes = living(m, SILVERBACK);
+                apes.extend(leader.into_iter().flat_map(|l| living(m, l)));
+                apes
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            apes.len(),
+            silverbacks + leader.iter().count(),
+            "{event}'s apes"
+        );
+        let n = apes.len() as u32;
+        let counted = map
+            .query(move |m| {
+                tough(m, unbagwa);
+                let mut counted = Vec::new();
+                for g in &apes {
+                    kill(m, me, *g);
+                    counted.push(crate::game::map::map_events::data(m, event, 0));
+                }
+                check_events(m);
+                counted
+            })
+            .await
+            .unwrap();
+        let want: Vec<Option<u32>> = (1..=n).map(Some).collect();
+        assert_eq!(counted, want, "{event}: each fallen ape counts");
+    }
+    assert!(
+        until(&map, 2_000, move |m| npc_flags(m, unbagwa) & 0x2 != 0
+            && faction(m, unbagwa) == usual)
+        .await,
+        "back to work"
+    );
+    // A wave that runs out of time.
+    let taken = map
+        .query(move |m| turn_in(m, me, unbagwa, STRANGLETHORN_FEVER))
+        .await
+        .unwrap();
+    assert!(taken, "turned in again");
+    let restored = map
+        .query(move |m| {
+            if let Some(e) = m.map_events.active.get_mut(&34901) {
+                e.expires = m.now;
+            }
+            check_events(m);
+            hurry_runs(m, None, Duration::from_millis(100));
+            (npc_flags(m, unbagwa) & 0x2, faction(m, unbagwa))
+        })
+        .await
+        .unwrap();
+    assert_eq!(restored, (0x2, usual), "a failure puts him back to work");
+}
+
+const CAULDRON: u32 = 11152;
+
+/// The live creature of spawn `spawn` here.
+pub(super) fn of_spawn(m: &Map, spawn: u32) -> Option<Guid> {
+    m.creatures
+        .iter()
+        .find(|(_, c)| c.spawn_guid == Some(spawn) && c.alive())
+        .map(|(_, c)| c.guid)
+}
+
+/// Where spawn `spawn` stands.
+pub(super) fn spawn_at(realm: &Realm, spawn: u32) -> (u32, Vector3d) {
+    let s = realm
+        .data
+        .creature_spawns
+        .values()
+        .flatten()
+        .find(|s| s.guid == spawn)
+        .unwrap_or_else(|| panic!("spawn {spawn}"));
+    (
+        s.map,
+        Vector3d {
+            x: s.x,
+            y: s.y,
+            z: s.z,
+        },
+    )
+}
+
+/// Western Plaguelands: a Scourge Cauldron calls up its own field's lord
+/// for a player on that field's quest who comes in sight, and goes quiet
+/// for ten minutes; for one on another field's quest, or none, it does
+/// nothing (Thistle Tea's `western_plaguelands`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_scourge_cauldron_calls_its_lord_for_one_on_its_fields_quest() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, _) = hero(&realm, "Cauldron").await;
+    let (id, felstone_at) = spawn_at(&realm, 45420);
+    let map = travel(&realm, &mut c, id, off(felstone_at, 30.0, 0.0)).await;
+    for (spawn, quest, lord) in [
+        (45420, None, None),
+        (45421, Some(5216), None),
+        (45420, Some(5216), Some(11075)),
+        (45421, Some(5231), Some(11077)),
+    ] {
+        let (_, at) = spawn_at(&realm, spawn);
+        map.query(move |m| {
+            let p = m.players.get_mut(&me).unwrap();
+            // Seen as a player is, not a GM.
+            p.gm = false;
+            p.journal.log.clear();
+        })
+        .await;
+        relocate(&map, &mut c, off(at, 15.0, 0.0)).await;
+        let cauldron = map
+            .query(move |m| {
+                let g = of_spawn(m, spawn);
+                if let Some(q) = quest {
+                    logs(m, me, q);
+                }
+                g
+            })
+            .await
+            .flatten()
+            .unwrap_or_else(|| panic!("cauldron {spawn}"));
+        assert_eq!(
+            map.query(move |m| m.creature(cauldron).map(|c| c.entry))
+                .await
+                .flatten(),
+            Some(CAULDRON)
+        );
+        let called = until(&map, 2_500, move |m| {
+            [11075, 11076, 11077, 11078]
+                .iter()
+                .any(|e| !living(m, *e).is_empty())
+        })
+        .await;
+        match lord {
+            None => assert!(!called, "{spawn}, {quest:?}: quiet"),
+            Some(lord) => {
+                assert!(called, "{spawn}, {quest:?}: a lord");
+                let (lords, gone) = map
+                    .query(move |m| (living(m, lord).len(), of_spawn(m, spawn).is_none()))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    (lords, gone),
+                    (1, true),
+                    "{spawn}: its own lord, and it goes quiet"
+                );
+                let all: Vec<Guid> = map
+                    .query(|m| {
+                        [11075, 11076, 11077, 11078]
+                            .iter()
+                            .flat_map(|e| living(m, *e))
+                            .collect()
+                    })
+                    .await
+                    .unwrap();
+                clear(&map, all);
+            }
+        }
+    }
+}
+
+const DISCIPLE: u32 = 3678;
+const NARALEX: u32 = 3679;
+const ECTOPLASM: u32 = 3640;
+
+/// Wailing Caverns: once Mutanus is dead, the disciple, waiting on him,
+/// wakes Naralex, fighting or not, and only then (his last phase, his
+/// event ended well); the disciple's death ends the ritual's event a
+/// failure (Thistle Tea's `wailing_caverns`, vmangos's
+/// `npc_disciple_of_naralex`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn naralex_wakes_once_mutanus_is_dead_and_the_ritual_fails_with_the_disciple() {
+    use super::tests_p4_scripts_dungeons::{inside, set};
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = inside(&realm, "Dreamer", 43, DISCIPLE).await;
+    let d = map.query(|m| first(m, DISCIPLE)).await.flatten().unwrap();
+    c.sees(d).await;
+    let (naralex, by) = map
+        .query(|m| {
+            let n = first(m, NARALEX)?;
+            Some((n, m.position_of(n)?))
+        })
+        .await
+        .flatten()
+        .expect("Naralex");
+    // At the ritual's place, by Naralex.
+    relocate(&map, &mut c, off(by, 4.0, 4.0)).await;
+    map.query(move |m| crate::game::map::scripts::place(m, d, off(by, 5.0, 0.0), 0.0))
+        .await;
+    c.sees(naralex).await;
+    // Not in his waiting phase, Mutanus dead: nothing.
+    let early = map
+        .query(move |m| {
+            set(m, 5, 3);
+            event_ai::set_phase(m, d, 1);
+            due(m, d, 367807);
+            event_ai::phase(m, d)
+        })
+        .await
+        .unwrap();
+    assert_eq!(early, 1, "only while waiting on Mutanus");
+    for fighting in [false, true] {
+        c.clear();
+        let phase = map
+            .query(move |m| {
+                crate::game::map::map_events::start(m, DISCIPLE, d, me, Duration::from_secs(600));
+                event_ai::set_phase(m, d, 6);
+                set(m, 4, 1);
+                if fighting {
+                    tough(m, d);
+                    let dd = dummy(m, off(m.position_of(d).unwrap(), 3.0, 0.0));
+                    crate::game::map::ai::attacked(m, d, dd);
+                    due(m, d, 367808);
+                } else {
+                    due(m, d, 367807);
+                }
+                hurry_runs(m, Some(d), Duration::from_millis(100));
+                (
+                    event_ai::phase(m, d),
+                    super::tests_p4_scripts_dungeons::data(m, 4),
+                    crate::game::map::map_events::active(m, DISCIPLE),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            phase,
+            (7, 3, false),
+            "fighting {fighting}: the finale, done, the event over"
+        );
+        assert!(
+            hears(&mut c, &realm, naralex, 1271).await,
+            "fighting {fighting}: Naralex awakens"
+        );
+    }
+    // The disciple's death fails the ritual.
+    let ended = map
+        .query(move |m| {
+            crate::game::map::map_events::start(m, DISCIPLE, d, me, Duration::from_secs(600));
+            kill(m, me, d);
+            crate::game::map::map_events::active(m, DISCIPLE)
+        })
+        .await
+        .unwrap();
+    assert!(!ended, "the ritual's event ended with him");
+}
+
+/// An evolving ectoplasm takes on the colour of the school that strikes
+/// it, frost, fire, nature or shadow, its form and its immunity; while it
+/// wears one, another school changes nothing; ten seconds on, it is
+/// itself again (Thistle Tea's `wailing_caverns`, vmangos's
+/// `npc_evolving_ectoplasm`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn an_evolving_ectoplasm_takes_the_colour_of_the_school_that_strikes_it() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = hero(&realm, "Colourist").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    for (school, form, immunity, other, other_form) in [
+        (16, 7944, 7940, 4, 7943),
+        (4, 7943, 7942, 8, 7945),
+        (8, 7945, 7941, 32, 7946),
+        (32, 7946, 7743, 16, 7944),
+    ] {
+        let g = summon_near(&map, ECTOPLASM, off(at, 3.0, 0.0)).await;
+        let worn = map
+            .query(move |m| {
+                event_ai::update_despawns(m);
+                tough(m, g);
+                event_ai::spell_hit(m, g, me, 133, school);
+                let worn = (has(m, g, form), has(m, g, immunity), event_ai::phase(m, g));
+                event_ai::spell_hit(m, g, me, 133, other);
+                (worn, has(m, g, other_form))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            worn,
+            ((true, true, 1), false),
+            "school {school}: its form and immunity, and no other while it wears them"
+        );
+        let after = map
+            .query(move |m| {
+                hurry_runs(m, Some(g), Duration::from_secs(10));
+                (has(m, g, form), event_ai::phase(m, g))
+            })
+            .await
+            .unwrap();
+        assert_eq!(after, (false, 0), "school {school}: itself again");
+        clear(&map, vec![g]);
+    }
+}
+
+const WARD_OF_ZUMRAH: u32 = 7785;
+
+/// A Ward of Zum'rah raises a skeleton every five seconds, fighting or
+/// not (Thistle Tea's `zul_farrak`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_ward_of_zumrah_raises_a_skeleton_every_five_seconds() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero(&realm, "Warded").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let ward = summon_near(&map, WARD_OF_ZUMRAH, off(at, 3.0, 0.0)).await;
+    c.sees(ward).await;
+    assert!(
+        until(&map, 2_000, move |m| left(m, ward, 778501).is_some()).await,
+        "its timer"
+    );
+    timed_cast(
+        &mut c,
+        &map,
+        ward,
+        778501,
+        11088,
+        (0.0, 5.0),
+        (5.0, 5.0),
+        None,
+    )
+    .await;
+    let d = map
+        .query(move |m| {
+            tough(m, ward);
+            let d = dummy(m, off(at, 5.0, 0.0));
+            crate::game::map::ai::attacked(m, ward, d);
+            d
+        })
+        .await
+        .unwrap();
+    assert!(
+        until(&map, 2_000, move |m| left(m, ward, 778502).is_some()).await,
+        "its fight's timer"
+    );
+    timed_cast(
+        &mut c,
+        &map,
+        ward,
+        778502,
+        11088,
+        (0.0, 5.0),
+        (5.0, 5.0),
+        None,
+    )
+    .await;
+    clear(&map, vec![ward, d]);
+}
+
+/// The kills `g` has toward `quest`.
+pub(super) fn kills_of(m: &Map, g: Guid, quest: u32) -> u32 {
+    m.players[&g]
+        .journal
+        .log
+        .iter()
+        .find(|l| l.quest == quest)
+        .map_or(0, |l| l.kills.iter().sum())
+}
+
+/// Object `entry` summoned where `by` stands, for `secs`.
+pub(super) fn object_by(m: &mut Map, by: Guid, entry: u32, secs: u32) {
+    let step = crate::game::data::scripts::ScriptStep {
+        command: 76,
+        datalong: [entry, secs, 0, 0],
+        ..Default::default()
+    };
+    crate::game::map::scripts::execute(m, &step, by, by);
+}
+
+/// An Andorhal watchtower credits a player on its quest who comes in
+/// sight, but only while a beacon torch burns by them (Thistle Tea's
+/// `western_plaguelands`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn an_andorhal_watchtower_credits_a_scout_by_a_beacon_torch() {
+    const TOWER: u32 = 10902;
+    const TORCH: u32 = 176093;
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map, tower) = hero_by(&realm, "Scout", TOWER).await;
+    map.query(move |m| {
+        let p = m.players.get_mut(&me).unwrap();
+        p.gm = false;
+        logs(m, me, 5097);
+    })
+    .await;
+    sleep_ms(1_500).await;
+    assert_eq!(
+        map.query(move |m| kills_of(m, me, 5097)).await.unwrap(),
+        0,
+        "no torch, no credit"
+    );
+    map.query(move |m| object_by(m, me, TORCH, 60)).await;
+    assert!(
+        until(&map, 3_000, move |m| kills_of(m, me, 5097) > 0).await,
+        "credited by the torch's light"
+    );
+    assert!(
+        map.query(move |m| m.creature(tower).is_some())
+            .await
+            .unwrap()
+    );
 }
