@@ -29,6 +29,74 @@ pub(super) fn stand(m: &mut Map, g: Guid, at: Vector3d) {
     crate::game::map::visibility::moved(m, g, anchor, at);
 }
 
+/// [`realm`], with the real navmesh (where a script's summons scatter over
+/// it); `None` without either.
+pub(super) fn nav_realm() -> Option<std::sync::Arc<crate::game::Realm>> {
+    let nav = crate::game::harness::real_data("nav");
+    let db = crate::game::harness::real_data("db");
+    if !nav.join("Azeroth.map").exists() || !db.join("vmangos.sqlite").exists() {
+        return None;
+    }
+    let mut cfg = crate::game::harness::test_config();
+    cfg.nav_dir = Some(nav);
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Some(crate::game::Realm::new(
+        cfg,
+        store,
+        startup,
+        crate::game::harness::load_real(&db),
+        None,
+    ))
+}
+
+/// A [`hero`] of `class` (a quest may ask for one), at the start.
+pub(super) async fn hero_as(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    name: &str,
+    class: Class,
+) -> (Client, Guid, MapHandle) {
+    let mut c = Client::connect(realm, name);
+    let g = c.enter(name, Race::Human, class).await;
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &data, 60);
+        p.fields.set_flag(
+            PLAYER_FLAGS,
+            crate::game::map::player::PLAYER_FLAGS_GM,
+            true,
+        );
+        p.misc.god = true;
+    })
+    .await;
+    toughen(&map, g).await;
+    (c, g, map)
+}
+
+/// A [`hero_as`] beside the spawn of `entry`, in sight of it: the client,
+/// the player, the map and the creature.
+pub(super) async fn hero_as_by(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    name: &str,
+    class: Class,
+    entry: u32,
+) -> (Client, Guid, MapHandle, Guid) {
+    let (mut c, me, _) = hero_as(realm, name, class).await;
+    let (id, at) = spawn_of(realm, entry);
+    let map = travel(realm, &mut c, id, off(at, 2.0, 0.0)).await;
+    assert!(
+        until(&map, 5_000, move |m| first(m, entry)
+            .and_then(|g| m.creature(g))
+            .is_some_and(|c| c.observers.contains(&me)))
+        .await,
+        "{entry} in sight"
+    );
+    let g = map.query(move |m| first(m, entry)).await.flatten().unwrap();
+    (c, me, map, g)
+}
+
 /// `g`, walking its route, put half a yard short of its point `point`
 /// and bound for it, its group with it and `me` beside: it arrives at
 /// the next update or so. Where the point is.

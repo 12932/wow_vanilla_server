@@ -823,3 +823,372 @@ async fn windsor_unmasks_prestor_at_the_players_word() {
         "not failed"
     );
 }
+
+const ERIS: u32 = 14494;
+const INJURED: u32 = 14484;
+const PLAGUED: u32 = 14485;
+const FOOTSOLDIER: u32 = 14486;
+const ARCHER: u32 = 14489;
+const BALANCE: u32 = 7622;
+const LIGHT: u32 = 179693;
+const SEETHING_PLAGUE: u32 = 23072;
+const ARROW: u32 = 23073;
+const DEATHS_DOOR: u32 = 23127;
+
+/// The peasants a script brought here, the fallen too.
+fn peasants(m: &Map) -> Vec<Guid> {
+    m.creatures
+        .iter()
+        .filter(|(_, c)| [INJURED, PLAGUED].contains(&c.entry) && c.spawn_guid.is_none())
+        .map(|(_, c)| c.guid)
+        .collect()
+}
+
+/// The Balance of Light and Shadow taken from Eris, by a priest: the
+/// client, the player, the map, Eris.
+async fn the_trial(realm: &std::sync::Arc<Realm>, name: &str) -> (Client, Guid, MapHandle, Guid) {
+    let (mut c, me, map, eris) = hero_as_by(realm, name, Class::Priest, ERIS).await;
+    map.query(move |m| quests_as(m, me, &[], &[7621])).await;
+    c.clear();
+    assert!(takes(&mut c, &map, eris, BALANCE).await, "the trial taken");
+    (c, me, map, eris)
+}
+
+/// The trial taken, its event opens, the light is lit at the sanctuary
+/// and eight archers take their posts. Its waves of peasants flee the
+/// burning village, scattered about it, ten seconds on and every eighty
+/// seconds after, five of them (twelve, twelve, twelve, thirteen and
+/// sixteen, some plagued); at a hundred seconds the Scourge's assault
+/// joins, and only from then does Eris bless the field and send
+/// footsoldiers (Thistle Tea's `eris_havenfire`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_trial_lights_the_sanctuary_and_its_waves_flee_the_village() {
+    // The navmesh, which the waves scatter over.
+    let Some(realm) = nav_realm() else {
+        return;
+    };
+    let (mut c, me, map, eris) = the_trial(&realm, "Lightbearer").await;
+    let (light, archers) = map
+        .query(|m| {
+            (
+                m.gameobjects
+                    .iter()
+                    .find(|(_, o)| o.entry == LIGHT)
+                    .map(|(_, o)| o.position),
+                living(m, ARCHER),
+            )
+        })
+        .await
+        .unwrap();
+    let light = light.expect("the sanctuary lit");
+    assert!(
+        dist(
+            light,
+            Vector3d {
+                x: 3327.0,
+                y: -2970.0,
+                z: 160.0
+            }
+        ) < 2.0
+    );
+    assert_eq!(archers.len(), 8, "eight archers at their posts");
+    // Eris sends no one before the assault.
+    let before = map
+        .query(move |m| {
+            for _ in 0..10 {
+                due(m, eris, 1449401);
+            }
+            living(m, FOOTSOLDIER).len()
+        })
+        .await
+        .unwrap();
+    assert_eq!(before, 0, "no footsoldiers before the assault");
+    // The waves, by the trial's clock.
+    let waves = map.clone();
+    let wave = move |by: f32| {
+        let map = waves.clone();
+        async move {
+            map.query(move |m| {
+                let had = peasants(m);
+                hurry_runs(m, None, Duration::from_secs_f32(by));
+                let new: Vec<(u32, Vector3d)> = peasants(m)
+                    .into_iter()
+                    .filter(|g| !had.contains(g))
+                    .filter_map(|g| m.creature(g).map(|c| (c.entry, c.position)))
+                    .collect();
+                // The fallen and the saved go, so the next wave counts.
+                for g in had {
+                    scripts::despawn(m, g);
+                }
+                new
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let village = Vector3d {
+        x: 3353.8,
+        y: -3042.16,
+        z: 163.68,
+    };
+    for (n, (by, size)) in [(10.0, 12), (80.0, 12), (80.0, 12), (80.0, 13), (80.0, 16)]
+        .into_iter()
+        .enumerate()
+    {
+        if n == 2 {
+            // The assault joins at a hundred seconds.
+            hurry_all(&map, 10.0).await;
+            assert!(
+                until(&map, 2_000, move |m| event_ai::phase(m, eris) == 1).await,
+                "the Scourge's assault"
+            );
+        }
+        let came = wave(if n == 2 { 70.0 } else { by }).await;
+        assert_eq!(came.len(), size, "wave {}: {came:?}", n + 1);
+        let plagued = came.iter().filter(|(e, _)| *e == PLAGUED).count();
+        assert!((1..=4).contains(&plagued), "some plagued: {plagued}");
+        let spots: std::collections::BTreeSet<(i32, i32)> = came
+            .iter()
+            .map(|(_, at)| (at.x.round() as i32, at.y.round() as i32))
+            .collect();
+        assert!(spots.len() > 1, "scattered");
+        assert!(
+            came.iter().all(|(_, at)| dist(*at, village) < 60.0),
+            "at the burning village"
+        );
+    }
+    // Once it has, Eris blesses the field and sends footsoldiers.
+    c.clear();
+    let sent = map
+        .query(move |m| {
+            for _ in 0..20 {
+                due(m, eris, 1449401);
+                hurry_runs(m, Some(eris), Duration::from_secs(5));
+                if !living(m, FOOTSOLDIER).is_empty() {
+                    break;
+                }
+            }
+            due(m, eris, 1449402);
+            !living(m, FOOTSOLDIER).is_empty()
+        })
+        .await
+        .unwrap();
+    assert!(sent, "footsoldiers once the assault starts");
+    assert!(
+        cast_any_of(&mut c, eris, 23108, Duration::from_secs(2))
+            .await
+            .is_some(),
+        "her blessing"
+    );
+    let _ = me;
+}
+
+/// A peasant of the trial stays passive and joins its event; a plagued
+/// one carries the Seething Plague (an injured one doesn't). Each walks to
+/// the road and on to the light, where it is saved and goes. The archers
+/// loose at random peasants; an arrow hits a peasant fifty-seven harder
+/// than its spell, and now and then opens Death's Door. Each fallen
+/// peasant is hung on the next of the light's death posts.
+#[tokio::test]
+#[ignore = "extended"]
+async fn peasants_flee_for_the_light_under_the_archers() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map, _eris) = the_trial(&realm, "Shepherd").await;
+    hurry_all(&map, 10.0).await;
+    let (plagued, injured) = map
+        .query(|m| {
+            let all = peasants(m);
+            let of = |e: u32| {
+                all.iter()
+                    .copied()
+                    .find(|g| m.creature(*g).is_some_and(|c| c.entry == e))
+                    .unwrap()
+            };
+            (of(PLAGUED), of(INJURED))
+        })
+        .await
+        .unwrap();
+    // Their spawned events, at the update after.
+    assert!(
+        until(&map, 2_000, move |m| has(m, plagued, SEETHING_PLAGUE)).await,
+        "the plagued carry the plague"
+    );
+    let state = map
+        .query(move |m| {
+            let s = event_ai::scripted(m, plagued).unwrap();
+            (
+                s.reaction,
+                map_events::targets(m, BALANCE).contains(&plagued),
+                has(m, plagued, SEETHING_PLAGUE),
+                has(m, injured, SEETHING_PLAGUE),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        state.0,
+        Some(crate::game::map::assistance::Reaction::Passive),
+        "passive"
+    );
+    assert!(state.1, "of the trial");
+    assert!(state.2 && !state.3, "the plagued carry the plague");
+    // The archers loose at the peasants.
+    let archer = map.query(|m| first(m, ARCHER)).await.flatten().unwrap();
+    let all = map.query(|m| peasants(m)).await.unwrap();
+    c.clear();
+    map.query(move |m| due(m, archer, 1448902)).await;
+    let at = cast_any_of(&mut c, archer, ARROW, Duration::from_secs(3)).await;
+    assert!(
+        at.is_some_and(|g| all.contains(&g)),
+        "an arrow at a peasant: {at:?}"
+    );
+    // The archers stood down, an arrow at the injured peasant.
+    map.query(move |m| {
+        for g in living(m, ARCHER).into_iter().filter(|g| *g != archer) {
+            scripts::despawn(m, g);
+        }
+        tough(m, injured);
+    })
+    .await;
+    c.clear();
+    let before = map
+        .query(move |m| {
+            let hp = health(m, injured).0;
+            crate::game::map::spells::cast_triggered(m, archer, ARROW, Some(injured));
+            hp
+        })
+        .await
+        .unwrap();
+    let dealt = c
+        .gets(Duration::from_secs(3), move |m| match m {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(d)
+                if d.spell == ARROW && d.target == injured =>
+            {
+                Some(d.damage)
+            }
+            _ => None,
+        })
+        .await
+        .expect("the arrow hits");
+    assert!(
+        until(&map, 2_000, move |m| before - health(m, injured).0
+            == dealt + 57)
+        .await,
+        "fifty-seven more than the arrow's {dealt}: {:?}",
+        map.query(move |m| before - health(m, injured).0).await
+    );
+    // Death's Door, now and then.
+    let doors = map
+        .query(move |m| {
+            let mut n = 0;
+            for _ in 0..60 {
+                crate::game::map::auras::remove_spell(m, injured, DEATHS_DOOR, None);
+                event_ai::spell_hit(m, injured, archer, ARROW, 1);
+                if has(m, injured, DEATHS_DOOR) {
+                    n += 1;
+                }
+            }
+            n
+        })
+        .await
+        .unwrap();
+    assert!(
+        (1..=20).contains(&doors),
+        "Death's Door, now and then: {doors} of 60"
+    );
+    // To the road and the light.
+    map.query(move |m| scripts::despawn(m, archer)).await;
+    let road = Vector3d {
+        x: 3353.8,
+        y: -3042.16,
+        z: 163.68,
+    };
+    let light = Vector3d {
+        x: 3327.0,
+        y: -2970.0,
+        z: 161.0,
+    };
+    for (to, what) in [(road, "the road"), (light, "the light")] {
+        map.query(move |m| {
+            scripts::place(m, plagued, off(to, 1.5, 0.0), 0.0);
+            stand(m, me, off(to, 4.0, 0.0));
+            if let Some(c) = m.creature_mut(plagued) {
+                c.speeds.walk = 20.0;
+                c.speeds.run = 20.0;
+            }
+        })
+        .await;
+        sleep_ms(200).await;
+        // A move toward it again, from beside it.
+        map.query(move |m| {
+            let step = crate::game::data::scripts::ScriptStep {
+                command: 3,
+                datalong: [3, 0, 3, 2],
+                dataint: [if what == "the road" { 1 } else { 2 }, 0, 0, 0],
+                x: to.x,
+                y: to.y,
+                z: to.z,
+                ..Default::default()
+            };
+            scripts::execute(m, &step, plagued, plagued);
+        })
+        .await;
+        if what == "the road" {
+            assert!(
+                until(&map, 3_000, move |m| event_ai::scripted(m, plagued)
+                    .and_then(|s| s.scripted_move)
+                    .is_some_and(|mv| mv.point == Some(2)))
+                .await,
+                "from the road, on to the light"
+            );
+        }
+    }
+    assert!(
+        until(&map, 3_000, move |m| gone(m, plagued)
+            && map_events::data(m, BALANCE, 0) == Some(1))
+        .await,
+        "saved at the light"
+    );
+    // The fallen, each on the next post.
+    let (posts, hung) = map
+        .query(move |m| {
+            let summoned = |m: &Map| -> Vec<(Guid, Vector3d)> {
+                m.gameobjects
+                    .iter()
+                    .filter(|(_, o)| o.spawn_guid.is_none())
+                    .map(|(_, o)| (o.guid, o.position))
+                    .collect()
+            };
+            let had = summoned(m);
+            let mut out = Vec::new();
+            for g in peasants(m).into_iter().take(2) {
+                kill(m, me, g);
+                out.push(map_events::data(m, BALANCE, 1));
+            }
+            let hung: Vec<Vector3d> = summoned(m)
+                .into_iter()
+                .filter(|o| !had.contains(o))
+                .map(|(_, at)| at)
+                .collect();
+            (out, hung)
+        })
+        .await
+        .unwrap();
+    assert_eq!(posts, [Some(1), Some(2)], "counted fallen");
+    assert_eq!(hung.len(), 2, "two posts hung");
+    assert!(dist(hung[0], hung[1]) > 1.0, "each on its own post");
+    assert!(
+        hung.iter().any(|p| dist(
+            *p,
+            Vector3d {
+                x: 3355.48,
+                y: -3010.68,
+                z: 175.212
+            }
+        ) < 1.0),
+        "the first post first"
+    );
+}
