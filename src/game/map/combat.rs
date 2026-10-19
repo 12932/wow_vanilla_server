@@ -2896,9 +2896,23 @@ pub fn kill(map: &mut Map, killer: Guid, victim: Guid) {
 /// Suicide (27965), wears nothing down (Thistle Tea's
 /// `Durability.death_loss?`).
 pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
-    if map.unit_view(victim).is_none_or(|u| !u.alive) {
+    if map.unit_view(victim).is_none_or(|u| !u.alive)
+        || DYING.with(|d| d.borrow().contains(&victim))
+    {
         return;
     }
+    // Being killed, it isn't killed again meanwhile (by a kill's proc).
+    DYING.with(|d| d.borrow_mut().push(victim));
+    kill_once(map, killer, victim, spell);
+    DYING.with(|d| d.borrow_mut().retain(|g| *g != victim));
+}
+
+thread_local! {
+    /// The units being killed now, on this thread.
+    static DYING: std::cell::RefCell<Vec<Guid>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     let attackers: Vec<Guid> = map
         .combat(victim)
         .map(|c| c.attackers.iter().copied().collect())
@@ -2947,9 +2961,27 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     }
     let worth = kill_procs(map, killer, victim);
     // A pet's kill is its master's too (mangos's `Unit::Kill` procs the
-    // killer's owner as well).
+    // killer's owner as well). The killer's procs of the kill come before
+    // the victim's death takes its auras (mangos's `Unit::Kill`, before
+    // `RemoveAllAurasOnDeath`): a Drain Soul ended by it still procs.
     let master = crate::game::map::pets::master(map, killer);
     let master_worth = master != killer && kill_procs(map, master, victim);
+    if killer != victim {
+        for (by, counts) in [(master, master_worth && master != victim), (killer, worth)] {
+            if counts {
+                procs::trigger(
+                    map,
+                    procs::Event {
+                        actor: by,
+                        target: victim,
+                        actor_flags: procs::PROC_KILL,
+                        ex: procs::EX_NORMAL_HIT,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
     if guid::is_unit(killer) {
         crate::game::map::event_ai::kill(map, killer, victim);
     }
@@ -3009,24 +3041,11 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         crate::game::map::ai::die_by(map, victim, tapper, killer);
     }
     if killer != victim {
-        if master_worth && master != victim {
-            procs::trigger(
-                map,
-                procs::Event {
-                    actor: master,
-                    target: victim,
-                    actor_flags: procs::PROC_KILL,
-                    ex: procs::EX_NORMAL_HIT,
-                    ..Default::default()
-                },
-            );
-        }
         procs::trigger(
             map,
             procs::Event {
                 actor: killer,
                 target: victim,
-                actor_flags: if worth { procs::PROC_KILL } else { 0 },
                 target_flags: procs::PROC_KILLED,
                 ex: procs::EX_NORMAL_HIT,
                 ..Default::default()

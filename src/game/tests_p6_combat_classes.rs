@@ -464,3 +464,279 @@ async fn lightning_shield_strikes_back_by_its_rank_and_no_proc_answers_it() {
         "absorbed whole, a charge spent, struck back"
     );
 }
+
+fn spirit(m: &Map, g: Guid) -> u32 {
+    m.players[&g].fields.get_u32(UNIT_FIELD_STAT0 + 4)
+}
+
+fn expire(m: &mut Map, g: Guid, spell: u32) {
+    let now = m.now;
+    if let Some(h) =
+        auras::auras_mut(m, g).and_then(|a| a.holders.iter_mut().find(|h| h.spell == spell))
+    {
+        h.expires = Some(now);
+    }
+    auras::update(m);
+}
+
+/// Thistle Tea's "Spirit Tap doubles spirit after a killing blow and
+/// restores it on expiry", "Remorseless Attacks and Spinal Reaper use their
+/// DBC kill triggers", "Improved Drain Soul raises its zero base proc
+/// chance through spell modifiers" and "untalented and canceled Drain Soul
+/// cannot proc Soul Siphon": a priest's kill with Spirit Tap doubles their
+/// spirit for fifteen seconds; a rogue's with Remorseless Attacks or a
+/// warrior's with Spinal Reaper gives its buff; a warlock's kill while
+/// draining the victim's soul gives Improved Drain Soul's mana back only
+/// with the talent (its chance, 0 in the spell, the talent's 50 or 100),
+/// and not once the drain is cancelled.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_kill_sets_off_spirit_tap_remorseless_attacks_spinal_reaper_and_improved_drain_soul() {
+    const DRAIN_SOUL: u32 = 1120;
+    const SOUL_SIPHON: u32 = 18_371;
+    let (realm, _a, gp, map) = real(Race::Human, Class::Priest).await;
+    let mut b = Client::connect(&realm, "B");
+    let gr = b.enter("Bob", Race::Human, Class::Rogue).await;
+    let mut c = Client::connect(&realm, "C");
+    let gw = c.enter("Carl", Race::Human, Class::Warlock).await;
+    let r = map
+        .query(move |m| {
+            level(m, gr, 60);
+            level(m, gw, 60);
+            // Spirit Tap.
+            put_on(m, gp, gp, 15_338);
+            let before = spirit(m, gp);
+            let victim = spawn(m, gp, VERMIN, 60, 3.0);
+            combat::kill(m, gp, victim);
+            let tapped = (
+                spirit(m, gp),
+                holder(m, gp, 15_271).and_then(|h| h.duration),
+            );
+            expire(m, gp, 15_271);
+            let spirit_tap = (before, tapped, spirit(m, gp));
+            // Remorseless Attacks; and Spinal Reaper's mana.
+            let mut triggers = Vec::new();
+            for (talent, trigger) in [(14_144, 14_143), (14_148, 14_149)] {
+                put_on(m, gr, gr, talent);
+                let victim = spawn(m, gr, VERMIN, 60, 3.0);
+                combat::kill(m, gr, victim);
+                triggers.push(holder(m, gr, trigger).is_some());
+                auras::remove_spell(m, gr, talent, None);
+                auras::remove_spell(m, gr, trigger, None);
+            }
+            put_on(m, gp, gp, 21_185);
+            m.players
+                .get_mut(&gp)
+                .unwrap()
+                .fields
+                .set_u32(UNIT_FIELD_POWER1, 0);
+            let victim = spawn(m, gp, VERMIN, 60, 3.0);
+            combat::kill(m, gp, victim);
+            triggers.push(m.players[&gp].fields.get_u32(UNIT_FIELD_POWER1) > 0);
+            // Improved Drain Soul.
+            let drain = m.realm.data.spells.get(DRAIN_SOUL).cloned().unwrap();
+            let mut siphons = Vec::new();
+            for (talent, cancel) in [(None, false), (Some(18_372), false), (Some(18_372), true)] {
+                if let Some(t) = talent {
+                    put_on(m, gw, gw, t);
+                }
+                let victim = spawn(m, gw, VERMIN, 60, 3.0);
+                crate::game::map::spells::cast_triggered(m, gw, DRAIN_SOUL, Some(victim));
+                if cancel {
+                    auras::remove_spell(m, gw, DRAIN_SOUL, None);
+                    auras::remove_spell(m, victim, DRAIN_SOUL, None);
+                }
+                combat::kill(m, gw, victim);
+                siphons.push(holder(m, gw, SOUL_SIPHON).and_then(|h| h.duration));
+                auras::remove_spell(m, gw, SOUL_SIPHON, None);
+                if let Some(t) = talent {
+                    auras::remove_spell(m, gw, t, None);
+                }
+            }
+            let chances: Vec<f32> = [18_213, 18_372]
+                .into_iter()
+                .map(|t| {
+                    put_on(m, gw, gw, t);
+                    let c = procs::chance(m, gw, &drain, combat::Hand::Main, true);
+                    auras::remove_spell(m, gw, t, None);
+                    c
+                })
+                .collect();
+            (spirit_tap, triggers, siphons, chances)
+        })
+        .await
+        .unwrap();
+    let ((before, (tapped, lasts), after), triggers, siphons, chances) = r;
+    assert_eq!(
+        (tapped, lasts, after),
+        (before * 2, Some(15_000), before),
+        "doubled, then back"
+    );
+    assert_eq!(
+        triggers, [true; 3],
+        "each talent's buff; Spinal Reaper's mana"
+    );
+    assert_eq!(
+        siphons,
+        [None, Some(10_000), None],
+        "the talent's, and not once cancelled"
+    );
+    assert_eq!(chances, [50.0, 100.0]);
+}
+
+/// Thistle Tea's "every Berserking variant captures health for melee,
+/// ranged and spell haste", "Berserking retains each class's resource cost"
+/// and "Berserking death cleanup restores all speed fields", as mangos's
+/// dummy has it: each class's Berserking hastes swings, shots and casts by
+/// ten percent at full health, twenty at seven tenths, thirty at four
+/// tenths, for ten seconds, healing changes none of it, and its end or the
+/// troll's death puts the speeds back; it costs a warrior 5 rage, a rogue
+/// 10 energy and a mage 7% of their base mana.
+#[tokio::test]
+#[ignore = "extended"]
+async fn berserking_hastes_by_the_health_lost_for_ten_seconds() {
+    const BUFF: u32 = 26_635;
+    let (realm, _a, gt, map) = real(Race::Troll, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gr = b.enter("Bob", Race::Troll, Class::Rogue).await;
+    let mut c = Client::connect(&realm, "C");
+    let gm = c.enter("Carl", Race::Troll, Class::Mage).await;
+    let r = map
+        .query(move |m| {
+            level(m, gr, 60);
+            level(m, gm, 60);
+            equip(m, gt, SWORD, SLOT_MAIN_HAND);
+            derive::unit(m, gt);
+            let speeds = |m: &Map| {
+                let f = &m.players[&gt].fields;
+                (
+                    f.get_u32(UNIT_FIELD_BASEATTACKTIME),
+                    f.get_u32(UNIT_FIELD_RANGEDATTACKTIME),
+                    f.get_f32(UNIT_MOD_CAST_SPEED),
+                )
+            };
+            let plain = speeds(m);
+            let mut variants = Vec::new();
+            for id in [20_554, 26_296, 26_297] {
+                for health in [1000, 700, 400] {
+                    let f = &mut m.players.get_mut(&gt).unwrap().fields;
+                    f.set_u32(UNIT_FIELD_MAXHEALTH, 1000);
+                    f.set_u32(UNIT_FIELD_HEALTH, health);
+                    crate::game::map::spells::cast_triggered(m, gt, id, Some(gt));
+                    let h = holder(m, gt, BUFF);
+                    let amounts: Vec<i32> = h
+                        .as_ref()
+                        .map(|h| h.effects.iter().map(|x| x.amount).collect())
+                        .unwrap_or_default();
+                    let hasted = speeds(m);
+                    let f = &mut m.players.get_mut(&gt).unwrap().fields;
+                    f.set_u32(UNIT_FIELD_HEALTH, 1000);
+                    let healed = speeds(m);
+                    expire(m, gt, BUFF);
+                    variants.push((
+                        amounts,
+                        h.and_then(|h| h.duration),
+                        hasted,
+                        healed == hasted,
+                        speeds(m),
+                    ));
+                }
+            }
+            crate::game::map::spells::cast_triggered(m, gt, 20_554, Some(gt));
+            crate::game::map::death::kill(m, gt);
+            let dead = (speeds(m), holder(m, gt, BUFF).is_none());
+            let cost = |m: &Map, g: Guid, id: u32| {
+                let s = m.realm.data.spells.get(id).cloned().unwrap();
+                crate::game::map::spells::power_cost(m, g, &s)
+            };
+            let base_mana = m.players[&gm].fields.get_u32(UNIT_FIELD_BASE_MANA);
+            let costs = (
+                cost(m, gt, 26_296),
+                cost(m, gr, 26_297),
+                (cost(m, gm, 20_554), base_mana * 7 / 100),
+            );
+            (plain, variants, dead, costs)
+        })
+        .await
+        .unwrap();
+    let (plain, variants, dead, costs) = r;
+    for (i, (amounts, lasts, hasted, healed_same, after)) in variants.iter().enumerate() {
+        let a = [10, 20, 30][i % 3];
+        assert_eq!(*amounts, vec![a; 3], "{variants:?}");
+        assert_eq!(*lasts, Some(10_000));
+        assert_eq!(hasted.0, plain.0 * 100 / (100 + a as u32), "{variants:?}");
+        assert_eq!(hasted.1, plain.1 * 100 / (100 + a as u32), "{variants:?}");
+        assert!((hasted.2 - plain.2 * 100.0 / (100 + a) as f32).abs() < 1e-4);
+        assert!(healed_same, "healing changes nothing");
+        assert_eq!(*after, plain, "its end puts them back");
+    }
+    assert_eq!(dead, (plain, true), "death puts them back");
+    assert_eq!((costs.0, costs.1), (50, 10), "5 rage, 10 energy");
+    assert_eq!(costs.2.0, costs.2.1, "7% of base mana");
+}
+
+/// Thistle Tea's "Blood Fury grants base melee attack power and a longer
+/// healing penalty" and "canceling Blood Fury retains its penalty and death
+/// removes both", as mangos's dummy has it: a quarter of the orc's attack
+/// power as it is when cast, melee only, for fifteen seconds, more strength
+/// adding to it as ever; healing on them halved for twenty-five; the buff
+/// cancelled leaves the penalty; death takes both.
+#[tokio::test]
+#[ignore = "extended"]
+async fn blood_fury_gives_a_quarter_of_attack_power_and_halves_healing_for_longer() {
+    const BUFF: u32 = 23_234;
+    const PENALTY: u32 = 23_230;
+    let (_realm, _a, go, map) = real(Race::Orc, Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let power = |m: &Map| {
+                let p = &m.players[&go];
+                (p.derived.attack_power, p.derived.ranged_attack_power)
+            };
+            let before = power(m);
+            crate::game::map::spells::cast_triggered(m, go, 20_572, Some(go));
+            let buffed = power(m);
+            let held =
+                |m: &Map, s: u32| holder(m, go, s).map(|h| (h.effects[0].amount, h.duration));
+            let auras_on = (held(m, BUFF), held(m, PENALTY));
+            aura_of_strength(m, go, 20);
+            let stronger = (power(m).0, held(m, BUFF).map(|h| h.0));
+            auras::remove_spell(m, go, 91_510, None);
+            auras::remove_spell(m, go, BUFF, None);
+            let cancelled = (power(m), holder(m, go, PENALTY).is_some());
+            crate::game::map::spells::cast_triggered(m, go, 20_572, Some(go));
+            crate::game::map::death::kill(m, go);
+            let dead = (
+                holder(m, go, BUFF).is_none(),
+                holder(m, go, PENALTY).is_none(),
+            );
+            (before, buffed, auras_on, stronger, cancelled, dead)
+        })
+        .await
+        .unwrap();
+    let (before, buffed, (buff, penalty), stronger, cancelled, dead) = r;
+    let quarter = (before.0 / 4) as i32;
+    assert_eq!(
+        buff,
+        Some((quarter, Some(15_000))),
+        "a quarter, fifteen seconds"
+    );
+    assert_eq!(buffed, (before.0 + quarter as u32, before.1), "melee only");
+    assert_eq!(
+        penalty,
+        Some((-50, Some(25_000))),
+        "healing halved, twenty-five"
+    );
+    assert_eq!(
+        stronger,
+        (buffed.0 + 40, Some(quarter)),
+        "twenty strength more is forty more, the buff as it was"
+    );
+    assert_eq!(cancelled, (before, true), "the penalty stays");
+    assert_eq!(dead, (true, true), "death takes both");
+}
+
+fn aura_of_strength(m: &mut Map, g: Guid, amount: i32) {
+    crate::game::tests_p3_combat::aura_of(m, g, 91_510, AURA_MOD_STAT, 0, amount);
+    derive::unit(m, g);
+}
