@@ -379,6 +379,12 @@ pub fn roll_hit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mo
     if s.dmg_class == 0 {
         return Hit::Hit;
     }
+    // A creature with no defence against spells misses none, whatever its
+    // level and mechanic resistance (`NO_SPELL_DEFENSE`, as Thistle Tea's
+    // `SpellResist.magic_hit?`).
+    if crate::game::map::creature_combat::no_spell_defense(map, target) {
+        return Hit::Hit;
+    }
     let chance = spell_hit_chance(map, caster, target, s, m);
     if roll_strict(map, chance) {
         Hit::Hit
@@ -438,7 +444,10 @@ pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate
 /// effect whose mechanic isn't the spell's rolls its own resistance.
 pub fn effect_resisted(map: &Map, target: Guid, s: &SpellTemplate, index: usize) -> bool {
     let mechanic = s.effects[index].mechanic;
-    if mechanic == 0 || mechanic == s.mechanic {
+    if mechanic == 0
+        || mechanic == s.mechanic
+        || crate::game::map::creature_combat::no_spell_defense(map, target)
+    {
         return false;
     }
     let chance = auras::auras(map, target).map_or(0, |a| {

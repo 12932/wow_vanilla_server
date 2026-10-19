@@ -1732,9 +1732,24 @@ fn evade(map: &mut Map, g: Guid) {
         .or_else(|| patrol_home(map, g))
         .unwrap_or(c.home);
     let from = c.position;
-    let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
-        None => vec![from, home],
+    // One that never moves leaves its fight where it stands (mangos's
+    // home movement waits out its AI's root; Thistle Tea's sessile
+    // evade).
+    // A flyer flies home, as it chased (Thistle Tea's airborne home
+    // movement).
+    let (path, fly) = if crate::game::map::creature_motion::sessile(map, g) {
+        (vec![from], false)
+    } else if crate::game::map::creature_motion::habitat(map, g).fly {
+        match crate::game::map::creature_motion::route(map, g, from, home) {
+            Some((path, _, fly)) => (path, fly),
+            None => (vec![from, home], true),
+        }
+    } else {
+        let path = match map.nav.as_mut() {
+            Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
+            None => vec![from, home],
+        };
+        (path, false)
     };
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let attackers: Vec<Guid> = map
@@ -1758,7 +1773,7 @@ fn evade(map: &mut Map, g: Guid) {
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT, false);
     c.fields.set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_TAPPED, false);
-    let frame = c.walk(path, true, now, spline_id);
+    let frame = c.walk_at(path, true, fly, None, now, spline_id);
     if frame.is_none() {
         c.evading = false;
     }

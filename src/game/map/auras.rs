@@ -2689,7 +2689,9 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         | AURA_PERIODIC_DAMAGE_PERCENT
         | AURA_PERIODIC_MANA_LEECH
         | AURA_POWER_BURN_MANA
-            if auras(map, target).is_some_and(|x| x.school_immune(h.school))
+            // Its auras' or a creature's template's (mangos's
+            // `IsImmuneToDamage` at each tick).
+            if crate::game::map::combat::school_immune(map, target, h.school)
                 && !map
                     .realm
                     .data

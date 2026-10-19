@@ -612,6 +612,16 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     extended_at(map, c).is_none_or(|t| now.duration_since(t) > timeout)
 }
 
+/// `static_flags1`: no defence against spells (the water guardians').
+const STATIC_NO_SPELL_DEFENSE: u32 = 0x8000;
+
+/// Whether a creature's template gives it no defence against spells: no
+/// magic miss by its level or its mechanic resistance (`NO_SPELL_DEFENSE`,
+/// which mangos-classic names and reads nowhere; Thistle Tea's).
+pub fn no_spell_defense(map: &Map, g: Guid) -> bool {
+    template(map, g).is_some_and(|t| t.static_flags1 & STATIC_NO_SPELL_DEFENSE != 0)
+}
+
 /// The template's mechanic immunity: `mechanic` (1 to 31) is in its mask.
 pub fn mechanic_immune(map: &Map, g: Guid, mechanic: u32) -> bool {
     (1..=31).contains(&mechanic)
@@ -863,7 +873,13 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     // moment it is free, the rest of its way asked for anew (Thistle Tea's
     // `SeekAssistance`, mangos's retreat reset); fear and confusion keep
     // their own pauses.
-    if c.auras.has(AURA_MOD_STUN) || c.auras.has(AURA_MOD_ROOT) {
+    // One that never moves stands under fear and confusion too: they take,
+    // but its AI holds it rooted (mangos's `SetAIImmobilizedState` for
+    // `SESSILE`, which every movement but a fall waits out).
+    if c.auras.has(AURA_MOD_STUN)
+        || c.auras.has(AURA_MOD_ROOT)
+        || crate::game::map::creature_motion::sessile(map, g)
+    {
         let seeking = c.engagement.flee.is_some_and(|f| f.helper.is_some());
         crate::game::map::ai::halt(map, g);
         if seeking && let Some(c) = map.creature_mut(g) {
