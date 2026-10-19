@@ -565,6 +565,8 @@ mod tests_p6_world;
 #[cfg(test)]
 mod tests_p6_world_events;
 #[cfg(test)]
+mod tests_p6_world_scripts;
+#[cfg(test)]
 mod tests_p6_world_sight;
 #[cfg(test)]
 mod tests_p6_world_system;

@@ -111,7 +111,12 @@ pub fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             map.map_events.next_check.get_or_insert(now + CHECK_EVERY);
             true
         }
+        // An event not under way can't be ended (vmangos's "map event not
+        // found", Thistle Tea's `:event_state`).
         62 => {
+            if !active(map, id) {
+                return false;
+            }
             end(map, id, d2 != 0);
             true
         }
