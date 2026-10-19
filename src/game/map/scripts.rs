@@ -1361,7 +1361,9 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                     let to = map
                         .nav
                         .as_mut()
-                        .and_then(|n| n.random_point(pos, step.o))
+                        .and_then(|n| {
+                            crate::game::map::world::wander_point(n, pos, step.o, &mut rand::rng())
+                        })
                         .unwrap_or(pos);
                     (to, -10.0)
                 }
@@ -2864,7 +2866,7 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
         at = map
             .nav
             .as_mut()
-            .and_then(|n| n.random_point(at, e.scatter))
+            .and_then(|n| crate::game::map::world::wander_point(n, at, e.scatter, &mut rand::rng()))
             .unwrap_or(at);
     }
     let despawn = (d2 > 0).then(|| {
