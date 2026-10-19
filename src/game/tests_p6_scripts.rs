@@ -100,6 +100,8 @@ pub(super) async fn hears(c: &mut Client, realm: &Realm, speaker: Guid, id: u32)
     let full = line(realm, id);
     let want = full.split('$').next().unwrap_or_default().to_owned();
     let exact = !full.contains('$');
+    // An emote's `%s` is its speaker's name, filled in by the client.
+    let emote = want.replace("%s", "").trim().to_owned();
     c.gets(Duration::from_secs(3), move |m| match m {
         ServerOpcodeMessage::SMSG_MESSAGECHAT(s) => match &s.chat_type {
             SMSG_MESSAGECHAT_ChatType::MonsterSay { sender1, .. }
@@ -110,6 +112,14 @@ pub(super) async fn hears(c: &mut Client, realm: &Realm, speaker: Guid, id: u32)
                     } else {
                         s.message.starts_with(&want)
                     }) =>
+            {
+                Some(())
+            }
+            // 1.12's emote names its speaker and carries its target's guid,
+            // not the speaker's.
+            SMSG_MESSAGECHAT_ChatType::MonsterEmote { .. }
+            | SMSG_MESSAGECHAT_ChatType::RaidBossEmote { .. }
+                if !emote.is_empty() && s.message.contains(&emote) =>
             {
                 Some(())
             }
@@ -2630,4 +2640,411 @@ async fn bly_turns_his_crew_on_the_player_once_the_trolls_are_dead() {
         (vec![14, 14, 14, 14], true),
         "hostile, and on the player"
     );
+}
+
+/// A level 60 `class` of `race` at the start, whom nothing harms: the
+/// client, the player and the map.
+pub(super) async fn hero_of(
+    realm: &Arc<Realm>,
+    name: &str,
+    race: Race,
+    class: Class,
+) -> (Client, Guid, MapHandle) {
+    let mut c = Client::connect(realm, name);
+    let g = c.enter(name, race, class).await;
+    c.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let map = realm.registry.online(g).unwrap().map();
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &data, 60);
+        p.misc.god = true;
+    })
+    .await;
+    toughen(&map, g).await;
+    (c, g, map)
+}
+
+const ARTORIUS: u32 = 14531;
+const FRANKLIN: u32 = 14529;
+const NELSON: u32 = 14536;
+const SIMONE: u32 = 14527;
+const PRECIOUS: u32 = 14528;
+const DEVOURER: u32 = 14538;
+const CLEANER: u32 = 14503;
+const STAVE: u32 = 7636;
+
+/// An amiable demon of `entry` beside `me`, called out (its script
+/// event) and ten seconds on, in its true form: it.
+async fn unmasked(map: &MapHandle, me: Guid, entry: u32) -> Guid {
+    let g = map
+        .query(move |m| {
+            let at = m.players[&me].position();
+            let g = summon(m, entry, off(at, 4.0, 0.0), 0.0);
+            event_ai::update_despawns(m);
+            tough(m, g);
+            event_ai::script_event(m, g, 0, 0, Some(me));
+            g
+        })
+        .await
+        .unwrap();
+    map.query(move |m| {
+        for _ in 0..11 {
+            hurry_runs(m, None, Duration::from_secs(1));
+        }
+        tough(m, g);
+    })
+    .await;
+    g
+}
+
+/// The Stave of the Ancients: Franklin and Simone offer a hunter on the
+/// quest to show their real faces, and nobody else; called out, a demon
+/// halts, stops offering talk, gestures five seconds on, and at ten takes
+/// its true form where it stands; Simone laughs as she is called, and
+/// Precious, who follows her from her spawn, becomes the Devourer as she
+/// unmasks (Thistle Tea's `stave_of_the_ancients`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_amiable_demons_show_their_real_faces_to_a_hunter() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero_of(&realm, "Stavehunter", Race::NightElf, Class::Hunter).await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    for (entry, demon) in [(FRANKLIN, 14534), (SIMONE, 14533)] {
+        let g = summon_near(&map, entry, off(at, 4.0, 0.0)).await;
+        c.sees(g).await;
+        map.query(move |m| {
+            event_ai::update_despawns(m);
+            m.players.get_mut(&me).unwrap().journal.log.clear();
+        })
+        .await;
+        let (_, none) = menu(&mut c, g).await;
+        assert!(
+            !none.iter().any(|(_, t)| t.contains("real face")),
+            "{entry}: nothing off the quest"
+        );
+        map.query(move |m| logs(m, me, STAVE)).await;
+        let (_, options) = menu(&mut c, g).await;
+        let id = options
+            .iter()
+            .find(|(_, t)| t.contains("real face"))
+            .map(|(i, _)| *i)
+            .unwrap_or_else(|| panic!("{entry}: called out on the quest"));
+        if entry == SIMONE {
+            assert!(
+                until(&map, 2_000, |m| !living(m, PRECIOUS).is_empty()).await,
+                "Precious with her"
+            );
+        }
+        choose(&c, g, id).await;
+        assert!(
+            until(&map, 2_000, move |m| event_ai::phase(m, g) == 1).await,
+            "{entry}: unmasking"
+        );
+        let halted = map
+            .query(move |m| (npc_flags(m, g) & 0x1, m.creature(g).map(|c| c.entry)))
+            .await
+            .unwrap();
+        assert_eq!(
+            halted,
+            (0, Some(entry)),
+            "{entry}: no more talk, not yet itself"
+        );
+        let true_form = map
+            .query(move |m| {
+                for _ in 0..11 {
+                    hurry_runs(m, None, Duration::from_secs(1));
+                }
+                (
+                    m.creature(g).map(|c| c.entry),
+                    event_ai::phase(m, g),
+                    living(m, DEVOURER).len(),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (true_form.0, true_form.1),
+            (Some(demon), 2),
+            "{entry}: its true form"
+        );
+        if entry == SIMONE {
+            assert_eq!(true_form.2, 1, "Precious the Devourer");
+        }
+        let mut gone = vec![g];
+        gone.extend(map.query(|m| living(m, DEVOURER)).await.unwrap());
+        clear(&map, gone);
+    }
+}
+
+/// A demon in its true form: pulled by anyone but a hunter, it calls The
+/// Cleaner and is banished for fifteen minutes; a second foe on its
+/// threat list does the same, The Cleaner set on the hunter and the
+/// meddler both; a banished Simone takes the Devourer with her. The
+/// Cleaner wears its immunity, speaks as it fights, and leaves once
+/// nobody is left to punish (Thistle Tea's `stave_of_the_ancients`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_demon_pulled_by_a_meddler_calls_the_cleaner() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero_of(&realm, "Meddlehunter", Race::NightElf, Class::Hunter).await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    let (mut w, warrior) = joins_here(&realm, "Intruder", &map, at).await;
+    let cleaners = |m: &Map| living(m, CLEANER);
+    // A hunter's pull: no Cleaner.
+    let g = unmasked(&map, me, FRANKLIN).await;
+    let pulled = map
+        .query(move |m| {
+            event_ai::aggro(m, g, me);
+            hurry_runs(m, None, Duration::from_millis(100));
+            (cleaners(m).len(), m.creature(g).is_some_and(|c| c.alive()))
+        })
+        .await
+        .unwrap();
+    assert_eq!(pulled, (0, true), "the hunter may pull it");
+    clear(&map, vec![g]);
+    // A warrior's: The Cleaner, the demon gone.
+    let g = unmasked(&map, me, FRANKLIN).await;
+    let banished = map
+        .query(move |m| {
+            event_ai::aggro(m, g, warrior);
+            hurry_runs(m, None, Duration::from_millis(100));
+            event_ai::update_despawns(m);
+            (
+                cleaners(m),
+                m.creature(g).is_none_or(|c| c.despawned || !c.alive()),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(banished.0.len(), 1, "The Cleaner called");
+    assert!(banished.1, "the demon banished");
+    let cleaner = banished.0[0];
+    w.sees(cleaner).await;
+    assert!(
+        until(&map, 2_000, move |m| has(m, cleaner, 29230)).await,
+        "it can't be harmed"
+    );
+    clear(&map, vec![cleaner]);
+    // A second foe on its list: The Cleaner on both, and Simone's
+    // Devourer goes with her.
+    let g = unmasked(&map, me, SIMONE).await;
+    let devourer = map.query(|m| first(m, DEVOURER)).await.flatten();
+    let crowded = map
+        .query(move |m| {
+            crate::game::map::ai::attacked(m, g, me);
+            // The hunter its victim, at the top; the meddler second.
+            if let Some(cr) = m.creature_mut(g) {
+                for (u, t) in cr.threat.iter_mut() {
+                    if *u == me {
+                        *t = 100.0;
+                    }
+                }
+                cr.threat.push((warrior, 1.0));
+            }
+            due(m, g, 1452706);
+            hurry_runs(m, None, Duration::from_millis(100));
+            event_ai::update_despawns(m);
+            let cl = cleaners(m);
+            (
+                cl.clone(),
+                cl.iter().map(|c| victim(m, *c)).collect::<Vec<_>>(),
+                m.creature(g).is_none_or(|c| c.despawned || !c.alive()),
+                devourer.is_none_or(|d| m.creature(d).is_none_or(|c| c.despawned || !c.alive())),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(crowded.0.len(), 1, "The Cleaner called");
+    assert!(
+        [me, warrior].contains(&crowded.1[0]),
+        "on the hunter or the meddler"
+    );
+    let cleaner = crowded.0[0];
+    let on_both = map
+        .query(move |m| {
+            let c = m.creature(cleaner).unwrap();
+            [me, warrior]
+                .iter()
+                .all(|p| c.threat.iter().any(|(u, _)| u == p))
+        })
+        .await
+        .unwrap();
+    assert!(on_both, "both on its list");
+    assert!(
+        hears(&mut c, &realm, cleaner, 9726).await,
+        "it speaks as it fights"
+    );
+    assert!(crowded.2, "Simone banished");
+    assert!(crowded.3, "and her Devourer with her");
+    // Nobody left to punish: it goes.
+    w.clear();
+    let gone = map
+        .query(move |m| {
+            event_ai::evade(m, cleaner);
+            hurry_runs(m, None, Duration::from_millis(100));
+            m.creature(cleaner)
+                .is_none_or(|c| c.despawned || !c.alive())
+        })
+        .await
+        .unwrap();
+    assert!(gone, "The Cleaner leaves");
+}
+
+/// Another [`hero`] in `map` at `to`, by a teleport within it.
+async fn joins_here(
+    realm: &Arc<Realm>,
+    name: &str,
+    map: &MapHandle,
+    to: Vector3d,
+) -> (Client, Guid) {
+    let (mut c, g, _) = hero(realm, name).await;
+    let id = map.query(|m| m.key.map).await.unwrap();
+    let map = travel(realm, &mut c, id, to).await;
+    map.query(move |m| m.players.get_mut(&g).unwrap().gm = false)
+        .await;
+    (c, g)
+}
+
+/// Each demon answers the sting that undoes it: Artorius poisoned by a
+/// Serpent Sting, Klinfran's frenzy undone by a Scorpid Sting, Solenor
+/// clipped by Wing Clip and his flame put out by a Frost Trap, Simone
+/// silenced by a Viper Sting; and a demon left alone runs out of
+/// patience in twenty minutes and slips away (Thistle Tea's
+/// `stave_of_the_ancients`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn each_demon_answers_its_sting_and_slips_away_when_left_alone() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero_of(&realm, "Stinger", Race::NightElf, Class::Hunter).await;
+    for (entry, sting, answer, text) in [
+        (ARTORIUS, 13555, 23299, Some(9786)),
+        (ARTORIUS, 25295, 23299, Some(9786)),
+        (FRANKLIN, 14277, 23260, None),
+        (NELSON, 14268, 23279, Some(9785)),
+        (SIMONE, 14280, 23207, Some(9762)),
+    ] {
+        let g = unmasked(&map, me, entry).await;
+        c.sees(g).await;
+        c.clear();
+        map.query(move |m| {
+            crate::game::map::ai::attacked(m, g, me);
+            if entry == FRANKLIN {
+                aura_on(m, g, g, 23257);
+            }
+            if let Some(cr) = m.caster_mut(g) {
+                cr.gcd_until = None;
+                cr.casting = None;
+            }
+            event_ai::spell_hit(m, g, me, sting, 8);
+        })
+        .await;
+        let (spells, said) = answers(&mut c, g, Duration::from_millis(1500)).await;
+        assert!(
+            spells.contains(&answer),
+            "{entry}: {answer} for {sting}: {spells:?}"
+        );
+        if let Some(text) = text {
+            let l = line(&realm, text).replace("%s", "");
+            let l = l.trim();
+            assert!(
+                said.iter().any(|s| s.contains(l)),
+                "{entry}: its cry: {said:?}"
+            );
+        }
+        if entry == FRANKLIN {
+            assert!(
+                !map.query(move |m| has(m, g, 23257)).await.unwrap(),
+                "his frenzy undone"
+            );
+        }
+        if entry == NELSON {
+            let out = map
+                .query(move |m| {
+                    let had = has(m, g, 23272);
+                    aura_on(m, me, g, 13810);
+                    due(m, g, 1453610);
+                    (had, has(m, g, 23272))
+                })
+                .await
+                .unwrap();
+            assert_eq!(out, (true, false), "his flame out in the frost");
+        }
+        clear(&map, vec![g]);
+    }
+    // Left alone.
+    let g = unmasked(&map, me, ARTORIUS).await;
+    let restless = map
+        .query(move |m| {
+            event_ai::evade(m, g);
+            for _ in 0..1201 {
+                hurry_runs(m, Some(g), Duration::from_secs(1));
+            }
+            let phase = event_ai::phase(m, g);
+            due(m, g, 1453104);
+            hurry_runs(m, Some(g), Duration::from_millis(100));
+            (
+                phase,
+                m.creature(g).is_none_or(|c| c.despawned || !c.alive()),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(restless, (3, true), "out of patience, and away");
+}
+
+/// `spell`'s aura on `who`, by `by`.
+pub(super) fn aura_on(m: &mut Map, by: Guid, who: Guid, spell: u32) {
+    let t = m.realm.data.spells.get(spell).cloned().unwrap();
+    let _ = crate::game::map::auras::apply_spell(m, by, who, &t, &[(0, 0)], Default::default());
+}
+
+/// What `c` sees `g` cast and hears it say, yell or emote over `within`.
+pub(super) async fn answers(c: &mut Client, g: Guid, within: Duration) -> (Vec<u32>, Vec<String>) {
+    let (mut spells, mut said) = (Vec::new(), Vec::new());
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return (spells, said);
+        }
+        let seen = c
+            .gets(left, move |m| match m {
+                ServerOpcodeMessage::SMSG_SPELL_START(s) if s.caster == g => {
+                    Some((Some(s.spell), None))
+                }
+                ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.caster == g => {
+                    Some((Some(s.spell), None))
+                }
+                ServerOpcodeMessage::SMSG_MESSAGECHAT(s) => match &s.chat_type {
+                    SMSG_MESSAGECHAT_ChatType::MonsterSay { sender1, .. }
+                    | SMSG_MESSAGECHAT_ChatType::MonsterYell { sender1, .. }
+                        if *sender1 == g =>
+                    {
+                        Some((None, Some(s.message.clone())))
+                    }
+                    // Its target's guid, not its own (1.12's layout).
+                    SMSG_MESSAGECHAT_ChatType::MonsterEmote { .. }
+                    | SMSG_MESSAGECHAT_ChatType::RaidBossEmote { .. } => {
+                        Some((None, Some(s.message.clone())))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .await;
+        match seen {
+            Some((s, l)) => {
+                spells.extend(s);
+                said.extend(l);
+            }
+            None => return (spells, said),
+        }
+    }
 }
