@@ -258,6 +258,20 @@ pub fn physical_pct_for(a: &Auras, w: Option<&Weapon>) -> f32 {
     pct_for(a, 1, w)
 }
 
+/// The flat physical damage done a player's hand with the weapon `w` takes
+/// into its damage, under its percentages: aura 13 of the physical school,
+/// one that asks for a weapon only with one it fits, as mangos's
+/// `HandleModDamageDone` and `_ApplyWeaponDependentAuraDamageMod` put it in
+/// the hand's `TOTAL_VALUE` (Restless Strength's, Curse of Weakness's, a
+/// weapon specialization's). The hand's damage fields hold it, so the
+/// character sheet shows it and every blow and ability has it.
+pub fn physical_flat_for(a: &Auras, w: Option<&Weapon>) -> f32 {
+    a.effects()
+        .filter(|(h, x)| x.kind == AURA_MOD_DAMAGE_DONE && x.misc & 1 != 0 && fits(h, w))
+        .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
+        .sum()
+}
+
 /// A spell's percentages of damage done on school `bit`: those that ask
 /// for no weapon or item.
 pub fn spell_pct(a: &Auras, bit: u32) -> f32 {
@@ -720,6 +734,7 @@ pub fn player(p: &mut Player, data: &GameData) {
     let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
     let bonus = ap / 14.0 * main_delay as f32 / 1000.0;
     let main_pct = physical_pct(main.as_ref());
+    let bonus = bonus + physical_flat_for(a, main.as_ref());
     f.set_f32(UNIT_FIELD_MINDAMAGE, (min + bonus) * main_pct);
     f.set_f32(UNIT_FIELD_MAXDAMAGE, (max + bonus) * main_pct);
     f.set_u32(
@@ -729,7 +744,7 @@ pub fn player(p: &mut Player, data: &GameData) {
     let dual_wield = knows_dual_wield && g.off.is_some() && !no_weapon_form(form);
     match g.off.filter(|_| dual_wield) {
         Some(w) => {
-            let bonus = ap / 14.0 * w.delay as f32 / 1000.0;
+            let bonus = ap / 14.0 * w.delay as f32 / 1000.0 + physical_flat_for(a, Some(&w));
             let pct =
                 physical_pct(Some(&w)) * (1.0 + a.sum(AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
             f.set_f32(UNIT_FIELD_MINOFFHANDDAMAGE, (w.min + bonus) * 0.5 * pct);
@@ -768,7 +783,8 @@ pub fn player(p: &mut Player, data: &GameData) {
             } else {
                 0.0
             };
-            let bonus = (rap / 14.0 + ammo) * w.delay as f32 / 1000.0;
+            let bonus =
+                (rap / 14.0 + ammo) * w.delay as f32 / 1000.0 + physical_flat_for(a, Some(&w));
             let pct = physical_pct(Some(&w));
             f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, (w.min + bonus) * pct);
             f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, (w.max + bonus) * pct);

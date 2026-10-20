@@ -555,6 +555,36 @@ fn weapon_damage(
         })
         .unwrap_or((1.0, 2.0));
     let mut base = roll_between(map, min, max);
+    // Normalized, a player's blow is their weapon's at its kind's speed,
+    // with the hand's flat bonuses, under the hand's percentages, as its
+    // fields have it at the weapon's speed (mangos's `CalculateMinMaxDamage`
+    // with `normalized`).
+    if normalized && let Some(p) = map.players.get(&caster) {
+        let g = crate::game::map::derive::gear(p, &data);
+        let w = if ranged {
+            g.ranged
+        } else if offhand {
+            g.off
+        } else {
+            g.main
+        };
+        if let Some(w) = w {
+            let ap = if ranged {
+                p.derived.ranged_attack_power
+            } else {
+                p.derived.attack_power
+            } as f32;
+            let flat = crate::game::map::derive::physical_flat_for(&p.auras, Some(&w));
+            let mut pct = crate::game::map::derive::physical_pct_for(&p.auras, Some(&w));
+            if offhand {
+                pct *= 0.5 * (1.0 + p.auras.sum(auras::AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
+            }
+            base = (roll_between(map, w.min, w.max)
+                + ap / 14.0 * normalized_speed(w.subclass, ranged)
+                + flat)
+                * pct;
+        }
+    }
     // Hunter's Mark: ranged attack power against its target; and melee
     // attack power against one so marked.
     {
@@ -580,25 +610,6 @@ fn weapon_damage(
             .map(|f| f.get_u32(period))
             .unwrap_or(2000);
         base += bonus.max(0) as f32 / 14.0 * speed as f32 / 1000.0;
-    }
-    if normalized && let Some(p) = map.players.get(&caster) {
-        let g = crate::game::map::derive::gear(p, &data);
-        let w = if ranged {
-            g.ranged
-        } else if offhand {
-            g.off
-        } else {
-            g.main
-        };
-        if let Some(w) = w {
-            let ap = if ranged {
-                p.derived.ranged_attack_power
-            } else {
-                p.derived.attack_power
-            } as f32;
-            base =
-                roll_between(map, w.min, w.max) + ap / 14.0 * normalized_speed(w.subclass, ranged);
-        }
     }
     let flat: i32 = effects
         .iter()

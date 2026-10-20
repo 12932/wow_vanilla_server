@@ -451,3 +451,75 @@ async fn a_channels_trigger_keeps_its_modified_schedule_after_the_charge_is_spen
         "and its trigger goes every 2 s"
     );
 }
+
+const OVERPOWER: u32 = 7384;
+const BATTLE_STANCE: u32 = 2457;
+const TEN_MORE: u32 = 995_200;
+const TWICE_AS_MUCH: u32 = 995_201;
+
+/// A flat physical damage done goes in the hand's fields, under its
+/// percentages, and a normalized ability takes both, as mangos's
+/// `CalculateMinMaxDamage` (`TOTAL_VALUE` under `TOTAL_PCT`, normalized or
+/// not): with ten more damage done and twice as much, Overpower is its
+/// weapon at 2.4 and its attack power, and the ten, all doubled, and its 5.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_normalized_ability_takes_the_hands_flat_bonus_and_percentages() {
+    use super::tests_p3_spells_kit::{
+        apply, at, cast_fresh, dummy, have_data, health, made_up, player, ready, realm_plus,
+        set_health, set_power,
+    };
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        let mut ten = made_up(TEN_MORE, 6, auras::AURA_MOD_DAMAGE_DONE, 1, 10);
+        ten.duration_index = 5;
+        d.spells.spells.insert(TEN_MORE, ten);
+        let mut twice = made_up(TWICE_AS_MUCH, 6, 79, 1, 100);
+        twice.duration_index = 5;
+        d.spells.spells.insert(TWICE_AS_MUCH, twice);
+    });
+    let (_c, w, map) = player(&realm, "P8AN", "Overpowera", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, w, 60, &[OVERPOWER]);
+            let k = dummy(m, w, 60, 2.0);
+            let fields = |m: &Map| m.unit_fields(w).unwrap().get_f32(UNIT_FIELD_MINDAMAGE);
+            let bare = fields(m);
+            apply(m, w, w, TEN_MORE);
+            apply(m, w, w, TWICE_AS_MUCH);
+            let sheet = fields(m);
+            let expected = {
+                let p = m.players.get(&w).unwrap();
+                let data = m.realm.data.clone();
+                let wpn = crate::game::map::derive::gear(p, &data).main.unwrap();
+                ((wpn.min + wpn.max) / 2.0 + p.derived.attack_power as f32 / 14.0 * 2.4 + 10.0)
+                    * 2.0
+                    + 5.0
+            };
+            apply(m, w, w, BATTLE_STANCE);
+            crate::game::map::combat::after_outcome(
+                m,
+                w,
+                k,
+                crate::game::map::combat::Outcome::Dodge,
+            );
+            set_health(m, k, 100_000);
+            set_power(m, w, 1, 1_000);
+            cast_fresh(m, w, OVERPOWER, at(k));
+            (bare, sheet, 100_000 - health(m, k), expected)
+        })
+        .await
+        .unwrap();
+    let (bare, sheet, overpower, expected) = out;
+    assert_eq!(
+        (sheet - bare * 2.0).round(),
+        20.0,
+        "the sheet's damage: the weapon's and the ten, doubled"
+    );
+    assert_eq!(
+        overpower, expected as u32,
+        "Overpower, normalized, with both"
+    );
+}
