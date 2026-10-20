@@ -732,6 +732,16 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   and 67, the script wander), 3 sent it from the last update's place. (The PvP flag items were already done on
   master.) Client check passed. **Its calls:** marks per viewer on players too (mangos's intent); strangers lose the
   whole mangos owner mask (stats, attack power, base health and mana, costs, pet experience).
+- **Review 5's lows, the network, maps and data (`fix/lowsa`):** `/who`, whois and inspect at most once in 5 s
+  each (mangos's `InitOpcodeCooldowns`), and a cache upload unchanged isn't written; a client's packet carries its
+  session; a login into a copy starts no world copy of its map; logging in aboard a ship that crossed to the other
+  continent puts you on its deck there (mangos's `LoadFromDB`); what a map makes itself gets a counter that
+  doesn't collide; a navmesh header listing missing tiles warns; a reload finding no config file keeps the running
+  settings; `[arena]`'s times bounded. **Left:** net 7, maps 9, data 7 (queued).
+- **The flaky tests (`fix/flaky`):** nine, each from 5 to 16 failures in 30 or 40 runs to none: fights that ended
+  at the next update, charms with no aura that went free, timers read late, an unseeded roll (Jaina's elementals,
+  Balnazzar's Domination window), a route's last point gone by the next update (`came_to`); and tests that
+  reconnected so fast they took their player over (`harness::offline`).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
