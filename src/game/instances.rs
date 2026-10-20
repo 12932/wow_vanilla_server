@@ -134,6 +134,7 @@ const ON_THE_WAY_SECS: i64 = 60;
 impl Instances {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut i = Self::default();
+        let now = now();
         for (kind, _, data) in records {
             match kind.as_str() {
                 KIND_RAID => {
@@ -151,6 +152,16 @@ impl Instances {
                         if matches!(save.owner, Some(Owner::Group(_))) {
                             save.owner = None;
                         }
+                        // Empty since the restart, as far as the sweep can
+                        // tell: it has as long from now as a copy left
+                        // empty has. Its stored time is its last kill or
+                        // entry (a copy in use isn't written as it is
+                        // touched), and one that was occupied at the
+                        // shutdown never emptied: before, the first sweep,
+                        // at start-up, took every copy whose last kill was
+                        // five minutes before, the downtime counted too,
+                        // and those saved inside went home at their login.
+                        save.touched_at = now;
                         if let Some(owner) = save.owner
                             && !save.expired
                         {

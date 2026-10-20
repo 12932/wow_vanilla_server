@@ -339,3 +339,59 @@ async fn one_panic_in_a_maps_shutdown_costs_only_that_players_save() {
     }
     drop(clients);
 }
+
+fn store_file(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wvs-rev5-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("characters.sqlite")
+}
+
+/// Review 5's maps 3: after a restart, a dungeon copy someone was saved in
+/// at the shutdown, its last kill (here its entry) more than the sweep's
+/// limit before, is kept for as long from the restart as a copy left empty
+/// is: the sweep that runs at start-up leaves it, and she logs back into
+/// it. Before, the stored time was all the sweep had: it took the copy at
+/// once, and she went home.
+#[tokio::test]
+async fn a_dungeon_copy_outlasts_a_restart_whatever_its_last_kill() {
+    let db = store_file("sweep");
+    let (store, startup) = crate::game::store::Store::open(&db).unwrap();
+    let realm = realm_on(store, startup);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    go(&realm, &mut a, DUNGEON).await;
+    let key = map_of(&realm, g).key;
+    let id = key.instance;
+    realm.shutdown().await;
+    drop(a);
+    drop(realm);
+    // Inside 11 minutes without a kill: past the sweep's limit,
+    // max(instance_unload, 5 min), 10 minutes here.
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let data: String = conn
+            .query_row(
+                "SELECT data FROM records WHERE kind = 'instance' AND id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut save: instances::InstanceSave = serde_json::from_str(&data).unwrap();
+        save.touched_at -= 660;
+        conn.execute(
+            "UPDATE records SET data = ?1 WHERE kind = 'instance' AND id = ?2",
+            rusqlite::params![serde_json::to_string(&save).unwrap(), id],
+        )
+        .unwrap();
+    }
+    let (store, startup) = crate::game::store::Store::open(&db).unwrap();
+    let realm = realm_on(store, startup);
+    // The realm's sweep, as at start-up.
+    instances::sweep(&realm);
+    assert!(instances::save_of(&realm, id).is_some(), "the copy is kept");
+    let mut a = Client::connect(&realm, "A");
+    a.login(g).await;
+    assert_eq!(map_of(&realm, g).key, key, "Alice is back in her copy");
+    let _ = std::fs::remove_dir_all(db.parent().unwrap());
+}
