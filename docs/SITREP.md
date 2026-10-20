@@ -636,6 +636,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   said normal on every realm: the one behaviour change); a flood count of 0 turns flood control off, as mangos.
   **Left for you** (in its report): mangos's `PlayerLimit`, `InstantLogout`, `Rate.Creature.*`, ghost speed, mail
   expiry and the 100-mail box, the invasions' script numbers, ports and bind address, and more.
+- **Chat's fan-out (`perf/chat`, your ask):** a lock per channel behind a directory never held across one; a line is
+  fanned out after its channel and the ignore lists are let go (the ignore lists gained a reverse index); guild and
+  group lines likewise, and guild chat no longer looks each member up again (it was N²); `/who` stops at a full
+  list. **Measured** (`benches/chat.rs`, millions of deliveries a second): one map about the same (2), 8 maps in one
+  channel 1.9 → 7.2, 8 maps in 8 channels 2 → 13 to 20. **What limits it now** is tokio waking each recipient's
+  writer (85–90% of a map's fan-out), and in one channel the shared recipients' queues. **Its calls:** lines from
+  two maps in one channel may reach members in different orders (one map's stay in order); channel notices stay
+  under the channel's lock, in order. Numbers in `docs/PERFORMANCE.md`. **Also fixed:** the reputation test's race
+  (the map's update ending a fight's war between two queries).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.

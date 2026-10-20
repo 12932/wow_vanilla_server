@@ -279,26 +279,39 @@ async fn what_a_player_may_show_set_at_war_or_put_away() {
 #[tokio::test]
 async fn a_fights_war_ends_with_it_unless_the_faction_is_hostile() {
     let (realm, _a, g) = setup().await;
+    // The flag as it stands, read in the same step as what set it: the
+    // map's update ends a fight's war once nothing holds the player (8g),
+    // so a separate query could run after an update and find it gone.
+    let at_war = move |m: &Map, f: u32| {
+        m.players[&g]
+            .row
+            .state
+            .reputation
+            .iter()
+            .find(|s| s.faction == f)
+            .is_some_and(|s| s.flags & FLAG_AT_WAR != 0)
+    };
     // Through a creature of each faction.
-    let marks = on_map(&realm, move |m| {
+    let (marks, ordinary) = on_map(&realm, move |m| {
         let mut marked = Vec::new();
         for f in [ORDINARY, HIDDEN, PEACE, AT_WAR] {
             reputation::temporary_war_with(m, g, f);
             marked.push(m.players[&g].temporary_war.contains(&f));
         }
-        marked
+        (marked, at_war(m, ORDINARY))
     })
     .await;
     assert_eq!(marks, vec![true, false, false, false]);
-    assert_ne!(state(&realm, g, ORDINARY).await.1 & FLAG_AT_WAR, 0);
+    assert!(ordinary, "at war for the fight");
     // Hostile by the fight's end: still at war.
-    modify(&realm, g, ORDINARY, -6_000).await;
-    on_map(&realm, move |m| {
+    let still = on_map(&realm, move |m| {
+        reputation::modify(m, g, ORDINARY, -6_000, true);
         let d = m.realm.data.clone();
         reputation::end_temporary_war(m.players.get_mut(&g).unwrap(), &d);
+        at_war(m, ORDINARY)
     })
     .await;
-    assert_ne!(state(&realm, g, ORDINARY).await.1 & FLAG_AT_WAR, 0);
+    assert!(still, "hostile by the fight's end, still at war");
     // A fight's war with a friendly one ends with it.
     on_map(&realm, move |m| {
         reputation::temporary_war_with(m, g, SPILLED);
