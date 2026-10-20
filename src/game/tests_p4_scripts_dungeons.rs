@@ -400,26 +400,21 @@ async fn the_deadmines_doors_gunpowder_and_cannon() {
         instance_script::object_used(m, 16398);
         set(m, 1, 1);
         assert_eq!((data(m, 1), m.instance.timers.len()), (1, alarms), "once");
-    })
-    .await
-    .unwrap();
-    // The alarm goes three seconds on: its call, and the pirates charge.
-    let pirates = map
-        .query(|m| {
-            hurry_copy(m, Duration::from_millis(2900));
-            assert_eq!(data(m, 1), 1, "not before three seconds");
-            hurry_copy(m, Duration::from_millis(200));
-            assert_eq!(data(m, 1), 2, "the alarm");
-            [79289u32, 79290].map(|s| crate::game::map::scripts::creature_of_spawn(m, s))
-        })
-        .await
-        .unwrap();
-    assert!(pirates.iter().all(|p| p.is_some()), "the two pirates");
-    let charging = |m: &Map, g: Guid| {
-        m.creature(g)
-            .is_some_and(|c| c.movement_type == crate::game::map::creature::MOVEMENT_IDLE)
-    };
-    map.query(move |m| {
+        // The alarm goes three seconds on: its call, and the pirates
+        // charge; fifteen more, the assault. Counted from the cannon in
+        // its own query: the map's clock runs on between queries, and on
+        // a busy machine the tenth of a second "not before three
+        // seconds" was left had gone by the next.
+        hurry_copy(m, Duration::from_millis(2900));
+        assert_eq!(data(m, 1), 1, "not before three seconds");
+        hurry_copy(m, Duration::from_millis(200));
+        assert_eq!(data(m, 1), 2, "the alarm");
+        let pirates = [79289u32, 79290].map(|s| crate::game::map::scripts::creature_of_spawn(m, s));
+        assert!(pirates.iter().all(|p| p.is_some()), "the two pirates");
+        let charging = |m: &Map, g: Guid| {
+            m.creature(g)
+                .is_some_and(|c| c.movement_type == crate::game::map::creature::MOVEMENT_IDLE)
+        };
         for p in pirates.iter().flatten() {
             assert!(charging(m, *p), "a pirate off its patrol");
         }
