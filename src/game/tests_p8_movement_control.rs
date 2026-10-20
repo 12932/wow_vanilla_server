@@ -314,3 +314,77 @@ async fn a_confused_units_detour_out_of_its_circle_is_refused() {
     assert!(walks > 0, "the wolf walks");
     assert!(farthest <= 4.01, "and keeps within the circle: {farthest}");
 }
+
+/// By Northshire Abbey, a place the navmesh keeps apart: a fear's point to
+/// run to is found from here, but no way to it.
+const CUT_OFF: Vector3d = Vector3d {
+    x: -8975.95,
+    y: -176.493,
+    z: 85.380_615,
+};
+
+/// A feared wolf whose run has a point but no way to it keeps its fear and
+/// stands 0.8 to 1.5 seconds before it looks again, with no run, as
+/// Thistle Tea's "failed paths retain fear and wait before retrying" has
+/// it.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_feared_units_run_with_no_way_waits_and_tries_again() {
+    let Some(realm) = nav_realm() else {
+        return;
+    };
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let wolf = motion::wolf();
+    let out = map
+        .query(move |m| {
+            let mut rng = rand::rng();
+            let tries: Vec<_> = (0..10)
+                .map(|_| {
+                    let to = player_motion::fear_point(m, CUT_OFF, 5.0, &mut rng);
+                    (
+                        to,
+                        to.map(|to| player_motion::control_path(m, CUT_OFF, to, 30.0)),
+                    )
+                })
+                .collect();
+            // Mostly a point with no way to it; now and then no point (a
+            // pause too); never a way.
+            let cut = |path: &Option<Option<Vec<Vector3d>>>| matches!(path, Some(None));
+            let no_way = tries.iter().all(|(to, path)| to.is_none() || cut(path))
+                && tries.iter().filter(|(_, path)| cut(path)).count() >= 5;
+            if !no_way {
+                eprintln!("{tries:?}");
+            }
+            let c = m.creature_mut(wolf).unwrap();
+            c.position = CUT_OFF;
+            c.home = CUT_OFF;
+            motion::apply(m, ga, wolf, FEAR);
+            let mut rounds = Vec::new();
+            for _ in 0..3 {
+                let before = m.now;
+                creature_combat::controlled_step(m, wolf);
+                let next = m.creature(wolf).unwrap().engagement.next_move_at.unwrap();
+                rounds.push((next - before, !walking(m, wolf)));
+                m.now = next;
+            }
+            let feared = creature_combat::control_changed(m, wolf);
+            (no_way, rounds, feared)
+        })
+        .await
+        .unwrap();
+    let (no_way, rounds, feared) = out;
+    assert!(no_way, "a point, and no way to it");
+    for (pause, stands) in rounds {
+        assert!(
+            (Duration::from_millis(800)..Duration::from_millis(1500)).contains(&pause),
+            "{pause:?}"
+        );
+        assert!(stands, "no run");
+    }
+    assert!(
+        matches!(feared, Some(creature_combat::Control::Fear)),
+        "still feared: {feared:?}"
+    );
+}
