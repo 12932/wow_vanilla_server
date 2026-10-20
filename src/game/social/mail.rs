@@ -222,9 +222,9 @@ pub fn post(realm: &Realm, m: Mail) -> u32 {
 ///
 /// The caller holds the mail's lock (`mails`) until `records` is sent to
 /// the store. Any map can take from the mail once it is in `mails`, and a
-/// take sends its save under the lock: let go first, a refund taken
-/// before its post was written was written over by the post, and came
-/// back after a restart.
+/// take sends its save under the lock. Were the lock let go first, a take
+/// in between would be written first and the post's older record over it:
+/// a refund taken would be back in the mail after a restart.
 pub fn post_in(realm: &Realm, mails: &mut Mails, mut m: Mail, records: &mut Records) -> u32 {
     if m.id == 0 {
         m.id = mails.next_id();
