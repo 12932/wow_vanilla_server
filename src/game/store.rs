@@ -534,6 +534,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&conn)?;
         sweep_bones(&conn, crate::game::social::mail::now())?;
+        accounts_in_capitals(&conn)?;
         let startup = read_startup(&conn)?;
         info!(
             "character store {}: {} characters, schema version {SCHEMA_VERSION}",
@@ -788,6 +789,30 @@ fn sweep_bones(conn: &Connection, now: i64) -> rusqlite::Result<()> {
     let gone = conn.execute("DELETE FROM bones WHERE expires_at <= ?1", params![now])?;
     if gone > 0 {
         info!("the character store: {gone} bones gone while it was closed");
+    }
+    Ok(())
+}
+
+/// Characters and caches kept under an account's name in another case
+/// (made before the name was put in capitals at the login,
+/// `auth::account_name`) are the account's: its characters join its list,
+/// and where both cases have a cache of one kind, the capitals' stays.
+/// Nothing to do once done.
+fn accounts_in_capitals(conn: &Connection) -> rusqlite::Result<()> {
+    let moved = conn.execute(
+        "UPDATE characters SET account = UPPER(account) WHERE account <> UPPER(account)",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE OR IGNORE account_data SET account = UPPER(account) WHERE account <> UPPER(account)",
+        [],
+    )?;
+    conn.execute(
+        "DELETE FROM account_data WHERE account <> UPPER(account)",
+        [],
+    )?;
+    if moved > 0 {
+        info!("the character store: {moved} characters' account names put in capitals");
     }
     Ok(())
 }

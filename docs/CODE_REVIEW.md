@@ -17,6 +17,9 @@ the reader off, a player dropped by a copy stopped from outside, a pet's threat 
 missing world data). None fixed yet; waiting on your choice.
 - **#2** fixed (`fix/fixnet`): a close wakes the writer out of its write (a `Notify` in the queue), and a write that
   takes nothing for `client_idle_timeout_secs` ends it; the reader and the session end at the close too.
+- **#13** fixed (`fix/fixnet`): the account name is put in capitals (`auth::account_name`) at the logon and reconnect
+  challenges and the world handshake, before the proof, the ban or the key cache use it; the store's rows kept under
+  another case are the account's at the next start.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

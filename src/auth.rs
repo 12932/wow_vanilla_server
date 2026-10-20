@@ -290,6 +290,18 @@ pub(crate) async fn handle(mut stream: TcpStream, users: UserCache) {
         }
     };
 
+    // The name as the account has it, before anything uses it: the proof,
+    // the ban, the session key's place in the cache.
+    let opcode = match opcode {
+        InitialMessage::Logon(mut l) => {
+            l.account_name = account_name(&l.account_name);
+            InitialMessage::Logon(l)
+        }
+        InitialMessage::Reconnect(mut r) => {
+            r.account_name = account_name(&r.account_name);
+            InitialMessage::Reconnect(r)
+        }
+    };
     match opcode {
         InitialMessage::Logon(l) => match l.protocol_version {
             ProtocolVersion::Two => login_version_2(stream, l, users).await,
@@ -307,6 +319,15 @@ pub(crate) async fn handle(mut stream: TcpStream, users: UserCache) {
             _ => {}
         },
     }
+}
+
+/// An account's name as the realm keeps it, whatever case a client sends
+/// it in: in capitals, as SRP makes it (wow_srp's `NormalizedString`; the
+/// 1.12 client sends it so) and mangos's `AccountMgr::normalizeString`
+/// keeps it. Else `casey` would be proved against CASEY's verifier and
+/// enter the world as an account of its own.
+pub fn account_name(sent: &str) -> String {
+    sent.to_ascii_uppercase()
 }
 
 /// Whether `account` is banned now: a session it made before the ban

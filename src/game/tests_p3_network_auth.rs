@@ -392,3 +392,76 @@ async fn a_ban_outlasts_the_session_made_before_it() {
         "AUTH_BANNED, in the clear"
     );
 }
+
+/// Review 5's net 4: a login as `casey` is CASEY's, at the login server
+/// and in the world: its session key is kept under CASEY (where it was
+/// kept as sent), a reconnect in any case finds it, and the world
+/// handshake as `casey` enters as CASEY, with CASEY's characters, not as
+/// an account of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_login_in_lower_case_is_the_account_in_capitals() {
+    accounts().set_password("CASEY", "SECRET").unwrap();
+    let users = users();
+    let mut s = login_server(users.clone()).await;
+    let client = log_in(&mut s, "casey", "SECRET").await;
+    drop(s);
+    assert!(
+        users_lock(&users).get("CASEY").is_some(),
+        "kept in capitals"
+    );
+    assert!(users_lock(&users).get("casey").is_none(), "not as sent");
+    // A reconnect in lower case finds it.
+    let mut s = login_server(users.clone()).await;
+    s.write_all(&challenge(2, "Casey")).await.unwrap();
+    let c = read_n(&mut s, 2 + 16 + 16).await;
+    assert_eq!(&c[..2], &[2, 0], "the reconnect challenge");
+    drop(s);
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(
+        crate::game::harness::test_config(),
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        Some(users),
+    );
+    let mut s = world_server(realm.clone()).await;
+    let server_seed = auth_challenge(&mut s).await;
+    let seed = ProofSeed::new();
+    let client_seed = seed.seed();
+    let (proof, mut crypto) = seed.into_client_header_crypto(
+        &NormalizedString::new("casey").unwrap(),
+        client.session_key(),
+        server_seed,
+    );
+    auth_session(&mut s, "casey", client_seed, proof).await;
+    let header = read_n(&mut s, 4).await;
+    let h = crypto.decrypt_server_header(header.try_into().unwrap());
+    assert_eq!(h.opcode, 0x1EE, "SMSG_AUTH_RESPONSE");
+    let body = read_n(&mut s, usize::from(h.size) - 2).await;
+    assert_eq!(body[0], 0x0C, "AUTH_OK");
+    CMSG_CHAR_CREATE {
+        name: "Lower".into(),
+        race: Race::Human,
+        class: Class::Warrior,
+        gender: Gender::Female,
+        skin_color: 1,
+        face: 1,
+        hair_style: 1,
+        hair_color: 1,
+        facial_hair: 1,
+    }
+    .tokio_write_encrypted_client(&mut s, crypto.encrypter())
+    .await
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let g = loop {
+        if let Some(g) = realm.registry.guid_by_name("Lower") {
+            break g;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no character made");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(&*realm.registry.name(g).unwrap().account, "CASEY");
+    assert_eq!(realm.store.characters("CASEY").await.len(), 1);
+    assert!(realm.store.characters("casey").await.is_empty());
+}

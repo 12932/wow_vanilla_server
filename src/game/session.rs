@@ -124,7 +124,7 @@ async fn handshake(
     .tokio_write_unencrypted_server(&mut *stream)
     .await?;
     let c = read_auth_session(stream).await?;
-    let account = c.username;
+    let account = crate::auth::account_name(&c.username);
     let session_key = realm.users.as_ref().and_then(|users| {
         let mut users = crate::auth::users_lock(users);
         users.get_mut(&account).map(|srp| *srp.session_key())

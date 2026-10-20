@@ -117,3 +117,57 @@ async fn a_closed_connection_ends_its_reader_and_its_session() {
     }
     drop(a);
 }
+
+/// Net 4's store: characters and caches kept under an account's name in
+/// another case (from a login before names were put in capitals) are the
+/// account's at the next start; where both cases have a cache of one
+/// kind, the capitals' stays.
+#[tokio::test]
+async fn characters_made_under_a_lower_case_name_are_the_accounts() {
+    use crate::game::store::{CharacterRow, Store};
+    let path = std::env::temp_dir().join(format!("wvs-net5-case-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    {
+        let (store, _) = Store::open(&path).unwrap();
+        for (guid, account, name) in [(1, "CASEY", "Upper"), (2, "casey", "Lower")] {
+            store
+                .create(CharacterRow {
+                    guid,
+                    account: account.into(),
+                    name: name.into(),
+                    race: 1,
+                    class: 1,
+                    level: 1,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        store.set_account_data("CASEY", 0, 1, b"upper".to_vec());
+        store.set_account_data("casey", 0, 2, b"lower".to_vec());
+        store.set_account_data("casey#2", 1, 3, b"lower's".to_vec());
+        store.flush().await;
+    }
+    let (store, startup) = Store::open(&path).unwrap();
+    assert!(startup.names.iter().all(|n| n.account == "CASEY"));
+    let mut names: Vec<String> = store
+        .characters("CASEY")
+        .await
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["Lower", "Upper"]);
+    assert!(store.characters("casey").await.is_empty());
+    assert_eq!(
+        store.account_data("CASEY").await,
+        vec![(0, 1, b"upper".to_vec())]
+    );
+    assert!(store.account_data("casey").await.is_empty());
+    assert_eq!(
+        store.account_data("CASEY#2").await,
+        vec![(1, 3, b"lower's".to_vec())]
+    );
+    drop(store);
+    let _ = std::fs::remove_file(&path);
+}
