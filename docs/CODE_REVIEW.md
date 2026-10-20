@@ -20,6 +20,9 @@ missing world data). None fixed yet; waiting on your choice.
 - **#13** fixed (`fix/fixnet`): the account name is put in capitals (`auth::account_name`) at the logon and reconnect
   challenges and the world handshake, before the proof, the ban or the key cache use it; the store's rows kept under
   another case are the account's at the next start.
+- **#12** fixed (`fix/fixnet`): one session an account (`Registry::claim_session`, as mangos's `AddSession_`): a new
+  one replaces the old and starts once it has gone, a player in the world left for it to take over; `.ban` kicks the
+  account's session wherever it is, and a login refuses a banned account.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

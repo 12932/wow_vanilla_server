@@ -18,7 +18,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 9 | medium | combat | Triggered spells recurse without a bound (a spell that triggers itself aborts the server) |
 | 10 | medium | data | A store that can't write loses every save while the realm plays on |
 | 11 | medium | data, social | A deleted character's GUID, honor, tickets and raid binds go to the next character made after a restart |
-| 12 | medium | net | An account can have any number of world sessions; a ban doesn't reach one on the character screen |
+| 12 | medium | net | An account can have any number of world sessions; a ban doesn't reach one on the character screen **Fixed.** |
 | 13 | medium | net | Account names keep the case typed: a lowercase login is another account in the world **Fixed.** |
 | 14 | medium | social | A refund taken before its post is written comes back after a restart |
 | 15 | medium | social | A client can have every mail in the realm scanned 1,000 times a second |

@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::io::duplex;
 use wow_srp::normalized_string::NormalizedString;
 use wow_srp::vanilla_header::{HeaderCrypto, ProofSeed};
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::conn::{self, Connection, Outbound};
@@ -170,4 +171,251 @@ async fn characters_made_under_a_lower_case_name_are_the_accounts() {
     );
     drop(store);
     let _ = std::fs::remove_file(&path);
+}
+
+/// Whether `c`'s session ends within a few seconds: what it is sent then
+/// goes nowhere.
+async fn ends(c: &harness::Client) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while c.try_send(CMSG_CHAR_ENUM {}).await {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
+fn create(name: &str) -> CMSG_CHAR_CREATE {
+    CMSG_CHAR_CREATE {
+        name: name.into(),
+        race: Race::Human,
+        class: Class::Warrior,
+        gender: Gender::Female,
+        skin_color: 1,
+        face: 1,
+        hair_style: 1,
+        hair_color: 1,
+        facial_hair: 1,
+    }
+}
+
+fn created(m: &ServerOpcodeMessage) -> Option<WorldResult> {
+    match m {
+        ServerOpcodeMessage::SMSG_CHAR_CREATE(c) => Some(c.result),
+        _ => None,
+    }
+}
+
+/// Net 2: an account has one session. A second, once started, is the
+/// account's, and the first goes: from the character screen at once; from
+/// the world with the player left where they are, for the second to take
+/// over at its login, as it does.
+#[tokio::test]
+async fn a_second_session_of_an_account_ends_the_first() {
+    let realm = harness::realm();
+    let first = harness::Client::connect(&realm, "TWICE");
+    let mut second = harness::Client::connect(&realm, "TWICE");
+    assert!(
+        ends(&first).await,
+        "the first, on the character screen, goes"
+    );
+    let g = second.enter("Twice", Race::Human, Class::Warrior).await;
+    let mut third = harness::Client::connect(&realm, "TWICE");
+    assert!(ends(&second).await, "the second, in the world, goes");
+    assert!(
+        realm.registry.online(g).is_some(),
+        "its player stays in the world"
+    );
+    third.login(g).await;
+    let o = realm.registry.online(g).expect("online");
+    assert!(
+        realm
+            .registry
+            .session_for_account("TWICE")
+            .is_some_and(|s| s.same_channel(&o.session)),
+        "the third's now"
+    );
+}
+
+/// A player the replaced session left in the world goes, saved, when the
+/// session that replaced it ends without taking them over.
+#[tokio::test]
+async fn a_player_left_for_a_session_that_goes_without_them_goes_too() {
+    let realm = harness::realm();
+    let mut first = harness::Client::connect(&realm, "LEAVER");
+    let g = first.enter("Leaver", Race::Human, Class::Warrior).await;
+    let second = harness::Client::connect(&realm, "LEAVER");
+    assert!(ends(&first).await);
+    assert!(realm.registry.online(g).is_some(), "left in the world");
+    second.disconnect();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while realm.registry.online(g).is_some() {
+        assert!(tokio::time::Instant::now() < deadline, "and let go");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Net 2: a character deleted from one session as another logs it in.
+/// Before, both went through (the delete told it succeeded, the login in
+/// the world) and the login's first save wrote the character back, its
+/// name freed meanwhile. Now the second session starts once the first has
+/// gone, so one of them happens: the login, the player left in the world
+/// and the delete refused; or the delete, and no login.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_character_deleted_as_it_logs_in_is_one_or_the_other() {
+    let realm = harness::realm();
+    for i in 0..6 {
+        let name = format!("Lazarus{}", ["a", "b", "c", "d", "e", "f"][i]);
+        let mut a = harness::Client::connect(&realm, "TWIN");
+        a.send(create(&name)).await;
+        assert_eq!(
+            a.wait_for("create", created).await,
+            WorldResult::CharCreateSuccess
+        );
+        let g = realm.registry.guid_by_name(&name).unwrap();
+        a.send(CMSG_PLAYER_LOGIN { guid: g }).await;
+        let mut b = harness::Client::connect(&realm, "TWIN");
+        b.send(CMSG_CHAR_DELETE { guid: g }).await;
+        let deleted = b
+            .wait_for("delete", |m| match m {
+                ServerOpcodeMessage::SMSG_CHAR_DELETE(d) => Some(d.result),
+                _ => None,
+            })
+            .await
+            == WorldResult::CharDeleteSuccess;
+        let kept = realm
+            .store
+            .characters("TWIN")
+            .await
+            .iter()
+            .any(|r| r.guid == crate::game::guid::counter(g));
+        let online = realm.registry.online(g).is_some();
+        eprintln!("round {i}: deleted {deleted}, kept {kept}, online {online}");
+        assert_eq!(deleted, !kept, "a delete told is a delete done");
+        assert!(!(deleted && online), "not deleted and in the world");
+        assert_eq!(deleted, realm.registry.name(g).is_none());
+        if online {
+            // b takes them over, and leaves them, saved: still there.
+            b.login(g).await;
+            b.disconnect();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while realm.registry.online(g).is_some() {
+                assert!(tokio::time::Instant::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(
+                realm
+                    .store
+                    .characters("TWIN")
+                    .await
+                    .iter()
+                    .any(|r| r.guid == crate::game::guid::counter(g))
+            );
+        }
+    }
+}
+
+/// Net 2: two creates from two sessions of an account, at once, stay
+/// within its limit, where both passed the count before either was made.
+#[tokio::test]
+async fn two_sessions_of_an_account_create_within_its_limit() {
+    let realm = harness::realm();
+    let limit = realm.config().max_characters_per_account;
+    let mut a = harness::Client::connect(&realm, "MANY");
+    for i in 0..limit - 1 {
+        let name = format!("Many{}", char::from(b'a' + i as u8));
+        a.send(create(&name)).await;
+        assert_eq!(
+            a.wait_for("create", created).await,
+            WorldResult::CharCreateSuccess
+        );
+    }
+    a.send(create("Lasta")).await;
+    let mut b = harness::Client::connect(&realm, "MANY");
+    b.send(create("Lastb")).await;
+    b.wait_for("create", created).await;
+    let n = realm.store.characters("MANY").await.len();
+    assert_eq!(n, limit, "{n} characters, the limit {limit}");
+}
+
+fn gm_realm() -> Arc<crate::game::Realm> {
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = true;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    crate::game::Realm::new(
+        cfg,
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        None,
+    )
+}
+
+/// Net 3: `.ban` reaches the account's session on the character screen,
+/// where it kicked only a player in the world, and the session picked a
+/// character and was in, banned.
+#[tokio::test]
+async fn a_ban_reaches_a_session_on_the_character_screen() {
+    crate::accounts::install(crate::accounts::Accounts::in_memory(
+        crate::accounts::Creation::Auto,
+        false,
+    ));
+    let accounts = crate::accounts::get().unwrap();
+    accounts.set_password("EXILE", "EXILE").unwrap();
+    let realm = gm_realm();
+    let mut warden = harness::Client::connect(&realm, "WARDEN");
+    warden.enter("Warden", Race::Human, Class::Warrior).await;
+    let mut exile = harness::Client::connect(&realm, "EXILE");
+    exile.send(create("Exile")).await;
+    assert_eq!(
+        exile.wait_for("create", created).await,
+        WorldResult::CharCreateSuccess
+    );
+    warden.say(".ban exile perm testing").await;
+    let reply = warden
+        .wait_for("the GM's answer", |m| match m {
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => Some(c.message.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(reply, "EXILE is banned.");
+    assert!(ends(&exile).await, "the session on the screen is kicked");
+}
+
+/// Net 3: a session on the character screen of an account banned since
+/// its handshake (a ban that didn't kick it) can't log a character in:
+/// refused, and disconnected.
+#[tokio::test]
+async fn a_banned_account_logs_nobody_in() {
+    crate::accounts::install(crate::accounts::Accounts::in_memory(
+        crate::accounts::Creation::Auto,
+        false,
+    ));
+    let accounts = crate::accounts::get().unwrap();
+    accounts.set_password("BANNED", "BANNED").unwrap();
+    let realm = harness::realm();
+    let mut c = harness::Client::connect(&realm, "BANNED");
+    c.send(create("Banned")).await;
+    assert_eq!(
+        c.wait_for("create", created).await,
+        WorldResult::CharCreateSuccess
+    );
+    let g = realm.registry.guid_by_name("Banned").unwrap();
+    assert!(accounts.ban("BANNED", -1, "testing"));
+    c.send(CMSG_PLAYER_LOGIN { guid: g }).await;
+    assert!(ends(&c).await, "disconnected");
+    assert!(realm.registry.online(g).is_none(), "nobody in the world");
+    // Told so, if the refusal was taken before the close dropped it.
+    let answer = c
+        .gets(Duration::from_millis(100), |m| match m {
+            ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => Some(None),
+            ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(f) => Some(Some(f.result)),
+            _ => None,
+        })
+        .await;
+    assert!(
+        matches!(answer, None | Some(Some(WorldResult::CharLoginFailed))),
+        "{answer:?}"
+    );
 }

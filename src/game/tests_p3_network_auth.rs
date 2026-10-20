@@ -465,3 +465,50 @@ async fn a_login_in_lower_case_is_the_account_in_capitals() {
     assert_eq!(realm.store.characters("CASEY").await.len(), 1);
     assert!(realm.store.characters("casey").await.is_empty());
 }
+
+/// Review 5's net 2: one login's session key opens one world session at
+/// a time. A second world connection with it is the account's session,
+/// and the first is closed, where any number stayed open at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_world_session_of_an_account_closes_the_first() {
+    let users = users();
+    let key = session(&users, "DOUBLE");
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(
+        crate::game::harness::test_config(),
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        Some(users),
+    );
+    let mut sessions = Vec::new();
+    for _ in 0..3 {
+        let mut s = world_server(realm.clone()).await;
+        let server_seed = auth_challenge(&mut s).await;
+        let seed = ProofSeed::new();
+        let client_seed = seed.seed();
+        let (proof, mut crypto) = seed.into_client_header_crypto(
+            &NormalizedString::new("DOUBLE").unwrap(),
+            key,
+            server_seed,
+        );
+        auth_session(&mut s, "DOUBLE", client_seed, proof).await;
+        let header = read_n(&mut s, 4).await;
+        let h = crypto.decrypt_server_header(header.try_into().unwrap());
+        let body = read_n(&mut s, usize::from(h.size) - 2).await;
+        assert_eq!((h.opcode, body[0]), (0x1EE, 0x0C), "AUTH_OK");
+        sessions.push(s);
+    }
+    let last = sessions.pop().unwrap();
+    for mut s in sessions {
+        rest(&mut s).await;
+    }
+    let mut nothing = [0u8; 1];
+    let mut last = last;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), last.read(&mut nothing))
+            .await
+            .is_err(),
+        "the last stays open"
+    );
+}

@@ -38,6 +38,12 @@ pub enum Control {
     /// Another login has the player now, where they are: disconnect the
     /// client, the player staying in the world.
     TakenOver,
+    /// Another connection of the account has passed the world handshake
+    /// and is its session now (mangos's `World::AddSession_` kicks the
+    /// old one): disconnect the client. A player in the world stays where
+    /// they are, for the new session to take over at its login
+    /// (`login::take_over`), or to let go if it ends without.
+    Replaced,
     /// Panic in the session's task, as a bug there would.
     #[cfg(test)]
     Panic,
@@ -45,7 +51,13 @@ pub enum Control {
 
 enum State {
     Screen,
-    InWorld { guid: Guid, map: MapHandle },
+    InWorld {
+        guid: Guid,
+        map: MapHandle,
+    },
+    /// Taken over or replaced: the player, if any, is left in the world
+    /// for the account's new session.
+    Left,
 }
 
 pub struct Session {
@@ -197,70 +209,112 @@ async fn read_auth_session(
     }
 }
 
+/// How long a new session of an account waits for the one it replaces to
+/// end: past a login's own wait ([`LOGIN_WAIT`]) and its reads.
+const REPLACE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Run an authenticated session until the client goes.
-pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
-    let Connection {
-        outbound,
-        mut inbound,
-    } = connection;
+///
+/// One session an account, as mangos's `World::AddSession_` has it: this
+/// one is the account's from the call (so of two started in turn, the
+/// later is), and the one it replaces is let go
+/// ([`Control::Replaced`]). It starts once that one has ended, so that
+/// the character screen's checks and the store's writes after them
+/// (a delete, a create under the limit, a login) are never two at once.
+pub fn run(
+    realm: Arc<Realm>,
+    account: String,
+    connection: Connection,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    let Connection { outbound, inbound } = connection;
     let (control, control_rx) = mpsc::unbounded_channel();
-    // Two buckets: the read-only queries a client asks of what it sees
-    // (a crowd's names, a city's objects) in a generous one of their own,
-    // so that walking into a crowd isn't a flood; everything else in the
-    // flood guard's.
-    let mut rate = PacketRate::new(realm.config().max_packets_per_sec);
-    let mut queries = PacketRate::new(realm.config().max_queries_per_sec);
-    let mut recent = Recent::default();
-    let mut s = Session {
+    let account: Arc<str> = Arc::from(account);
+    let replaced = realm.registry.claim_session(&account, &control);
+    if let Some(old) = &replaced {
+        let _ = old.send(Control::Replaced);
+    }
+    let s = Session {
         realm,
-        account: Arc::from(account),
+        account,
         outbound,
         control,
         control_rx,
         state: State::Screen,
         last_character: None,
     };
-    #[allow(clippy::large_enum_variant)] // Each packet goes through once.
-    enum Next {
-        Packet(Option<crate::game::conn::Inbound>),
-        Control(Option<Control>),
-        /// The connection is closed (over budget, taken over, its writer
-        /// gone): the session goes with it.
-        Closed,
-    }
-    let outbound = s.outbound.clone();
-    loop {
-        let next = tokio::select! {
-            msg = inbound.recv() => Next::Packet(msg),
-            ctl = s.control_rx.recv() => Next::Control(ctl),
-            () = outbound.closed() => Next::Closed,
-        };
-        match next {
-            Next::Packet(Some(msg)) => {
-                let now = std::time::Instant::now();
-                recent.note(now, &msg);
-                let query = is_query(&msg);
-                let bucket = if query { &mut queries } else { &mut rate };
-                if !bucket.allow(now) {
+    s.serve(inbound, replaced)
+}
+
+impl Session {
+    async fn serve(
+        mut self,
+        mut inbound: mpsc::Receiver<crate::game::conn::Inbound>,
+        replaced: Option<mpsc::UnboundedSender<Control>>,
+    ) {
+        let outbound = self.outbound.clone();
+        if let Some(old) = replaced {
+            tokio::select! {
+                () = old.closed() => {}
+                // Replaced or kicked in turn, or gone, before it began.
+                _ = self.control_rx.recv() => return,
+                () = outbound.closed() => return,
+                () = tokio::time::sleep(REPLACE_WAIT) => {
                     warn!(
-                        "{} sends {} too fast; disconnecting. Lately: {}",
-                        s.account,
-                        if query { "queries" } else { "packets" },
-                        recent.summary(now)
+                        "{}'s other session hasn't ended in {REPLACE_WAIT:?}; disconnecting this one",
+                        self.account
                     );
-                    break;
-                }
-                s.packet(msg).await
-            }
-            Next::Control(Some(ctl)) => {
-                if !s.control(ctl) {
-                    break;
+                    return;
                 }
             }
-            Next::Packet(None) | Next::Control(None) | Next::Closed => break,
         }
+        // Two buckets: the read-only queries a client asks of what it sees
+        // (a crowd's names, a city's objects) in a generous one of their
+        // own, so that walking into a crowd isn't a flood; everything else
+        // in the flood guard's.
+        let mut rate = PacketRate::new(self.realm.config().max_packets_per_sec);
+        let mut queries = PacketRate::new(self.realm.config().max_queries_per_sec);
+        let mut recent = Recent::default();
+        #[allow(clippy::large_enum_variant)] // Each packet goes through once.
+        enum Next {
+            Packet(Option<crate::game::conn::Inbound>),
+            Control(Option<Control>),
+            /// The connection is closed (over budget, taken over, its
+            /// writer gone): the session goes with it.
+            Closed,
+        }
+        loop {
+            let next = tokio::select! {
+                msg = inbound.recv() => Next::Packet(msg),
+                ctl = self.control_rx.recv() => Next::Control(ctl),
+                () = outbound.closed() => Next::Closed,
+            };
+            match next {
+                Next::Packet(Some(msg)) => {
+                    let now = std::time::Instant::now();
+                    recent.note(now, &msg);
+                    let query = is_query(&msg);
+                    let bucket = if query { &mut queries } else { &mut rate };
+                    if !bucket.allow(now) {
+                        warn!(
+                            "{} sends {} too fast; disconnecting. Lately: {}",
+                            self.account,
+                            if query { "queries" } else { "packets" },
+                            recent.summary(now)
+                        );
+                        break;
+                    }
+                    self.packet(msg).await
+                }
+                Next::Control(Some(ctl)) => {
+                    if !self.control(ctl) {
+                        break;
+                    }
+                }
+                Next::Packet(None) | Next::Control(None) | Next::Closed => break,
+            }
+        }
+        // Dropping the session disconnects it.
     }
-    // Dropping the session disconnects it.
 }
 
 impl Session {
@@ -320,10 +374,17 @@ impl Session {
                 true
             }
             Control::Kick => false,
-            // The player is another session's now: they stay in the world,
-            // and this connection goes without taking them out of it.
-            Control::TakenOver => {
-                self.state = State::Screen;
+            // The player is another session's now, or the account's new
+            // session's to take: they stay in the world, and this
+            // connection goes without taking them out of it.
+            Control::TakenOver | Control::Replaced => {
+                if let State::InWorld { guid, .. } = self.state {
+                    debug!(
+                        "{guid} left in the world for {}'s new session",
+                        self.account
+                    );
+                    self.state = State::Left;
+                }
                 false
             }
             #[cfg(test)]
@@ -347,15 +408,27 @@ impl Session {
                 }
             }
             State::Screen => {
-                // Gone between going online and reaching a map (a panic
-                // in the login).
-                if let Some(o) = self.realm.registry.online_for_account(&self.account)
-                    && o.session.same_channel(&self.control)
-                {
-                    self.realm.registry.go_offline(o.guid);
+                let current = self
+                    .realm
+                    .registry
+                    .release_session(&self.account, &self.control);
+                if let Some(o) = self.realm.registry.online_for_account(&self.account) {
+                    if o.session.same_channel(&self.control) {
+                        // Gone between going online and reaching a map (a
+                        // panic in the login).
+                        self.realm.registry.go_offline(o.guid);
+                    } else if current && o.session.is_closed() {
+                        // Left in the world by the session this one
+                        // replaced, and not taken over: they go now, saved.
+                        reap(&self.realm, o);
+                    }
                 }
             }
+            State::Left => {}
         }
+        self.realm
+            .registry
+            .release_session(&self.account, &self.control);
         self.outbound.close();
     }
 
@@ -586,6 +659,15 @@ impl Session {
         };
         if *name.account != *self.account {
             return login_failed(&self.outbound, WorldResult::CharLoginNoCharacter);
+        }
+        // Banned since the world handshake (a ban's kick reaches the
+        // account's session wherever it is; this is for one that came as
+        // it was made): refused, and the connection goes.
+        if crate::auth::banned(&self.account) {
+            info!("{} is banned; refusing its login", self.account);
+            login_failed(&self.outbound, WorldResult::CharLoginFailed);
+            let _ = self.control.send(Control::Kick);
+            return;
         }
         let started = tokio::time::Instant::now();
         loop {
