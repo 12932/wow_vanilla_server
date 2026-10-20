@@ -894,11 +894,16 @@ fn let_go(realm: &Realm, key: MapKey, event: MapEvent) {
     match event {
         MapEvent::Arrive(a) => {
             let Arrival { kind, online } = *a;
-            if let ArrivalKind::Transfer(mut p) = kind {
-                p.row.map = key.map;
-                realm.store.save(p.to_row(Instant::now()));
+            match kind {
+                // From the world: they leave it as at a logout.
+                ArrivalKind::Transfer(mut p) => {
+                    p.row.map = key.map;
+                    realm.store.save(p.to_row(Instant::now()));
+                    social::went_offline(realm, online.guid);
+                }
+                // Never in it: no one heard they came.
+                ArrivalKind::Login(_) => realm.registry.go_offline(online.guid),
             }
-            realm.registry.go_offline(online.guid);
             let _ = online.session.send(crate::game::session::Control::Kick);
         }
         MapEvent::Shutdown(reply) => {
@@ -1064,13 +1069,33 @@ impl Map {
                 let _z = crate::zone!("call");
                 f(self)
             }
-            MapEvent::Stop => return true,
+            // A copy stopped from outside (a reset) with players still in
+            // it: one whose arrival was in its queue, ahead of the stop,
+            // that the reset didn't see. They don't go with it: each is
+            // saved and goes back to the character screen, as at a map's
+            // restart (`supervise::restart`). Before, the actor ended with
+            // them inside, unsaved and still online.
+            MapEvent::Stop => {
+                let guids: Vec<Guid> = self.players.keys().copied().collect();
+                if !guids.is_empty() {
+                    warn!(
+                        "{} stopped with {} players in it; saved and back to the character screen",
+                        self.key,
+                        guids.len()
+                    );
+                }
+                for g in guids {
+                    supervise::send_to_screen(self, g);
+                }
+                return true;
+            }
+            // Each player saved under a guard of their own: a panic for one
+            // costs only their save. Before, it unwound the loop, and every
+            // player after them went unsaved.
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
                 for g in guids {
-                    if let Some(p) = self.take_player(g) {
-                        self.save_and_go_offline(p);
-                    }
+                    supervise::save_at_shutdown(self, g);
                 }
                 let _ = reply.send(());
                 return true;
@@ -1206,6 +1231,10 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        #[cfg(test)]
+        if self.faults.any() {
+            self.faults.check(&format!("take {guid}"));
+        }
         // Their cast or channel ends, and the creatures they fought forget
         // them (mangos's `RemoveFromWorld`: the cast interrupted, the
         // hostile references deleted), as a death has them forgotten.
@@ -1248,10 +1277,13 @@ impl Map {
 
     /// Store a player's character and take them off the online list.
     pub fn save_and_go_offline(&mut self, mut p: Player) {
+        #[cfg(test)]
+        if self.faults.any() {
+            self.faults.check(&format!("save {}", p.guid));
+        }
         let row = p.to_row(self.now);
         self.realm.store.save(row);
-        social::logged_out(self, p.guid);
-        self.realm.registry.go_offline(p.guid);
+        social::went_offline(&self.realm, p.guid);
     }
 
     /// Save the players and records an item or money just moved between,
@@ -1478,7 +1510,11 @@ impl Map {
         p.movement.position = position;
         p.movement.orientation = orientation;
         p.movement.flags = wow_world_messages::vanilla::MovementInfo_MovementFlags::empty();
-        p.logout_at = None;
+        // A logout under way goes on in the new map, as mangos's session
+        // timer does through a teleport: it is due when it was, and a
+        // cancel there undoes it (`login::arrived` roots the client again).
+        // Before, it was dropped and its stun and root left: the player
+        // came in stunned, and a cancel had nothing to cancel.
         let session = p.online.session.clone();
         crate::game::session::transfer(&self.realm, &session, p, key);
     }

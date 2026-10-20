@@ -849,7 +849,8 @@ impl Map {
             }
             None => MovementInfo_MovementFlags::empty(),
         };
-        p.logout_at = None;
+        // A logout under way goes on across, as through any far teleport
+        // (`Map::teleport_with`).
         let session = p.online.session.clone();
         crate::game::session::transfer(&self.realm, &session, p, to);
     }

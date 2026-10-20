@@ -428,6 +428,18 @@ pub fn cancel_logout(map: &mut Map, guid: Guid) {
     undo_logout(p);
 }
 
+/// A client that has loaded a new map in a logout's countdown is rooted
+/// again: its root was the old world's. The rest of the logout (the stun,
+/// the sit, its byte) came in its fields; the countdown goes on here.
+pub fn arrived(map: &Map, g: Guid) {
+    if let Some(p) = map.players.get(&g)
+        && p.logout_at.is_some()
+        && p.misc.logout_rooted
+    {
+        crate::game::map::movement::root_to(&p.outbound, g, true);
+    }
+}
+
 /// The logout is due: save the character and hand the session back to the
 /// character screen, which tells the client.
 pub fn complete_logout(map: &mut Map, guid: Guid) {

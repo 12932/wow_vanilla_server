@@ -338,7 +338,7 @@ impl Session {
                         "{}'s map has gone; {guid} is lost since their last save",
                         self.account
                     );
-                    self.realm.registry.go_offline(guid);
+                    crate::game::map::social::went_offline(&self.realm, guid);
                 }
             }
             State::Screen => {
@@ -808,7 +808,7 @@ fn reap(realm: &Arc<Realm>, ghost: Arc<Online>) {
             .online(reaped.guid)
             .is_some_and(|o| Arc::ptr_eq(&o, &reaped))
         {
-            registry_realm.registry.go_offline(reaped.guid);
+            crate::game::map::social::went_offline(&registry_realm, reaped.guid);
         }
     });
     if !delivered
@@ -817,7 +817,7 @@ fn reap(realm: &Arc<Realm>, ghost: Arc<Online>) {
             .online(ghost.guid)
             .is_some_and(|o| Arc::ptr_eq(&o, &ghost))
     {
-        realm.registry.go_offline(ghost.guid);
+        crate::game::map::social::went_offline(realm, ghost.guid);
     }
 }
 

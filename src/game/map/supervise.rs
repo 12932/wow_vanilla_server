@@ -17,11 +17,13 @@
 use std::time::{Duration, Instant};
 
 use ahash::AHashMap;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::error;
 use wow_world_messages::Guid;
 
 use crate::game::map::creature::Life;
 use crate::game::map::{Map, MapStats};
+use crate::game::session::Control;
 use crate::game::supervisor::{catch, worth_logging};
 
 /// When those who panic have had enough.
@@ -187,7 +189,7 @@ pub fn packet_panicked(map: &mut Map, g: Guid) {
 /// Save a player and send them to the character screen; if that panics
 /// (the state that panicked may be theirs), they go unsaved rather than
 /// stay.
-fn send_to_screen(map: &mut Map, g: Guid) {
+pub fn send_to_screen(map: &mut Map, g: Guid) {
     if catch(|| crate::game::map::login::complete_logout(map, g)).is_ok() {
         return;
     }
@@ -195,7 +197,38 @@ fn send_to_screen(map: &mut Map, g: Guid) {
         "{}: {g} couldn't be saved; they go as they were last saved",
         map.key
     );
+    if let Some(session) = gone_unsaved(map, g) {
+        let _ = session.send(crate::game::session::Control::LoggedOut);
+    }
+}
+
+/// Save a player and take them offline as the server shuts down, under a
+/// guard of their own: a panic for one costs their save alone (they go as
+/// they were last saved), and the rest of the map's are made.
+pub fn save_at_shutdown(map: &mut Map, g: Guid) {
+    let saved = catch(|| {
+        if let Some(p) = map.take_player(g) {
+            map.save_and_go_offline(p);
+        }
+    });
+    if let Err(e) = saved {
+        map.stats.panics += 1;
+        error!(
+            "{}: saving {g} at the shutdown panicked: {e}; they go as they were last saved",
+            map.key
+        );
+        gone_unsaved(map, g);
+    }
+}
+
+/// A player whose save panicked goes as they were last saved: out of the
+/// map, as `take_player` has them, and offline. So too when the panic came
+/// once `take_player` had them out (in the save itself): before, they
+/// stayed online in no map, a ghost holding the account's place until a
+/// later login reaped them. Their session, to be told, if they were here.
+fn gone_unsaved(map: &mut Map, g: Guid) -> Option<UnboundedSender<Control>> {
     let _ = catch(|| map.let_go(g));
+    let mut session = None;
     if let Some(p) = map.players.remove(&g) {
         // What `take_player` does once its own steps are past.
         map.grid.remove(g, p.cell);
@@ -211,12 +244,19 @@ fn send_to_screen(map: &mut Map, g: Guid) {
         for k in &p.known {
             map.remove_observer(*k, g);
         }
-        map.realm.registry.go_offline(g);
-        let _ = p
-            .online
-            .session
-            .send(crate::game::session::Control::LoggedOut);
+        session = Some(p.online.session.clone());
     }
+    // Online here still: offline, the social parts under a guard of their
+    // own (they may be what panicked), the online list whatever they do.
+    if let Some(o) = map.realm.registry.online(g)
+        && o.map().key == map.key
+    {
+        session.get_or_insert_with(|| o.session.clone());
+        let realm = map.realm.clone();
+        let _ = catch(|| crate::game::map::social::went_offline(&realm, g));
+        map.realm.registry.go_offline(g);
+    }
+    session
 }
 
 /// Run a creature's turn; a panic in it costs the turn. One that panics

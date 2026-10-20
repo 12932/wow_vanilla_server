@@ -25,6 +25,16 @@ missing world data). None fixed yet; waiting on your choice.
 - #15 fixed (R4-44 with it): the mail is indexed by receiver, kept by `Mails::insert`, `remove` and the send-back,
   so the next mail time, the mail list, a mailbox's count and a deletion look through one character's mail
   (1,000 next-mail-time queries over 100,000 mails: 1.51 s before, 1 ms now, in a test build).
+- #4 fixed: a copy counts as in use while anyone let in is on their way, so a reset answers "zoning" and a raid's
+  reset waits, asked and decided under the copies' lock; a copy stopped with players in it saves each and sends them
+  to the character screen.
+- #7 fixed: a map's shutdown saves each player under a guard of their own; the fallback takes offline a player the
+  panic caught after they were taken out.
+- #17 fixed: a dungeon copy loaded at start-up counts as empty from then, with the five minutes a copy left empty has.
+- #18 fixed: a far teleport keeps a logout's countdown going, as mangos does; the client is rooted again on the new
+  map, and a cancel there undoes it.
+- Maps 6 fixed: every way out of the world (let go with a map, a lost map, a reaped ghost, a panic's fallback) leaves
+  the channels, battleground queues, friends, guild and group, through one `went_offline`.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
