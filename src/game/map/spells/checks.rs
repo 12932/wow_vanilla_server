@@ -88,6 +88,15 @@ pub const AURA_STATE_HEALTHLESS_15: u32 = 13;
 /// shadowform, stealth, moonkin.
 const STANCE_LIKE: &[u8] = &[17, 18, 19, 28, 30, 31];
 
+/// The bit of a one-based index in a 32-bit mask (an aura state, a form, a
+/// creature type), none past the 32nd: data can name any, and a shift past
+/// the width panics (a debug build) or tests another bit (release).
+pub fn bit(n: u32) -> u32 {
+    n.checked_sub(1)
+        .and_then(|s| 1u32.checked_shl(s))
+        .unwrap_or(0)
+}
+
 /// Whether the aura state `state` is set on `g`.
 pub fn aura_state(map: &Map, g: Guid, state: u32) -> bool {
     if state == 0 {
@@ -97,7 +106,7 @@ pub fn aura_state(map: &Map, g: Guid, state: u32) -> bool {
         .unit_fields(g)
         .map(|f| f.get_u32(UNIT_FIELD_AURASTATE))
         .unwrap_or(0);
-    if field & (1 << (state - 1)) != 0 {
+    if field & bit(state) != 0 {
         return true;
     }
     // Health states are worked out here, as they change with every blow.
@@ -114,7 +123,7 @@ pub fn aura_state(map: &Map, g: Guid, state: u32) -> bool {
 
 /// Why a form stops `s`, if it does.
 pub fn form_error(s: &SpellTemplate, form: u8) -> Option<u8> {
-    let mask = if form > 0 { 1u32 << (form - 1) } else { 0 };
+    let mask = bit(u32::from(form));
     if mask & s.stances_not != 0 {
         return Some(fail::NOT_SHAPESHIFT);
     }
@@ -208,8 +217,7 @@ pub fn facing(map: &Map, a: Guid, b: Guid, arc: f32) -> bool {
 
 /// Whether a creature's type is one the spell may target.
 fn creature_type_allowed(s: &SpellTemplate, creature_type: u32) -> bool {
-    s.target_creature_type == 0
-        || (creature_type > 0 && s.target_creature_type & (1 << (creature_type - 1).min(31)) != 0)
+    s.target_creature_type == 0 || s.target_creature_type & bit(creature_type) != 0
 }
 
 /// Whether unit `g`'s type is one the spell may land on: a creature's

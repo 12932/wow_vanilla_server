@@ -883,7 +883,13 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   logging at `debug`. Optionally, refuse self-triggers at load.
 - **Effort:** easy.
 
-#### 4. A fighting creature checks every unit on its threat list two or three times an update, two of them for nothing
+#### 4. A fighting creature checks every unit on its threat list two or three times an update, two of them for nothing **Fixed** (1 and 2)
+- **Fixed:** a creature's turn asks once of each on its list: after `prune_threat`, `overtake` and `pick_victim` take
+  the list as it is (`ai::overtake_of`, `pruned`); `ai::overtake` from elsewhere still asks. `can_attack` works out
+  the other way's regard only if this way isn't hostile. The fix's third part (a bitset of the aura kinds each unit
+  has) is left: medium, and it touches every aura's coming and going. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: 100 creatures each holding the same 40
+  players, `ai::update_creatures` 129.9 ms before, 31.7 ms after; `can_attack(creature, player)` 9.7 µs, 6.3 µs.
+  The threat and victim tests cover the choice.
 - **Severity:** medium. **Kind:** speed.
 - **Where:** `ai.rs:1263-1278` (`fight_step`), `:1144` (`prune_threat`), `:1164` (`pick_victim`), `:1216-1261`
   (`overtake`, its `sorted` at `:1240`) and `:1120` (`valid_victim`). Also `combat.rs:816` (`can_attack`'s
@@ -953,7 +959,12 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   - gather the owner's modifier holders once per `run`.
 - **Effort:** easy.
 
-#### 6. While any creature on the map casts, every update looks through every creature twice
+#### 6. While any creature on the map casts, every update looks through every creature twice **Fixed.**
+- **Fixed:** the map keeps the creatures that may be casting (`Map::casting`, added by `caster_mut`, where every
+  cast begins, and `add_creature`; `Map::casting_where` lets go of those done), and the update's two looks and Feign
+  Death's go through it; the `casting` flag of `RareStates` is gone. Debug builds check each look against one
+  through every creature. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: 20,001 creatures, one casting, `spells::update` 691 µs before, 1.9 µs after. Test
+  `a_cast_far_from_anyone_is_found_among_the_casting_and_let_go_when_done`.
 - **Severity:** low. **Kind:** speed.
 - **Where:** `spells/mod.rs:2648-2652` (`channels_in_reach`) and `:2696-2709` (`update`), both under
   `map.rare.casting`.
@@ -969,7 +980,12 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   creatures casting, noted in `Map::caster_mut`.
 - **Effort:** easy.
 
-#### 7. `leave_finished_fights` builds a set of every fighting creature's whole threat list, nearly every update
+#### 7. `leave_finished_fights` builds a set of every fighting creature's whole threat list, nearly every update **Fixed.**
+- **Fixed:** each due player whose answer needs it (in a fight with no PvP timer or Bloodrage holding them, or out
+  of one with a creature's war) asks the fighting creatures, found once and only then, stopping at the first that
+  holds them. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: one player due and in a fight, held by the last of 100 creatures holding 40 each (the most a look
+  takes), `combat::update_players` 702 µs before, 20.5 µs after. The fight's tests (`tests_p3_combat5`) cover who
+  leaves.
 - **Severity:** low. **Kind:** speed.
 - **Where:** `combat.rs:3486-3537`, the `held` set at `:3497-3512`.
 - **What:** whenever any player's `next_check` is due, the whole set is built. With 40 players on 1.2 s checks, that
@@ -981,7 +997,10 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   per-player count of holders (the index R3-31 proposes would serve both).
 - **Effort:** easy to medium.
 
-#### 8. `checks::aura_state` and the form checks shift by a data value with no bound
+#### 8. `checks::aura_state` and the form checks shift by a data value with no bound **Fixed.**
+- **Fixed:** `checks::bit`, a one-based index's bit that is none past the 32nd, for the aura states, the forms
+  (`form_error`, `passive_eligible`) and the creature types (which took bit 31 for any past it); test
+  `an_aura_state_or_form_past_the_mask_names_no_bit`.
 - **Severity:** low. **Kind:** robustness.
 - **Where:**
   - `spells/checks.rs:100`: `1 << (state - 1)` for `caster_aura_state` or `target_aura_state`;
@@ -991,7 +1010,12 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
 - **The fix:** `checked_shl(..).unwrap_or(0)`, as R4-39 proposes.
 - **Effort:** easy.
 
-#### 9. A chain spell runs a line-of-sight ray for every unit within a jump, before it picks the nearest
+#### 9. A chain spell runs a line-of-sight ray for every unit within a jump, before it picks the nearest **Fixed.**
+- **Fixed:** a jump tests everyone within it for the cheap things (taken already, alive, the spell's types, hurt
+  for a heal), puts them in its order (nearest; a heal's group, most hurt, nearest), and asks the costly ones
+  (whom an area may hit or the caster help, stealth, sight) only until one passes; the same one is picked. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: a
+  three-jump bolt into 100 stacked kobolds, 1,331 µs a cast before, 416 µs after (no navmesh here, so a ray is
+  cheap: with one the gain is more). The chain tests (`tests_p3_cast8`) cover the order.
 - **Severity:** low. **Kind:** speed.
 - **Where:** `spells/targets.rs:520-579` (`chain`) through `units_around` (`:167-186`).
 - **What:** `units_around` applies its whole predicate to every unit within the jump's radius before it sorts them:
@@ -1157,7 +1181,11 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
   then, take `MSG_QUERY_NEXT_MAIL_TIME` out of `is_query`.
 - **Effort:** easy (the rate) to medium (the index).
 
-#### 6. A `/who` takes the guilds' lock once for each player online (low, speed)
+#### 6. A `/who` takes the guilds' lock once for each player online (low, speed) **Fixed.**
+- **Fixed** with `perf/chat` (e443fa9): a `/who` stops at a full list, so the guilds' lock is taken for at most
+  the 49 listed, or for each player who passes the cheaper filters before it. `fix/lowsb` lowers the search words
+  once, not for each player. A guild's name is still looked up under the lock one player at a time: holding it
+  across the walk instead would keep every map's guild work waiting longer.
 - **Where:** `map/social.rs:173-274`: `guilds.lock().name_of` per player (`:226`); each player's name, guild and zone
   lowercased, and `words` rebuilt per player (`:239`).
 - **How it shows:** `r5_who_costs_grow_with_everyone_online`: 100 `/who` with 3,000 online take 103 ms in a test
@@ -1184,7 +1212,11 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
   `pending` rebuilt from the mails whose `deliver_at` is still ahead.
 - **Effort:** easy to medium.
 
-#### 8. What a service asks of a player's map while they change maps is lost (low, reliability)
+#### 8. What a service asks of a player's map while they change maps is lost (low, reliability) **Fixed.**
+- **Fixed:** `deliver` names the new map in the online list as the arrival is sent, and the services reach a
+  player through `map::call_player`, which follows them: a map that has let them go sends it on to the map the
+  list names now or, while their session has yet to pass them on, through the session behind them
+  (`Control::ToPlayer`). Test `what_a_service_asks_of_a_player_changing_maps_follows_them` (both lost before).
 - **Where:** `map/mod.rs:1091` (`Online::set_map` runs when the new map handles the arrival), `session.rs:296-306`
   and `:784-792` (`deliver`). The callers: `guilds.rs:240` (`set_fields`), `groups.rs:198` (`set_leader_flag`),
   `map/misc.rs:390` (a summons).
@@ -1206,7 +1238,12 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
 - **Fix:** a mailbox (a game object of type 19) within interaction range, as R4-15 did for auctions.
 - **Effort:** easy.
 
-#### 10. Two event sweeps at once can leave a map with the older events (low, reliability)
+#### 10. Two event sweeps at once can leave a map with the older events (low, reliability) **Fixed.**
+- **Fixed:** `events::sweep` works the set out, compares, keeps it and sends it to the maps under the events'
+  lock (then the driven events', the GM's and the maps' handles; nothing takes them the other way), so the last
+  kept is worked out from the latest driven events and is the last each map hears. Test
+  `event_sweeps_at_once_keep_the_latest_events` (four threads driving events at once); it didn't catch the old
+  race in its runs, whose window is microseconds, so it guards the rule rather than showing the fault.
 - **Where:** `events.rs:187-212` (`sweep`). It runs from the five-second sweep and from maps: each elemental invader
   slain (`elemental.rs:198`, `:207`), Omen (`omen.rs:64`, `:126`), a necropolis falling (`invasion.rs:309`), and
   `.event` or script command 53 (`events.rs:119`).
@@ -1219,7 +1256,10 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
 - **Fix:** compute, compare, store and fan out under the events lock (the fan-out is channel sends).
 - **Effort:** easy.
 
-#### 11. A champion is lost until a restart if their city's map restarts during the farewell (low, reliability)
+#### 11. A champion is lost until a restart if their city's map restarts during the farewell (low, reliability) **Fixed.**
+- **Fixed:** the realm keeps when a returning champion is due home (`State::home_by`), and home brings them back
+  (`come_home`, the spawn alive again) once that is 30 s past (`STALE`, as a lost call gives way); test
+  `a_champion_whose_farewell_was_lost_with_the_citys_map_comes_home`.
 - **Where:** `champions.rs:896-897` (`Place::Returning` is realm-wide, but the time home is only in the city map's
   `Local`), `:782-788` (the only path that brings them home), `:828` (home's catch-up only keeps the home spawn
   away).
@@ -1241,7 +1281,11 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
 - **Fix:** a record per member, or mark the guild changed and have the sweep write it.
 - **Effort:** medium.
 
-#### 13. Every map holds the realm's groups lock through its whole member-stats push (low, speed)
+#### 13. Every map holds the realm's groups lock through its whole member-stats push (low, speed) **Fixed.**
+- **Fixed:** `push_member_stats` takes the lock twice, briefly: once for who on the map is grouped, once to keep
+  the stats and who saw them. Each player's stats and who sees them are read out of the map, and the frames made and
+  sent, without it. No new test (a lock's hold isn't seen through the protocol); the push's own tests
+  (`members_apart_get_each_others_stats`, `the_party_sees_a_member_away_busy_and_dead`) pass. Not measured.
 - **Where:** `map/social.rs:559-596`, on every map once a second (`map/mod.rs:1532`).
 - **What:** the lock is held across every player in the map: each grouped player's stats, two `Vec`s, the
   `seen_by` copy, and a frame to each member out of sight. Everything else that takes the groups lock on any map

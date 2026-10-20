@@ -521,6 +521,13 @@ pub struct Map {
     /// arrives with auras; `Map::with_auras_where` lets go of those
     /// without.
     pub with_auras: ahash::AHashSet<Guid>,
+    /// Creatures that may be casting: every creature that is, and some
+    /// that were. Every cast begins at `Map::caster_mut`, which adds its
+    /// creature, as `Map::add_creature` adds one that arrives casting;
+    /// `Map::casting_where` lets go of those not. The update's looks for a
+    /// creature's cast go through it, where they went through every
+    /// creature while any on the map cast (review 5's combat 6).
+    pub casting: ahash::AHashSet<Guid>,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
     /// The Elemental Invasion's rifts and their invaders.
@@ -871,9 +878,17 @@ async fn finish(map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
 pub fn deliver(realm: &Arc<Realm>, map: MapHandle, arrival: Box<Arrival>) -> Option<MapHandle> {
     let mut map = map;
     let mut arrival = arrival;
+    let online = arrival.online.clone();
     for _ in 0..4 {
         match map.try_arrive(arrival) {
-            Ok(()) => return Some(map),
+            // The online list names the map as the arrival is sent: a
+            // service's call for them, sent after, lands after it, where
+            // one sent while it waited in the queue went to the map they
+            // had left (review 5's social 8).
+            Ok(()) => {
+                online.set_map(map.clone());
+                return Some(map);
+            }
             Err(back) => arrival = back,
         }
         if !realm.maps.is_closed() && crate::game::instances::expired(realm, map.key) {
@@ -887,6 +902,50 @@ pub fn deliver(realm: &Arc<Realm>, map: MapHandle, arrival: Box<Arrival>) -> Opt
     }
     let_go(realm, map.key, MapEvent::Arrive(arrival));
     None
+}
+
+/// Run `f` on the map that has the player `g`, if they are online, wherever
+/// they are: what a realm-wide service (a guild's ranks, a group's leader,
+/// a summons) changes on them. It goes to the map the online list names,
+/// and on after them if they have left it by then: to the map it names
+/// now, or, while they are on their way from there, through their session,
+/// which passes it on behind them (review 5's social 8). Before, a call
+/// sent as they changed maps found no one and was lost.
+pub fn call_player(realm: &Realm, g: Guid, f: impl FnOnce(&mut Map) + Send + 'static) {
+    let Some(o) = realm.registry.online(g) else {
+        return;
+    };
+    o.map().call(after_player(g, Box::new(f), true));
+}
+
+/// `f`, run on a map if it has `g`; else, if `follow`, sent on after them
+/// ([`call_player`]).
+pub(crate) fn after_player(
+    g: Guid,
+    f: Box<dyn FnOnce(&mut Map) + Send>,
+    follow: bool,
+) -> impl FnOnce(&mut Map) + Send + 'static {
+    move |m| {
+        if m.players.contains_key(&g) {
+            return f(m);
+        }
+        if !follow {
+            return;
+        }
+        let Some(o) = m.realm.registry.online(g) else {
+            return;
+        };
+        let there = o.map();
+        if !there.same(&m.handle) {
+            there.call(after_player(g, f, false));
+        } else {
+            // Taken out of here and not yet sent on: their session has
+            // them on its queue, and passes this on after them.
+            let _ = o
+                .session
+                .send(crate::game::session::Control::ToPlayer { guid: g, call: f });
+        }
+    }
 }
 
 /// A map's queue once the server is shutting down, until every handle to
@@ -1036,6 +1095,7 @@ impl Map {
             rare: Default::default(),
             awake: Awake::default(),
             with_auras: ahash::AHashSet::new(),
+            casting: ahash::AHashSet::new(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
@@ -2073,6 +2133,30 @@ impl Map {
         found
     }
 
+    /// [`Map::awake_where`] for the creatures casting (`casting`): `pred`
+    /// takes only creatures with a cast under way.
+    pub fn casting_where<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        pred: impl Fn(&Creature) -> bool,
+        out: impl Fn(usize, &Creature) -> T,
+    ) -> Vec<T> {
+        let found = members_where(
+            &mut self.casting,
+            &self.creatures,
+            &self.creature_by_guid,
+            |c| c.caster.casting.is_some(),
+            &pred,
+            &out,
+        );
+        debug_assert_eq!(
+            found,
+            every_creature_where(&self.creatures, &pred, &out),
+            "{}: a creature casts but isn't in Map::casting",
+            self.key
+        );
+        found
+    }
+
     pub fn gameobject(&self, guid: Guid) -> Option<&GameObject> {
         self.gameobject_by_guid
             .get(&guid)
@@ -2108,6 +2192,9 @@ impl Map {
         }
         if !c.auras.is_empty() {
             self.with_auras.insert(guid);
+        }
+        if c.caster.casting.is_some() {
+            self.casting.insert(guid);
         }
         let at = c.position;
         let key = self.creatures.insert(c);

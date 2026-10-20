@@ -595,3 +595,72 @@ async fn no_one_swings_without_meaning_to_nor_at_or_from_the_dead() {
         .unwrap();
     assert_eq!(r, (true, (true, false)));
 }
+
+/// Review 5's combat 8: an aura state, a form or a creature type past the
+/// 32nd names no bit, where `1 << (n - 1)` panicked in a debug build (and
+/// tested another bit in release).
+#[tokio::test]
+async fn an_aura_state_or_form_past_the_mask_names_no_bit() {
+    use crate::game::data::spells::SpellTemplate;
+    use crate::game::map::spells::checks;
+    assert_eq!(
+        [0, 1, 32, 33, 40, u32::MAX].map(checks::bit),
+        [0, 1, 1 << 31, 0, 0, 0]
+    );
+    let mut s = SpellTemplate {
+        stances: u32::MAX,
+        stances_not: 0,
+        ..Default::default()
+    };
+    s.attributes[0] |= crate::game::data::spells::ATTR_PASSIVE;
+    // Form 40 is in no mask: not "only in a form" allowed, and no panic.
+    assert!(checks::form_error(&s, 40).is_some());
+    assert!(!spells::passive_eligible(&s, 40));
+    assert!(spells::passive_eligible(&s, 32));
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let f = m.unit_fields_mut(ga).unwrap();
+            f.set_u32(UNIT_FIELD_AURASTATE, u32::MAX);
+            (checks::aura_state(m, ga, 40), checks::aura_state(m, ga, 32))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (false, true));
+}
+
+/// Review 5's combat 6: the update finds a creature's cast through the
+/// creatures casting (`Map::casting`), one far from anyone and in no fight
+/// too, and lets go of it once the cast is done; debug builds check every
+/// look against one through every creature.
+#[tokio::test]
+async fn a_cast_far_from_anyone_is_found_among_the_casting_and_let_go_when_done() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let far = spawn(m, ga, BRUTE, 20, 2_000.0);
+            for _ in 0..50 {
+                spawn(m, ga, BRUTE, 20, 2_100.0);
+            }
+            let now = m.now;
+            m.caster_mut(far).unwrap().casting = Some(spells::Casting {
+                spell: 1,
+                targets: spells::Targets::default(),
+                ends: now,
+                item: None,
+                pushbacks: 0,
+                channel_until: None,
+                duration: 0,
+            });
+            let noted = m.casting.iter().copied().collect::<Vec<_>>();
+            spells::update(m);
+            let done = m.caster(far).unwrap().casting.is_none();
+            spells::update(m);
+            (noted, done, m.casting.len())
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0.len(), 1, "the one casting noted");
+    assert!(r.1, "its cast done");
+    assert_eq!(r.2, 0, "and let go");
+}

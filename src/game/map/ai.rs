@@ -306,7 +306,7 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             }
         }
         // The next it may fight: not one it can't reach or see.
-        let next = pick_victim(map, c);
+        let next = pick_victim(map, c, false);
         combat::stop_attack(map, c);
         let pet = map.creature(c).is_some_and(|cr| cr.pet.is_some());
         match next {
@@ -344,7 +344,7 @@ pub fn victim_died(map: &mut Map, g: Guid) {
     {
         return;
     }
-    if let Some(t) = pick_victim(map, g) {
+    if let Some(t) = pick_victim(map, g, false) {
         assist(map, g, t);
     }
 }
@@ -1197,12 +1197,14 @@ fn prune_threat(map: &mut Map, g: Guid) {
     }
 }
 
-/// The highest threat still worth fighting, if any.
-fn pick_victim(map: &Map, g: Guid) -> Option<Guid> {
+/// The highest threat still worth fighting, if any; every one on the list
+/// is, if it was `pruned` just before ([`prune_threat`]), and isn't asked
+/// again.
+fn pick_victim(map: &Map, g: Guid, pruned: bool) -> Option<Guid> {
     let c = map.creature(g)?;
     c.threat
         .iter()
-        .filter(|(t, _)| valid_victim(map, g, *t))
+        .filter(|(t, _)| pruned || valid_victim(map, g, *t))
         .max_by(|a, b| effective_threat(a.1).total_cmp(&effective_threat(b.1)))
         .map(|(t, _)| *t)
 }
@@ -1251,13 +1253,20 @@ fn taunter(map: &Map, g: Guid) -> Option<Guid> {
 /// melee range or three tenths beyond. Wherever they are: the leash, not
 /// the choice, keeps a creature near home.
 pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
+    overtake_of(map, g, current, false)
+}
+
+/// [`overtake`], for a list `pruned` just before: everyone on it may be
+/// fought, and isn't asked again (review 5's combat 4: a turn asked two or
+/// three times of each, a full `can_attack` and `stealth::sees` each).
+fn overtake_of(map: &Map, g: Guid, current: Guid, pruned: bool) -> Guid {
     let Some(c) = map.creature(g) else {
         return current;
     };
     if let Some(t) = taunter(map, g) {
         return t;
     }
-    let Some(best) = pick_victim(map, g) else {
+    let Some(best) = pick_victim(map, g, pruned) else {
         return current;
     };
     if best == current {
@@ -1277,7 +1286,7 @@ pub fn overtake(map: &Map, g: Guid, current: Guid) -> Guid {
     let mut sorted: Vec<(Guid, f32)> = c
         .threat
         .iter()
-        .filter(|(t, _)| valid_victim(map, g, *t))
+        .filter(|(t, _)| pruned || valid_victim(map, g, *t))
         .map(|(t, v)| (*t, effective_threat(*v)))
         .collect();
     sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -1314,9 +1323,9 @@ fn fight_step(map: &mut Map, g: Guid) {
     let victim = if valid_victim(map, g, current)
         && !crate::game::map::creature_combat::should_evade(map, g, current)
     {
-        Some(overtake(map, g, current))
+        Some(overtake_of(map, g, current, true))
     } else {
-        pick_victim(map, g)
+        pick_victim(map, g, true)
     };
     let victim = victim.filter(|v| !crate::game::map::creature_combat::should_evade(map, g, *v));
     // With no one left on its list, it doesn't go home while a creature

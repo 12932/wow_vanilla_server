@@ -245,10 +245,7 @@ fn command_result(
 
 /// Set a member's guild fields, in whatever map they are.
 fn set_fields(realm: &Realm, g: Guid, guild: u32, rank: u32) {
-    let Some(o) = realm.registry.online(g) else {
-        return;
-    };
-    o.map().call(move |m| {
+    crate::game::map::call_player(realm, g, move |m| {
         if let Some(p) = m.players.get_mut(&g) {
             p.fields.set_u32(PLAYER_GUILDID, guild);
             p.fields.set_u32(PLAYER_GUILDRANK, rank);

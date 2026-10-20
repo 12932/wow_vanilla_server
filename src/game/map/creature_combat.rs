@@ -270,18 +270,17 @@ fn sweep_leashes(map: &mut Map) {
 }
 
 /// Which of the rarer states some creature of the map may be in: a
-/// charge, a flight, a call for help on its way, a cast, being a pet. The
-/// update looks at every creature for one only while one may be in it,
-/// and the look clears it when it finds none. So whatever puts a creature
-/// in one notes it here first (`Map::add_creature` notes what a creature
-/// arrives with, and `Map::caster_mut` notes a cast); debug builds check
-/// that a look skipped would have found nothing.
+/// charge, a flight, a call for help on its way, being a pet (a cast has a
+/// set of its own, `Map::casting`). The update looks at every creature for
+/// one only while one may be in it, and the look clears it when it finds
+/// none. So whatever puts a creature in one notes it here first
+/// (`Map::add_creature` notes what a creature arrives with); debug builds
+/// check that a look skipped would have found nothing.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RareStates {
     pub charge: bool,
     pub flee: bool,
     pub assist: bool,
-    pub casting: bool,
     pub pet: bool,
 }
 
@@ -292,7 +291,6 @@ impl RareStates {
         self.charge |= e.charge.is_some();
         self.flee |= e.flee.is_some();
         self.assist |= !e.assist.is_empty();
-        self.casting |= c.caster.casting.is_some();
         self.pet |= c.pet.is_some();
     }
 }

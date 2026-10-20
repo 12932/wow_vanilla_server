@@ -818,8 +818,14 @@ fn can_attack_alive_or_not(map: &Map, a: Guid, b: Guid, dead_ok: bool) -> bool {
     // standings is friendly but at war (Thistle Tea's
     // `attack_reaction_allows?`, mangos's `GetReactionTo`). Two creatures
     // must be enemies.
-    match (regard(map, a, b), regard(map, b, a)) {
-        (Regard::Hostile, _) | (_, Regard::Hostile) => true,
+    // The other way only if this way isn't hostile (review 5's combat 4:
+    // each scans a player's auras for a forced reaction).
+    let ab = regard(map, a, b);
+    if ab == Regard::Hostile {
+        return true;
+    }
+    match (ab, regard(map, b, a)) {
+        (_, Regard::Hostile) => true,
         (Regard::Friendly, _) | (_, Regard::Friendly) => false,
         _ if player_a != player_b => {
             let (creature, player) = if player_a { (b, ma) } else { (a, mb) };
@@ -3533,44 +3539,58 @@ fn leave_finished_fights(map: &mut Map) {
     if due.is_empty() {
         return;
     }
-    let held: ahash::AHashSet<Guid> = {
-        let fighting = map.awake_where(
-            |c| c.alive() && (c.combat.attacking || !c.threat.is_empty()),
-            |k, _| k,
-        );
-        fighting
-            .into_iter()
-            .filter_map(|k| map.creatures.get(k))
-            .flat_map(|c| {
-                c.threat
-                    .iter()
-                    .map(|(t, _)| *t)
-                    .chain(c.combat.attacking.then_some(c.combat.victim))
-            })
-            .collect()
-    };
+    // The creatures in a fight, looked for once, and only if a due
+    // player's answer needs them; each such player asks them in turn,
+    // stopping at the first that holds them, where a set of everyone each
+    // holds was built for one or two players (review 5's combat 7).
+    let mut fighting: Option<Vec<usize>> = None;
     let data = map.realm.data.clone();
     for g in due {
+        let Some(p) = map.players.get(&g) else {
+            continue;
+        };
+        let in_combat = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
+        // In a fight, what holds them besides a creature (the PvP timer,
+        // Bloodrage); out of one, a war a creature's fight began.
+        let asks = if in_combat {
+            let timed = p.combat.combat_until.is_some_and(|t| t > now);
+            let forced = p.auras.has_spell(SPELL_BLOODRAGE_REGEN);
+            !timed && !forced
+        } else {
+            !p.temporary_war.is_empty()
+        };
+        let held = asks && {
+            let keys = fighting.get_or_insert_with(|| {
+                map.awake_where(
+                    |c| c.alive() && (c.combat.attacking || !c.threat.is_empty()),
+                    |k, _| k,
+                )
+            });
+            keys.iter().filter_map(|&k| map.creatures.get(k)).any(|c| {
+                (c.combat.attacking && c.combat.victim == g)
+                    || c.threat.iter().any(|(t, _)| *t == g)
+            })
+        };
         let Some(p) = map.players.get_mut(&g) else {
             continue;
         };
         p.combat.next_check = Some(now + COMBAT_CHECK);
-        if !p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT) {
+        if !in_combat {
             // Out of combat, with a war a creature's fight began (it took
             // them on its list, and never fought them): over once none
             // holds them.
-            if p.temporary_war.is_empty() || !held.contains(&g) {
+            if !held {
                 p.combat.next_check = None;
                 crate::game::map::reputation::end_temporary_war(p, &data);
             }
             continue;
         }
-        let timed = p.combat.combat_until.is_some_and(|t| t > now);
-        let forced = p.auras.has_spell(SPELL_BLOODRAGE_REGEN);
-        if held.contains(&g) || timed || forced {
+        if held || !asks {
             continue;
         }
         leave_combat(map, g);
+        // What it changed, the next asks afresh.
+        fighting = None;
     }
 }
 
@@ -3610,12 +3630,7 @@ pub fn feigned(map: &mut Map, g: Guid) {
         .filter(|p| p.guid != g && at_it(&p.caster))
         .map(|p| p.guid)
         .collect();
-    casting.extend(
-        map.creatures
-            .iter()
-            .filter(|(_, c)| c.guid != g && at_it(&c.caster))
-            .map(|(_, c)| c.guid),
-    );
+    casting.extend(map.casting_where(|c| c.guid != g && at_it(&c.caster), |_, c| c.guid));
     for c in casting {
         crate::game::map::spells::interrupt(map, c);
     }

@@ -83,6 +83,28 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   saved, by that copy. Before, the session kept the stopped copy's handle: the client's next packet closed the
   connection, and the player went offline unsaved, still in the copy.
 
+The lows of the world, combat and realm-wide sections (`fix/lowsb`):
+- combat 4 fixed in part, 6, 7 and 9 fixed, measured in a test build with its debug checks off:
+  - 4: a creature's turn asks once of each on its threat list, and `can_attack` the second regard only if needed
+    (100 creatures holding 40: 129.9 ms an update's turns before, 31.7 ms after). The aura kinds' bitset is left.
+  - 6: the creatures casting kept in a set (`Map::casting`), so the update's looks for casts go through them
+    (20,001 creatures, one casting: `spells::update` 691 µs before, 1.9 µs after).
+  - 7: a player due for leaving their fight asks the fighting creatures until one holds them, where a set of all
+    they held was built (702 µs before, 20.5 µs after, at the worst).
+  - 9: a chain's jump asks the costly things, sight among them, only until one passes, in its order (a bolt into
+    100: 1,331 µs before, 416 µs after).
+- combat 8 fixed: an aura state, form or creature type past the 32nd names no bit (`checks::bit`), where the
+  shift by a data value panicked in a debug build and tested another bit in release.
+- social 8 fixed: a guild's rank, a group's lead or a summons sent as a player changes maps follows them
+  (`map::call_player`; `deliver` names the new map as the arrival is sent), where it went to the map they had left.
+- social 11 fixed: a champion whose farewell was lost with their city's map is brought home 30 s past when they
+  were due (`champions::State::home_by`), where Jaina or Rexxar never came again until a restart.
+- social 10 fixed: an event sweep works out, keeps and sends its set under the events' lock, so two at once can't
+  leave a map with the older events.
+- social 6 fixed, with `perf/chat`: a `/who` stops at a full list; its search words are lowered once.
+- social 13 fixed: the member-stats push holds the groups lock only to look up who is grouped and to keep what it
+  sent; the stats are read, and the frames made and sent, without it.
+
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
   - **saves apart:** a trade, mail sent or taken, an auction, a charter or emblem bought were each saved on both

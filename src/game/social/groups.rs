@@ -198,10 +198,7 @@ const SMSG_GROUP_LIST_OPCODE: u16 = 0x07D;
 fn set_leader_flag(realm: &Realm, g: Guid, leader: bool) {
     use crate::game::fields::PLAYER_FLAGS;
     use crate::game::map::player::PLAYER_FLAGS_GROUP_LEADER;
-    let Some(o) = realm.registry.online(g) else {
-        return;
-    };
-    o.map().call(move |m| {
+    crate::game::map::call_player(realm, g, move |m| {
         if let Some(p) = m.players.get_mut(&g) {
             p.fields
                 .set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GROUP_LEADER, leader);

@@ -435,3 +435,126 @@ async fn the_sweep_drops_one_queued_and_offline() {
     let bee = groups.group_of(gb).expect("Bee is grouped");
     assert!(bee.members.iter().any(|m| m.guid == gc), "with Cee");
 }
+
+/// rev5-social 8: what a service changes on a player (a guild's rank, a
+/// group's lead, a summons) as they change maps reaches them on the map
+/// they go to: one sent as the map they left has let them go, passed on
+/// by their session behind them, and one sent while their arrival waits
+/// in the new map's queue, sent there. Before, both went to the map they
+/// had left, found no one, and were lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_a_service_asks_of_a_player_changing_maps_follows_them() {
+    use crate::game::fields::{PLAYER_GUILDID, PLAYER_GUILDRANK};
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // Kalimdor kept busy, so her arrival waits in its queue.
+    let kalimdor = realm.maps.get(&realm, MapKey::world(1));
+    let (go, held) = std::sync::mpsc::channel::<()>();
+    kalimdor.call(move |_| {
+        let _ = held.recv_timeout(Duration::from_secs(5));
+    });
+    realm
+        .maps
+        .get(&realm, MapKey::world(0))
+        .query(move |m| {
+            m.teleport(
+                ga,
+                MapKey::world(1),
+                Vector3d {
+                    x: 1_600.0,
+                    y: -4_400.0,
+                    z: 10.0,
+                },
+                0.0,
+            );
+            // Let go here, not yet passed on by her session.
+            crate::game::map::call_player(&m.realm.clone(), ga, move |m| {
+                if let Some(p) = m.players.get_mut(&ga) {
+                    p.fields.set_u32(PLAYER_GUILDRANK, 3);
+                }
+            });
+        })
+        .await
+        .unwrap();
+    // Passed on by her session, waiting in Kalimdor's queue.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let online = realm.registry.online(ga).unwrap();
+    let _ = online
+        .session
+        .send(crate::game::session::Control::Probe(tx));
+    let routed = rx.await.unwrap().expect("in the world");
+    assert_eq!(routed.key, MapKey::world(1));
+    crate::game::map::call_player(&realm, ga, move |m| {
+        if let Some(p) = m.players.get_mut(&ga) {
+            p.fields.set_u32(PLAYER_GUILDID, 7);
+        }
+    });
+    let _ = go.send(());
+    let fields = kalimdor
+        .query(move |m| {
+            m.players.get(&ga).map(|p| {
+                (
+                    p.fields.get_u32(PLAYER_GUILDRANK),
+                    p.fields.get_u32(PLAYER_GUILDID),
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(fields, Some((3, 7)));
+}
+
+/// rev5-social 10: sweeps run at once, from four threads each starting and
+/// stopping events the world drives, leave the realm's events as the latest
+/// driven ones make them. Before, a sweep begun on older driven events
+/// could keep its set after a newer one's, and the next sweeps found
+/// nothing changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn event_sweeps_at_once_keep_the_latest_events() {
+    use crate::game::data::{GameData, GameEvent};
+    use crate::game::events;
+    let mut d = GameData::empty();
+    for id in [200, 201] {
+        d.events.insert(
+            id,
+            GameEvent {
+                id,
+                name: "Driven".into(),
+                hardcoded: true,
+                ..Default::default()
+            },
+        );
+    }
+    // A calendar of others, so a sweep takes as long as a real one.
+    for id in 1_000..6_000 {
+        d.events.insert(
+            id,
+            GameEvent {
+                id,
+                ..Default::default()
+            },
+        );
+    }
+    let (store, startup) = Store::open(":memory:").unwrap();
+    let realm = Realm::new(harness::test_config(), store, startup, d, None);
+    let mut stale = 0;
+    for round in 0..10 {
+        std::thread::scope(|s| {
+            for t in 0..4u32 {
+                let realm = &realm;
+                s.spawn(move || {
+                    for i in 0..200u32 {
+                        events::drive(realm, 200 + t % 2, (i + t + round) % 3 != 0);
+                    }
+                });
+            }
+        });
+        let driven = realm.social.driven_events.lock().clone();
+        let latest = events::active_with(&realm.data, mail::now(), &driven);
+        if events::current(&realm) != latest {
+            stale += 1;
+        }
+    }
+    assert_eq!(stale, 0, "rounds left with older events");
+}

@@ -541,33 +541,43 @@ fn chain(
         } else {
             CHAIN_JUMP_YARDS
         };
-        let next = units_around(map, at, jump, |g| {
+        // The cheap tests for all within the jump, the nearest first; the
+        // costly ones (whom an area may hit or the caster help, stealth, a
+        // ray of sight) in the order a jump takes them, until one passes,
+        // where every unit within it had them all (review 5's combat 9).
+        let near = units_around(map, at, jump, |g| {
             !out.contains(&g)
                 && alive(map, g)
                 && super::checks::unit_type_allowed(map, s, g)
                 && if heal {
-                    !combat::can_attack(map, caster, g)
-                        && !combat::hostile(map, caster, g)
-                        && combat::can_assist(map, caster, g)
-                        && missing_health(map, g) > 0
+                    missing_health(map, g) > 0
                 } else {
-                    g != caster && combat::can_attack_in_area(map, caster, g)
+                    g != caster
                 }
-                && super::stealth::sees(map, caster, g)
+        });
+        let takes = |g: Guid| {
+            (if heal {
+                !combat::can_attack(map, caster, g)
+                    && !combat::hostile(map, caster, g)
+                    && combat::can_assist(map, caster, g)
+            } else {
+                combat::can_attack_in_area(map, caster, g)
+            }) && super::stealth::sees(map, caster, g)
                 && (ignores_sight
                     || map
                         .position_of(g)
                         .is_some_and(|p| super::checks::sight(map, at, p)))
-        });
+        };
         // Nearest first already; a heal's order over that.
         let pick = if heal {
             let group = members(map, last, true);
-            next.into_iter()
-                .enumerate()
-                .min_by_key(|(i, g)| (!group.contains(g), u32::MAX - missing_health(map, *g), *i))
-                .map(|(_, g)| g)
+            let mut order: Vec<(usize, Guid)> = near.into_iter().enumerate().collect();
+            order.sort_by_cached_key(|(i, g)| {
+                (!group.contains(g), u32::MAX - missing_health(map, *g), *i)
+            });
+            order.into_iter().map(|(_, g)| g).find(|g| takes(*g))
         } else {
-            next.into_iter().next()
+            near.into_iter().find(|g| takes(*g))
         };
         let Some(g) = pick else {
             break;

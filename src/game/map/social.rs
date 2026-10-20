@@ -187,7 +187,14 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     );
     let name = m.player_name.to_lowercase();
     let guild_filter = m.guild_name.to_lowercase();
-    let words: Vec<String> = m.search_strings.iter().map(|s| s.to_lowercase()).collect();
+    // Any word, in the name, the guild or the zone (Thistle Tea's `Who`):
+    // lowered once, not for each player.
+    let words: Vec<String> = m
+        .search_strings
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect();
     let zones: Vec<u32> = m.zones.clone();
     let mut b = Body::default();
     let mut listed = 0u32;
@@ -241,9 +248,6 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
             .get(&o.zone())
             .map(|a| a.name.to_lowercase())
             .unwrap_or_default();
-        // Any word, in the name, the guild or the zone (Thistle Tea's
-        // `Who`).
-        let words: Vec<&String> = words.iter().filter(|w| !w.is_empty()).collect();
         if !words.is_empty()
             && !words.iter().any(|w| {
                 lower.contains(w.as_str())
@@ -577,31 +581,55 @@ pub fn push_member_stats(map: &mut Map) {
     }
     map.member_stats_at = map.now + STATS_EVERY;
     let realm = map.realm.clone();
-    let mut groups = realm.social.groups.lock();
-    for p in map.players.values() {
-        let others = groups.others(p.guid);
-        if others.is_empty() {
-            continue;
-        }
-        let now = stats_of(p);
-        let before = groups.stats.get(&p.guid).copied();
+    // The realm's groups lock is taken twice, briefly: for who is grouped,
+    // and to keep the stats and who saw them. Their stats are read out of
+    // the map, and the frames made and sent, without it, where it was held
+    // across all of it and every map's taps, group spells, party chat and
+    // copies waited (review 5's social 13).
+    let grouped: Vec<(Guid, Vec<Guid>)> = {
+        let groups = realm.social.groups.lock();
+        map.players
+            .keys()
+            .filter_map(|&g| {
+                let others = groups.others(g);
+                (!others.is_empty()).then_some((g, others))
+            })
+            .collect()
+    };
+    if grouped.is_empty() {
+        return;
+    }
+    let read: Vec<(Guid, Vec<Guid>, MemberStats, Vec<Guid>)> = grouped
+        .into_iter()
+        .filter_map(|(g, others)| {
+            let p = map.players.get(&g)?;
+            let seen = others
+                .iter()
+                .copied()
+                .filter(|o| p.observers.contains(o))
+                .collect();
+            Some((g, others, stats_of(p), seen))
+        })
+        .collect();
+    type Kept = (Option<MemberStats>, Vec<Guid>);
+    let kept: Vec<Kept> = {
+        let mut groups = realm.social.groups.lock();
+        read.iter()
+            .map(|(g, _, now, seen)| {
+                let before = groups.stats.insert(*g, *now);
+                let was_seen = groups.seen_by.insert(*g, seen.clone()).unwrap_or_default();
+                (before, was_seen)
+            })
+            .collect()
+    };
+    for ((g, others, now, seen), (before, was_seen)) in read.iter().zip(kept) {
         let mask = before.map_or(groups::STAT_PLAYER, |b| now.changed(&b));
-        groups.stats.insert(p.guid, now);
-        let seen: Vec<Guid> = others
-            .iter()
-            .copied()
-            .filter(|o| p.observers.contains(o))
-            .collect();
-        let was_seen = groups
-            .seen_by
-            .insert(p.guid, seen.clone())
-            .unwrap_or_default();
-        let frame = (mask != 0).then(|| now.packet(p.guid, mask, before.is_none()));
+        let frame = (mask != 0).then(|| now.packet(*g, mask, before.is_none()));
         let mut all = None;
         for o in others.iter().filter(|o| !seen.contains(o)) {
             if was_seen.contains(o) {
                 // Just out of sight: everything.
-                let all = all.get_or_insert_with(|| now.packet(p.guid, groups::STAT_PLAYER, false));
+                let all = all.get_or_insert_with(|| now.packet(*g, groups::STAT_PLAYER, false));
                 crate::game::social::send_frame(&realm, *o, all);
             } else if let Some(frame) = &frame {
                 crate::game::social::send_frame(&realm, *o, frame);

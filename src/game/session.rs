@@ -35,6 +35,13 @@ pub enum Control {
     /// and handed them on to the copy started in its place, which has them
     /// now (`map::hand_on`): route there.
     HandedOn { guid: Guid, map: MapHandle },
+    /// Something for the player on their map, sent to the one they were
+    /// taken out of as they changed maps (`map::call_player`): pass it on
+    /// to the map they are routed to, after them.
+    ToPlayer {
+        guid: Guid,
+        call: Box<dyn FnOnce(&mut crate::game::map::Map) + Send>,
+    },
     /// The player has logged out: back to the character screen.
     LoggedOut,
     /// Disconnect the client.
@@ -461,6 +468,14 @@ impl Session {
                     && *g == guid
                 {
                     *held = map;
+                }
+                true
+            }
+            Control::ToPlayer { guid, call } => {
+                if let State::InWorld { guid: g, map } = &self.state
+                    && *g == guid
+                {
+                    map.call(crate::game::map::after_player(guid, call, false));
                 }
                 true
             }
