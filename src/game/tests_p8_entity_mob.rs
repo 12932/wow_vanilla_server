@@ -417,3 +417,33 @@ async fn a_dragonling_comes_at_the_full_health_of_its_passive() {
         .unwrap();
     assert_eq!(later, (max, max), "kept");
 }
+
+/// A script's reaction (command 59) is what the creature does: passive, it
+/// looks for no fight and answers no call for help; defensive, it looks for
+/// none but answers; aggressive, both (Thistle Tea's "reaction changes
+/// publish acquisition and assistance eligibility"; mangos's
+/// `SetReactState`, `CanAssist` refusing the passive).
+#[tokio::test]
+async fn a_scripts_reaction_decides_aggro_and_assistance() {
+    use crate::game::map::assistance::{Reaction, available, reaction};
+    use crate::game::tests_p3_combat::{BRUTE, spawn};
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let seen = map
+        .query(move |m| {
+            let g = spawn(m, ga, BRUTE, 20, 30.0);
+            let mut seen = Vec::new();
+            for d1 in [0, 1, 2] {
+                let step = crate::game::data::scripts::ScriptStep {
+                    command: 59,
+                    datalong: [d1, 0, 0, 0],
+                    ..Default::default()
+                };
+                crate::game::map::scripts::execute(m, &step, g, g);
+                seen.push((reaction(m, g) == Reaction::Aggressive, available(m, g)));
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen, [(false, false), (false, true), (true, true)]);
+}

@@ -226,3 +226,46 @@ fn run_time(t: &SMSG_MONSTER_MOVE_MonsterMoveType) -> u32 {
         T::Stop => 0,
     }
 }
+
+/// A spell that needs a spell focus (an anvil, a forge) needs it of a
+/// player only: a creature casts it with none near, a player is refused
+/// (Thistle Tea's "does not impose player focus requirements on creature
+/// triggers"; mangos's `CheckCast`, `m_caster->GetTypeId() ==
+/// TYPEID_PLAYER` for `RequiresSpellFocus`).
+#[tokio::test]
+async fn a_spell_focus_is_asked_of_players_only() {
+    use crate::game::map::spells::{self, Targets};
+    use crate::game::tests_p3_combat::{BRUTE, spawn};
+    use crate::game::tests_p3_entity::{aura_effect, spell};
+    const AT_THE_ANVIL: u32 = 97_811;
+    let mut d = data();
+    let mut s = spell(
+        AT_THE_ANVIL,
+        &[aura_effect(crate::game::map::auras::AURA_DUMMY, 1, 0, 1)],
+    );
+    s.requires_spell_focus = 1;
+    d.spells.spells.insert(AT_THE_ANVIL, s);
+    let (_realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let seen = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 5.0);
+            let me = Targets {
+                unit: Some(ga),
+                ..Default::default()
+            };
+            let it = Targets {
+                unit: Some(brute),
+                ..Default::default()
+            };
+            let player = spells::cast_now(m, ga, AT_THE_ANVIL, me);
+            let creature = spells::cast_now(m, brute, AT_THE_ANVIL, it);
+            (
+                player,
+                creature,
+                crate::game::map::auras::auras(m, brute).is_some_and(|a| a.has_spell(AT_THE_ANVIL)),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen, (false, true, true));
+}
