@@ -231,7 +231,7 @@ New characters, the level cap, the realm's type, and what is left of the dead.
 | `characters_per_realm` | Characters an account may have on the realm. | `10` | 1 to 10, clamped | live | `CharactersPerRealm` |
 | `pvp_realm` | A PvP realm: an account's characters are all of one side, and everyone is flagged for PvP. | `false` |  | restart | `GameType` |
 | `always_max_skill_for_level` | Weapon skills and Defense at their caps, at login and each level, rather than raised by use from 1. | `false` |  | live | `AlwaysMaxSkillForLevel` |
-| `bones_hours` | Hours the bones a corpse turns to lie where it was, once its player rises (reclaims it, is raised, or a spirit healer raises them), seen by everyone; 0 leaves none. Bones aren't kept across a restart, and go with a dungeon's copy. mangos-classic has no time for them: its bones lie until their grid unloads, and `Death.Bones.World` and `Death.Bones.Battleground` turn them off. | `18` | 0 to 8760, clamped | live |  |
+| `bones_hours` | Hours the bones a corpse turns to lie where it was, once its player rises (reclaims it, is raised, or a spirit healer raises them), seen by everyone; 0 leaves none. Bones in the open world are kept across a restart, with the time they had left; a dungeon's or a battleground's go with its copy. mangos-classic has no time for them: its bones lie until their grid unloads, aren't saved, and `Death.Bones.World` and `Death.Bones.Battleground` turn them off. | `18` | 0 to 8760, clamped | live |  |
 
 ### `[quests]`
 

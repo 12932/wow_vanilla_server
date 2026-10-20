@@ -102,6 +102,27 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE character_items ADD COLUMN charges TEXT;
     "#,
+    // 4: bones lying in the open world (`map::bones`), kept across a
+    // restart: where they lie, whose they were, what a client shows of
+    // them, and when (Unix seconds) they go.
+    r#"
+    CREATE TABLE bones (
+        id INTEGER PRIMARY KEY,
+        map INTEGER NOT NULL,
+        x REAL NOT NULL,
+        y REAL NOT NULL,
+        z REAL NOT NULL,
+        orientation REAL NOT NULL,
+        owner INTEGER NOT NULL,
+        display INTEGER NOT NULL,
+        bytes_1 INTEGER NOT NULL,
+        bytes_2 INTEGER NOT NULL,
+        guild INTEGER NOT NULL,
+        flags INTEGER NOT NULL,
+        dynamic_flags INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+    );
+    "#,
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -361,6 +382,36 @@ pub struct Startup {
     pub max_item_guid: u32,
     /// Every record: kind, id and JSON.
     pub records: Vec<(String, u64, String)>,
+    /// The bones yet to go (those gone were swept as the store opened),
+    /// and the highest of their ids.
+    pub bones: Vec<BonesRow>,
+    pub max_bones_id: u32,
+}
+
+/// Bones lying in the open world, as kept (`map::bones`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BonesRow {
+    /// The bones' id, unique in the realm: their GUID's counter.
+    pub id: u32,
+    pub map: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub orientation: f32,
+    /// Whose they were, by GUID counter.
+    pub owner: u32,
+    /// `CORPSE_FIELD_DISPLAY_ID`, `CORPSE_FIELD_BYTES_1` (race, gender,
+    /// skin), `CORPSE_FIELD_BYTES_2` (face, hair style and colour, facial
+    /// hair), `CORPSE_FIELD_GUILD`, `CORPSE_FIELD_FLAGS` and
+    /// `CORPSE_FIELD_DYNAMIC_FLAGS`.
+    pub display: u32,
+    pub bytes_1: u32,
+    pub bytes_2: u32,
+    pub guild: u32,
+    pub flags: u32,
+    pub dynamic_flags: u32,
+    /// When they go, in Unix seconds.
+    pub expires_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -390,6 +441,8 @@ enum Request {
     SetAccountData(String, u8, u32, Vec<u8>),
     PutRecord(&'static str, u64, String),
     DeleteRecord(&'static str, u64),
+    PutBones(Box<BonesRow>),
+    DeleteBones(u32),
     /// Characters and records an item or money moved between: written in
     /// one transaction, never apart.
     Together(Vec<CharacterRow>, Vec<RecordOp>),
@@ -477,6 +530,7 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&conn)?;
+        sweep_bones(&conn, crate::game::social::mail::now())?;
         let startup = read_startup(&conn)?;
         info!(
             "character store {}: {} characters, schema version {SCHEMA_VERSION}",
@@ -566,6 +620,16 @@ impl Store {
 
     pub fn delete_record(&self, kind: &'static str, id: u64) {
         self.send(Request::DeleteRecord(kind, id));
+    }
+
+    /// Keep bones, replacing any of their id.
+    pub fn put_bones(&self, row: BonesRow) {
+        self.send(Request::PutBones(Box::new(row)));
+    }
+
+    /// Bones gone.
+    pub fn delete_bones(&self, id: u32) {
+        self.send(Request::DeleteBones(id));
     }
 
     /// Save characters and records in one transaction: what moved between
@@ -669,12 +733,49 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
             Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, map, x, y, z, orientation, owner, display, bytes_1, bytes_2, guild, flags, \
+         dynamic_flags, expires_at FROM bones ORDER BY id",
+    )?;
+    let bones = stmt
+        .query_map([], |r| {
+            Ok(BonesRow {
+                id: r.get(0)?,
+                map: r.get(1)?,
+                x: r.get(2)?,
+                y: r.get(3)?,
+                z: r.get(4)?,
+                orientation: r.get(5)?,
+                owner: r.get(6)?,
+                display: r.get(7)?,
+                bytes_1: r.get(8)?,
+                bytes_2: r.get(9)?,
+                guild: r.get(10)?,
+                flags: r.get(11)?,
+                dynamic_flags: r.get(12)?,
+                expires_at: r.get(13)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let max_bones_id = bones.iter().map(|b| b.id).max().unwrap_or(0);
     Ok(Startup {
         names,
         max_character_guid,
         max_item_guid,
         records,
+        bones,
+        max_bones_id,
     })
+}
+
+/// Bones whose time was up by `now` (Unix seconds) go: those gone while
+/// the server was down, or in a map that never started.
+fn sweep_bones(conn: &Connection, now: i64) -> rusqlite::Result<()> {
+    let gone = conn.execute("DELETE FROM bones WHERE expires_at <= ?1", params![now])?;
+    if gone > 0 {
+        info!("the character store: {gone} bones gone while it was closed");
+    }
+    Ok(())
 }
 
 /// The store's thread. It outlives a panic in what it does: that request
@@ -731,6 +832,8 @@ fn is_save(req: &Request) -> bool {
             | Request::SetAccountData(..)
             | Request::PutRecord(..)
             | Request::DeleteRecord(..)
+            | Request::PutBones(_)
+            | Request::DeleteBones(_)
             | Request::Together(..)
     )
 }
@@ -742,6 +845,8 @@ fn describe(req: &Request) -> String {
         Request::SetAccountData(account, kind, ..) => format!("{account}'s account data {kind}"),
         Request::PutRecord(kind, id, _) => format!("{kind} {id}"),
         Request::DeleteRecord(kind, id) => format!("deleting {kind} {id}"),
+        Request::PutBones(b) => format!("bones {} (of {} on map {})", b.id, b.owner, b.map),
+        Request::DeleteBones(id) => format!("deleting bones {id}"),
         Request::Together(rows, records) => {
             let names: Vec<String> = rows
                 .iter()
@@ -834,6 +939,11 @@ fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()>
                 }
                 Request::PutRecord(kind, id, data) => put_record(&tx, kind, *id, data)?,
                 Request::DeleteRecord(kind, id) => delete_record(&tx, kind, *id)?,
+                Request::PutBones(b) => put_bones(&tx, b)?,
+                Request::DeleteBones(id) => {
+                    tx.prepare_cached("DELETE FROM bones WHERE id = ?1")?
+                        .execute(params![id])?;
+                }
                 Request::Together(rows, records) => {
                     for row in rows {
                         save_row(&tx, row)?;
@@ -859,6 +969,31 @@ fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()>
 fn put_record(conn: &Connection, kind: &str, id: u64, data: &str) -> rusqlite::Result<()> {
     conn.prepare_cached("INSERT OR REPLACE INTO records (kind, id, data) VALUES (?1, ?2, ?3)")?
         .execute(params![kind, id as i64, data])?;
+    Ok(())
+}
+
+fn put_bones(conn: &Connection, b: &BonesRow) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT OR REPLACE INTO bones (id, map, x, y, z, orientation, owner, display, bytes_1, \
+         bytes_2, guild, flags, dynamic_flags, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, \
+         ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+    )?
+    .execute(params![
+        b.id,
+        b.map,
+        b.x,
+        b.y,
+        b.z,
+        b.orientation,
+        b.owner,
+        b.display,
+        b.bytes_1,
+        b.bytes_2,
+        b.guild,
+        b.flags,
+        b.dynamic_flags,
+        b.expires_at,
+    ])?;
     Ok(())
 }
 
@@ -967,6 +1102,8 @@ fn serve(conn: &Connection, req: Request) {
         | Request::SetAccountData(..)
         | Request::PutRecord(..)
         | Request::DeleteRecord(..)
+        | Request::PutBones(_)
+        | Request::DeleteBones(_)
         | Request::Together(..) => {}
     }
 }

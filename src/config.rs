@@ -491,11 +491,12 @@ settings! {
         always_max_skill_for_level: bool = false, Any, Live, "AlwaysMaxSkillForLevel";
         /// Hours the bones a corpse turns to lie where it was, once its
         /// player rises (reclaims it, is raised, or a spirit healer raises
-        /// them), seen by everyone; 0 leaves none. Bones aren't kept
-        /// across a restart, and go with a dungeon's copy. mangos-classic
+        /// them), seen by everyone; 0 leaves none. Bones in the open world
+        /// are kept across a restart, with the time they had left; a
+        /// dungeon's or a battleground's go with its copy. mangos-classic
         /// has no time for them: its bones lie until their grid unloads,
-        /// and `Death.Bones.World` and `Death.Bones.Battleground` turn
-        /// them off.
+        /// aren't saved, and `Death.Bones.World` and
+        /// `Death.Bones.Battleground` turn them off.
         bones_hours: u64 = 18, Clamp(0.0, 8_760.0), Live, "";
     }
 }

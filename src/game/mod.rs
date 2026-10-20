@@ -1179,6 +1179,8 @@ pub struct Realm {
     pub social: social::Social,
     pub next_character: AtomicU32,
     pub next_item: AtomicU32,
+    /// Bones ids, and the kept bones of maps yet to start.
+    pub bones: map::bones::Kept,
     /// The auth server's sessions, for the world handshake.
     pub users: Option<crate::auth::UserCache>,
 }
@@ -1221,6 +1223,7 @@ impl Realm {
             social,
             next_character: AtomicU32::new(startup.max_character_guid + 1),
             next_item: AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1),
+            bones: map::bones::Kept::load(startup.bones, startup.max_bones_id),
             users,
         });
         *realm.social.events.lock() = events::active(&realm.data, chrono::Utc::now().timestamp());
