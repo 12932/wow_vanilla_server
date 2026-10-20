@@ -563,6 +563,18 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
             .get(spell)
             .is_some_and(crate::game::map::auras::positive);
         let target = if helpful { e.actor } else { e.target };
+        // Its last charge spent by an earlier spell of this blow, the
+        // enchantment is gone, and its others don't go off (Thistle Tea's
+        // depleted snapshot).
+        if let Some(slot) = charge
+            && map
+                .players
+                .get(&e.actor)
+                .and_then(|p| p.items.iter().find(|i| i.guid == item_guid))
+                .is_none_or(|i| get(i, slot).charges == 0)
+        {
+            continue;
+        }
         crate::game::map::spells::cast_triggered(map, e.actor, spell, Some(target));
         if let Some(slot) = charge {
             spend_charge(map, e.actor, item_guid, slot);
