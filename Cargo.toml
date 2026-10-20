@@ -41,10 +41,10 @@ walkdir = "2.5.0"
 
 # The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
 # decoded off the map's thread and handed in (`load_nav_file`).
-rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "921d5108495c2d126d6a6acd4cb3e4ad22ea450c" }
+rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "732cec2fd85a1135475c651b7d98da2d3bd1ccd6" }
 glam = "0.34.1"
 # The navmesh and terrain builds, for the data setup.
-rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "921d5108495c2d126d6a6acd4cb3e4ad22ea450c" }
+rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "732cec2fd85a1135475c651b7d98da2d3bd1ccd6" }
 tracing = "0.1.44"
 # The log's filter is `Targets` (RUST_LOG's `target=level` lists), not
 # `env-filter`, which would bring regex in.
