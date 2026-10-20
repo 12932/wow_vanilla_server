@@ -9,12 +9,10 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::data::{AREA_FLAG_ARENA, AreaTrigger};
-use crate::game::fields::PLAYER_FLAGS;
 use crate::game::map::creature::{MOVEMENT_RANDOM, MOVEMENT_WAYPOINT, Motion, wander_pause};
 use crate::game::map::gameobject::GameObject;
 use crate::game::map::grid::cell_of;
 use crate::game::map::nav::Nav;
-use crate::game::map::player::PLAYER_FLAGS_FFA_PVP;
 use crate::game::map::{Map, MapKey, visibility};
 
 /// Load the map's navmesh and its spawns.
@@ -437,7 +435,8 @@ pub fn area_is_ffa(data: &crate::game::data::GameData, area: u32) -> bool {
 }
 
 /// Work out the zone and area a player is in, from the navmesh or the
-/// terrain, and the free-for-all flag that goes with an arena.
+/// terrain, and the free-for-all flag that goes with an arena
+/// ([`crate::game::map::pvp::free_for_all`]).
 pub fn update_zone(map: &mut Map, guid: Guid) {
     let Some(pos) = map.players.get(&guid).map(|p| p.position()) else {
         return;
@@ -445,7 +444,6 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
     let Some((zone, area)) = zone_and_area(map, pos) else {
         return;
     };
-    let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
@@ -467,11 +465,7 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
     if new_area {
         crate::game::map::spell_areas::reconcile(map, guid);
     }
-    let ffa = area_is_ffa(&data, area) || crate::game::map::arena::fighting(map, guid);
-    let Some(p) = map.players.get_mut(&guid) else {
-        return;
-    };
-    p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP, ffa);
+    crate::game::map::pvp::free_for_all(map, guid);
     if new_zone {
         crate::game::map::world_states::send_init(map, guid);
     }

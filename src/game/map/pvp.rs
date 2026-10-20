@@ -51,6 +51,11 @@ pub struct PvpState {
     pub map: u32,
     /// Contested until then.
     pub contested_until: Option<Instant>,
+    /// The area last worked out for them is free-for-all (an arena's).
+    pub ffa_area: bool,
+    /// Out of it, still free-for-all until then (`[arena]
+    /// ffa_grace_secs`).
+    pub ffa_until: Option<Instant>,
 }
 
 impl PvpState {
@@ -381,7 +386,7 @@ pub fn enforced(map: &Map, team: Team, zone: u32) -> bool {
 }
 
 /// Every update: each player's flag in line with where they are, and how
-/// long it lingers.
+/// long it lingers; and the free-for-all graces that ran out.
 pub fn update(map: &mut Map) {
     let now = map.now;
     // Land flown over on a taxi isn't entered (Thistle Tea's territory):
@@ -419,6 +424,7 @@ pub fn update(map: &mut Map) {
             p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP, false);
         }
     }
+    ffa_graces(map);
 }
 
 /// Arrived somewhere (a worldport, a teleport, a flight's end): one who
@@ -438,6 +444,85 @@ pub fn arrived(map: &mut Map, g: Guid) {
     let (team, zone) = (p.team, p.zone);
     if enforced(map, team, zone) {
         crate::game::map::spells::cast_triggered(map, g, SPELL_HONORLESS_TARGET, Some(g));
+    }
+}
+
+/// A player's free-for-all flag (`PLAYER_FLAGS_FFA_PVP`), which the client
+/// goes by too: one may strike one of one's own side only when both carry
+/// it. On in an arena's area (Gurubashi's pit), as mangos's `UpdateArea`
+/// has it, and for a fighter in the pit's battle (the server knows the
+/// pit's area only from the navmesh or the terrain; without them two of a
+/// side could never fight). Walked out of the area, it stays `[arena]
+/// ffa_grace_secs` (mangos drops it at once), so no one teases the edge;
+/// back in within them, it carries on without a gap.
+pub fn free_for_all(map: &mut Map, g: Guid) {
+    let now = map.now;
+    let grace = Duration::from_secs(map.cfg.arena.ffa_grace_secs);
+    let fighting = crate::game::map::arena::fighting(map, g);
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    let in_area = crate::game::map::world::area_is_ffa(&map.realm.data, p.area);
+    if in_area {
+        p.pvp.ffa_until = None;
+    } else if p.pvp.ffa_area {
+        p.pvp.ffa_until = Some(now + grace);
+    }
+    p.pvp.ffa_area = in_area;
+    let graced = p.pvp.ffa_until.is_some_and(|t| t > now);
+    if !graced {
+        p.pvp.ffa_until = None;
+    }
+    p.fields.set_flag(
+        PLAYER_FLAGS,
+        crate::game::map::player::PLAYER_FLAGS_FFA_PVP,
+        in_area || fighting || graced,
+    );
+}
+
+/// A death ends the free-for-all grace: the flag is the area's (and the
+/// battle's) again, and none starts.
+pub fn died(map: &mut Map, g: Guid) {
+    if let Some(p) = map.players.get_mut(&g) {
+        p.pvp.ffa_until = None;
+        p.pvp.ffa_area = false;
+    }
+    free_for_all(map, g);
+}
+
+/// A teleport away (one that ends the fight: not Blink's) ends the
+/// free-for-all grace, and the flag is worked out again where they land,
+/// as mangos's `UpdateArea` on arrival does; meanwhile only a fighter
+/// keeps it.
+pub fn teleported(map: &mut Map, g: Guid) {
+    let fighting = crate::game::map::arena::fighting(map, g);
+    if let Some(p) = map.players.get_mut(&g) {
+        p.pvp.ffa_until = None;
+        p.pvp.ffa_area = false;
+        p.fields.set_flag(
+            PLAYER_FLAGS,
+            crate::game::map::player::PLAYER_FLAGS_FFA_PVP,
+            fighting,
+        );
+    }
+}
+
+/// The free-for-all graces run out: where each player stands is worked
+/// out again first, so one who stepped back in by less than the
+/// visibility's step keeps the flag.
+fn ffa_graces(map: &mut Map) {
+    let now = map.now;
+    let due: Vec<(Guid, bool)> = map
+        .players
+        .values()
+        .filter(|p| p.pvp.ffa_until.is_some_and(|t| t <= now))
+        .map(|p| (p.guid, p.awaiting_worldport))
+        .collect();
+    for (g, awaiting) in due {
+        if !awaiting {
+            crate::game::map::world::update_zone(map, g);
+        }
+        free_for_all(map, g);
     }
 }
 
