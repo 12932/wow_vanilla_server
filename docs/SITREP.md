@@ -651,6 +651,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   written comes back no more; #15: mail is indexed by receiver (the next-mail-time query over 100,000 mails, 1,000
   times, 1.5 s → 1 ms); a meeting stone's queue is left at a logout. **Its calls:** mails cut, not refused (a
   client's box takes 500 letters, an addon may send more).
+- **Review 5's fixes, maps (`fix/fixmaps`):** #4 (high): a copy counts as in use while anyone let in is on their
+  way, so a reset or a raid's expiry no longer drops an arrival in its queue; as a backstop, a copy stopped with
+  players inside saves each and sends them to the character screen; #7: a map's shutdown saves each player under a
+  guard of their own (one panic no longer loses the rest); #17: copies loaded at start-up get their five minutes;
+  #18: a far teleport keeps a logout's countdown going (mangos), the client rooted again on the new map; maps 6:
+  every way out of the world leaves channels, queues, friends, guild and group. **Its calls:** players in a copy at
+  its stop go to the character screen, not into the restarted copy; a reset refused for someone on their way says
+  "zoning" (mangos). **Found:** a session can keep sending to a stopped copy's old handle (the player then goes
+  offline unsaved); queued for after `fixnet`.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
