@@ -483,10 +483,193 @@ async fn a_raised_ghosts_bones_lie_at_the_corpse_and_none_at_zero_hours() {
             settled(&mut b).await;
             let left = on(&map, move |m| m.corpses.len()).await;
             assert_eq!(left, 0, "no bones at 0 hours");
+            assert!(realm.store.bones_for_test().await.is_empty(), "none kept");
             continue;
         }
         let (bones, at, ..) = bones_of(&map, ga).await;
         assert_eq!((at.x, at.y), (lay.x, lay.y), "at the corpse, not the ghost");
         b.sees(bones).await;
+        let kept = realm.store.bones_for_test().await;
+        assert_eq!(kept.len(), 1, "kept in the store");
+        assert_eq!((kept[0].x, kept[0].y), (lay.x, lay.y));
     }
+}
+
+/// An empty character store in a directory of its own, for `name`'s test.
+fn store_file(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wvs-bones-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("characters.sqlite")
+}
+
+/// Bones `g` as they lie: their place, facing, every field, and the time
+/// they have left.
+async fn lying(map: &MapHandle, g: Guid) -> Option<((f32, f32, f32), f32, Vec<u32>, Duration)> {
+    on(map, move |m| {
+        let c = m.corpses.get(&g)?;
+        let until = m.bones.iter().find(|(_, b)| *b == g)?.0;
+        let fields = (0..c.fields.len()).map(|i| c.fields.get_u32(i)).collect();
+        let at = (c.position.x, c.position.y, c.position.z);
+        Some((
+            at,
+            c.orientation,
+            fields,
+            until.saturating_duration_since(m.now),
+        ))
+    })
+    .await
+}
+
+/// The store's id of bones `g`.
+fn bones_id(g: Guid) -> u32 {
+    guid::counter(g) & 0x7FFF_FFFF
+}
+
+/// Bones made just before a shutdown lie again after a restart on the
+/// same database, once their map starts (another map started first leaves
+/// them be): where they lay, as they looked (every field), with the time
+/// they had left; an insignia's keep their hour and their loot. Those whose
+/// time came while the server was down, or before their map started, don't
+/// come back, and go from the store. A newcomer is told of them, and new
+/// bones' ids go on from the kept ones'.
+#[tokio::test]
+async fn bones_lie_again_after_a_restart_with_the_time_they_had_left() {
+    let db = store_file("restart");
+    let open = |db: &std::path::Path| crate::game::store::Store::open(db).unwrap();
+    let (store, startup) = open(&db);
+    let realm = Realm::new(harness::test_config(), store, startup, data(), None);
+    let (mut a, ga, map) = enter(&realm, "A").await;
+    let (mut b, gb, _) = enter(&realm, "B").await;
+    let (mut c, gc, _) = enter(&realm, "C").await;
+    let (mut d, gd, _) = enter(&realm, "D").await;
+    for cl in [&mut a, &mut b, &mut c, &mut d] {
+        die_and_release(cl, &map).await;
+    }
+    on(&map, move |m| {
+        for g in [ga, gc, gd] {
+            assert!(death::resurrect_with(m, g, 50, 0));
+        }
+        // An insignia's bones: an hour, and lootable.
+        bones::convert(
+            m,
+            gb,
+            crate::game::map::battleground::insignia::BONES_LIE,
+            0x01,
+        )
+        .expect("B's corpse");
+    })
+    .await;
+    let mut made = Vec::new();
+    for g in [ga, gb, gc, gd] {
+        made.push(bones_of(&map, g).await.0);
+    }
+    let [ba, bb, bc, bd] = made[..] else {
+        unreachable!()
+    };
+    let before_a = lying(&map, ba).await.unwrap();
+    let before_b = lying(&map, bb).await.unwrap();
+    let hour = Duration::from_secs(3600);
+    assert!(before_b.3 <= hour && before_b.3 > hour - Duration::from_secs(30));
+    assert_eq!(before_b.2[usize::from(CORPSE_FIELD_DYNAMIC_FLAGS)], 0x01);
+    let shut = std::time::Instant::now();
+    realm.shutdown().await;
+    drop((a, b, c, d, map));
+    drop(realm);
+
+    // C's time comes while the server is down.
+    let now = crate::game::social::mail::now();
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE bones SET expires_at = ?1 WHERE id = ?2",
+            rusqlite::params![now - 1, bones_id(bc)],
+        )
+        .unwrap();
+    }
+    let (store, mut startup) = open(&db);
+    let kept: Vec<u32> = startup.bones.iter().map(|r| r.id).collect();
+    let mut want = vec![bones_id(ba), bones_id(bb), bones_id(bd)];
+    want.sort();
+    assert_eq!(kept, want, "C's swept as the store opened");
+    // D's comes after the store opened, before its map starts.
+    startup
+        .bones
+        .iter_mut()
+        .find(|r| r.id == bones_id(bd))
+        .unwrap()
+        .expires_at = now - 1;
+    let realm = Realm::new(harness::test_config(), store, startup, data(), None);
+    let kalimdor = realm.maps.get(&realm, crate::game::map::MapKey::world(1));
+    assert_eq!(
+        on(&kalimdor, |m| m.corpses.len()).await,
+        0,
+        "not Kalimdor's"
+    );
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    let down = shut.elapsed() + Duration::from_secs(2);
+    for (g, before) in [(ba, &before_a), (bb, &before_b)] {
+        let after = lying(&map, g).await.expect("lying again");
+        assert_eq!(
+            (after.0, after.1, &after.2),
+            (before.0, before.1, &before.2),
+            "where they lay, as they looked"
+        );
+        assert!(
+            after.3 <= before.3 + Duration::from_secs(1) && after.3 + down >= before.3,
+            "the time they had left: {:?} then, {:?} now",
+            before.3,
+            after.3
+        );
+    }
+    assert!(lying(&map, bc).await.is_none(), "C's gone");
+    assert!(lying(&map, bd).await.is_none(), "D's gone");
+    let stored: Vec<u32> = realm
+        .store
+        .bones_for_test()
+        .await
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    let mut want = vec![bones_id(ba), bones_id(bb)];
+    want.sort();
+    assert_eq!(stored, want, "D's gone from the store as its map started");
+    // A newcomer sees them; their bones are new ids.
+    let (mut e, ge, _) = enter(&realm, "E").await;
+    e.sees(ba).await;
+    e.sees(bb).await;
+    die_and_release(&mut e, &map).await;
+    on(&map, move |m| assert!(death::resurrect_with(m, ge, 50, 0))).await;
+    let be = bones_of(&map, ge).await.0;
+    assert!(bones_id(be) > bones_id(bd), "after every kept id");
+    drop((e, map));
+    drop(realm);
+    let _ = std::fs::remove_dir_all(db.parent().unwrap());
+}
+
+/// A map its supervisor builds again (`supervise::restart`) still has its
+/// bones, as they were, with their time left.
+#[tokio::test]
+async fn a_supervised_restart_keeps_the_maps_bones() {
+    let realm = harness::realm();
+    let (mut a, ga, map) = enter(&realm, "A").await;
+    die_and_release(&mut a, &map).await;
+    on(&map, move |m| assert!(death::resurrect_with(m, ga, 50, 0))).await;
+    let bones = bones_of(&map, ga).await.0;
+    let before = lying(&map, bones).await.unwrap();
+    let restarts = on(&map, |m| {
+        let fresh = Map::new(m.key, m.realm.clone(), m.handle.clone());
+        let old = std::mem::replace(m, fresh);
+        *m = crate::game::map::supervise::restart(old);
+        m.stats.restarts
+    })
+    .await;
+    assert_eq!(restarts, 1);
+    let after = lying(&map, bones).await.expect("still lying");
+    assert_eq!(
+        (after.0, after.1, &after.2),
+        (before.0, before.1, &before.2)
+    );
+    assert!(after.3 <= before.3 + Duration::from_secs(1));
+    assert!(after.3 + Duration::from_secs(5) >= before.3);
 }

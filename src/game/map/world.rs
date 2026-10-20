@@ -121,6 +121,7 @@ pub fn populate(map: &mut Map) {
         }
     }
     crate::game::map::instance_script::settle_spawns(map);
+    crate::game::map::bones::restore(map);
     // Nobody is here yet to see any of it.
     map.visibility_dirty.clear();
     if !map.creatures.is_empty() || !map.gameobjects.is_empty() {

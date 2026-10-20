@@ -308,6 +308,8 @@ pub fn restart(mut old: Map) -> Map {
         restarts: old.stats.restarts + 1,
         ..Default::default()
     };
+    // Its bones lie on in the new one.
+    let _ = catch(|| crate::game::map::bones::hand_back(&old));
     // The old map's parts go with it; a panic in one of their drops
     // doesn't stop the new one.
     let _ = catch(move || drop(old));

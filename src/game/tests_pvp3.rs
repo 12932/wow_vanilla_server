@@ -895,6 +895,23 @@ async fn alice_takes_a_fallen_horde_players_insignia_and_his_corpse_is_bones() {
     assert!(ghost, "made to release");
     assert!(!corpse, "no corpse to take back");
     assert_eq!(bones, vec![(0x05, 0x01)]);
+    // They lie an hour, and, a battleground copy's, aren't kept across a
+    // restart.
+    let left: Vec<Duration> = map
+        .query(|m| {
+            m.bones
+                .iter()
+                .map(|(t, _)| t.saturating_duration_since(m.now))
+                .collect()
+        })
+        .await
+        .unwrap();
+    let hour = Duration::from_secs(3600);
+    assert!(
+        left.len() == 1 && left[0] <= hour && left[0] > hour - Duration::from_secs(30),
+        "{left:?}"
+    );
+    assert!(realm.store.bones_for_test().await.is_empty(), "not kept");
     b.wait_for("SMSG_PLAYER_SKINNED", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_PLAYER_SKINNED(_)).then_some(())
     })
