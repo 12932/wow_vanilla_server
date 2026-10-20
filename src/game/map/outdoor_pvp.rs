@@ -925,10 +925,9 @@ fn link_soldier(map: &mut Map, g: Guid, slot: usize) {
 /// faction other than its own if given); it doesn't respawn.
 pub fn summon(map: &mut Map, entry: u32, at: (f32, f32, f32, f32), faction: u32) -> Option<Guid> {
     let data = map.realm.data.clone();
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.creature_counter();
     let spawn = crate::game::data::CreatureSpawn {
-        guid: counter | 0x80_0000,
+        guid: counter,
         entries: vec![entry],
         map: map.key.map,
         x: at.0,
@@ -950,12 +949,11 @@ pub fn summon(map: &mut Map, entry: u32, at: (f32, f32, f32, f32), faction: u32)
 fn place_object(map: &mut Map, entry: u32, at: (f32, f32, f32, f32)) -> Option<Guid> {
     let data = map.realm.data.clone();
     let t = data.gameobject_templates.get(&entry)?;
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         t,
         &GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry,
             map: map.key.map,
             x: at.0,
@@ -1231,12 +1229,11 @@ fn drop_silithyst(map: &mut Map, at: Vector3d) {
     let Some(t) = data.gameobject_templates.get(&SILITHYST_MOUND) else {
         return;
     };
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         t,
         &GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry: SILITHYST_MOUND,
             map: map.key.map,
             x: at.x,

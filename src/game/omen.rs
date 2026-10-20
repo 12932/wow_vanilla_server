@@ -65,10 +65,9 @@ pub fn use_object(map: &mut Map, object: Guid) -> bool {
     }
     if call {
         let data = realm.data.clone();
-        let counter = map.next_creature_counter;
-        map.next_creature_counter += 1;
+        let counter = map.creature_counter();
         let spawn = crate::game::data::CreatureSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entries: vec![OMEN],
             map: map.key.map,
             x: RISES_AT.0,

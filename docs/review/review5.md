@@ -160,7 +160,7 @@ under "Found by the other reviews too", with what this review adds.
   session at once: the session's `select!` waits on the same `Notify` as finding 1's writer.
 - **Effort:** easy.
 
-#### 6. The flood guard counts a packet as a packet, whatever it costs (low-medium, speed)
+#### 6. The flood guard counts a packet as a packet, whatever it costs (low-medium, speed) **Fixed.**
 - **Where:** `src/game/session.rs:236-247` (one bucket for everything but the queries: 100 a second, 300 at once),
   `src/game/map/account_data.rs:114-137` (`parse_update` inflates up to 64 KB) and `:150-165` (`update` clones it
   into a store write), on the map's thread, and on the session's task on the character screen
@@ -199,7 +199,7 @@ under "Found by the other reviews too", with what this review adds.
   only once its proof passes.
 - **Effort:** easy to medium.
 
-#### 8. Packets the old client sent still act on the player after another login takes them over (low, robustness)
+#### 8. Packets the old client sent still act on the player after another login takes them over (low, robustness) **Fixed.**
 - **Where:** `src/game/session.rs:263-281` (`MapEvent::Packet(*guid, msg)` and `handle_raw(g, ..)` carry the
   player's guid, not the session), `src/game/map/mod.rs:1042-1049` (the map handles a packet for whoever has the
   guid), `src/game/map/login.rs:235` (`take_over` tells the old session `TakenOver`).
@@ -419,7 +419,7 @@ asserts the bug, so it passes while the bug is there.
   `logout_at` alone and let the new map complete it.
 - **Effort:** easy.
 
-#### 5. Logging into a copy starts that map's world copy, which never stops
+#### 5. Logging into a copy starts that map's world copy, which never stops **Fixed.**
 - **Severity:** low. **Kind:** speed (CPU and memory for nothing).
 - **Where:** `src/game/session.rs:692-700` (`enter`).
 - **What:** `enter` calls `maps.get(MapKey::world(row.map))` before it knows where the player is going, and builds
@@ -471,7 +471,7 @@ asserts the bug, so it passes while the bug is there.
   every path.
 - **Effort:** easy.
 
-#### 7. Summoned GUIDs repeat after 2^23 summons on a map
+#### 7. Summoned GUIDs repeat after 2^23 summons on a map **Fixed.**
 - **Severity:** low. **Kind:** reliability (two objects under one GUID).
 - **Where:**
   - `src/game/map/scripts.rs:1081-1084` and `src/game/map/pets/summon.rs:56`, among the 21 sites that take
@@ -498,7 +498,7 @@ asserts the bug, so it passes while the bug is there.
   with separate counters for creatures and game objects, as mangos has.
 - **Effort:** easy.
 
-#### 8. Logging in aboard a ship that has crossed to the other continent leaves the player at sea
+#### 8. Logging in aboard a ship that has crossed to the other continent leaves the player at sea **Fixed.**
 - **Severity:** low. **Kind:** robustness.
 - **Where:** `src/game/transports.rs:575-589` (`place_aboard`).
 - **What:** `if pose.map != p.row.map { return; }`. The transport state has already been taken (`take()`), and it is
@@ -1496,7 +1496,7 @@ Each finding: severity, kind, where, what, how it shows, the fix and its effort.
   and need a GM or their reagents.
 - **Effort:** medium, for the fallout.
 
-#### 8. A partial bake is quiet, and a tile whose read panics is never read again (low, robustness)
+#### 8. A partial bake is quiet, and a tile whose read panics is never read again (low, robustness) **Fixed.**
 - **Where:** `src/game/map/nav.rs:113-129` (`read`: a tile the header lists that is missing or doesn't decode is a
   `debug!`), `src/setup/plan.rs:362-366` (`has_navmesh`: any one map built counts), `src/game/map/tiles.rs:59`
   with `nav.rs:179-216` and `:302`.
@@ -1510,7 +1510,7 @@ Each finding: severity, kind, where, what, how it shows, the fix and its effort.
   reader job that panics (a guard that sends on drop); check the continents by name at start-up.
 - **Effort:** easy.
 
-#### 9. A reload that finds no config file puts every live key back to its default (low, robustness)
+#### 9. A reload that finds no config file puts every live key back to its default (low, robustness) **Fixed.**
 - **Where:** `src/config.rs:768-771` (`load_full`: not found is the defaults), `src/game/mod.rs:1158-1166`
   (`reload_from_disk`), `:1262` (`Realm::reload`).
 - **What:** at start a missing file means the defaults, which is right. At a reload it means the file has gone, or
@@ -1522,7 +1522,7 @@ Each finding: severity, kind, where, what, how it shows, the fix and its effort.
   changes nothing.
 - **Effort:** easy.
 
-#### 10. `[arena]`'s times are unchecked, and a huge one panics the arena's step every update (low, robustness)
+#### 10. `[arena]`'s times are unchecked, and a huge one panics the arena's step every update (low, robustness) **Fixed.**
 - **Where:** `src/config.rs:628-641` (`every_minutes`, `countdown_secs`, `max_minutes`, `ring_after_secs`, all
   `Any`), `src/game/map/arena.rs:598-603` and `:483`.
 - **What:** `every_minutes * 60` overflows (a panic in debug, a wrap in release), and `now + every` panics on

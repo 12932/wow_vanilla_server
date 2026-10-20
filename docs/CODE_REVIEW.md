@@ -82,6 +82,28 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   packet for a stopped map waits for that word and goes there, and a session gone by then has the player let go,
   saved, by that copy. Before, the session kept the stopped copy's handle: the client's next packet closed the
   connection, and the player went offline unsaved, still in the copy.
+- **data 10** fixed (`fix/lowsa`): `[arena]`'s minutes are 0 to a week and its seconds 0 to an hour, clamped, and
+  `.arena start`'s numbers are held to the same; the arena's times are added without a panic (`arena::later`).
+- **data 9** fixed (`fix/lowsa`): a reload (SIGHUP, `.reload config`) that finds the file missing or empty, where the
+  running settings aren't the defaults, is an error that changes nothing (`game::reload_from`).
+- **data 8** fixed (`fix/lowsa`): a navmesh whose header lists tiles that aren't there warns at its open with the
+  count; a navmesh or terrain tile whose read panics is answered as missing (`tiles::read_into`), where it stayed
+  loading until the map restarted; the start warns of a continent with no navmesh when another map has one.
+- **maps 7** fixed (`fix/lowsa`): what a map makes itself takes its counter through `Map::creature_counter`,
+  `pet_counter` or `object_counter`: creatures and game objects counted apart, as mangos's, and a counter come
+  round skips those on the map still (`Map::own_counters`, kept by `add_*` and the removals).
+- **net 8** fixed (`fix/lowsa`): a packet (and a raw one) carries its session, and the map drops one from a session
+  that no longer has the player (`Map::from_their_session`), as it drops a stale `Disconnect`. #12's one session
+  an account had already closed the path (the new session starts once the old has gone); this no longer leans on it.
+- **maps 5** fixed (`fix/lowsa`): a login into a dungeon, raid or battleground goes online with a handle to no map
+  (`MapHandle::detached`) until its copy is chosen, and starts that map only; before, it started the map's open-world
+  copy first, which ran, empty and populated, for good.
+- **maps 8** fixed (`fix/lowsa`): one who logged out aboard a boat or zeppelin that has crossed to its other map
+  since logs in on that map, on its deck (`transports::aboard_at_login`, as mangos's `LoadFromDB`).
+- **net 6** fixed (`fix/lowsa`): `/who`, whois and inspect come at most once in 5 s each, one sooner dropped
+  (`session::Cooldowns`, mangos's `InitOpcodeCooldowns`); a cache upload the same as what is held isn't written, and
+  one changed again within 5 s of its kind's last write is held and written at the player's next save or logout
+  (`account_data::flush`). On the character screen, the same upload again isn't written; a changed one still is.
 
 The lows of the world, combat and realm-wide sections (`fix/lowsb`):
 - combat 4 fixed in part, 6, 7 and 9 fixed, measured in a test build with its debug checks off:

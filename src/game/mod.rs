@@ -81,6 +81,8 @@ mod tests_combat5;
 #[cfg(test)]
 mod tests_config;
 #[cfg(test)]
+mod tests_cooldowns;
+#[cfg(test)]
 mod tests_creatures4;
 #[cfg(test)]
 mod tests_dead_body;
@@ -116,6 +118,8 @@ mod tests_net5;
 mod tests_objects;
 #[cfg(test)]
 mod tests_order;
+#[cfg(test)]
+mod tests_own_guids;
 #[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
@@ -1058,6 +1062,9 @@ pub struct RealmConfig {
     /// Read-only queries a client may send a second, sustained, apart
     /// from the packets (`session::is_query`).
     pub max_queries_per_sec: u32,
+    /// How seldom a `/who`, whois or inspect may come (`session::Cooldowns`):
+    /// mangos's 5 s; none in the tests.
+    pub packet_cooldown: Duration,
     /// The weekday honor's week turns over on: 1 Monday to 7 Sunday.
     pub honor_reset_weekday: u8,
     /// Whether spells roll to hit, crit and resist (tests fix them).
@@ -1122,6 +1129,7 @@ impl RealmConfig {
             pvp_realm: c.players.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
             max_queries_per_sec: c.network.max_queries_per_sec,
+            packet_cooldown: session::COOLDOWN,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
             spell_travel: true,
@@ -1197,12 +1205,29 @@ impl std::fmt::Display for ReloadReport {
 /// Read `config.toml` and the environment again, off the map's threads,
 /// and put in what is safe to change live.
 pub async fn reload_from_disk(realm: Arc<Realm>) -> Result<ReloadReport, String> {
-    let loaded = tokio::task::spawn_blocking(|| {
-        crate::config::load_full(std::path::Path::new(crate::config::PATH))
-    })
-    .await
-    .map_err(|e| format!("the reload stopped: {e}"))??;
-    Ok(realm.reload(loaded))
+    reload_from(realm, std::path::PathBuf::from(crate::config::PATH)).await
+}
+
+/// [`reload_from_disk`], from `path`. A file missing or empty, where the
+/// running settings didn't come from the defaults, is an error that
+/// changes nothing: at a reload it is a file gone or half saved.
+pub async fn reload_from(
+    realm: Arc<Realm>,
+    path: std::path::PathBuf,
+) -> Result<ReloadReport, String> {
+    let origin = path.display().to_string();
+    let (loaded, blank) =
+        tokio::task::spawn_blocking(move || crate::config::load_noting_blank(&path))
+            .await
+            .map_err(|e| format!("the reload stopped: {e}"))??;
+    let mut source = realm.source.lock();
+    if blank && loaded.config != *source {
+        return Err(format!(
+            "{origin} is missing or empty, and the running settings aren't the defaults: \
+             nothing changed (put the file back, or give the defaults in it)"
+        ));
+    }
+    Ok(realm.reload_locked(&mut source, loaded))
 }
 
 /// How long the shutdown waits for the maps to save their players.
@@ -1311,8 +1336,17 @@ impl Realm {
     /// them need a restart. Maps see it at their next update.
     pub fn reload(&self, loaded: crate::config::Loaded) -> ReloadReport {
         let mut source = self.source.lock();
-        let changes = crate::config::changes(&source, &loaded.config);
-        let applied = crate::config::live_part(&source, &loaded.config);
+        self.reload_locked(&mut source, loaded)
+    }
+
+    /// [`Realm::reload`], `source` held.
+    fn reload_locked(
+        &self,
+        source: &mut crate::config::ServerConfig,
+        loaded: crate::config::Loaded,
+    ) -> ReloadReport {
+        let changes = crate::config::changes(source, &loaded.config);
+        let applied = crate::config::live_part(source, &loaded.config);
         let next = self.config().reloaded(&applied);
         self.social.honor.lock().minimum_kills = Some(next.min_honor_kills);
         *self.config.write() = Arc::new(next);

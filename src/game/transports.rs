@@ -570,6 +570,28 @@ pub fn entry_of(g: Guid) -> u32 {
     }
 }
 
+/// Before a login picks its map: a player who logged out aboard a boat or
+/// zeppelin that has crossed to its other map since logs in on that map,
+/// on its deck, as mangos's `Player::LoadFromDB` loads them onto the
+/// transport's map. Before, they came back where they had logged out, the
+/// ship gone: at sea, or on a dock across the water from it. On their own
+/// map still, [`place_aboard`] puts them on deck as they arrive.
+pub fn aboard_at_login(realm: &Realm, row: &mut crate::game::store::CharacterRow) {
+    let Some((entry, x, y, z, o)) = row.state.transport else {
+        return;
+    };
+    let Some(route) = route_of(realm, entry) else {
+        return;
+    };
+    let pose = route.pose_at(crate::game::uptime_ms());
+    if pose.map == row.map {
+        return;
+    }
+    let (at, facing) = passenger_world(Vector3d { x, y, z }, o, &pose);
+    row.map = pose.map;
+    (row.x, row.y, row.z, row.orientation) = (at.x, at.y, at.z, facing);
+}
+
 /// A player who logged out aboard a transport comes back on its deck,
 /// wherever it has gone since, if it is on their map.
 pub fn place_aboard(realm: &Realm, p: &mut crate::game::map::player::Player) {

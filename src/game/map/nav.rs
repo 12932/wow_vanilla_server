@@ -128,6 +128,23 @@ fn read(dir: &Path, name: &str, (x, y): (i32, i32)) -> Option<NavFile> {
     }
 }
 
+/// The tiles `map`'s header lists, and how many of them have no file in
+/// `dir`.
+fn missing_tiles(map: &PathfindMap, dir: &Path, name: &str) -> (usize, usize) {
+    if !map.has_adts() {
+        return (0, 0);
+    }
+    let listed: Vec<(i32, i32)> = (0..64)
+        .flat_map(|x| (0..64).map(move |y| (x, y)))
+        .filter(|&(x, y)| map.has_adt(x, y))
+        .collect();
+    let missing = listed
+        .iter()
+        .filter(|(x, y)| !dir.join(format!("{name}_{x}_{y}.nav")).is_file())
+        .count();
+    (listed.len(), missing)
+}
+
 impl Nav {
     /// The navmesh for the map called `name` in the bake at `dir`, its
     /// tiles read at once as they are asked for (a dungeon that is one WMO
@@ -136,6 +153,15 @@ impl Nav {
         match PathfindMap::new(dir, name) {
             Ok(map) => {
                 info!("navmesh for {name} from {}", dir.display());
+                let (listed, missing) = missing_tiles(&map, dir, name);
+                if missing > 0 {
+                    warn!(
+                        "navmesh for {name}: {missing} of its {listed} tiles aren't in {} \
+                         (a bake copied in part, or a disk that filled): creatures there walk \
+                         straight lines; `wvs-setup` builds them again",
+                        dir.display()
+                    );
+                }
                 Some(Self {
                     map,
                     dir: dir.to_owned(),
@@ -198,9 +224,7 @@ impl Nav {
         match &self.background {
             Some(b) => {
                 let (tx, dir, name) = (b.tx.clone(), self.dir.clone(), self.name.clone());
-                crate::game::map::tiles::read(move || {
-                    let _ = tx.send((t, read(&dir, &name, t)));
-                });
+                crate::game::map::tiles::read_into(tx, t, None, move || read(&dir, &name, t));
                 self.tiles.insert(
                     t,
                     Tile {
@@ -469,5 +493,36 @@ impl Nav {
             .values()
             .filter(|t| t.state == State::Loading)
             .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// rev5-data 8: a bake whose header lists tiles that aren't there is
+    /// counted, for the warning at its open.
+    #[test]
+    #[ignore = "extended"]
+    fn the_tiles_a_bake_lacks_are_counted() {
+        let real = crate::game::harness::real_data("nav");
+        let dir = std::env::temp_dir().join(format!("wvs-nav-part-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = "AhnQirajTemple";
+        for f in [format!("{name}.map"), format!("{name}.build.json")] {
+            let _ = std::fs::copy(real.join(&f), dir.join(&f));
+        }
+        let whole = PathfindMap::new(&real, name).unwrap();
+        let (listed, missing) = missing_tiles(&whole, &real, name);
+        assert!(listed > 2, "{listed}");
+        assert_eq!(missing, 0, "the whole bake");
+        // Two tiles of it.
+        for (x, y) in [(26, 46), (26, 47)] {
+            let f = format!("{name}_{x}_{y}.nav");
+            std::fs::copy(real.join(&f), dir.join(&f)).unwrap();
+        }
+        let part = PathfindMap::new(&dir, name).unwrap();
+        assert_eq!(missing_tiles(&part, &dir, name), (listed, listed - 2));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

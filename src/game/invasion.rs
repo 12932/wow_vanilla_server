@@ -353,10 +353,9 @@ fn mouth(realm: &Realm, z: Zone, arrive: bool) {
     handle.call(move |m| {
         if arrive {
             let data = m.realm.data.clone();
-            let counter = m.next_creature_counter;
-            m.next_creature_counter += 1;
+            let counter = m.creature_counter();
             let spawn = crate::game::data::CreatureSpawn {
-                guid: counter | 0x80_0000,
+                guid: counter,
                 entries: vec![MOUTH],
                 map: z.map,
                 x: z.mouth.0,
@@ -410,10 +409,9 @@ pub fn creature_died(map: &mut Map, entry: u32, at: Vector3d) {
     match entry {
         NECROTIC_SHARD => {
             let data = realm.data.clone();
-            let counter = map.next_creature_counter;
-            map.next_creature_counter += 1;
+            let counter = map.creature_counter();
             let spawn = crate::game::data::CreatureSpawn {
-                guid: counter | 0x80_0000,
+                guid: counter,
                 entries: vec![DAMAGED_SHARD],
                 map: map.key.map,
                 x: at.x,

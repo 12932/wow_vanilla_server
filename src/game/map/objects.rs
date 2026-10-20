@@ -347,12 +347,11 @@ fn spawn_object(
     at: Vector3d,
     orientation: f32,
 ) -> Guid {
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         t,
         &GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry: t.entry,
             map: map.key.map,
             x: at.x,

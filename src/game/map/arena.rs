@@ -63,6 +63,18 @@ const BOOTY_RUN_TEXT: u32 = 9730;
 pub const SPELL_RING_BURN: u32 = 20019;
 const TICK: Duration = Duration::from_secs(1);
 pub const KIND_ARENA: &str = "arena";
+/// The most `[arena]`'s minutes (and `.arena start`'s) may be: a week.
+pub const MAX_MINUTES: u64 = 7 * 24 * 60;
+/// The most its seconds may be: an hour.
+pub const MAX_SECS: u64 = 3600;
+
+/// `now` and `d` later, or as late as an `Instant` goes: a time from the
+/// config or a GM's command is never a panic.
+fn later(now: Instant, d: Duration) -> Instant {
+    now.checked_add(d)
+        .or_else(|| now.checked_add(Duration::from_secs(u32::MAX.into())))
+        .unwrap_or(now)
+}
 
 /// `[arena]` in the config.
 pub use crate::config::ArenaConfig;
@@ -116,7 +128,8 @@ pub struct Battle {
     pub ring: f32,
     pub(crate) ring_steps: u32,
     pub(crate) next_shrink: Option<Instant>,
-    cap_at: Instant,
+    /// When the ring is at its smallest and burns its hardest.
+    pub(crate) cap_at: Instant,
     announced: u64,
     roll_call_at: Instant,
     started_unix: i64,
@@ -331,7 +344,8 @@ pub fn command(map: &mut Map, g: Guid, args: &[&str]) -> String {
             let countdown = args
                 .get(1)
                 .and_then(|a| a.parse().ok())
-                .unwrap_or(config.countdown_secs);
+                .unwrap_or(config.countdown_secs)
+                .min(MAX_SECS);
             let minutes = args
                 .get(2)
                 .and_then(|a| a.parse().ok())
@@ -460,21 +474,23 @@ pub fn start(map: &mut Map, countdown_secs: u64, max_minutes: u64) -> Result<usi
         .map(|(i, f)| (f.guid, i))
         .collect();
     let n = fighters.len();
+    // A GM's numbers are held to the config's ranges.
+    let countdown_secs = countdown_secs.min(MAX_SECS);
+    let max_minutes = max_minutes.clamp(1, MAX_MINUTES);
     let countdown = Duration::from_secs(countdown_secs);
+    let fight_at = later(now, countdown);
     map.arena.battle = Some(Battle {
         id: now_unix().max(1) as u64,
-        phase: Phase::Countdown {
-            fight_at: now + countdown,
-        },
+        phase: Phase::Countdown { fight_at },
         fighters,
         by_guid,
         alive: n as u32,
         ring: PIT_RADIUS,
         ring_steps: 0,
         next_shrink: None,
-        cap_at: now + countdown + Duration::from_secs(max_minutes.max(1) * 60),
+        cap_at: later(fight_at, Duration::from_secs(max_minutes * 60)),
         announced: countdown_secs + 1,
-        roll_call_at: now + countdown + Duration::from_secs(map.cfg.arena.roll_call_secs),
+        roll_call_at: later(fight_at, Duration::from_secs(map.cfg.arena.roll_call_secs)),
         started_unix: now_unix(),
     });
     map.arena.raising = false;
@@ -587,12 +603,12 @@ fn schedule(map: &mut Map) {
         return;
     }
     let now = map.now;
-    let every = Duration::from_secs(config.every_minutes * 60);
-    let due = *map.arena.next_scheduled.get_or_insert(now + every);
+    let every = Duration::from_secs(config.every_minutes.min(MAX_MINUTES) * 60);
+    let due = *map.arena.next_scheduled.get_or_insert(later(now, every));
     if now < due || map.arena.battle.is_some() {
         return;
     }
-    map.arena.next_scheduled = Some(now + every);
+    map.arena.next_scheduled = Some(later(now, every));
     if start(map, config.countdown_secs, config.max_minutes).is_err() {
         yell(
             map,
@@ -626,7 +642,7 @@ fn countdown(map: &mut Map) {
     }
     b.phase = Phase::Fight { since: now };
     let config = map.cfg.arena.clone();
-    b.next_shrink = Some(now + Duration::from_secs(config.ring_after_secs));
+    b.next_shrink = Some(later(now, Duration::from_secs(config.ring_after_secs)));
     b.roll_call_at = now + Duration::from_secs(map.cfg.arena.roll_call_secs);
     // Everyone starts whole.
     let ids: Vec<Guid> = b

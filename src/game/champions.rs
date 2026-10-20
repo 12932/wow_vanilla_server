@@ -550,10 +550,9 @@ fn arrive(map: &mut Map, who: Champion, city: u32, near: Vector3d, foe: Guid) {
             .map_or(0.0, |p| (p.y - start.y).atan2(p.x - start.x))
     };
     let made = spawn.and_then(|spawn| {
-        let counter = map.next_creature_counter;
-        map.next_creature_counter += 1;
+        let counter = map.creature_counter();
         let s = crate::game::data::CreatureSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             map: map.key.map,
             x: start.x,
             y: start.y,

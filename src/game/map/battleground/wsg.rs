@@ -129,12 +129,11 @@ fn spawn_flag(map: &mut Map, s: usize, dropped: Option<Vector3d>) -> Guid {
         Some(at) => (at.x, at.y, at.z, 0.0),
         None => FLAG_AT[s],
     };
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         &template,
         &GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry,
             map: map.key.map,
             x,

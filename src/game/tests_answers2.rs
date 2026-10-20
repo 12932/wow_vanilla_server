@@ -182,6 +182,40 @@ async fn a_second_login_takes_the_character_over_where_they_are() {
     }
 }
 
+/// rev5-net 8: what the old client sent, reaching the map after the second
+/// login took the player over, doesn't act on them (as a stale disconnect
+/// doesn't): a packet, or a raw one, from the old session is dropped; the
+/// new session's are the player's.
+#[tokio::test]
+async fn the_old_clients_packets_after_a_takeover_dont_act() {
+    use crate::game::map::MapEvent;
+    use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
+    let realm = harness::realm_with(takeover_data());
+    let mut a = Client::connect(&realm, "TAKEN");
+    let g = a.enter("Takenover", Race::Human, Class::Warrior).await;
+    let keeper = guid::unit(KEEPER, 935);
+    let map = map_of(&realm, g);
+    let old = realm.registry.online(g).expect("online").session.clone();
+    let mut b = Client::connect(&realm, "TAKEN");
+    b.login(g).await;
+    b.wait_for("their own create", |m| created_player(m, g))
+        .await;
+    let new = realm.registry.online(g).expect("online").session.clone();
+    assert!(!new.same_channel(&old), "taken over");
+    let select = move |from| {
+        MapEvent::Packet(
+            g,
+            ClientOpcodeMessage::CMSG_SET_SELECTION(CMSG_SET_SELECTION { target: keeper }),
+            from,
+        )
+    };
+    let target = move |m: &mut Map| m.players[&g].fields.get_guid(UNIT_FIELD_TARGET);
+    assert!(map.send(select(old.clone())));
+    assert_eq!(on(&map, target).await, Guid::zero(), "the old client's");
+    assert!(map.send(select(new)));
+    assert_eq!(on(&map, target).await, keeper, "the new client's");
+}
+
 /// A login of another of the account's characters, while one is in the
 /// world, is refused, and the one in the world goes (saved), so the next
 /// try gets in: as before (mangos refuses a second character too).

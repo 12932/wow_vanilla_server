@@ -260,6 +260,58 @@ async fn too_few_fighters_make_no_battle() {
     );
 }
 
+/// rev5-data 10: a GM's huge countdown or length is held to the config's
+/// ranges, where `now + countdown` panicked the command.
+#[tokio::test]
+async fn a_huge_countdown_or_length_is_held_to_its_range() {
+    let realm = harness::realm_with(data());
+    let (mut a, _alice) = fighter(&realm, "Alice", 0.0).await;
+    let (_b, _bob) = fighter(&realm, "Bob", 3.0).await;
+    a.say(".arena start 18446744073709551615 18446744073709551615")
+        .await;
+    let on = a.system_message("The battle is on").await;
+    assert!(on.contains("3600 s to the fight"), "{on}");
+    let map = arena_map(&realm);
+    let (fight_in, cap_in) = map
+        .query(|m| {
+            let b = m.arena.battle.as_ref().expect("a battle");
+            let arena::Phase::Countdown { fight_at } = b.phase else {
+                panic!("in its countdown");
+            };
+            (fight_at - m.now, b.cap_at - m.now)
+        })
+        .await
+        .expect("the map");
+    let hour = Duration::from_secs(arena::MAX_SECS);
+    assert!(
+        fight_in <= hour && fight_in > hour - Duration::from_secs(10),
+        "{fight_in:?}"
+    );
+    assert_eq!(
+        cap_in - fight_in,
+        Duration::from_secs(arena::MAX_MINUTES * 60)
+    );
+}
+
+/// rev5-data 10: `[arena]`'s times have ranges, so a typo can't panic the
+/// arena's step every update.
+#[test]
+fn the_arenas_times_are_clamped() {
+    let l = crate::config::resolve(
+        "[arena]\nevery_minutes = 300000000000000000\ncountdown_secs = 99999999\n\
+         ring_after_secs = 99999999\nmax_minutes = 300000000000000000\n",
+        "t",
+        &[],
+    )
+    .unwrap();
+    let a = &l.config.arena;
+    assert_eq!(a.every_minutes, arena::MAX_MINUTES);
+    assert_eq!(a.max_minutes, arena::MAX_MINUTES);
+    assert_eq!(a.countdown_secs, arena::MAX_SECS);
+    assert_eq!(a.ring_after_secs, arena::MAX_SECS);
+    assert_eq!(l.warnings.len(), 4, "{:?}", l.warnings);
+}
+
 #[tokio::test]
 async fn the_booty_runs_chest_falls_with_its_event_and_not_before() {
     let mut d = data();

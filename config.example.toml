@@ -796,15 +796,15 @@ orientation = 0.0
 [arena]
 
 # Minutes between scheduled battles; 0 for only those a GM starts.
-# Default 0. Changes at a reload.
+# Default 0. Range 0 to 10080, clamped. Changes at a reload.
 every_minutes = 0
 
 # Seconds of countdown before a battle.
-# Default 30. Changes at a reload.
+# Default 30. Range 0 to 3600, clamped. Changes at a reload.
 countdown_secs = 30
 
 # Seconds into the fight the ring of fire starts closing.
-# Default 120. Changes at a reload.
+# Default 120. Range 0 to 3600, clamped. Changes at a reload.
 ring_after_secs = 120
 
 # Seconds between the ring's steps.
@@ -821,7 +821,7 @@ ring_min_yards = 6.0
 
 # The longest a battle runs: then the ring is at its smallest and
 # burns its hardest.
-# Default 20. Changes at a reload.
+# Default 20. Range 0 to 10080, clamped. Changes at a reload.
 max_minutes = 20
 
 # The champion's prize in copper.

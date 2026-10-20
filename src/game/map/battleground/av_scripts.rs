@@ -385,12 +385,11 @@ fn summon(map: &mut Map, entry: u32, at: (f32, f32, f32, f32)) -> Option<Guid> {
 fn place(map: &mut Map, entry: u32, at: (f32, f32, f32, f32), faction: u32) -> Option<Guid> {
     let data = map.realm.data.clone();
     let t = data.gameobject_templates.get(&entry)?;
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = crate::game::map::gameobject::GameObject::from_spawn(
         t,
         &crate::game::data::GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry,
             map: map.key.map,
             x: at.0,
