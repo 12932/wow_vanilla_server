@@ -935,6 +935,8 @@ mod tests_p9_core_class;
 #[cfg(test)]
 mod tests_p9_core_class_real;
 #[cfg(test)]
+mod tests_p9_core_motion;
+#[cfg(test)]
 mod tests_p9_core_power;
 #[cfg(test)]
 mod tests_p9_core_scripts;
