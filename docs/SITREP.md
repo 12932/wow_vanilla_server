@@ -554,6 +554,16 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   once (vmangos's sniffs; Thistle Tea keeps them 5 s); the small coloured clusters send their colour's rockets
   (Thistle Tea; vmangos's guy sends nothing for them); a transform's weapons win over an event's own equipment
   (Thistle Tea; mangos puts the event's on).
+- **8h, entities, round 8:** a harmful spell's hostile act flags both sides and contests the caster, damage or
+  not (mangos's `CasterHitTargetWithSpell`, `SetInCombatWithVictim`); **the Ghost Magnet** calls its eight Magrami
+  Spectres for two minutes (vmangos); **the Lunar Festival's cheer speakers** run their cities' fireworks shows
+  (vmangos's `go_cheer_speaker`); target dummies take their summoner's side (in vmangos's data they are wild
+  summons) and a dragonling arrives at its full health; a rogue's open pockets shut as the creature dies (mangos's
+  `Loot::~Loot`). **Merged with 8j:** both had ported the firework guys and target dummies; 8j's fireworks were kept
+  (rockets go off at once, vmangos's sniffs; Omen's launcher), and both dummy paths (as a guardian, 8i; as a wild
+  summon, 8h). **My calls:** the Ghost Magnet, fireworks and speakers follow vmangos (mangos-classic's magnet is one
+  spectre every 15 s); an owned trap springs on a flagged enemy though its owner isn't flagged (mangos); items held in
+  an open pickpocket window are lost at the creature's death (mangos).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
