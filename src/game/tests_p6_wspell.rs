@@ -267,9 +267,9 @@ async fn a_harmful_chain_jumps_to_the_nearest_seen_in_sight_of_the_last() {
 
 /// A healing chain jumps only to a friend who is hurt: the last one's
 /// group first, then the most hurt by health (not by its share), then the
-/// nearest; it may come back to its hurt caster, but no further than ten
-/// yards (Thistle Tea's `ChainTargets` healing priority; mangos's
-/// `ChainHealingOrder`).
+/// nearest; it may come back to its hurt caster, but no further than a
+/// heal's jump, 12.5 yards (Thistle Tea's `ChainTargets` healing priority;
+/// mangos's `ChainHealingOrder`; the 12.5 your call, mangos's is 10).
 #[tokio::test]
 async fn a_healing_chain_jumps_to_the_most_hurt_of_the_last_ones_group_first() {
     let realm = fast_realm(data);
@@ -334,7 +334,7 @@ async fn a_healing_chain_jumps_to_the_most_hurt_of_the_last_ones_group_first() {
         .query(move |m| {
             let first = unit_at(m, a, FRIEND, 9.0, 0.0);
             hurt(m, first, 1000, 10);
-            let distant = unit_at(m, a, FRIEND, 20.0, 0.0);
+            let distant = unit_at(m, a, FRIEND, 22.0, 0.0);
             hurt(m, distant, 3000, 1000);
             hurt(m, a, 2000, 500);
             assert!(cast_fresh(m, a, CHAIN_HEAL, at(first)));
