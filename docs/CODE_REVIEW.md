@@ -16,6 +16,10 @@ crafted flight route corrupting others' packet streams, a writer outliving its c
 the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
 missing world data). None fixed yet; waiting on your choice.
 
+- **#6** fixed: the start refuses data that was looked for and doesn't load (missing, an LFS pointer, unreadable, no
+  creatures, spells, areas or skill lines), and no data at all over a store with characters (`game::world_data`); a
+  skill the data gives no slot is saved as it was loaded (`skills::saved`).
+
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
   - **saves apart:** a trade, mail sent or taken, an auction, a charter or emblem bought were each saved on both

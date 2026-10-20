@@ -100,9 +100,9 @@ async fn async_main(start: Start) -> u8 {
         ))
     };
     // The world returns once it has saved everyone after a shutdown signal.
-    crate::game::run(users).await;
+    let code = crate::game::run(users).await;
     auth_server.abort();
-    0
+    code
 }
 
 /// The log's filter: `RUST_LOG` if it is set and reads, else `default`.

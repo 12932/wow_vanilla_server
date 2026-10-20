@@ -12,7 +12,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox |
 | 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue |
 | 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live |
-| 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
+| 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in **Fixed.** |
 | 7 | medium | maps | One panic in a map's shutdown loses the saves of every player on it |
 | 8 | medium | combat | A panic inside a death leaves its victim unkillable at no health |
 | 9 | medium | combat | Triggered spells recurse without a bound (a spell that triggers itself aborts the server) |

@@ -955,6 +955,8 @@ mod tests_review3;
 #[cfg(test)]
 mod tests_review4;
 #[cfg(test)]
+mod tests_review5_data;
+#[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
 mod tests_rules;
@@ -1373,9 +1375,40 @@ impl Realm {
     }
 }
 
+/// The world's data for a start over a store with `characters`, or why
+/// the server mustn't start on it. Data looked for (`[world] data_dir`, or
+/// `data/db` there) must load whole; with none looked for, the empty world
+/// is only for a store with no characters (a bare checkout). A character
+/// who logs in on a world without its data is saved without what the data
+/// gives them, their skills first, for good.
+pub fn world_data(dir: Option<&std::path::Path>, characters: usize) -> Result<GameData, String> {
+    match dir {
+        Some(dir) => data::load::load_checked(dir).map_err(|e| {
+            format!(
+                "the world's data won't load: {e}. Not starting: a character who logged in \
+                 would be saved without their skills. Fix it, or point [world] data_dir at \
+                 the data"
+            )
+        }),
+        None if characters > 0 => Err(format!(
+            "no world data (no {} and no [world] data_dir), and the store has {characters} \
+             characters. Not starting: a character who logged in would be saved without \
+             their skills. Put vmangos.sqlite and dbc.sqlite in {0}, or set [world] data_dir",
+            crate::config::DEFAULT_DATA_DIR
+        )),
+        None => {
+            warn!(
+                "no world data: the world is empty. Put vmangos.sqlite and dbc.sqlite in {}, or set [world] data_dir",
+                crate::config::DEFAULT_DATA_DIR
+            );
+            Ok(GameData::empty())
+        }
+    }
+}
+
 /// Run the world server on port 8085 until a shutdown signal, then save
-/// everyone and return.
-pub async fn run(users: crate::auth::UserCache) {
+/// everyone and return the process's exit code: 2 if it can't start.
+pub async fn run(users: crate::auth::UserCache) -> u8 {
     let cfg = crate::config::config();
     let (store, startup) = Store::open(&cfg.world.characters_db).unwrap_or_else(|e| {
         panic!(
@@ -1383,14 +1416,11 @@ pub async fn run(users: crate::auth::UserCache) {
             cfg.world.characters_db.display()
         )
     });
-    let data = match &cfg.world.data_dir {
-        Some(dir) => data::load::load(dir),
-        None => {
-            warn!(
-                "no world data: the world is empty. Put vmangos.sqlite and dbc.sqlite in {}, or set [world] data_dir",
-                crate::config::DEFAULT_DATA_DIR
-            );
-            GameData::empty()
+    let data = match world_data(cfg.world.data_dir.as_deref(), startup.names.len()) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::error!("{e}");
+            return 2;
         }
     };
     let realm = Realm::new(
@@ -1447,6 +1477,7 @@ pub async fn run(users: crate::auth::UserCache) {
     info!("shutting down: saving everyone");
     realm.shutdown().await;
     info!("saved; exiting");
+    0
 }
 
 /// Tracy's plots of the realm, once a second while Tracy is on: who is

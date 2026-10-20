@@ -128,6 +128,62 @@ fn open(path: &Path) -> Option<Connection> {
     .ok()
 }
 
+/// Why the database at `path` can't be read, if it can't: missing, a Git
+/// LFS pointer, or not a database SQLite opens and reads.
+fn unreadable(path: &Path) -> Option<String> {
+    if !path.is_file() {
+        return Some(format!("{} is missing", path.display()));
+    }
+    if lfs_pointer(path) {
+        return Some(format!(
+            "{} is a Git LFS pointer: run `git lfs pull`",
+            path.display()
+        ));
+    }
+    // SQLite opens anything; it is the first read that finds out.
+    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|c| {
+            c.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
+        .err()
+        .map(|e| format!("{} doesn't read: {e}", path.display()))
+}
+
+/// [`load`], for a start: an error, not the empty world, when a database
+/// is missing or won't read, or what it gave has no creatures, spells,
+/// areas or skill lines (tables that didn't read). A character who logs in
+/// on such a world is saved without what it would give them: their skills
+/// (mangos-classic ends its start on a missing DBC, `DBCStores.cpp`).
+pub fn load_checked(dir: &Path) -> Result<GameData, String> {
+    let broken: Vec<String> = ["vmangos.sqlite", "dbc.sqlite"]
+        .iter()
+        .filter_map(|name| unreadable(&dir.join(name)))
+        .collect();
+    if !broken.is_empty() {
+        return Err(broken.join("; "));
+    }
+    let data = load(dir);
+    let none: Vec<&str> = [
+        ("creature templates", data.creature_templates.is_empty()),
+        ("spells", data.spells.spells.is_empty()),
+        ("areas", data.areas.is_empty()),
+        ("skill lines", data.spells.skill_abilities.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(what, none)| none.then_some(what))
+    .collect();
+    if !none.is_empty() {
+        return Err(format!(
+            "the game data in {} has no {} (see the warnings above)",
+            dir.display(),
+            none.join(", ")
+        ));
+    }
+    Ok(data)
+}
+
 /// Every row of `sql`, through `f`.
 pub(super) fn rows<T>(conn: &Connection, sql: &str, mut f: impl FnMut(&Cols) -> T) -> Vec<T> {
     let mut stmt = match conn.prepare(sql) {

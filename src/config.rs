@@ -205,8 +205,9 @@ settings! {
         /// The character store (with the accounts in it).
         characters_db: PathBuf = PathBuf::from("characters.sqlite"), Any, Restart, "";
         /// The directory with `vmangos.sqlite` and `dbc.sqlite`, as Thistle
-        /// Tea exports them; `data/db` if unset and there. Without it the
-        /// world is empty.
+        /// Tea exports them; `data/db` if unset and there. The server won't
+        /// start on data that is missing or doesn't load; without any, the
+        /// world is empty, and only for a store with no characters.
         data_dir: Option<PathBuf> = None, Any, Restart, "DataDir";
         /// A rustigator bake, the directory with `Azeroth.map`; `data/nav`
         /// if unset and there. Without it creatures walk straight lines and

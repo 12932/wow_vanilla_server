@@ -55,7 +55,7 @@ the checkout looks in the checkout's `data/`):
 
 | Directory | Holds | Without it |
 |---|---|---|
-| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export). They ship with the repository, in Git LFS: install it before cloning, or run `git lfs pull` after (the server says so if they are LFS pointers) | the world is empty: no creatures, objects, spells or quests |
+| `data/db` | `vmangos.sqlite` and `dbc.sqlite`, vmangos's database and the client's DBCs as SQLite (Thistle Tea's export). They ship with the repository, in Git LFS: install it before cloning, or run `git lfs pull` after (the server says so if they are LFS pointers, and won't start) | the world is empty: no creatures, objects, spells or quests. The server won't start without it once the store has characters: a character who logged in would be saved without their skills |
 | `data/nav` | the navmesh, a rustigator bake (`Azeroth.map` and the rest), made by the setup from your client | creatures walk straight lines |
 | `data/terrain` | the terrain tiles (`MMMMRRCC.map`, as mangos-zero's extractor writes them), made by the setup from your client | liquids outside WMOs have no kind (the deep sea doesn't tire swimmers, lava doesn't burn) |
 

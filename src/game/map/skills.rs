@@ -160,8 +160,12 @@ pub fn set_value(p: &mut Player, skill: u32, value: u32) {
     }
 }
 
-/// Forget a skill: its slot is cleared.
+/// Forget a skill: its slot is cleared, and its value as loaded too, so
+/// that [`saved`] doesn't keep it.
 pub fn forget_skill(p: &mut Player, skill: u32) {
+    if let Some(saved) = &mut p.row.state.skills {
+        saved.retain(|(s, _)| *s != skill);
+    }
     if let Some(slot) = slot_of(p, skill) {
         let base = PLAYER_SKILL_INFO_1_1 + slot * 3;
         p.fields.set_u32(base, 0);
@@ -198,12 +202,20 @@ pub fn init(p: &mut Player, data: &GameData) {
     }
 }
 
-/// Every skill's value, to save.
+/// Every skill's value, to save: those with a slot, and those loaded that
+/// have none (the data didn't give their slot: a world missing its data,
+/// a spell it doesn't know), kept as they were rather than dropped, as
+/// mangos keeps `character_skills` apart from the spells.
 pub fn saved(p: &Player) -> Vec<(u32, u32)> {
-    known(p)
-        .into_iter()
-        .filter_map(|s| value(p, s).map(|v| (s, v)))
-        .collect()
+    let known = known(p);
+    let mut out: Vec<(u32, u32)> = known
+        .iter()
+        .filter_map(|&s| value(p, s).map(|v| (s, v)))
+        .collect();
+    if let Some(loaded) = &p.row.state.skills {
+        out.extend(loaded.iter().filter(|(s, _)| !known.contains(s)).copied());
+    }
+    out
 }
 
 /// The level's skills at their caps: the weapon skills, Defense, and the
