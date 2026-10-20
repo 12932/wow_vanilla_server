@@ -202,7 +202,7 @@ pub(crate) fn in_cone(map: &Map, caster: Guid, g: Guid, degrees: i32) -> bool {
 
 /// The point an effect's area is at: about the caster (or the unit it is
 /// about), or at the destination.
-fn center(map: &Map, caster: Guid, t: &Targets, at_dest: bool) -> Vector3d {
+pub(crate) fn center(map: &Map, caster: Guid, t: &Targets, at_dest: bool) -> Vector3d {
     let caster_at = map
         .position_of(t.origin.unwrap_or(caster))
         .unwrap_or(Vector3d {
