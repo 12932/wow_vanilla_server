@@ -78,12 +78,18 @@ pub struct Mail {
 
 #[derive(Debug, Default)]
 pub struct Mails {
+    /// Every mail, by id. Add, remove and send back through [`Mails::insert`],
+    /// [`Mails::remove`] and `send_back`, which keep `by_receiver`; nothing
+    /// else changes a mail's receiver.
     pub mails: AHashMap<u32, Mail>,
     /// Texts made into letters, by id.
     pub texts: AHashMap<u32, String>,
     next_id: u32,
     /// Mails due and not yet announced to their receiver.
     pending: Vec<u32>,
+    /// Each receiver's mail ids (R4-44): a mailbox, its count and the next
+    /// mail time look through their receiver's mail, not the realm's.
+    by_receiver: AHashMap<u32, Vec<u32>>,
 }
 
 impl Mails {
@@ -94,7 +100,7 @@ impl Mails {
                 KIND_MAIL => match serde_json::from_str::<Mail>(data) {
                     Ok(mail) => {
                         m.next_id = m.next_id.max(mail.id);
-                        m.mails.insert(mail.id, mail);
+                        m.insert(mail);
                     }
                     Err(e) => tracing::warn!("a mail record doesn't read: {e}"),
                 },
@@ -124,11 +130,46 @@ impl Mails {
         self.next_id
     }
 
+    /// A mail in, or over the one of its id.
+    pub fn insert(&mut self, m: Mail) {
+        let (id, receiver) = (m.id, m.receiver);
+        if let Some(old) = self.mails.insert(id, m) {
+            if old.receiver == receiver {
+                return;
+            }
+            self.unindex(old.receiver, id);
+        }
+        self.by_receiver.entry(receiver).or_default().push(id);
+    }
+
+    /// A mail out.
+    pub fn remove(&mut self, id: u32) -> Option<Mail> {
+        let m = self.mails.remove(&id)?;
+        self.unindex(m.receiver, id);
+        Some(m)
+    }
+
+    fn unindex(&mut self, receiver: u32, id: u32) {
+        if let Some(ids) = self.by_receiver.get_mut(&receiver) {
+            ids.retain(|x| *x != id);
+            if ids.is_empty() {
+                self.by_receiver.remove(&receiver);
+            }
+        }
+    }
+
+    /// The ids of the mail for `receiver`, delivered or not.
+    pub fn ids_of(&self, receiver: u32) -> &[u32] {
+        self.by_receiver.get(&receiver).map_or(&[], Vec::as_slice)
+    }
+
+    /// The mail delivered to `receiver`, newest first.
     fn of(&self, receiver: u32, now: i64) -> Vec<&Mail> {
         let mut v: Vec<&Mail> = self
-            .mails
-            .values()
-            .filter(|m| m.receiver == receiver && m.deliver_at <= now)
+            .ids_of(receiver)
+            .iter()
+            .filter_map(|id| self.mails.get(id))
+            .filter(|m| m.deliver_at <= now)
             .collect();
         v.sort_by_key(|m| std::cmp::Reverse(m.deliver_at));
         v
@@ -195,7 +236,7 @@ pub fn post_in(realm: &Realm, mails: &mut Mails, mut m: Mail, records: &mut Reco
     if !due {
         mails.pending.push(id);
     }
-    mails.mails.insert(id, m);
+    mails.insert(m);
     if due {
         send_to(realm, receiver, &SMSG_RECEIVED_MAIL { unknown1: 0 });
     }
@@ -410,10 +451,8 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         .social
         .mail
         .lock()
-        .mails
-        .values()
-        .filter(|x| x.receiver == guid::counter(to.guid))
-        .count()
+        .ids_of(guid::counter(to.guid))
+        .len()
         >= MAX_MAILS;
     if full {
         fail(map, Two::ErrRecipientCapReached);
@@ -617,31 +656,32 @@ pub fn mark_read(map: &Map, g: Guid, id: u32) {
 }
 
 /// Send a mail back: to its sender, now, for 30 days.
-fn send_back(realm: &Realm, m: &mut Mail) {
+fn send_back(realm: &Realm, mails: &mut Mails, id: u32) {
+    let Some(mut m) = mails.remove(id) else {
+        return;
+    };
     std::mem::swap(&mut m.sender, &mut m.receiver);
     m.flags = RETURNED;
     m.cod = 0;
     m.deliver_at = now();
     m.expires_at = m.deliver_at + 30 * DAY;
-    save(realm, m);
-    send_to(
-        realm,
-        guid::player(m.receiver),
-        &SMSG_RECEIVED_MAIL { unknown1: 0 },
-    );
+    save(realm, &m);
+    let receiver = guid::player(m.receiver);
+    mails.insert(m);
+    send_to(realm, receiver, &SMSG_RECEIVED_MAIL { unknown1: 0 });
 }
 
 /// `CMSG_MAIL_RETURN_TO_SENDER`: a player's mail goes back.
 pub fn return_to_sender(map: &Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
-    let returned = with_mail(map, g, id, |m| {
-        if m.kind != NORMAL || m.flags & RETURNED != 0 {
-            return false;
-        }
-        send_back(&realm, m);
-        true
-    });
-    if returned == Some(true) {
+    let mut mails = realm.social.mail.lock();
+    let returned =
+        own_mail(&mut mails, g, id).is_some_and(|m| m.kind == NORMAL && m.flags & RETURNED == 0);
+    if returned {
+        send_back(&realm, &mut mails, id);
+    }
+    drop(mails);
+    if returned {
         result(
             map,
             g,
@@ -660,7 +700,7 @@ pub fn delete(map: &Map, g: Guid, id: u32) {
         .get(&id)
         .is_some_and(|m| m.receiver == guid::counter(g))
     {
-        mails.mails.remove(&id);
+        mails.remove(id);
         realm.store.delete_record(KIND_MAIL, u64::from(id));
         drop(mails);
         result(
@@ -786,14 +826,14 @@ pub fn sweep(realm: &Realm) {
     }
     for id in expired {
         let mut mails = realm.social.mail.lock();
-        let Some(m) = mails.mails.get_mut(&id) else {
+        let Some(m) = mails.mails.get(&id) else {
             continue;
         };
         let keeps = m.item.is_some() || m.money > 0;
         if m.kind == NORMAL && m.flags & RETURNED == 0 && keeps {
-            send_back(realm, m);
+            send_back(realm, &mut mails, id);
         } else {
-            mails.mails.remove(&id);
+            mails.remove(id);
             realm.store.delete_record(KIND_MAIL, u64::from(id));
         }
     }
@@ -802,24 +842,19 @@ pub fn sweep(realm: &Realm) {
 /// A character deleted: the mail waiting for them goes.
 pub fn character_deleted(realm: &Realm, counter: u32) {
     let mut mails = realm.social.mail.lock();
-    let gone: Vec<u32> = mails
-        .mails
-        .values()
-        .filter(|m| m.receiver == counter)
-        .map(|m| m.id)
-        .collect();
+    let gone: Vec<u32> = mails.ids_of(counter).to_vec();
     for id in gone {
-        let Some(mut m) = mails.mails.remove(&id) else {
+        let Some(m) = mails.mails.get_mut(&id) else {
             continue;
         };
         // An item sent cash on delivery goes back to its sender (Thistle
         // Tea's `Mail.forfeit`); the rest goes with the character.
         if m.cod > 0 && m.item.is_some() && m.kind == NORMAL && m.sender != counter {
             m.money = 0;
-            send_back(realm, &mut m);
-            mails.mails.insert(id, m);
+            send_back(realm, &mut mails, id);
             continue;
         }
+        mails.remove(id);
         realm.store.delete_record(KIND_MAIL, u64::from(id));
     }
 }

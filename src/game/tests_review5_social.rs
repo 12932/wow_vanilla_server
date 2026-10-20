@@ -259,6 +259,101 @@ async fn a_refund_taken_as_its_post_is_written_is_had_once_after_a_restart() {
     assert_eq!((bob, kept), (5000, 0), "the refund is had once");
 }
 
+/// The next mail time's answer: 0 with mail unread, a day back without.
+async fn next_mail(c: &mut Client) -> f32 {
+    let f = c
+        .wait_frame("MSG_QUERY_NEXT_MAIL_TIME", 0x284, |_| true)
+        .await;
+    f32::from_le_bytes(f[..4].try_into().unwrap())
+}
+
+/// rev5-social 5 (review 5's #15, R4-44): `MSG_QUERY_NEXT_MAIL_TIME`, a
+/// query a client may send 1,000 times a second, scanned every mail in the
+/// realm under its lock: 1,000 of them over 100,000 mails took 1.51 s of
+/// the map's thread in a test build. The mail is indexed by receiver.
+#[tokio::test]
+async fn the_next_mail_time_looks_through_ones_own_mail_alone() {
+    let realm = harness::realm();
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let now = mail::now();
+    {
+        let mut mails = realm.social.mail.lock();
+        for i in 0..100_000u32 {
+            let id = mails.next_id();
+            mails.insert(Mail {
+                id,
+                kind: mail::NORMAL,
+                sender: 1,
+                receiver: 10_000 + i % 5_000,
+                subject: "hello".into(),
+                deliver_at: now,
+                expires_at: now + 30 * DAY,
+                ..Default::default()
+            });
+        }
+    }
+    let unread = |realm: &Arc<Realm>| {
+        let map0 = realm.maps.get(realm, MapKey::world(0));
+        async move {
+            map0.query(move |m| {
+                let t = Instant::now();
+                for _ in 0..1000 {
+                    mail::next_mail_time(m, gb);
+                }
+                t.elapsed()
+            })
+            .await
+            .expect("the map answers")
+        }
+    };
+    let took = unread(&realm).await;
+    eprintln!("1,000 MSG_QUERY_NEXT_MAIL_TIME over 100,000 mails: {took:?}");
+    assert!(took < Duration::from_millis(200), "{took:?}");
+    assert_eq!(next_mail(&mut b).await, -86_400.0, "no mail for Bob");
+
+    // Bob's own mail is found, and goes with a return to its sender.
+    let id = mail::post(
+        &realm,
+        Mail {
+            kind: mail::NORMAL,
+            sender: 10_001,
+            receiver: guid::counter(gb),
+            subject: "yours".into(),
+            deliver_at: now,
+            expires_at: now + 30 * DAY,
+            ..Default::default()
+        },
+    );
+    b.clear();
+    b.send(MSG_QUERY_NEXT_MAIL_TIME_Client {}).await;
+    assert_eq!(next_mail(&mut b).await, 0.0, "Bob has unread mail");
+    b.send(CMSG_MAIL_RETURN_TO_SENDER {
+        mailbox_id: Guid::zero(),
+        mail_id: id,
+    })
+    .await;
+    b.wait_for("the mail returned", |m| match m {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => matches!(
+            r.action,
+            SMSG_SEND_MAIL_RESULT_MailAction::ReturnedToSender { .. }
+        )
+        .then_some(()),
+        _ => None,
+    })
+    .await;
+    let (_, listed) = mail_list(&mut b).await;
+    assert!(listed.is_empty(), "returned, it is not Bob's");
+    let mails = realm.social.mail.lock();
+    assert_eq!(mails.mails[&id].receiver, 10_001);
+    assert!(mails.ids_of(guid::counter(gb)).is_empty());
+    assert_eq!(
+        mails.ids_of(10_001).len(),
+        21,
+        "the sender's 20 and the one returned"
+    );
+}
+
 /// rev5-social 4: a player queued alone at a meeting stone who logged out
 /// stayed queued; as the longest waiting they led, and every sweep handed
 /// the others to them, offline, and grouped none. A logout leaves the
