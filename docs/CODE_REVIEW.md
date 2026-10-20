@@ -10,6 +10,12 @@ are in [review/](review/):
 
 The review of 79b6def that this file held before predates the per-map rewrite, and is in the git history.
 
+## Review 5 (2026-10-20): open
+Six reviewers, by area: [review/review5.md](review/review5.md), its first table the 21 that matter most (6 high: a
+crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
+the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
+missing world data). None fixed yet; waiting on your choice.
+
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
   - **saves apart:** a trade, mail sent or taken, an auction, a charter or emblem bought were each saved on both
