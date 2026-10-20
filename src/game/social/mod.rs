@@ -19,7 +19,8 @@ use crate::game::registry::Online;
 
 #[derive(Default)]
 pub struct Social {
-    pub channels: Mutex<channels::Channels>,
+    /// A lock a channel, behind the directory's (`channels::Channels`).
+    pub channels: channels::Channels,
     pub groups: Mutex<groups::Groups>,
     pub lists: Mutex<friends::Lists>,
     pub guilds: Mutex<guilds::Guilds>,
@@ -87,6 +88,30 @@ pub fn send_to<M: wow_world_messages::vanilla::ServerMessage>(realm: &Realm, gui
 pub fn send_frame(realm: &Realm, guid: Guid, frame: &Arc<[u8]>) {
     if let Some(o) = realm.registry.online(guid) {
         o.outbound.send_frame(frame.clone());
+    }
+}
+
+/// The recipients [`send_frames`] looks up under one registry read: a
+/// login waits at most this many sends for the lock.
+const FAN_OUT_CHUNK: usize = 256;
+
+/// A frame for each of `guids` online: a channel's, a guild's or a group's
+/// line, sent with no service's lock held, the registry read once a
+/// [`FAN_OUT_CHUNK`].
+pub fn send_frames(realm: &Realm, guids: &[Guid], frame: &Arc<[u8]>) {
+    for chunk in guids.chunks(FAN_OUT_CHUNK) {
+        realm.registry.each_online(chunk, |o| {
+            o.outbound.send_frame(frame.clone());
+        });
+    }
+}
+
+/// `guids` less those ignoring `speaker`: the lists asked once, not once a
+/// recipient, and let go before the fan-out.
+pub fn not_ignoring(realm: &Realm, speaker: Guid, guids: &mut Vec<Guid>) {
+    let ignorers = realm.social.lists.lock().ignorers(speaker);
+    if !ignorers.is_empty() {
+        guids.retain(|g| !ignorers.contains(g));
     }
 }
 

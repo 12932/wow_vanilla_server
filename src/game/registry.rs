@@ -204,6 +204,20 @@ impl Registry {
         self.online.read().get(&guid).cloned()
     }
 
+    /// `f` for each of `guids` online, under one read lock: a fan-out's
+    /// lookups at once, not a lock and an `Arc` a recipient. `f` must not
+    /// reach the registry again (a read under a read, with a writer waiting
+    /// between them, would wait for good); keep `guids` short, as a login
+    /// waits for the lock.
+    pub fn each_online(&self, guids: &[Guid], mut f: impl FnMut(&Online)) {
+        let online = self.online.read();
+        for g in guids {
+            if let Some(o) = online.get(g) {
+                f(o);
+            }
+        }
+    }
+
     pub fn online_by_name(&self, name: &str) -> Option<Arc<Online>> {
         let guid = self.guid_by_name(name)?;
         self.online(guid)
