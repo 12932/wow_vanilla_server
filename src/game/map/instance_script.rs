@@ -435,6 +435,33 @@ pub fn settle_spawns(map: &mut Map) {
     }
 }
 
+/// An object come into the copy: a door of its script stands as its rule
+/// has the copy's data now, as the copy's doors do at its start, so one
+/// back after its rule flipped (a script took it away meanwhile) is as the
+/// rule says (mangos's `OnObjectCreate`: a ziggurat's door made once its
+/// boss is dead comes up open; Thistle Tea's reconciling of a spawned
+/// object). Another keeps the state it spawned in.
+pub fn object_added(map: &mut Map, object: Guid) {
+    let Some(s) = map.instance.script else {
+        return;
+    };
+    let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
+        return;
+    };
+    let Some((_, open)) = doors(s).iter().find(|(e, _)| *e == entry) else {
+        return;
+    };
+    let now = open.holds(&map.instance.data);
+    if open.holds(&BTreeMap::new()) != now {
+        let act = if now {
+            super::instance_adapters::Act::Open
+        } else {
+            super::instance_adapters::Act::Close
+        };
+        super::instance_adapters::operate_one(map, object, act);
+    }
+}
+
 /// The doors whose rule the data `before` and the data now disagree on,
 /// opened or shut to match it, as Thistle Tea's `Doors.changed` has it: a
 /// door is only worked when its rule flips, and keeps its own state else.

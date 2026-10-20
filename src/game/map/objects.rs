@@ -41,6 +41,8 @@ pub const EFFECT_TRANS_DOOR: u32 = 50;
 pub const EFFECT_SUMMON_OBJECT_WILD: u32 = 76;
 pub const EFFECT_SUMMON_PLAYER: u32 = 85;
 pub const EFFECT_ACTIVATE_OBJECT: u32 = 86;
+/// Onyxia's Eruption, which her lava fissures cast and which works them.
+pub const ERUPTION: u32 = 17731;
 pub const EFFECT_SUMMON_OBJECT_SLOT1: u32 = 104;
 pub const EFFECT_SUMMON_OBJECT_SLOT4: u32 = 107;
 
@@ -523,8 +525,23 @@ pub fn effect(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, t: &
             true
         }
         EFFECT_ACTIVATE_OBJECT => {
-            for o in object_targets(map, caster, s, t) {
-                activate(map, caster, o, e.misc_value.max(0) as u32);
+            let action = e.misc_value.max(0) as u32;
+            for o in object_targets(map, caster, s, index, t) {
+                // Onyxia's Eruption only shows its fissures erupting
+                // (mangos's `EffectActivateObject` for 17731): used, each
+                // would cast it again.
+                if s.id == ERUPTION && matches!(action, 5 | 8) {
+                    send(
+                        map,
+                        o,
+                        &SMSG_GAMEOBJECT_CUSTOM_ANIM {
+                            guid: o,
+                            animation_id: 0,
+                        },
+                    );
+                } else {
+                    activate(map, caster, o, action);
+                }
             }
             true
         }
@@ -643,8 +660,13 @@ pub fn cast_at(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<G
         .filter(|o| map.gameobject(*o).is_some())
         .into_iter()
         .collect();
-    if s.effects.iter().any(|e| e.effect == EFFECT_ACTIVATE_OBJECT) {
-        for o in object_targets(map, caster, s, t) {
+    for (i, _) in s
+        .effects
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.effect == EFFECT_ACTIVATE_OBJECT)
+    {
+        for o in object_targets(map, caster, s, i, t) {
             if !out.contains(&o) {
                 out.push(o);
             }
@@ -653,12 +675,39 @@ pub fn cast_at(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<G
     out
 }
 
-/// The objects a spell works on: the one aimed at, or the nearest its
-/// script targets name.
-fn object_targets(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<Guid> {
+/// The objects effect `index` of a spell works on: with an area of
+/// objects (51 about the source, 52 about the destination), every one its
+/// script targets name within the effect's radius (mangos's
+/// `TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_SRC_LOC` and `_DEST_LOC`);
+/// else the one aimed at, or the nearest they name.
+fn object_targets(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    t: &Targets,
+) -> Vec<Guid> {
     let named = |o: &GameObject| {
         crate::game::map::spells::targets::script_target(map, caster, s.id, &[0], o.entry, o.guid)
     };
+    let e = &s.effects[index];
+    if let Some(area) = [e.target_b, e.target_a]
+        .into_iter()
+        .find(|k| matches!(k, 51 | 52))
+    {
+        // About the caster's own place (18), the caster's.
+        let at_dest = area == 52 && e.target_a != 18;
+        let at = crate::game::map::spells::targets::center(map, caster, t, at_dest);
+        let r = map.realm.data.spells.radius(e.radius_index);
+        return map
+            .grid
+            .around(at.x, at.y, r)
+            .filter(|g| guid::is_game_object(*g))
+            .filter_map(|g| map.gameobject(g))
+            .filter(|o| named(o) && dist(o.position, at) <= r)
+            .map(|o| o.guid)
+            .collect();
+    }
     // The object aimed at, unless a condition its row puts on it fails.
     if let Some(o) = t.object.and_then(|o| map.gameobject(o)) {
         let barred = map

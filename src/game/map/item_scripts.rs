@@ -246,8 +246,10 @@ fn dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, item: Opt
         return true;
     }
     if let Some((_, summon)) = GUARDIAN_TRINKETS.iter().find(|(t, _)| *t == id) {
+        // The summon of the trinket's item (mangos's `CastSpell(..,
+        // m_CastItem)`).
         if own && item.is_some() {
-            trigger(map, caster, *summon, caster);
+            crate::game::map::spells::cast_triggered_from(map, caster, *summon, Some(caster), item);
         }
         return true;
     }

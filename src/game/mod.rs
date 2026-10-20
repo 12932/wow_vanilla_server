@@ -987,6 +987,22 @@ mod tests_p9_spells_real;
 #[cfg(test)]
 mod tests_p9_spells_world;
 #[cfg(test)]
+mod tests_p9_world_data;
+#[cfg(test)]
+mod tests_p9_world_misc;
+#[cfg(test)]
+mod tests_p9_world_nav;
+#[cfg(test)]
+mod tests_p9_world_sight;
+#[cfg(test)]
+mod tests_p9_world_spells2;
+#[cfg(test)]
+mod tests_p9_world_spells3;
+#[cfg(test)]
+mod tests_p9_world_spells;
+#[cfg(test)]
+mod tests_p9_world_system;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
