@@ -937,6 +937,8 @@ mod tests_p9_core_class_real;
 #[cfg(test)]
 mod tests_p9_core_power;
 #[cfg(test)]
+mod tests_p9_core_scripts;
+#[cfg(test)]
 mod tests_p9_core_terrain;
 #[cfg(test)]
 mod tests_p9_core_trade;
