@@ -479,15 +479,18 @@ pub fn start(stream: TcpStream, crypto: HeaderCrypto) -> Connection {
 }
 
 /// Decode packets and pass them on. Pings are answered here, so their
-/// round trip measures the network and not the world.
+/// round trip measures the network and not the world, and counted here
+/// ([`PingRate`]).
 pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
     mut read: R,
     mut decrypter: DecrypterHalf,
     tx: mpsc::Sender<Inbound>,
     outbound: Outbound,
 ) {
-    let idle = crate::config::config().network.client_idle_timeout();
+    let network = &crate::config::config().network;
+    let idle = network.client_idle_timeout();
     let mut bad = BadPacketLimit::new();
+    let mut pings = PingRate::new(network.max_overspeed_pings);
     loop {
         // Closed (over budget, taken over, its map gone), the connection
         // ends now, its socket with it: not at the client's next packet.
@@ -538,6 +541,10 @@ pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
         };
         PACKETS_IN.fetch_add(1, Ordering::Relaxed);
         if let ClientOpcodeMessage::CMSG_PING(ping) = &msg {
+            if !pings.allow(Instant::now()) {
+                warn!("a client pings too fast; disconnecting it");
+                break;
+            }
             outbound.send_unheld(&SMSG_PONG {
                 sequence_id: ping.sequence_id,
             });
@@ -675,6 +682,43 @@ where
         }
     }
     Ok(())
+}
+
+/// mangos's rule for pings (`WorldSocket::HandlePing`): the reader answers
+/// them before the session's flood guard, so they are counted here. One
+/// less than [`PingRate::SOONEST`] after the last is too soon; more than
+/// `max` too soon in a row disconnects (0 never does); one in time starts
+/// the count again.
+struct PingRate {
+    max: u32,
+    last: Option<Instant>,
+    too_soon: u32,
+}
+
+impl PingRate {
+    /// The client pings every 30 s.
+    const SOONEST: Duration = Duration::from_secs(27);
+
+    fn new(max: u32) -> Self {
+        Self {
+            max,
+            last: None,
+            too_soon: 0,
+        }
+    }
+
+    /// Whether a ping at `now` is let through.
+    fn allow(&mut self, now: Instant) -> bool {
+        let Some(last) = self.last.replace(now) else {
+            return true;
+        };
+        if now.saturating_duration_since(last) >= Self::SOONEST {
+            self.too_soon = 0;
+            return true;
+        }
+        self.too_soon = self.too_soon.saturating_add(1);
+        self.max == 0 || self.too_soon <= self.max
+    }
 }
 
 /// How many unknown or unparseable packets a client may send in a window
@@ -954,6 +998,58 @@ mod tests {
         assert!(out.send_frame(frame(1, &[0; 4])));
         assert!(!out.send_frame(frame(1, &[0; 4])));
         assert!(out.is_closed());
+    }
+
+    /// mangos's ping rule: a ping every 30 s goes on for ever; more than
+    /// `max` in a row each less than 27 s after the last disconnects, and
+    /// one in time starts the count again; 0 never disconnects.
+    #[test]
+    fn pings_too_soon_in_a_row_disconnect_and_one_in_time_forgives() {
+        let start = Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let mut steady = PingRate::new(2);
+        assert!((0..100).all(|i| steady.allow(at(i * 30))));
+        let mut fast = PingRate::new(2);
+        assert!(fast.allow(at(0)));
+        assert!(fast.allow(at(1)) && fast.allow(at(2)), "two too soon");
+        assert!(fast.allow(at(40)), "one in time");
+        assert!(fast.allow(at(41)) && fast.allow(at(42)));
+        assert!(!fast.allow(at(43)), "the third too soon in a row");
+        let mut off = PingRate::new(0);
+        assert!((0..100).all(|_| off.allow(start)));
+    }
+
+    /// Review 5's net 5: a flood of pings ends the connection, where each
+    /// was answered and none counted.
+    #[tokio::test]
+    async fn a_flood_of_pings_disconnects() {
+        let (server, client) = paired_crypto();
+        let (_, decrypter) = server.split();
+        let (mut encrypter, _) = client.split();
+        let (mut a, b) = duplex(1 << 20);
+        let (tx, _rx) = mpsc::channel(8);
+        let (outbound, mut frames) = queue(1 << 20);
+        let reader = tokio::spawn(run_reader(b, decrypter, tx, outbound.clone()));
+        for i in 0..1000u32 {
+            let mut body = i.to_le_bytes().to_vec();
+            body.extend_from_slice(&0u32.to_le_bytes());
+            let mut packet = encrypter.encrypt_client_header(4 + 8, 0x1DC).to_vec();
+            packet.extend_from_slice(&body);
+            if a.write_all(&packet).await.is_err() {
+                break;
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(10), reader)
+            .await
+            .expect("the reader ends")
+            .unwrap();
+        assert!(outbound.is_closed());
+        let max = crate::config::config().network.max_overspeed_pings as usize;
+        let mut pongs = 0;
+        while frames.rx.try_recv().is_ok() {
+            pongs += 1;
+        }
+        assert_eq!(pongs, 1 + max, "the first, and those let through");
     }
 
     #[test]

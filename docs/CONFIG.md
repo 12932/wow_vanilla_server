@@ -114,6 +114,7 @@ Connections: queues, timeouts and limits.
 | `max_pending_connections` | Connections still in the login or the world handshake, at most. | `1024` | 1 to 1000000, clamped | restart |  |
 | `max_packets_per_sec` | Packets a client may send a second, sustained (three seconds' worth at once); a client that floods is disconnected. | `100` | 10 to 100000, clamped | restart |  |
 | `max_queries_per_sec` | Read-only queries (names, creatures, objects, items, quests, texts, times) a client may send a second, sustained (three seconds' worth at once), apart from the packets: a client walking into a crowd asks after everyone in it at once. One that floods them is disconnected. | `1000` | 10 to 1000000, clamped | restart |  |
+| `max_overspeed_pings` | Pings a client may send in a row each less than 27 seconds after the last (the client pings every 30) before it is disconnected; 0 never disconnects. | `2` | 0 to 1000, clamped | restart | `MaxOverspeedPings` |
 
 ### `[world]`
 

@@ -39,6 +39,12 @@ max_packets_per_sec = 100
 # Default 1000. Range 10 to 1000000, clamped. Needs a restart.
 max_queries_per_sec = 1000
 
+# Pings a client may send in a row each less than 27 seconds after
+# the last (the client pings every 30) before it is disconnected;
+# 0 never disconnects.
+# Default 2. Range 0 to 1000, clamped. Needs a restart. mangos: MaxOverspeedPings.
+max_overspeed_pings = 2
+
 # The world: saves, the message of the day, the character store and
 # the data's paths.
 [world]

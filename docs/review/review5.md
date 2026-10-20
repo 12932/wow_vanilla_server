@@ -139,7 +139,7 @@ under "Found by the other reviews too", with what this review adds.
   (`AccountMgr::normalizeString`).
 - **Effort:** easy.
 
-#### 5. Pings skip the flood guard, and a closed queue's check, and so keep a dead connection alive (medium-low, robustness)
+#### 5. Pings skip the flood guard, and a closed queue's check, and so keep a dead connection alive (medium-low, robustness) **Fixed.**
 - **Where:** `src/game/conn.rs:485-491`: the reader answers `CMSG_PING` and goes round (`continue`) before the
   session's rate (`session.rs:239`) and before its own `outbound.is_closed()` check (`conn.rs:494`).
 - **What:**

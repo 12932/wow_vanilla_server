@@ -23,6 +23,9 @@ missing world data). None fixed yet; waiting on your choice.
 - **#12** fixed (`fix/fixnet`): one session an account (`Registry::claim_session`, as mangos's `AddSession_`): a new
   one replaces the old and starts once it has gone, a player in the world left for it to take over; `.ban` kicks the
   account's session wherever it is, and a login refuses a banned account.
+- **net 5** fixed (`fix/fixnet`): pings are counted in the reader by mangos's rule (more than
+  `[network] max_overspeed_pings`, 2, in a row each under 27 s after the last disconnect); a closed queue ends the
+  reader and the session at once (with #2).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
