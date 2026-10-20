@@ -1060,7 +1060,7 @@ pub fn apply_spell(
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
-    let visible = visible(spell, caster == target) && !ctx.linked;
+    let visible = visible(spell) && !ctx.linked;
     // What the new holder replaces.
     let replaced: Vec<usize> = existing
         .holders
@@ -1276,14 +1276,15 @@ pub fn apply_spell(
     Ok(())
 }
 
-/// Whether an aura shows on the unit's bar.
-pub fn visible(s: &SpellTemplate, on_self: bool) -> bool {
+/// Whether an aura shows on the unit's bar. A party aura shows on all it
+/// is on, its caster too, passive or not (mangos's `IsNeedVisibleSlot`:
+/// "passive party auras shown even on caster"; the user's call, #57).
+pub fn visible(s: &SpellTemplate) -> bool {
     if s.attributes[0] == sd::ATTR_HIDDEN && s.duration_index == 21 {
         return false;
     }
-    let area = s.effects.iter().any(|e| e.effect == 35);
-    if area {
-        return !on_self || !s.passive();
+    if s.effects.iter().any(|e| e.effect == 35 && e.aura != 0) {
+        return true;
     }
     !s.passive() || s.spell_visual > 0
 }

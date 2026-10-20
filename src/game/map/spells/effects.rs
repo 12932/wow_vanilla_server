@@ -893,6 +893,11 @@ fn effect(
                     .apply(super::mods::OP_MULTIPLE_VALUE, e.multiple_value)
                     .max(0.0);
                 let mut damage = taken as f32 * mult;
+                // The target's modifiers, a flat one by the burn's own
+                // coefficient, before the crit (mangos's
+                // `CalculateSpellDamage` of `EffectPowerBurn`'s damage,
+                // `SpellDamageBonusTaken`; Thistle Tea's `PowerBurn`).
+                damage = outcome::taken_of(map, caster, target, s, index, Kind::Direct, 1, damage);
                 if l.crit {
                     let pct = l.mods.pct[super::mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
                     damage += damage * 0.5 * (1.0 + pct);

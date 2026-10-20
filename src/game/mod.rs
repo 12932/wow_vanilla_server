@@ -931,6 +931,8 @@ mod tests_p8_world_system;
 #[cfg(test)]
 mod tests_p8_world_units;
 #[cfg(test)]
+mod tests_p9_creatures;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
