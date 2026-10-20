@@ -60,10 +60,7 @@ fn wrong_target(map: &Map, g: Guid, bag: u8, slot: u8, t: &SpellCastTargets) -> 
         .iter()
         .find(|s| s.id != 0 && s.trigger == 0)?
         .id;
-    let target = t
-        .target_flags
-        .get_unit()
-        .and_then(|u| map.creature(u.unit_target));
+    let target = crate::game::map::spells::unit_of(t).and_then(|u| map.creature(u));
     let fits = target.is_some_and(|c| wanted.contains(&(c.entry, c.alive())));
     (!fits).then_some(spell)
 }

@@ -266,9 +266,7 @@ pub(super) fn spent(m: &Map, g: Guid, id: u32) -> bool {
 }
 
 fn aimed_at(t: &SpellCastTargets) -> Guid {
-    t.target_flags
-        .get_unit()
-        .map_or(Guid::zero(), |u| u.unit_target)
+    crate::game::map::spells::unit_of(t).unwrap_or_else(Guid::zero)
 }
 
 /// A cast of `spell` by `caster` that `c` sees go within `within`: the

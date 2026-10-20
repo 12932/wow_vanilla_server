@@ -801,7 +801,7 @@ async fn an_item_for_a_creature_is_used_only_on_one_alive() {
     let (_, at) = give(&realm, ga, TORCH, 1).await;
     let at_unit = |unit: Guid| SpellCastTargets {
         target_flags: SpellCastTargets_SpellCastTargetFlags::empty()
-            .set_unit(SpellCastTargets_SpellCastTargetFlags_Unit { unit_target: unit }),
+            .set_unit(SpellCastTargets_SpellCastTargetFlags_Unit::Unit { unit_target: unit }),
     };
     let use_on = |targets: SpellCastTargets| CMSG_USE_ITEM {
         bag_index: at.0,

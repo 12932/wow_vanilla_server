@@ -758,7 +758,7 @@ pub fn spell_damage(
         periodic_log: false,
         unused: 0,
         blocked: 0,
-        hit_info: HitInfo::NormalSwing,
+        hit_info: HitInfo::empty(),
         extend_flag: 0,
     }) {
         map.send_to_observers(caster, &frame, true);

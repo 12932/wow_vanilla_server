@@ -506,6 +506,8 @@ async fn a_battlemaster_lists_the_matches_and_one_joins_from_the_list() {
     assert_eq!(listed, (npc, Map::ArathiBasin));
     a.send(CMSG_BATTLEFIELD_JOIN {
         map: Map::ArathiBasin,
+        instance_id: 0,
+        join_as_group: false,
     })
     .await;
     // In the queue: the status frame names Arathi Basin.

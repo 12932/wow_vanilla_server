@@ -544,9 +544,9 @@ fn resolve(
             unused: 0,
             blocked: 0,
             hit_info: if outcome == Outcome::Crit {
-                HitInfo::AffectsVictim
+                HitInfo::new_affects_victim()
             } else {
-                HitInfo::NormalSwing
+                HitInfo::empty()
             },
             extend_flag: 0,
         })

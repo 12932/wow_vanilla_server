@@ -1660,8 +1660,8 @@ async fn use_item_on_object(c: &mut Client, map: &MapHandle, item: u32, object: 
         bag_slot: slot,
         spell_index: 0,
         targets: SpellCastTargets {
-            target_flags: SpellCastTargets_SpellCastTargetFlags::empty().set_gameobject(
-                SpellCastTargets_SpellCastTargetFlags_Gameobject::Gameobject { gameobject: object },
+            target_flags: SpellCastTargets_SpellCastTargetFlags::empty().set_unit(
+                SpellCastTargets_SpellCastTargetFlags_Unit::Gameobject { gameobject: object },
             ),
         },
     })
