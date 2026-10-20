@@ -1256,7 +1256,11 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
 - **Fix:** a record per member, or mark the guild changed and have the sweep write it.
 - **Effort:** medium.
 
-#### 13. Every map holds the realm's groups lock through its whole member-stats push (low, speed)
+#### 13. Every map holds the realm's groups lock through its whole member-stats push (low, speed) **Fixed.**
+- **Fixed:** `push_member_stats` takes the lock twice, briefly: once for who on the map is grouped, once to keep
+  the stats and who saw them. Each player's stats and who sees them are read out of the map, and the frames made and
+  sent, without it. No new test (a lock's hold isn't seen through the protocol); the push's own tests
+  (`members_apart_get_each_others_stats`, `the_party_sees_a_member_away_busy_and_dead`) pass. Not measured.
 - **Where:** `map/social.rs:559-596`, on every map once a second (`map/mod.rs:1532`).
 - **What:** the lock is held across every player in the map: each grouped player's stats, two `Vec`s, the
   `seen_by` copy, and a frame to each member out of sight. Everything else that takes the groups lock on any map
