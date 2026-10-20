@@ -134,9 +134,12 @@ async fn a_reset_waits_for_a_member_on_the_way_in() {
     assert_ne!(key.instance, 0);
     go(&realm, &mut a, 0).await;
     let copy = realm.maps.get(&realm, key);
-    // The copy is busy a moment (a long update, a burst of events), and
-    // Bob sets out for it.
-    copy.call(|_| std::thread::sleep(Duration::from_millis(400)));
+    // The copy is busy (a long update, a burst of events) until the reset
+    // is answered, and Bob sets out for it.
+    let (free, busy) = std::sync::mpsc::channel::<()>();
+    copy.call(move |_| {
+        let _ = busy.recv_timeout(Duration::from_secs(5));
+    });
     map_of(&realm, gb)
         .call(move |m| m.teleport(gb, MapKey::world(DUNGEON), Vector3d::default(), 0.0));
     b.wait_for("SMSG_TRANSFER_PENDING", |m| {
@@ -156,6 +159,7 @@ async fn a_reset_waits_for_a_member_on_the_way_in() {
         Some(InstanceResetFailedReason::Zoning),
         "refused: Bob is on his way in"
     );
+    let _ = free.send(());
     b.wait_for("SMSG_NEW_WORLD", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
     })
@@ -478,12 +482,18 @@ async fn a_teleport_in_a_logouts_countdown_keeps_it_and_a_cancel_undoes_it() {
 async fn a_logout_carried_through_a_teleport_completes_on_the_new_map() {
     let (realm, mut a, g) = teleported_logging_out().await;
     let map = map_of(&realm, g);
-    // Due now, rather than in 20 s.
-    on(&map, move |m| {
+    // Still counting down: due now, rather than in 20 s.
+    let counting = on(&map, move |m| {
         let now = m.now;
-        m.players.get_mut(&g).unwrap().logout_at = Some(now);
+        let p = m.players.get_mut(&g).unwrap();
+        let counting = p.logout_at.is_some();
+        if counting {
+            p.logout_at = Some(now);
+        }
+        counting
     })
     .await;
+    assert!(counting, "the logout goes on");
     a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
     })
