@@ -450,6 +450,9 @@ enum Request {
     /// A record as stored, for the tests to read back.
     #[cfg(test)]
     Record(&'static str, u64, oneshot::Sender<Option<String>>),
+    /// The bones as stored, for the tests.
+    #[cfg(test)]
+    Bones(oneshot::Sender<Vec<BonesRow>>),
     /// The thread panics on it, as a bug would.
     #[cfg(test)]
     Panic,
@@ -652,6 +655,14 @@ impl Store {
         rx.await.ok().flatten()
     }
 
+    /// The bones as stored (once what was sent before is written).
+    #[cfg(test)]
+    pub async fn bones_for_test(&self) -> Vec<BonesRow> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Request::Bones(tx));
+        rx.await.unwrap_or_default()
+    }
+
     /// Wait until everything sent before is written.
     pub async fn flush(&self) {
         let (tx, rx) = oneshot::channel();
@@ -733,30 +744,7 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
             Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, map, x, y, z, orientation, owner, display, bytes_1, bytes_2, guild, flags, \
-         dynamic_flags, expires_at FROM bones ORDER BY id",
-    )?;
-    let bones = stmt
-        .query_map([], |r| {
-            Ok(BonesRow {
-                id: r.get(0)?,
-                map: r.get(1)?,
-                x: r.get(2)?,
-                y: r.get(3)?,
-                z: r.get(4)?,
-                orientation: r.get(5)?,
-                owner: r.get(6)?,
-                display: r.get(7)?,
-                bytes_1: r.get(8)?,
-                bytes_2: r.get(9)?,
-                guild: r.get(10)?,
-                flags: r.get(11)?,
-                dynamic_flags: r.get(12)?,
-                expires_at: r.get(13)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let bones = read_bones(conn)?;
     let max_bones_id = bones.iter().map(|b| b.id).max().unwrap_or(0);
     Ok(Startup {
         names,
@@ -766,6 +754,32 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
         bones,
         max_bones_id,
     })
+}
+
+fn read_bones(conn: &Connection) -> rusqlite::Result<Vec<BonesRow>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, map, x, y, z, orientation, owner, display, bytes_1, bytes_2, guild, flags, \
+         dynamic_flags, expires_at FROM bones ORDER BY id",
+    )?;
+    stmt.query_map([], |r| {
+        Ok(BonesRow {
+            id: r.get(0)?,
+            map: r.get(1)?,
+            x: r.get(2)?,
+            y: r.get(3)?,
+            z: r.get(4)?,
+            orientation: r.get(5)?,
+            owner: r.get(6)?,
+            display: r.get(7)?,
+            bytes_1: r.get(8)?,
+            bytes_2: r.get(9)?,
+            guild: r.get(10)?,
+            flags: r.get(11)?,
+            dynamic_flags: r.get(12)?,
+            expires_at: r.get(13)?,
+        })
+    })?
+    .collect()
 }
 
 /// Bones whose time was up by `now` (Unix seconds) go: those gone while
@@ -1093,6 +1107,10 @@ fn serve(conn: &Connection, req: Request) {
             let _ = reply.send(data);
         }
         #[cfg(test)]
+        Request::Bones(reply) => {
+            let _ = reply.send(read_bones(conn).unwrap_or_default());
+        }
+        #[cfg(test)]
         Request::Panic => panic!("the store's test panic"),
         #[cfg(test)]
         Request::Sleep(d) => std::thread::sleep(d),
@@ -1417,6 +1435,75 @@ mod tests {
         let loaded = store.load(1).await.expect("Alice");
         assert_eq!(loaded.items[0].charges, Some([1, -2, 0, 0, 0]));
         drop(store);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn bones(id: u32, expires_at: i64) -> BonesRow {
+        BonesRow {
+            id,
+            map: 1,
+            x: -618.5,
+            y: -4251.25,
+            z: 38.75,
+            orientation: 1.5,
+            owner: 7,
+            display: 1563,
+            bytes_1: 0x0001_0200,
+            bytes_2: 0x0304_0506,
+            guild: 3,
+            flags: 0x05,
+            dynamic_flags: 0x01,
+            expires_at,
+        }
+    }
+
+    /// A store of version 3 (no bones) migrates, its characters kept; the
+    /// bones kept in it come back as they went in, those whose time is up
+    /// swept as it opens, from the table too.
+    #[tokio::test]
+    async fn a_store_before_bones_migrates_and_sweeps_the_gone_as_it_opens() {
+        let path = std::env::temp_dir().join(format!("wvs-store-v3-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            for (i, sql) in MIGRATIONS[..3].iter().enumerate() {
+                conn.execute_batch(&format!(
+                    "BEGIN; {sql}; PRAGMA user_version = {}; COMMIT;",
+                    i + 1
+                ))
+                .unwrap();
+            }
+            conn.execute_batch(
+                "INSERT INTO characters (guid, account, name, race, class, gender, skin, face, \
+                 hair_style, hair_color, facial_hair, level, xp, money, map, x, y, z, \
+                 orientation, zone, played_total, played_level, logout_time, at_login, state) \
+                 VALUES (1, 'ACC', 'Alice', 1, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, \
+                 0, 0, 0, 0, '{}');",
+            )
+            .unwrap();
+        }
+        let now = crate::game::social::mail::now();
+        let (store, startup) = Store::open(&path).unwrap();
+        assert_eq!(startup.names.len(), 1, "her character kept");
+        assert!(startup.bones.is_empty());
+        assert_eq!(startup.max_bones_id, 0);
+        store.put_bones(bones(5, now + 3600));
+        store.put_bones(bones(9, now - 1));
+        store.put_bones(bones(6, now + 60));
+        store.delete_bones(6);
+        store.flush().await;
+        drop(store);
+        let (store, startup) = Store::open(&path).unwrap();
+        assert_eq!(startup.bones, vec![bones(5, now + 3600)], "as kept");
+        assert_eq!(startup.max_bones_id, 5);
+        assert_eq!(store.bones_for_test().await.len(), 1, "the gone swept");
+        drop(store);
+        let conn = Connection::open(&path).unwrap();
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        drop(conn);
         let _ = std::fs::remove_file(&path);
     }
 
