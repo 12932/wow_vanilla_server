@@ -927,7 +927,7 @@ mod tests {
         let (_, mut decrypter) = client.split();
         let (mut a, b) = duplex(256 * 1024);
         let (out, frames) = queue(1 << 20);
-        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        let writer = tokio::spawn(run_writer(b, encrypter, frames, LONG));
         // 70,000 bytes under a size of 0xFFFF, as `frame` built it before.
         let mut lying = vec![0xFF, 0xFF, 0xDD, 0x00];
         lying.extend(std::iter::repeat_n(0xAB, 70_000));

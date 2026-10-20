@@ -14,7 +14,7 @@ The review of 79b6def that this file held before predates the per-map rewrite, a
 Six reviewers, by area: [review/review5.md](review/review5.md), its first table the 21 that matter most (6 high: a
 crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
 the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
-missing world data). None fixed yet; waiting on your choice.
+missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
 - #3 fixed: a mail keeps its subject to the client's 64 letters and its body to 8,000 bytes, and the mail list
   stops at the client's 32,766 bytes, as mangos's `HandleGetMailList` does (`social/mail.rs`).
 - rev5-social 4 fixed: a logout leaves a meeting stone's queue (mangos's `LogoutPlayer`), and the sweep drops

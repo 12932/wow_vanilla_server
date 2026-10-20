@@ -668,6 +668,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   mangos's `HandlePing` does, more than `[network] max_overspeed_pings` (2) under 27 s apart disconnecting (peon
   and the real client ping every 30 s). **Its calls:** an old connection is cut as soon as the new one is through
   the handshake (mangos); GMs aren't exempt from the ping rule (the reader doesn't know the GM level).
+- **Review 5's fixes, world and combat (`fix/fixplay`):** #1 (high): an express route passes a node once (the
+  client's is always a shortest), 128 nodes at most, and a frame too big for its size field is refused, never cut
+  short, everywhere frames are built; #16: a possessed unit's movement from the controller's client is checked
+  valid (no NaN relayed or saved; no speed check yet); #5 (high): a pet, totem, guardian or charmed creature keeps
+  no threat list, so whoever strikes one leaves the fight once its timer runs out, and a passive creature lets go
+  of whoever struck it and went (30 yards, 12 s, the leash's settings); #8: a death's guard takes its victim off the
+  dying list as a panic unwinds, and an extra swing's flag is reset; #9: spells nest 32 deep at most on a thread
+  (a self-triggering spell no longer aborts the server). **Its calls:** a frame too big refused, not split;
+  guardians and creature-owned pets keep no threat list either (mangos keeps one, wvs never read it).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
