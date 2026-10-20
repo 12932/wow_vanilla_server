@@ -759,6 +759,13 @@ showed a difference. Phase 2 takes what is left.
   an area trigger's message; a talent's rank learned takes the rank below's aura with it. Four rows where wvs
   follows mangos are `wrong-for-1.12` (a dead player taking from an open item-loot window, a node's window left
   open on walking away, a random property rolled for a new item, only the caster's form checked).
+- **9spells:** 54 tests of what wvs already did (casting, effects, world spells, contact, three on the real data);
+  64 rows covered, 8 not-applicable, two `wrong-for-1.12` where wvs is mangos's (a resisted triggered spell
+  spends resist charges; a cleared cooldown doesn't clear the school lockout). **For phase 2** (wvs differs from
+  mangos too): any-unit heals ignore immune-to-player, a totem's aura ignores the shaman's radius modifiers, an
+  aura at a corpse always refused, `SPELL_EFFECT_SPAWN` (46) does nothing, demon and possessed summons ignore
+  the destination, the client's source location dropped, Frost Trap never procs Entrapment, ranged abilities take
+  the weapon skill.
 
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
