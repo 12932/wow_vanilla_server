@@ -224,6 +224,9 @@ pub struct Player {
     pub known: AHashSet<Guid>,
     /// Players whose clients know this one.
     pub observers: AHashSet<Guid>,
+    /// Whose marks were on them as their observers were last told
+    /// (`map::views`).
+    pub views_told: crate::game::map::views::Viewers,
     /// Where visibility was last worked out.
     pub vis_anchor: Vector3d,
     pub cell: CellKey,
@@ -350,6 +353,7 @@ impl Player {
             spells: row.spells.clone(),
             known: AHashSet::new(),
             observers: AHashSet::new(),
+            views_told: Default::default(),
             vis_anchor: position,
             cell: cell_of(position.x, position.y),
             logout_at: None,

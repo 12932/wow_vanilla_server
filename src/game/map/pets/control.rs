@@ -408,9 +408,10 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
     match kind {
         ACT_COMMAND => match action as u8 {
             COMMAND_STAY => {
-                let at = map.position_of(pet);
                 crate::game::map::combat::stop_attack(map, pet);
                 ai::stop(map, pet);
+                // It stays where it stopped.
+                let at = map.position_of(pet);
                 if let Some(s) = state_mut(map, pet) {
                     s.command = COMMAND_STAY;
                     s.stay_at = at;

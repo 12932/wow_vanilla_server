@@ -2059,21 +2059,16 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::interrupts::invulnerable(map, target, h.spell);
             }
         }
-        // Beast Lore: the target's special information shows.
-        AURA_EMPATHY => {
+        // Beast Lore: the target's special information shows, its damage
+        // and resistances to its caster (`views`). Hunter's Mark, Mind
+        // Vision: the unit is tracked, by its caster alone (mangos's
+        // `HandleAuraModStalked`, Thistle Tea's `StealthSync`). Who sees
+        // it so changed, though the flag may not have: each observer is
+        // told their own view again.
+        AURA_EMPATHY | AURA_MOD_STALKED => {
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(
-                    UNIT_DYNAMIC_FLAGS,
-                    crate::game::map::pets::DYNFLAG_SPECIALINFO,
-                    true,
-                );
-            }
-        }
-        // Hunter's Mark, Mind Vision: the unit is tracked (mangos's
-        // `HandleAuraModStalked`, Thistle Tea's `StealthSync`).
-        AURA_MOD_STALKED => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_TRACK_UNIT, true);
+                f.set_flag(UNIT_DYNAMIC_FLAGS, dynflag_of(kind), true);
+                f.touch(UNIT_DYNAMIC_FLAGS);
             }
         }
         AURA_GHOST => {}
@@ -2305,21 +2300,24 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 f.set_flag(UNIT_FIELD_FLAGS, unit_flag_of(a.kind), false);
             }
         }
-        AURA_EMPATHY if !still(map, AURA_EMPATHY) => {
+        // The flag goes with the last of them; who sees it so changed.
+        AURA_EMPATHY | AURA_MOD_STALKED => {
+            let on = still(map, a.kind);
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(
-                    UNIT_DYNAMIC_FLAGS,
-                    crate::game::map::pets::DYNFLAG_SPECIALINFO,
-                    false,
-                );
-            }
-        }
-        AURA_MOD_STALKED if !still(map, AURA_MOD_STALKED) => {
-            if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_TRACK_UNIT, false);
+                f.set_flag(UNIT_DYNAMIC_FLAGS, dynflag_of(a.kind), on);
+                f.touch(UNIT_DYNAMIC_FLAGS);
             }
         }
         _ => {}
+    }
+}
+
+/// The dynamic flag an Empathy or a mark shows.
+fn dynflag_of(kind: u32) -> u32 {
+    if kind == AURA_EMPATHY {
+        crate::game::map::pets::DYNFLAG_SPECIALINFO
+    } else {
+        DYNFLAG_TRACK_UNIT
     }
 }
 

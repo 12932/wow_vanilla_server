@@ -1533,10 +1533,10 @@ pub fn feign_death(map: &mut Map, g: Guid) -> bool {
     for spell in held {
         crate::game::map::auras::remove_spell(map, g, spell, None);
     }
-    let at = map.position_of(g);
+    // Down where its run has come to, not where the last update left it.
+    crate::game::map::ai::rest(map, g, None);
     map.note_fighting(g);
     if let Some(c) = map.creature_mut(g) {
-        c.motion = crate::game::map::creature::Motion::Idle { until: None };
         c.fields.set_u32(UNIT_FIELD_HEALTH, 1);
         c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, 7);
         let dynamic = c.fields.get_u32(UNIT_DYNAMIC_FLAGS);
@@ -1546,12 +1546,6 @@ pub fn feign_death(map: &mut Map, g: Guid) -> bool {
         {
             f.down_at = Some(now);
         }
-    }
-    if let Some(at) = at {
-        let spline_id = map.next_spline_id;
-        map.next_spline_id = map.next_spline_id.wrapping_add(1);
-        let frame = crate::game::map::ai::stop_packet(g, at, spline_id);
-        map.send_to_observers(g, &frame, false);
     }
     scripts::start(map, ScriptTable::Generic, f.fall_script, g, g);
     true

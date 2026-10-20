@@ -139,9 +139,9 @@ and a shutdown saves a player between maps.
   - the world's systems, about 60; the loaders, about 55; creature AI, about 45; combat, movement and auras, about
     20 together.
 
-  What's left is mostly what wvs doesn't model: an aura origin on casts (Thistle Tea's proc origins), owner and
-  caster views of a creature's fields (Empathy), creature-group routes, cases that need a navmesh that refuses, and
-  Thistle Tea internals. The leftovers each round named are in `<runs>/prompts/_carryover.md`, and round 9's briefs
+  What's left is mostly what wvs doesn't model: an aura origin on casts (Thistle Tea's proc origins),
+  creature-group routes, cases that need a navmesh that refuses, and Thistle Tea internals. (Owner and Empathy
+  views of a creature's fields, and a mark's tracking for its hunter alone, are in `map::views` since `fix/entity`.) The leftovers each round named are in `<runs>/prompts/_carryover.md`, and round 9's briefs
   are written by `<runs>/prompts/gen_round.py 9 docs/parity/matrix.csv`.
 - **The fork (12932/wow_messages):** its 1.12 `HitInfo` is flags (with the debug trailer under 0x1),
   `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u32, `CMSG_BATTLEFIELD_JOIN` the map, the instance and the group

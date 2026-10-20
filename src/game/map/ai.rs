@@ -2092,6 +2092,21 @@ pub fn halt(map: &mut Map, g: Guid) {
     stop_moving(map, g);
 }
 
+/// A creature comes to rest, standing until `until` (for good with
+/// `None`): a walk it is on stops where it has come to now, its watchers
+/// told with a stop there ([`halt`], as mangos's `MoveSplineInit::Stop`
+/// and death's stop), as every place that lets a walk go does. Without
+/// it, a client that saw the walk set off ran the creature on to its end,
+/// and the next walk snapped it back. A fall goes on.
+pub fn rest(map: &mut Map, g: Guid, until: Option<Instant>) {
+    halt(map, g);
+    if let Some(c) = map.creature_mut(g)
+        && !matches!(&c.motion, Motion::Moving(w) if w.falling)
+    {
+        c.motion = Motion::Idle { until };
+    }
+}
+
 /// A creature on the move stops where it is.
 fn stop_moving(map: &mut Map, g: Guid) {
     let spline_id = map.next_spline_id;

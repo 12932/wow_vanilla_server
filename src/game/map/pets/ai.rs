@@ -821,20 +821,9 @@ fn face(map: &mut Map, g: Guid, other: Guid) {
     crate::game::map::ai::face(map, g, other);
 }
 
-/// Stop where it is.
+/// Stop where its walk has come to now, its watchers told.
 pub fn stop(map: &mut Map, g: Guid) {
-    let spline = map.next_spline_id;
-    let Some(c) = map.creature_mut(g) else {
-        return;
-    };
-    if !matches!(c.motion, Motion::Moving(_)) {
-        return;
-    }
-    c.motion = Motion::Idle { until: None };
-    let at = c.position;
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
-    let frame = crate::game::map::ai::stop_packet(g, at, spline);
-    map.send_to_observers(g, &frame, false);
+    crate::game::map::ai::halt(map, g);
 }
 
 /// Walk (run) to `goal`, by the navmesh where there is one.

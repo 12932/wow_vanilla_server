@@ -266,20 +266,14 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
     {
         introduce(map, observer, t);
     }
-    let block = match map.players.get(&object) {
-        Some(p)
-            if crate::game::fields::has_group_only(&p.fields)
-                && crate::game::map::objects::same_group(map, observer, object) =>
-        {
-            Some(std::sync::Arc::from(update::create_block(
-                &p.create_for_others(map.now),
-                crate::game::fields::Visibility::Group,
-            )))
-        }
-        // A creature tapped by another: its grey view in its create.
-        _ if guid::is_unit(object) => crate::game::map::tap::create_for(map, observer, object)
-            .or_else(|| map.public_create(object)),
-        _ => map.public_create(object),
+    // A unit or player as the observer sees it: a creature tapped by
+    // another grey, a mark theirs tracked, a pet theirs or their Empathy's
+    // with its owner-only fields, a group's member's quest log's ids
+    // (`views`).
+    let block = if guid::is_unit(object) || guid::is_player(object) {
+        crate::game::map::views::create_for(map, observer, object)
+    } else {
+        map.public_create(object)
     };
     let Some(block) = block else {
         return;

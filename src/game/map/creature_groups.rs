@@ -191,7 +191,7 @@ fn stop_acting(map: &mut Map, leader: u32) {
     }
     c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
     if !c.combat.attacking && !c.evading {
-        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+        crate::game::map::ai::rest(map, acting, None);
     }
 }
 
@@ -552,9 +552,7 @@ pub fn died(map: &mut Map, g: Guid) {
     c.waypoint = bound_for;
     c.last_waypoint = last;
     if !c.combat.attacking && !c.evading {
-        c.motion = crate::game::map::creature::Motion::Idle {
-            until: Some(now + std::time::Duration::from_secs(1)),
-        };
+        crate::game::map::ai::rest(map, next, Some(now + std::time::Duration::from_secs(1)));
     }
 }
 
