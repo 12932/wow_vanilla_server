@@ -65,6 +65,8 @@ mod tests_bugs7;
 #[cfg(test)]
 mod tests_charges;
 #[cfg(test)]
+mod tests_chat_fanout;
+#[cfg(test)]
 mod tests_cities;
 #[cfg(test)]
 mod tests_client_emu;

@@ -43,12 +43,75 @@ const IGNORE_REMOVED: u8 = 0x10;
 pub struct Lists {
     friends: AHashMap<Guid, AHashSet<Guid>>,
     ignores: AHashMap<Guid, AHashSet<Guid>>,
+    /// `ignores` the other way round: those online ignoring a player, so
+    /// that a line to a channel, a guild or a group asks once
+    /// ([`Lists::ignorers`]), not once a recipient. Changed only with
+    /// `ignores`, by the methods below.
+    ignored_by: AHashMap<Guid, AHashSet<Guid>>,
 }
 
 impl Lists {
     /// Whether `owner` ignores `other`.
     pub fn ignores(&self, owner: Guid, other: Guid) -> bool {
         self.ignores.get(&owner).is_some_and(|s| s.contains(&other))
+    }
+
+    /// Those online who ignore `g`.
+    pub fn ignorers(&self, g: Guid) -> AHashSet<Guid> {
+        self.ignored_by.get(&g).cloned().unwrap_or_default()
+    }
+
+    /// `owner` ignores `other`.
+    fn ignore(&mut self, owner: Guid, other: Guid) {
+        self.ignores.entry(owner).or_default().insert(other);
+        self.ignored_by.entry(other).or_default().insert(owner);
+    }
+
+    /// `owner` no longer ignores `other`.
+    fn unignore(&mut self, owner: Guid, other: Guid) {
+        if let Some(s) = self.ignores.get_mut(&owner) {
+            s.remove(&other);
+        }
+        self.stop_ignoring(owner, other);
+    }
+
+    /// `owner` off the list of those ignoring `other`.
+    fn stop_ignoring(&mut self, owner: Guid, other: Guid) {
+        if let Some(by) = self.ignored_by.get_mut(&other) {
+            by.remove(&owner);
+            if by.is_empty() {
+                self.ignored_by.remove(&other);
+            }
+        }
+    }
+
+    /// `owner`'s ignore list, all of it, in place of what it was.
+    fn set_ignores(&mut self, owner: Guid, ignores: AHashSet<Guid>) {
+        self.drop_ignores(owner);
+        for i in &ignores {
+            self.ignored_by.entry(*i).or_default().insert(owner);
+        }
+        self.ignores.insert(owner, ignores);
+    }
+
+    /// `owner`'s ignore list gone (offline, or deleted).
+    fn drop_ignores(&mut self, owner: Guid) {
+        for i in self.ignores.remove(&owner).unwrap_or_default() {
+            self.stop_ignoring(owner, i);
+        }
+    }
+
+    /// A character deleted: off everyone's lists, and its own gone.
+    fn forget(&mut self, g: Guid) {
+        for f in self.friends.values_mut() {
+            f.remove(&g);
+        }
+        for i in self.ignores.values_mut() {
+            i.remove(&g);
+        }
+        self.ignored_by.remove(&g);
+        self.friends.remove(&g);
+        self.drop_ignores(g);
     }
 
     /// Those online with `g` as a friend.
@@ -147,7 +210,7 @@ pub fn list(map: &mut Map, g: Guid) {
     if let Some((friends, ignores)) = send_lists(map, g) {
         let mut lists = map.realm.social.lists.lock();
         lists.friends.insert(g, friends);
-        lists.ignores.insert(g, ignores);
+        lists.set_ignores(g, ignores);
     }
 }
 
@@ -186,7 +249,7 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     let watchers = {
         let mut lists = realm.social.lists.lock();
         lists.friends.insert(g, friends);
-        lists.ignores.insert(g, ignores);
+        lists.set_ignores(g, ignores);
         lists.watchers(g)
     };
     for w in watchers {
@@ -205,7 +268,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
     let watchers = {
         let mut lists = realm.social.lists.lock();
         lists.friends.remove(&g);
-        lists.ignores.remove(&g);
+        lists.drop_ignores(g);
         lists.watchers(g)
     };
     for w in watchers {
@@ -294,14 +357,7 @@ pub fn add_ignore(map: &mut Map, g: Guid, name: &str) {
         IGNORE_FULL
     } else {
         p.row.state.ignored.push(counter);
-        realm
-            .social
-            .lists
-            .lock()
-            .ignores
-            .entry(g)
-            .or_default()
-            .insert(i);
+        realm.social.lists.lock().ignore(g, i);
         IGNORE_ADDED
     };
     status(&realm, g, result, i);
@@ -315,21 +371,49 @@ pub fn del_ignore(map: &mut Map, g: Guid, i: Guid) {
     };
     let counter = guid::counter(i);
     p.row.state.ignored.retain(|c| *c != counter);
-    if let Some(s) = realm.social.lists.lock().ignores.get_mut(&g) {
-        s.remove(&i);
-    }
+    realm.social.lists.lock().unignore(g, i);
     status(&realm, g, IGNORE_REMOVED, i);
 }
 
 /// A character deleted: off the friends and ignore lists of those online.
 pub fn character_deleted(realm: &Realm, g: Guid) {
-    let mut lists = realm.social.lists.lock();
-    for f in lists.friends.values_mut() {
-        f.remove(&g);
+    realm.social.lists.lock().forget(g);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ignored_by` is `ignores` the other way round, whatever changes it.
+    #[test]
+    fn those_ignoring_a_player_follow_the_lists() {
+        let (a, b, c) = (guid::player(1), guid::player(2), guid::player(3));
+        let mut l = Lists::default();
+        let agree = |l: &Lists| {
+            for g in [a, b, c] {
+                let by: AHashSet<Guid> =
+                    [a, b, c].into_iter().filter(|o| l.ignores(*o, g)).collect();
+                assert_eq!(l.ignorers(g), by, "those ignoring {g:?}");
+            }
+        };
+        l.ignore(a, c);
+        l.ignore(b, c);
+        agree(&l);
+        assert_eq!(l.ignorers(c).len(), 2);
+        l.unignore(a, c);
+        agree(&l);
+        l.set_ignores(b, [a].into_iter().collect());
+        agree(&l);
+        assert!(l.ignorers(c).is_empty());
+        l.set_ignores(c, [a, b].into_iter().collect());
+        l.drop_ignores(b);
+        agree(&l);
+        assert_eq!(l.ignorers(a), [c].into_iter().collect());
+        // Deleted: off every list, and its own gone.
+        l.forget(a);
+        agree(&l);
+        l.forget(c);
+        agree(&l);
+        assert!(l.ignored_by.is_empty());
     }
-    for i in lists.ignores.values_mut() {
-        i.remove(&g);
-    }
-    lists.friends.remove(&g);
-    lists.ignores.remove(&g);
 }

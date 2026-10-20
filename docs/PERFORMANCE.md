@@ -907,3 +907,86 @@ sync                          fastest       │ slowest       │ median        
   with N is contention. 32 threads on 16 cores are two to a core, and some of that row is the scheduler's.
 - **`Std` and `StdRecovering` differ only on a poisoned lock**, which there never is here: the gap between their rows
   is the noise.
+
+### Channel chat's fan-out (`benches/chat.rs`)
+
+A line said in a channel goes to every member, from the speaker's map task (`channels::say`). Before 2026-10-20,
+`say` held `realm.social.channels`, one mutex over every channel in the realm, and the ignore lists' mutex, both
+across the whole fan-out: a registry read lock and an `Arc` clone for each member, then its queue's send. All channel
+chat in the realm took turns on those two locks, and a map waited for any other map's fan-out before starting its
+own.
+
+`benches/chat.rs` runs that path whole: a real `Realm` (an in-memory store, no game data), its registry, its
+channels, each member's real `Outbound` drained by a writer task of its own (`run_writer` without the cipher and the
+socket, as in `channels::outbound`), and the speakers as tasks on a tokio runtime, as maps are: 15 workers, the
+sixteenth core left to the benchmark's thread, which spins on the round's end. A round is 40,000 deliveries whatever
+the case, so a group's rows compare, down a column; the members are 100, 1,000 or 5,000, with 1 map saying lines, 8
+maps saying lines in the same channel, or 8 maps each in a channel of its own (8 × 5,000 is 40,000 players online).
+
+```sh
+cargo bench --bench chat                        # 27 cases, about two minutes
+cargo bench --bench chat -- said                # a group: delivered, said or pushed
+WVS_BENCH_WORKERS=4 cargo bench --bench chat    # another count of tokio workers
+```
+
+- **`delivered`**: a round ends when the writers have taken every delivery. Deliveries a second, end to end.
+- **`said`**: a round ends when the maps are done saying, the writers awake and working meanwhile; what they have left
+  is drained before the next round, untimed. What a map hands out a second while its update isn't running.
+- **`pushed`**: `said` with no writer at all, the queues emptied between rounds. The fan-out's own cost (the locks,
+  the registry, each queue's budget and push), without waking anyone.
+
+**Before and after** (2026-10-20; x86-64 server CPU, 16 cores; the old and new code's benchmark binaries alternately,
+two runs each, each row the mean of the two runs' medians, in millions of deliveries a second). The machine was
+shared: other agents (about seven, each mostly idle), no other build at the runs' starts, load averages 3.9 to 9.5
+with the benchmark's own 16 threads in them. Busier, the `delivered` and `said` medians of one map move from about 2
+to 16 within one binary; `pushed` moves by a tenth.
+
+| Case | `delivered` before | after | `said` before | after | `pushed` before | after |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 map, 100 members | 2.0 | 1.7 | 2.0 | 1.7 | 19.1 | 22.4 |
+| 1 map, 1,000 members | 2.2 | 2.0 | 3.7 | 3.9 | 22.2 | 27.2 |
+| 1 map, 5,000 members | 2.3 | 2.0 | 4.0 | 4.1 | 8.5 | 17.1 |
+| 8 maps, one channel of 100 | 1.9 | 7.5 | 2.1 | 7.6 | 12.8 | 10.8 |
+| 8 maps, one channel of 1,000 | 1.8 | 7.1 | 1.8 | 7.0 | 12.2 | 13.5 |
+| 8 maps, one channel of 5,000 | 2.0 | 6.9 | 2.6 | 6.9 | 7.8 | 10.3 |
+| 8 maps, 8 channels of 100 | 1.8 | 19.8 | 2.0 | 19.3 | 13.3 | 73.4 |
+| 8 maps, 8 channels of 1,000 | 1.9 | 16.2 | 2.0 | 15.8 | 8.9 | 57.8 |
+| 8 maps, 8 channels of 5,000 | 2.4 | 12.7 | 2.5 | 14.7 | 8.2 | 29.2 |
+
+One map's rows with its writers awake are within the noise: run three times more each, alternately, `delivered` and
+`said` gave 2.8 to 16 for both binaries, and `pushed` 23.0, 22.4 and 19.4 before against 28.9, 27.9 and 24.6 after
+(100, 1,000 and 5,000 members).
+
+**What changed** (`social/channels.rs`, `social/friends.rs`, `social/mod.rs`, `registry.rs`):
+
+- **A lock a channel.** The directory (`Channels`) is a `RwLock` over `Arc<Mutex<Channel>>`, taken only to find a
+  channel (a read), or to put one in or take one out (a write), and never while waiting for a channel's lock. A
+  channel left empty is marked dropped under its own lock, then taken out; one who found it just before finds no
+  channel, and a join makes a new one. A new channel is locked before it goes in, so no one finds it empty. Joins,
+  leaves and commands lock their channel alone; their notices are still sent under it, in order with its changes.
+- **The fan-out after the lock.** Under the channel's lock `say` does its checks and copies the members' GUIDs; then
+  it encodes the line, asks the ignore lists once for those who ignore the speaker (`Lists::ignorers`, the lists the
+  other way round, kept with them), and sends with no service's lock held (`social::send_frames`): the registry read
+  once for 256 recipients (`Registry::each_online`), not once each.
+- **Guild and group chat** (`guilds::chat`, `groups::chat`) the same way: the hearers copied under their lock, the
+  ignore lists asked once, the fan-out after. Guild chat looked each member's rights up again by GUID, a scan of the
+  members for each, N² for a guild of N; it reads each member's own rank now. `/who` stops at a full list (49): the
+  rest it only looked at, taking the guilds' lock for each, to leave out. It holds no lock across its answer.
+
+**What limits it now:**
+
+- **The writers.** One map hands out 22 to 28 million deliveries a second when no writer is awake (35 to 45 ns a
+  delivery: the registry, the budget's semaphore, the `mpsc` push), and 2 to 4 million when every recipient's writer
+  is asleep on its queue (250 to 500 ns). The code is the same in both; the difference, 85 to 90 percent of a map's
+  fan-out, is the writers being awake: tokio waking each one (its task's state, a run queue, and with workers idle,
+  one unparked), and each taking frames off its queue while the map pushes more. Not profiled further (this machine
+  allows no `perf` for its users). The server's writers also encrypt and make a write call a batch, which the
+  benchmark leaves out. Neither lock was ever most of it for one map.
+- **One channel's recipients.** Eight maps in one channel hand out 7 million a second together, under 1 each, and
+  10 to 13 million with no writer awake, less than one map alone: every line goes to the same members' queues, so the
+  maps queue on each recipient's semaphore, `mpsc` tail and waker instead of the channel's lock. Lines in one
+  channel don't scale with maps; lines in different channels do (13 to 20 million awake, 29 to 73 million pushed).
+- **Not the registry.** Its read lock is taken once for 256 recipients, and two maps' reads don't wait for each other.
+- **The order of lines.** No longer under one lock, two maps' lines in the same channel can reach two members in
+  different orders, and a line can arrive after the notice of a leave or a kick that came after it was said. One
+  map's lines arrive in the order it said them.

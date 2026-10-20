@@ -121,6 +121,12 @@ required-features = ["world-bench"]
 name = "sync"
 harness = false
 
+# Channel chat's fan-out, on the real realm: a line to 100, 1,000 or 5,000
+# members, from 1 map or 8 (`cargo bench --bench chat`, docs/PERFORMANCE.md).
+[[bench]]
+name = "chat"
+harness = false
+
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,
 # wow_messages, the navmesh, compression): the suite takes a third less time,
 # and the crate itself builds as quickly as before. See docs/PERFORMANCE.md.
