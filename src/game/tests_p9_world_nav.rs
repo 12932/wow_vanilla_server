@@ -294,6 +294,52 @@ async fn with_no_navmesh_a_place_in_the_air_keeps_its_height() {
     assert_eq!(at.z, high.z, "at its height");
 }
 
+/// Thistle Tea's `get_zone_and_area/2` on a map with no navigation mesh,
+/// "names a single-zone map's zone where there is no area data" and
+/// "knows no zone for a map with several": with neither a navmesh nor
+/// terrain, a map with one zone (its subareas aside) is in that zone
+/// (mangos's `GetAreaFlagByMapId`, "for instances without generated *.map
+/// files"); one with two knows none, nor does a continent with one, which
+/// mangos skips.
+#[tokio::test]
+async fn a_map_of_one_zone_is_in_it_without_a_navmesh() {
+    use crate::game::data::AreaInfo;
+    let mut d = GameData::empty();
+    for (id, map, zone) in [
+        (209, 33, 0),
+        (2_100, 33, 209),
+        (2_597, 30, 0),
+        (2_598, 30, 0),
+        (12, 0, 0),
+    ] {
+        d.areas.insert(
+            id,
+            AreaInfo {
+                id,
+                map,
+                zone,
+                explore_bit: id,
+                ..Default::default()
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let place = |id: u32| {
+        let map = realm.maps.get(&realm, MapKey::world(id));
+        async move {
+            map.query(|m| {
+                assert!(m.nav.is_none() && m.terrain.is_none());
+                crate::game::map::world::zone_and_area(m, v(1.0, 2.0, 3.0))
+            })
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(place(33).await, Some((209, 209)), "Shadowfang Keep's");
+    assert_eq!(place(30).await, None, "two zones");
+    assert_eq!(place(0).await, None, "a continent");
+}
+
 /// `position_test.exs`'s `distance_between/3` "exact queries do not
 /// discard projected vertical movement by its stale distance" and
 /// `position_snapshot/3` "uses recent movement from the supplied

@@ -401,15 +401,17 @@ fn random_point(center: Vector3d, radius: f32, rng: &mut impl rand::Rng) -> Vect
 
 /// The zone and area at a point, as Thistle Tea works them out: the
 /// navmesh's; else those of the terrain tile's area bit; else the map's
-/// only zone. `None` with neither a navmesh nor terrain tiles. Inside a
-/// city neither knows ([`crate::game::cities::indoors`], Ironforge in its
-/// mountain, which both read as Dun Morogh), the city's, with or without
-/// them.
+/// only zone. With neither a navmesh nor terrain tiles, a continent's
+/// `None`, another map's its only zone (a dungeon's, as mangos's
+/// `GetAreaFlagByMapId` names it "for instances without generated *.map
+/// files", continents skipped). Inside a city neither knows
+/// ([`crate::game::cities::indoors`], Ironforge in its mountain, which
+/// both read as Dun Morogh), the city's, with or without them.
 pub fn zone_and_area(map: &mut Map, pos: Vector3d) -> Option<(u32, u32)> {
     if let Some(city) = crate::game::cities::indoors(map.key.map, pos) {
         return Some((city, city));
     }
-    if map.nav.is_none() && map.terrain.is_none() {
+    if map.nav.is_none() && map.terrain.is_none() && map.key.map <= 1 {
         return None;
     }
     let data = map.realm.data.clone();
