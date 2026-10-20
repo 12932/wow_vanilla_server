@@ -545,6 +545,15 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   keeps saving late arrivals; the shutdown waits (within its limit) until no one is online before the store's last
   flush; a session ending during the shutdown still hands on a player it was moving. **Found:** a copy that unloads
   normally can lose a player sent to it just before it stopped; queued.
+- **8j, creatures, round 8:** **the Lunar Festival's firework guys** (vmangos's `npc_pats_firework_guy`, new
+  `fireworks.rs`): a rocket or cluster used at a launcher calls its guy up there; spell target 46 now puts wild
+  summons and creature guardians at the nearest such spot (Raise Dead, Summon Atal'ai Skeleton too); a core hound with
+  no kin fighting dies and is gone at once (vmangos's `Kill_Self`); a creature group's leader row is no longer counted
+  as a member (60 real groups' flags change, vmangos's `AddMember`); a flyer's corpse falls under gravity on the
+  server as the client sees it; a transform's weapons stay over an event's looks. **My calls:** rockets go off at
+  once (vmangos's sniffs; Thistle Tea keeps them 5 s); the small coloured clusters send their colour's rockets
+  (Thistle Tea; vmangos's guy sends nothing for them); a transform's weapons win over an event's own equipment
+  (Thistle Tea; mangos puts the event's on).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
