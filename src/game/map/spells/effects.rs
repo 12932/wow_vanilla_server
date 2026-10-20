@@ -1995,6 +1995,81 @@ pub fn tick_areas(map: &mut Map) {
     map.spells.areas.retain(|a| a.ends > now);
 }
 
+/// How far past an area's edge a unit holding its aura may have gone
+/// since its last tick, for what it holds to be found.
+const AREA_MARGIN: f32 = 15.0;
+
+/// The units about `caster`'s areas of `spell`, other than `except`,
+/// holding an aura of the spell from the caster: what the areas put on.
+fn area_recipients(map: &Map, caster: Guid, spell: u32, except: Guid) -> Vec<Guid> {
+    let mut found: Vec<Guid> = Vec::new();
+    for a in map
+        .spells
+        .areas
+        .iter()
+        .filter(|a| a.caster == caster && a.spell == spell)
+    {
+        for g in map.grid.around(a.at.x, a.at.y, a.radius + AREA_MARGIN) {
+            if g != except
+                && !found.contains(&g)
+                && auras::auras(map, g).is_some_and(|x| {
+                    x.holders
+                        .iter()
+                        .any(|h| h.spell == spell && h.caster == caster)
+                })
+            {
+                found.push(g);
+            }
+        }
+    }
+    found
+}
+
+/// A channel pushed back: `caster`'s areas of `spell` end `cut` sooner,
+/// with the objects clients see them by, and what they hold on those
+/// inside ends no later than they do, the client told of it (mangos's
+/// `DynamicObject::Delay` and its `DelaySpellAuraHolder` on the affected,
+/// Thistle Tea's `shorten_area_aura`). A unit that holds the channel's own
+/// aura too is shortened once, whichever comes first.
+pub fn delay_areas(map: &mut Map, caster: Guid, spell: u32, cut: Duration) {
+    let now = map.now;
+    let mut until = None;
+    for a in map
+        .spells
+        .areas
+        .iter_mut()
+        .filter(|a| a.caster == caster && a.spell == spell)
+    {
+        a.ends = a.ends.checked_sub(cut).unwrap_or(now).max(now);
+        until = until.max(Some(a.ends));
+        if let Some(d) = map.spells.dynamic.get_mut(&a.object)
+            && let Some(t) = d.ends
+        {
+            d.ends = Some(t.checked_sub(cut).unwrap_or(now).max(now));
+        }
+    }
+    let Some(until) = until else {
+        return;
+    };
+    for g in area_recipients(map, caster, spell, Guid::zero()) {
+        auras::shorten_to(map, g, spell, caster, until);
+    }
+}
+
+/// A channel ended: `caster`'s areas of `spell` go, and with them what
+/// they hold on those about (the channel's own `target` has its aura
+/// taken already), as mangos's persistent area auras go with their
+/// dynamic object and Thistle Tea's `remove_area_aura` takes them.
+pub fn areas_cancelled(map: &mut Map, caster: Guid, spell: u32, target: Guid) {
+    let held = area_recipients(map, caster, spell, target);
+    map.spells
+        .areas
+        .retain(|a| !(a.caster == caster && a.spell == spell));
+    for g in held {
+        auras::remove_spell(map, g, spell, Some(caster));
+    }
+}
+
 /// Whether a ground area's aura ticks (damage, healing, a trigger).
 fn periodic_area(aura: u32) -> bool {
     matches!(

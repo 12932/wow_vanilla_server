@@ -1631,6 +1631,41 @@ pub fn delay_source(map: &mut Map, target: Guid, spell: u32, caster: Guid, cut: 
     }
 }
 
+/// `target`'s auras of `spell` from `caster` end no later than `until`,
+/// the client told of a slotted one's new duration (an area's, its area
+/// cut short: mangos's `DelaySpellAuraHolder`).
+pub fn shorten_to(map: &mut Map, target: Guid, spell: u32, caster: Guid, until: Instant) {
+    let now = map.now;
+    let until = until.max(now);
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let mut shown = Vec::new();
+    for h in a
+        .holders
+        .iter_mut()
+        .filter(|h| h.spell == spell && h.caster == caster)
+    {
+        if h.expires.is_none_or(|t| t > until) {
+            h.expires = Some(until);
+            if let Some(slot) = h.slot {
+                shown.push((
+                    slot,
+                    until.saturating_duration_since(now).as_millis() as u32,
+                ));
+            }
+        }
+    }
+    if let Some(p) = map.players.get(&target) {
+        for (slot, ms) in shown {
+            p.outbound.send(&SMSG_UPDATE_AURA_DURATION {
+                aura_slot: slot as u8,
+                aura_duration: ms,
+            });
+        }
+    }
+}
+
 /// One stack (or, with no stacks, the whole holder) of `spell` comes off.
 pub fn remove_stack(map: &mut Map, target: Guid, spell: u32) {
     let Some(a) = auras_mut(map, target) else {

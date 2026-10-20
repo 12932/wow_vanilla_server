@@ -1,7 +1,7 @@
 //! Round 8's auras: what an aura's spell attributes hold on its bearer.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -571,4 +571,181 @@ async fn a_vanished_rogue_is_undetectable_for_a_second() {
         (true, true, true, true, true, true),
         "(seen, stealthed, unseen a yard off, unseen at 999 ms, seen at a second, looked at afresh)"
     );
+}
+
+const HURRICANE: u32 = 16914;
+
+/// A ground channel pushed back cuts its areas short, the objects clients
+/// see them by, and what they hold on those inside, as mangos's
+/// `DynamicObject::Delay` (`DelaySpellAuraHolder` on the affected) and
+/// Thistle Tea's `shorten_area_aura` have it: Hurricane's slow on a duelling
+/// warrior and a kobold ends with the channel's new end, once, the warrior
+/// told of its new duration; another caster's Hurricane and the druid's
+/// other areas keep theirs. Cancelled, the channel takes its areas, and
+/// what they hold on those inside, at once.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_ground_channel_pushed_back_cuts_its_areas_and_what_they_hold_short() {
+    use super::tests_p3_spells_kit::{
+        cast_fresh, dummy, have_data, holder, pass, player, ready, realm,
+    };
+    use crate::game::map::duel::{Duel, Phase};
+    use crate::game::map::spells::{self, Area, Targets};
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_d, druid, map) = player(&realm, "P8AH", "Stormcall", Race::NightElf, Class::Druid).await;
+    let (mut c, warrior, _) =
+        player(&realm, "P8AW", "Stormed", Race::NightElf, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, druid, 60, &[HURRICANE]);
+            ready(m, warrior, 60, &[]);
+            let arbiter = Guid::new(0xF110_0000_0000_0001);
+            for (me, them, initiator) in [(druid, warrior, true), (warrior, druid, false)] {
+                m.players.get_mut(&me).unwrap().duel = Some(Duel {
+                    opponent: them,
+                    flag: arbiter,
+                    phase: Phase::Fighting,
+                    initiator,
+                    out_of_bounds_since: None,
+                    started: None,
+                });
+            }
+            let kobold = dummy(m, druid, 60, 10.0);
+            let at = m.position_of(kobold).unwrap();
+            if let Some(p) = m.players.get_mut(&warrior) {
+                p.movement.position = at;
+            }
+            let began = cast_fresh(
+                m,
+                druid,
+                HURRICANE,
+                Targets {
+                    dest: Some(at),
+                    ..Default::default()
+                },
+            );
+            // Another's Hurricane, and another spell's area of the druid's.
+            let other = |caster: Guid, spell: u32| Area {
+                caster,
+                spell,
+                index: 1,
+                amount: 0,
+                at,
+                radius: 1.0,
+                ends: m.now + Duration::from_secs(60),
+                next_tick: m.now + Duration::from_secs(60),
+                period: Duration::from_secs(60),
+                object: Guid::zero(),
+            };
+            let others = [other(kobold, HURRICANE), other(druid, HURRICANE + 1)];
+            m.spells.areas.extend(others.iter().cloned());
+            // Eight waves: two seconds left, the slow on both.
+            for _ in 0..8 {
+                m.players
+                    .get_mut(&warrior)
+                    .unwrap()
+                    .fields
+                    .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 5000);
+                pass(m, 1000);
+            }
+            let slowed = [warrior, kobold].map(|g| holder(m, g, HURRICANE).and_then(|h| h.expires));
+            let slot = holder(m, warrior, HURRICANE).and_then(|h| h.slot);
+            spells::pushback_by(m, druid, warrior);
+            let end = m
+                .caster(druid)
+                .and_then(|c| c.casting.as_ref())
+                .and_then(|c| c.channel_until);
+            let areas: Vec<(Guid, u32, Instant)> = m
+                .spells
+                .areas
+                .iter()
+                .map(|a| (a.caster, a.spell, a.ends))
+                .collect();
+            let objects: Vec<Option<Instant>> = m
+                .spells
+                .dynamic
+                .values()
+                .filter(|d| d.caster == druid && d.spell == HURRICANE)
+                .map(|d| d.ends)
+                .collect();
+            let shortened =
+                [warrior, kobold].map(|g| holder(m, g, HURRICANE).and_then(|h| h.expires));
+            let now = m.now;
+            // Cancelled: the areas, their objects and the slows go.
+            spells::interrupt(m, druid);
+            let gone = (
+                m.spells
+                    .areas
+                    .iter()
+                    .filter(|a| a.caster == druid && a.spell == HURRICANE)
+                    .count(),
+                m.spells
+                    .dynamic
+                    .values()
+                    .filter(|d| d.caster == druid && d.spell == HURRICANE)
+                    .count(),
+                [warrior, kobold].map(|g| holder(m, g, HURRICANE).is_some()),
+            );
+            (
+                began, now, slowed, slot, end, areas, objects, shortened, others, gone,
+            )
+        })
+        .await
+        .unwrap();
+    let (began, now, slowed, slot, end, areas, objects, shortened, others, gone) = out;
+    assert!(began, "Hurricane begins");
+    let end = end.expect("still channelling");
+    assert_eq!(
+        end - now,
+        Duration::from_secs(1),
+        "a second cut off its two"
+    );
+    assert!(
+        slowed.iter().all(|e| e.is_some_and(|t| t > end)),
+        "the slow ran past the new end: {slowed:?}"
+    );
+    for (caster, spell, ends) in &areas {
+        if *caster == others[0].caster || *spell == others[1].spell {
+            assert_eq!(
+                *ends,
+                if *caster == others[0].caster {
+                    others[0].ends
+                } else {
+                    others[1].ends
+                },
+                "another's area keeps its end"
+            );
+        } else {
+            assert_eq!(
+                *ends, end,
+                "the druid's Hurricane areas end with the channel"
+            );
+        }
+    }
+    assert_eq!(areas.len(), 4, "two of Hurricane's and the two others");
+    assert!(
+        !objects.is_empty() && objects.iter().all(|t| *t == Some(end)),
+        "{objects:?}"
+    );
+    assert_eq!(
+        shortened,
+        [Some(end), Some(end)],
+        "cut short to the new end, once"
+    );
+    let slot = slot.expect("the warrior's slow is shown") as u8;
+    let told = c
+        .gets(Duration::from_secs(2), |msg| match msg {
+            ServerOpcodeMessage::SMSG_UPDATE_AURA_DURATION(d)
+                if d.aura_slot == slot && d.aura_duration == 1000 =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    assert!(told.is_some(), "the warrior is told the slow's new second");
+    assert_eq!(gone, (0, 0, [false, false]), "cancelled, all of it goes");
 }

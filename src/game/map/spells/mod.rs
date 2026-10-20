@@ -2395,9 +2395,7 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     {
         auras::remove_spell(map, pet, casting.spell, Some(g));
     }
-    map.spells
-        .areas
-        .retain(|a| !(a.caster == g && a.spell == casting.spell));
+    effects::areas_cancelled(map, g, casting.spell, target);
     dynamic::remove_spell(map, g, casting.spell);
     if let Some(f) = map.unit_fields_mut(g) {
         f.set_u32(UNIT_CHANNEL_SPELL, 0);
@@ -2522,11 +2520,13 @@ pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
     let Some(delta) = pushed.filter(|d| !d.is_zero()) else {
         return;
     };
-    // The channel's auras end that much sooner too.
+    // The channel's auras end that much sooner too, and its areas on the
+    // ground with what they hold on those inside.
     if let Some((spell, target, cut)) = delayed
         && !cut.is_zero()
     {
         auras::delay_source(map, target, spell, g, cut);
+        effects::delay_areas(map, g, spell, cut);
     }
     let Some(p) = map.players.get(&g) else {
         return;
