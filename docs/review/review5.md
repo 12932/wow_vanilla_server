@@ -981,7 +981,10 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   per-player count of holders (the index R3-31 proposes would serve both).
 - **Effort:** easy to medium.
 
-#### 8. `checks::aura_state` and the form checks shift by a data value with no bound
+#### 8. `checks::aura_state` and the form checks shift by a data value with no bound **Fixed.**
+- **Fixed:** `checks::bit`, a one-based index's bit that is none past the 32nd, for the aura states, the forms
+  (`form_error`, `passive_eligible`) and the creature types (which took bit 31 for any past it); test
+  `an_aura_state_or_form_past_the_mask_names_no_bit`.
 - **Severity:** low. **Kind:** robustness.
 - **Where:**
   - `spells/checks.rs:100`: `1 << (state - 1)` for `caster_aura_state` or `target_aura_state`;

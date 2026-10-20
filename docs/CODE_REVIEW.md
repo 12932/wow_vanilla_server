@@ -83,6 +83,10 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   saved, by that copy. Before, the session kept the stopped copy's handle: the client's next packet closed the
   connection, and the player went offline unsaved, still in the copy.
 
+The lows of the world, combat and realm-wide sections (`fix/lowsb`):
+- combat 8 fixed: an aura state, form or creature type past the 32nd names no bit (`checks::bit`), where the
+  shift by a data value panicked in a debug build and tested another bit in release.
+
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
   - **saves apart:** a trade, mail sent or taken, an auction, a charter or emblem bought were each saved on both

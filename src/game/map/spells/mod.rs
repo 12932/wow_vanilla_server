@@ -471,7 +471,7 @@ pub fn passive_eligible(s: &SpellTemplate, form: u8) -> bool {
     let out_of_form = s.attr(2, ATTR_EX2_NOT_NEED_SHAPESHIFT);
     let in_form = form > 0
         && (s.passive() || s.attr(0, sd::ATTR_HIDDEN))
-        && mask & (1 << (form - 1)) != 0
+        && mask & checks::bit(u32::from(form)) != 0
         && !out_of_form;
     in_form || (s.passive() && (mask == 0 || (form == 0 && out_of_form)))
 }
