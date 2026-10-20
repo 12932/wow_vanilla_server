@@ -1510,7 +1510,11 @@ impl Map {
         p.movement.position = position;
         p.movement.orientation = orientation;
         p.movement.flags = wow_world_messages::vanilla::MovementInfo_MovementFlags::empty();
-        p.logout_at = None;
+        // A logout under way goes on in the new map, as mangos's session
+        // timer does through a teleport: it is due when it was, and a
+        // cancel there undoes it (`login::arrived` roots the client again).
+        // Before, it was dropped and its stun and root left: the player
+        // came in stunned, and a cancel had nothing to cancel.
         let session = p.online.session.clone();
         crate::game::session::transfer(&self.realm, &session, p, key);
     }

@@ -395,3 +395,105 @@ async fn a_dungeon_copy_outlasts_a_restart_whatever_its_last_kill() {
     assert_eq!(map_of(&realm, g).key, key, "Alice is back in her copy");
     let _ = std::fs::remove_dir_all(db.parent().unwrap());
 }
+
+type LogoutState = (bool, bool, bool);
+
+/// Stunned, logging out, rooted by the logout.
+fn logout_state(g: Guid) -> impl FnOnce(&mut Map) -> LogoutState + Send + 'static {
+    move |m| {
+        let p = &m.players[&g];
+        (
+            p.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_STUNNED,
+            ),
+            p.logout_at.is_some(),
+            p.misc.logout_rooted,
+        )
+    }
+}
+
+/// Alice, asked to log out (20 s), teleported to map 1 in its countdown.
+async fn teleported_logging_out() -> (Arc<Realm>, Client, Guid) {
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    cfg.logout_delay = Duration::from_secs(20);
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = Realm::new(cfg, store, startup, Default::default(), None);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_RESPONSE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(_)).then_some(())
+    })
+    .await;
+    assert_eq!(
+        on(&map_of(&realm, g), logout_state(g)).await,
+        (true, true, true)
+    );
+    map_of(&realm, g).call(move |m| m.teleport(g, MapKey::world(1), Vector3d::default(), 0.0));
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.clear();
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(g).await;
+    (realm, a, g)
+}
+
+/// Review 5's maps 4: a far teleport in a logout's countdown (a boat's
+/// crossing, an eviction, a battleground's end) keeps the logout going, as
+/// mangos's session timer does: the client is rooted again on the new map,
+/// and a cancel there undoes the stun and the root. Before, the teleport
+/// dropped the countdown and left its stun and root: the player came in
+/// stunned, and a cancel had nothing to cancel.
+#[tokio::test]
+async fn a_teleport_in_a_logouts_countdown_keeps_it_and_a_cancel_undoes_it() {
+    let (realm, mut a, g) = teleported_logging_out().await;
+    let map = map_of(&realm, g);
+    assert_eq!(map.key, MapKey::world(1));
+    assert_eq!(on(&map, logout_state(g)).await, (true, true, true));
+    a.wait_for("the root again", |m| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_ROOT(r) if r.guid == g => Some(()),
+        _ => None,
+    })
+    .await;
+    a.send(CMSG_LOGOUT_CANCEL {}).await;
+    a.wait_for("SMSG_LOGOUT_CANCEL_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK).then_some(())
+    })
+    .await;
+    a.wait_for("the unroot", |m| match m {
+        ServerOpcodeMessage::SMSG_FORCE_MOVE_UNROOT(r) if r.guid == g => Some(()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(on(&map, logout_state(g)).await, (false, false, false));
+}
+
+/// Review 5's maps 4: the logout a teleport carried on completes on the
+/// new map when it is due, saved there.
+#[tokio::test]
+async fn a_logout_carried_through_a_teleport_completes_on_the_new_map() {
+    let (realm, mut a, g) = teleported_logging_out().await;
+    let map = map_of(&realm, g);
+    // Due now, rather than in 20 s.
+    on(&map, move |m| {
+        let now = m.now;
+        m.players.get_mut(&g).unwrap().logout_at = Some(now);
+    })
+    .await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    until("offline", || realm.registry.online(g).is_none()).await;
+    realm.store.flush().await;
+    let row = realm
+        .store
+        .load(crate::game::guid::counter(g))
+        .await
+        .unwrap();
+    assert_eq!(row.map, 1, "saved on the new map");
+}
