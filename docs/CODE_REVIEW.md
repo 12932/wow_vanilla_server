@@ -88,6 +88,8 @@ The lows of the world, combat and realm-wide sections (`fix/lowsb`):
   shift by a data value panicked in a debug build and tested another bit in release.
 - social 8 fixed: a guild's rank, a group's lead or a summons sent as a player changes maps follows them
   (`map::call_player`; `deliver` names the new map as the arrival is sent), where it went to the map they had left.
+- social 11 fixed: a champion whose farewell was lost with their city's map is brought home 30 s past when they
+  were due (`champions::State::home_by`), where Jaina or Rexxar never came again until a restart.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

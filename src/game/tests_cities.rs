@@ -299,6 +299,42 @@ async fn jaina_answers_ironforge_with_its_elite_guards_and_her_teleport_to_the_m
     .await;
 }
 
+/// rev5-social 11: a champion whose farewell was lost with their city's
+/// map (started again as they said it, and their time home with it) is
+/// brought home by home, 30 s past when they were due, where nothing
+/// brought them and no call wanted them again until a restart. A farewell
+/// under way is left to the city.
+#[tokio::test]
+async fn a_champion_whose_farewell_was_lost_with_the_citys_map_comes_home() {
+    let realm = realm();
+    let kalimdor = realm.maps.get(&realm, MapKey::world(1));
+    let spawn = guid_of_spawn(&kalimdor, champions::JAINA_SPAWN).await;
+    let set = |due: Duration| {
+        move |m: &mut Map| {
+            let mut s = Champion::Jaina.state(&m.realm).lock();
+            s.place = Place::Returning;
+            s.home_by = std::time::Instant::now().checked_sub(due);
+        }
+    };
+    // Due a second ago: the city's to see home yet; home keeps her away.
+    on(&kalimdor, set(Duration::from_secs(1))).await;
+    until(&kalimdor, "her spawn kept away", move |m| {
+        m.creature(spawn).is_none_or(|c| !c.alive())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        on(&kalimdor, |m| place_of(m, Champion::Jaina)).await,
+        Place::Returning
+    );
+    // Due a minute ago, lost: home brings her back.
+    on(&kalimdor, set(Duration::from_secs(60))).await;
+    until(&kalimdor, "home in Theramore", move |m| {
+        place_of(m, Champion::Jaina) == Place::Home && m.creature(spawn).is_some_and(|c| c.alive())
+    })
+    .await;
+}
+
 /// Darnassus is on Theramore's map: its alarm at 60 brings Jaina from home
 /// to it on the same map, with four Darnassus Elite Sentinels, and her
 /// Teleport sends its victim into the Temple of the Moon.

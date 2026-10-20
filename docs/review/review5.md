@@ -1226,7 +1226,10 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
 - **Fix:** compute, compare, store and fan out under the events lock (the fan-out is channel sends).
 - **Effort:** easy.
 
-#### 11. A champion is lost until a restart if their city's map restarts during the farewell (low, reliability)
+#### 11. A champion is lost until a restart if their city's map restarts during the farewell (low, reliability) **Fixed.**
+- **Fixed:** the realm keeps when a returning champion is due home (`State::home_by`), and home brings them back
+  (`come_home`, the spawn alive again) once that is 30 s past (`STALE`, as a lost call gives way); test
+  `a_champion_whose_farewell_was_lost_with_the_citys_map_comes_home`.
 - **Where:** `champions.rs:896-897` (`Place::Returning` is realm-wide, but the time home is only in the city map's
   `Local`), `:782-788` (the only path that brings them home), `:828` (home's catch-up only keeps the home spawn
   away).

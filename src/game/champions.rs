@@ -34,7 +34,7 @@
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
@@ -248,6 +248,10 @@ pub struct State {
     /// When they were called, while they are leaving: a call lost (a map's
     /// actor gone) gives way after [`STALE`].
     pub called_at: Option<Instant>,
+    /// When they are due home, while they are returning: a farewell lost
+    /// (their city's map started again, its time home with it) gives way
+    /// after [`STALE`] past it, home bringing them back.
+    pub home_by: Option<Instant>,
     /// Their visits to their cities.
     pub visits: u32,
 }
@@ -823,6 +827,20 @@ fn update_one(map: &mut Map, who: Champion) {
                 s.place = Place::Home;
             }
         }
+        // Home, their farewell lost with their city's map (started again
+        // as it said farewell, and the time home with it): home brings
+        // them back, where they were gone until a restart (review 5's
+        // social 11).
+        Place::Returning
+            if who
+                .state(&map.realm)
+                .lock()
+                .home_by
+                .is_some_and(|t| t.elapsed() > STALE) =>
+        {
+            warn!("{}'s way home was lost; bringing them home", who.name());
+            come_home(map, who);
+        }
         // Home, after its actor started again while they were away: the
         // spawn back alive goes again.
         Place::Away { .. } | Place::Returning => {
@@ -839,12 +857,19 @@ fn update_one(map: &mut Map, who: Champion) {
     }
 }
 
+/// `who` says farewell to their city, home in `takes`.
+fn returning(map: &Map, who: Champion, takes: Duration) {
+    let mut s = who.state(&map.realm).lock();
+    s.place = Place::Returning;
+    s.home_by = Some(Instant::now() + takes);
+}
+
 /// The city: they are kept in it, and at peace long enough, they go home.
 fn watch(map: &mut Map, who: Champion, g: Guid, city: u32) {
     let now = map.now;
     if map.creature(g).is_none() {
         // Gone some other way: home, their company left as guards.
-        who.state(&map.realm).lock().place = Place::Returning;
+        returning(map, who, Duration::ZERO);
         crate::game::map::elites::released(map, who);
         bring_home(map, who);
         return;
@@ -894,7 +919,7 @@ fn watch(map: &mut Map, who: Champion, g: Guid, city: u32) {
         }
     };
     who.local(map).returning = Some((now + takes, g));
-    who.state(&map.realm).lock().place = Place::Returning;
+    returning(map, who, takes);
     info!(
         "{}: {} goes home to {}",
         map.key,
