@@ -323,6 +323,11 @@ fn self_resurrect(map: &mut Map, g: Guid) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
+    // Reincarnation only for one who knows it (Thistle Tea's "rejects a
+    // forged Reincarnation offer without learning it").
+    if spell == REINCARNATION && !p.spells.contains(&REINCARNATION_PASSIVE) {
+        return;
+    }
     // `SELF_RESURRECT`: points are a percentage, or (below zero) health
     // with the misc value's mana.
     let Some(index) = s.effects.iter().position(|e| e.effect == 94) else {

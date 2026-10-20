@@ -931,6 +931,10 @@ mod tests_p8_world_system;
 #[cfg(test)]
 mod tests_p8_world_units;
 #[cfg(test)]
+mod tests_p9_core_class;
+#[cfg(test)]
+mod tests_p9_core_class_real;
+#[cfg(test)]
 mod tests_p9_core_power;
 #[cfg(test)]
 mod tests_p9_core_terrain;

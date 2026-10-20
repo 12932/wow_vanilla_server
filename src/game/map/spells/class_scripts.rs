@@ -373,7 +373,7 @@ fn flametongue(
         })
         .and_then(|entry| data.item(entry))
         .map_or(2000, |t| t.delay.max(1));
-    let damage = ((amount as f32 + 3.85 * fire) * 0.01 * speed as f32 / 1000.0).round() as i32;
+    let damage = flametongue_damage(amount, fire, speed);
     let mut strike = attack.clone();
     // Its spell power is in already.
     strike.attributes[3] |= crate::game::data::spells::ATTR_EX3_IGNORE_CASTER_MODIFIERS;
@@ -385,6 +385,13 @@ fn flametongue(
         target,
         [Some(damage.max(1)), None, None],
     );
+}
+
+/// Flametongue's attack of the proc's `points` and `fire` spell power, with
+/// a weapon of `speed_ms`: vmangos's points and 3.85 times fire power, a
+/// hundredth of it a second of the weapon's speed, rounded.
+pub(crate) fn flametongue_damage(points: i32, fire: f32, speed_ms: u32) -> i32 {
+    ((points as f32 + 3.85 * fire) * 0.01 * speed_ms as f32 / 1000.0).round() as i32
 }
 
 /// The spell an aura's proc casts: Touch of Weakness's damage by its rank.
