@@ -621,6 +621,35 @@ impl Player {
         }
     }
 
+    /// The create another's client is told of the player by, at `now`. On
+    /// a flight, where it has taken them and its path as a flying spline,
+    /// its time passed, as mangos's create carries a taxi flight's (and a
+    /// creature's walk, `Creature::create`): the flight's
+    /// `SMSG_MONSTER_MOVE` went only to those who saw it take off, and a
+    /// newcomer to the flier's view saw a mounted player standing still.
+    pub fn create_for_others(&self, now: Instant) -> Create<'_> {
+        let mut create = self.create(false);
+        if let Some(f) = self.flight.as_ref().filter(|f| !f.walk.done(now))
+            && let Placement::Living {
+                position,
+                orientation,
+                spline,
+                ..
+            } = &mut create.placement
+        {
+            (*position, *orientation) = f.walk.position_at(now);
+            *spline = Some(crate::game::update::SplineState {
+                flags: crate::game::map::npc::FLIGHT_SPLINE,
+                time_passed: now.saturating_duration_since(f.walk.started).as_millis() as u32,
+                duration: f.walk.duration.as_millis() as u32,
+                id: f.walk.spline_id,
+                nodes: f.walk.points.clone(),
+                final_node: f.walk.destination(),
+            });
+        }
+        create
+    }
+
     pub fn stand_state(&self) -> u8 {
         self.fields.get_byte(UNIT_FIELD_BYTES_1, 0)
     }

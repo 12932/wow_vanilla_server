@@ -211,6 +211,102 @@ async fn debug_taxi_teaches_every_discoverable_node_and_keeps_them() {
     assert_eq!(on(&map, known).await, [true, true, false, false], "kept");
 }
 
+/// A flier's create, as another reads it: where it puts them, and its
+/// spline (whether it runs and flies, its time passed, its duration and its
+/// last point), if it has one.
+type Spline = (bool, bool, u32, u32, Vector3d);
+
+fn flier_in(
+    m: &wow_world_messages::vanilla::opcodes::ServerOpcodeMessage,
+    flier: Guid,
+) -> Option<(Vector3d, Option<Spline>)> {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let objects = match m {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+        ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+        _ => return None,
+    };
+    objects.iter().find_map(|o| match &o.update_type {
+        Object_UpdateType::CreateObject {
+            guid3, movement2, ..
+        }
+        | Object_UpdateType::CreateObject2 {
+            guid3, movement2, ..
+        } if *guid3 == flier => match movement2.update_flag.get_living()? {
+            MovementBlock_UpdateFlag_Living::Living {
+                flags,
+                living_position,
+                ..
+            } => Some((
+                *living_position,
+                flags.get_spline_enabled().map(|s| {
+                    (
+                        s.spline_flags.get_run_mode(),
+                        s.spline_flags.get_flying(),
+                        s.time_passed,
+                        s.duration,
+                        s.final_node,
+                    )
+                }),
+            )),
+            MovementBlock_UpdateFlag_Living::HasPosition { .. } => None,
+        },
+        _ => None,
+    })
+}
+
+/// mangos's taxi flight in a create: one who comes into view of a player
+/// on a flight is told of them where the flight has taken them, with its
+/// path as a flying spline and its time passed, so their client flies them
+/// on. The flight's `SMSG_MONSTER_MOVE` goes only to those who see it take
+/// off; without this, a newcomer saw a mounted player standing still.
+#[tokio::test]
+async fn one_who_comes_into_view_of_a_flier_sees_them_fly_on() {
+    let (realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let duration = on(&map, move |m| {
+        npc::fly_path(m, ga, PATH);
+        m.players[&ga]
+            .flight
+            .as_ref()
+            .map(|f| f.walk.duration.as_millis() as u32)
+    })
+    .await
+    .expect("flying");
+    // A moment on her way, Bob comes along.
+    crate::game::harness::an_update(&map).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.heartbeat(START.0, START.1, START.2).await;
+    let (at, spline) = b.wait_for("Alice's create", |m| flier_in(m, ga)).await;
+    let (run, flying, passed, total, last) = spline.expect("her flight's spline in her create");
+    assert!(run && flying, "flying, at a run");
+    assert_eq!(total, duration);
+    assert!(
+        passed > 0 && passed < total,
+        "partway: {passed} of {total} ms"
+    );
+    assert!(
+        (last.x - (START.0 + 150.0)).abs() < 0.01,
+        "to its end: {last:?}"
+    );
+    assert!(
+        at.x >= START.0 && (at.y - START.1).abs() < 0.01,
+        "on her way: {at:?}"
+    );
+    // Her own create has none: her client flies by her flight's move.
+    let own = on(&map, move |m| {
+        matches!(
+            m.players[&ga].create(true).placement,
+            crate::game::update::Placement::Living {
+                spline: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    assert!(!own, "no spline in her own create");
+}
+
 /// Thistle Tea's dev_commands_test ".start ... rejects combat and taxi
 /// flight": `.start` is refused in a fight and in flight, as mangos's
 /// `HandleStartCommand` refuses them before it casts Stuck.
