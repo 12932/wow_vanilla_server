@@ -194,6 +194,9 @@ async fn a_mind_controlled_player_is_let_go_when_the_priest_goes() {
         .await
         .unwrap();
     assert_eq!(victim, (false, before, false), "let go");
+    // Back once gone (a connection before that takes her over where she
+    // is).
+    crate::game::harness::offline(&realm, ga).await;
     let mut a = Client::connect(&realm, "A");
     a.login(ga).await;
     a.sees(ga).await;

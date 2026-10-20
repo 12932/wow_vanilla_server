@@ -753,9 +753,10 @@ async fn windsor_unmasks_prestor_at_the_players_word() {
     );
     // The throne room.
     c.clear();
-    map.query(move |m| bring(m, me, windsor, 4)).await;
+    // His walk's last point: reached, it ends his route an update on.
+    let throne = map.query(move |m| bring(m, me, windsor, 4)).await.unwrap();
     assert!(
-        until(&map, 3_000, move |m| reached(m, windsor, 4)).await,
+        until(&map, 3_000, move |m| came_to(m, windsor, 4, throne)).await,
         "in the throne room"
     );
     let prestor = map

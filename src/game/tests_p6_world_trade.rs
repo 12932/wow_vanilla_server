@@ -173,7 +173,9 @@ async fn a_partner_leaving_calls_the_trade_off_and_nothing_changes_hands() {
         on(&map, move |m| purse(m, ga, gem)).await,
         (1000, false, true)
     );
-    // Bob, back, has what he had.
+    // Bob, back, has what he had: as saved, once he has gone (a connection
+    // before that takes him over where he is).
+    crate::game::harness::offline(&realm, gb).await;
     let mut b = Client::connect(&realm, "Bob");
     b.login(gb).await;
     let back = on(&map, move |m| m.players[&gb].money()).await;

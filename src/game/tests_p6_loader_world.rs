@@ -576,9 +576,11 @@ async fn real_start_casts_stuck_to_where_its_caster_last_stood() {
         })
         .await;
     assert!((landed.x - safe.x).abs() < 0.1, "{landed:?} {safe:?}");
-    // Not in a fight.
+    // Not in a fight: one with a player, which lasts five seconds at least.
+    // A fight no creature holds her in ended at the map's next update,
+    // which came before her command whenever the test ran slow.
     on(&map, move |m| {
-        crate::game::map::combat::enter(m, g, false);
+        crate::game::map::combat::enter(m, g, true);
     })
     .await;
     c.say(".start").await;

@@ -243,6 +243,17 @@ pub(super) async fn timer(map: &MapHandle, g: Guid, id: u32) -> Option<Duration>
     map.query(move |m| left(m, g, id)).await.flatten()
 }
 
+/// How long after its fight began `g`'s event `id` is due: what the pull
+/// set it to, until it goes, however long ago the pull was (the map's
+/// clock runs on between queries, seconds on a busy machine). [`left`]
+/// for one not in a fight.
+pub(super) fn after_pull(m: &Map, g: Guid, id: u32) -> Option<Duration> {
+    let i = index(m, g, id);
+    let due = event_ai::scripted(m, g)?.timers[i]?;
+    let from = m.creature(g).and_then(|c| c.combat_start).unwrap_or(m.now);
+    Some(due.saturating_duration_since(from))
+}
+
 /// Whether `left` is `secs` seconds on, or within the update since.
 pub(super) fn about(left: Option<Duration>, secs: f32) -> bool {
     left.is_some_and(|l| {
@@ -323,8 +334,8 @@ pub(super) async fn cast_any_of(
     .await
 }
 
-/// A timed cast of `g`'s, pulled just now: its event `id` first due
-/// `first` seconds on (from, to); made due, `spell` goes (at `at`, if
+/// A timed cast of `g`'s, pulled: its event `id` first due `first`
+/// seconds after the pull (from, to); made due, `spell` goes (at `at`, if
 /// given) and is due again `repeat` seconds on.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn timed_cast(
@@ -337,7 +348,7 @@ pub(super) async fn timed_cast(
     repeat: (f32, f32),
     at: Option<Guid>,
 ) {
-    let t = timer(map, g, id).await;
+    let t = map.query(move |m| after_pull(m, g, id)).await.flatten();
     assert!(
         between(t, first.0, first.1),
         "{id}: first in {t:?}, not {first:?}"

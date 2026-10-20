@@ -696,6 +696,8 @@ async fn the_killing_blow_trains_and_the_client_sees_it_and_the_corpse_trains_no
         ((false, Some(2)), Some(2)),
         "trained by the kill, not by the corpse"
     );
+    // The new value, whenever it comes: an update between the two queries
+    // sends the 1 set in the first, after the clear.
     let field = PLAYER_SKILL_INFO_1_1 + slot * 3 + 1;
     let seen = a
         .wait_for("the skill's new value", |m| {
@@ -703,6 +705,7 @@ async fn the_killing_blow_trains_and_the_client_sees_it_and_the_corpse_trains_no
                 .into_iter()
                 .filter(|(g, _)| *g == ga)
                 .find_map(|(_, mask)| crate::game::tests_bugs6::fields(&mask).get(&field).copied())
+                .filter(|v| v & 0xFFFF == 2)
         })
         .await;
     assert_eq!(seen & 0xFFFF, 2);
