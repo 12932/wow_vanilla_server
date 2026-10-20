@@ -695,6 +695,12 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   to its restarted copy now has that copy tell the player's session its new handle, so their packets reach it and
   they're saved on logout (they had been dropped unsaved at their next packet); a player whose client goes while
   handed on is saved there.
+- **Leftovers, the capitals (`fix/cities2`):** a player inside Ironforge is in Ironforge, zone and area (the box
+  round its inside, asked first by every lookup; the gate's steps stay Dun Morogh); a script group whose leader
+  leaves the map is disbanded (Thistle Tea keeps it leaderless, mangos promotes a new leader). **peon:** the raid
+  knows every capital's guards, Elite Guards and champions; `--raid-at stormwind|ironforge|darnassus|orgrimmar|
+  undercity|thunderbluff` (or `map,x,y,z`); `--raid-side alliance` sends Alliance raiders at a Horde city (naming
+  a Horde city picks it). Merged with your peon flight path storm (`--mode flight`).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
