@@ -2272,7 +2272,7 @@ mod spells {
                 ServerOpcodeMessage::SMSG_SPELL_START(s)
                     if s.caster == spitter && s.spell == 105 =>
                 {
-                    s.targets.target_flags.get_unit().map(|u| u.unit_target)
+                    crate::game::map::spells::unit_of(&s.targets)
                 }
                 _ => None,
             })

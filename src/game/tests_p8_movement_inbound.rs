@@ -186,20 +186,56 @@ fn a_blows_line_carries_its_school_and_its_absorb_and_resist_apart() {
     assert_eq!(&frame[frame.len() - 12..frame.len() - 8], &[0, 0, 0, 0]);
 }
 
+/// A blow's hit info is a set of flags in 1.12: a crushing blow (0x8002)
+/// and a main hand's miss (0x12), as the Eranikus fight sends them, read
+/// back by wow_messages (as the harness and peon read them) with each bit.
+/// Before, wow_messages read the hit info as one value and refused both.
+#[test]
+fn a_blow_of_several_flags_reads_back_with_each() {
+    use crate::game::map::combat::{self, *};
+    let read = |hit_info| {
+        let f = combat::attacker_state(
+            Guid::new(1),
+            Guid::new(2),
+            hit_info,
+            7,
+            VICTIMSTATE_NORMAL,
+            0,
+        );
+        match ServerOpcodeMessage::read_unencrypted(&f[..]) {
+            Ok(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(m)) => m.hit_info,
+            other => panic!("{hit_info:#x} read as {other:?}"),
+        }
+    };
+    let crushing = read(HITINFO_NORMALSWING2 | HITINFO_CRUSHING);
+    assert!(crushing.get_affects_victim() && crushing.get_crushing() && !crushing.get_miss());
+    let miss = read(HITINFO_NORMALSWING2 | HITINFO_MISS);
+    assert!(miss.get_affects_victim() && miss.get_miss() && !miss.get_crushing());
+}
+
 /// Thistle Tea's auction_messages_test, "encodes conditional command-result
 /// trailers": an auction started, a bid placed (its next increment), one
 /// refused for the inventory (its reason, a u32) and one outbid (the higher
 /// bidder, their bid and the increment), as mangos's
-/// `SendAuctionCommandResult` writes them. Before, the inventory error's
-/// reason went as a byte (wow_messages'), which the client couldn't read.
+/// `SendAuctionCommandResult` writes them, and each read back. Before, the
+/// inventory error's reason went as a byte (wow_messages'), which the
+/// client couldn't read, and wvs wrote the packet by hand.
 #[test]
 fn an_auction_commands_result_carries_the_trailer_its_result_wants() {
     type A = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction;
     type R = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult;
     type R2 = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo;
     let body = |action: A| {
-        let f = crate::game::social::auction::command_result_frame(9, &action);
+        let m = SMSG_AUCTION_COMMAND_RESULT {
+            auction_id: 9,
+            action,
+        };
+        let f = crate::game::conn::encode(&m).expect("encodes");
         assert_eq!(u16::from_le_bytes([f[2], f[3]]), 0x25B);
+        match ServerOpcodeMessage::read_unencrypted(&f[..]) {
+            Ok(ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(back)) => assert_eq!(back, m),
+            other => panic!("read back as {other:?}"),
+        }
         f[4..].to_vec()
     };
     let words = |w: &[u32]| w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
@@ -247,16 +283,37 @@ async fn queued_for_arathi(c: &mut Client) {
 /// queue-list payload and preserves group and instance selection": the
 /// 1.12.1 client joins from a list shown with no battlemaster (the
 /// window's, `CMSG_BATTLEFIELD_LIST`) with `CMSG_BATTLEFIELD_JOIN`: the
-/// map, the instance and the group's byte (its `0x4AA00B`). Read by hand,
-/// a leader's join with the byte set queues the group; the map alone queues
-/// its sender alone. Before, wow_messages wanted the map alone and read
-/// nothing the client sent.
+/// map, the instance and the group's byte (its `0x4AA00B`). Read by
+/// wow_messages, as the reader task reads it, a leader's join with the
+/// byte set queues the group; one without it queues its sender alone.
+/// Before, wow_messages wanted the map alone and read nothing the client
+/// sent (wvs read it by hand).
 #[tokio::test]
 async fn a_join_from_the_windows_list_queues_as_the_client_asks() {
     assert!(
-        crate::game::conn::RAW_OPCODES.contains(&0x23E),
-        "read by hand"
+        !crate::game::conn::RAW_OPCODES.contains(&0x23E),
+        "read by wow_messages"
     );
+    // As the client writes it: the header (its size big-endian, the opcode
+    // a u32), the map, the instance and the group's byte.
+    let read = |as_group: u8| {
+        let mut p = vec![0, 13, 0x3E, 0x02, 0, 0];
+        p.extend(529u32.to_le_bytes());
+        p.extend(0u32.to_le_bytes());
+        p.push(as_group);
+        match wow_world_messages::vanilla::opcodes::ClientOpcodeMessage::read_unencrypted(&p[..]) {
+            Ok(
+                wow_world_messages::vanilla::opcodes::ClientOpcodeMessage::CMSG_BATTLEFIELD_JOIN(m),
+            ) => m,
+            other => panic!("the client's join, read as {other:?}"),
+        }
+    };
+    let (group, alone) = (read(1), read(0));
+    assert_eq!(
+        (group.map, group.instance_id, group.join_as_group),
+        (wow_world_messages::vanilla::Map::ArathiBasin, 0, true)
+    );
+    assert!(!alone.join_as_group);
     let realm = harness::realm_with(crate::game::tests_pvp::arathi());
     let mut a = Client::connect(&realm, "A");
     a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -269,18 +326,10 @@ async fn a_join_from_the_windows_list_queues_as_the_client_asks() {
         realm.registry.online(b.guid).unwrap(),
     );
     assert!(crate::game::social::groups::join_directly(&realm, &ao, &bo));
-    let mut join = 529u32.to_le_bytes().to_vec();
-    join.extend(0u32.to_le_bytes());
-    join.push(1);
-    a.send_raw(crate::game::map::pvp::CMSG_BATTLEFIELD_JOIN, &join)
-        .await;
+    a.send(group).await;
     queued_for_arathi(&mut a).await;
     queued_for_arathi(&mut b).await;
-    c.send_raw(
-        crate::game::map::pvp::CMSG_BATTLEFIELD_JOIN,
-        &529u32.to_le_bytes(),
-    )
-    .await;
+    c.send(alone).await;
     queued_for_arathi(&mut c).await;
 }
 

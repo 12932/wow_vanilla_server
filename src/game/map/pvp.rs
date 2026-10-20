@@ -96,9 +96,9 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
         C::CMSG_TOGGLE_PVP(m) => toggle(map, g, m.set.map(|s| s.enable_pvp)),
         C::MSG_INSPECT_HONOR_STATS(m) => inspect(map, g, m.guid),
         C::CMSG_BATTLEFIELD_LIST(m) => battlefield_list(map, g, Guid::zero(), m.map.as_int()),
-        // Read by hand off the wire (`join_raw`); wow_messages' map alone
-        // only from a test's client.
-        C::CMSG_BATTLEFIELD_JOIN(m) => join_raw(map, g, &m.map.as_int().to_le_bytes()),
+        C::CMSG_BATTLEFIELD_JOIN(m) => {
+            battlefield_join(map, g, m.map.as_int(), m.join_as_group, m.instance_id)
+        }
         C::CMSG_AREA_SPIRIT_HEALER_QUEUE(_) => {
             crate::game::map::battleground::queue_resurrection(map, g)
         }
@@ -161,26 +161,15 @@ fn battlemaster_join(
     }
 }
 
-pub const CMSG_BATTLEFIELD_JOIN: u16 = 0x23E;
-
-/// `CMSG_BATTLEFIELD_JOIN`, read by hand: from a list shown with no
-/// battlemaster, into the queue of the battleground on its map, alone or,
-/// for its leader, with the whole group, into the match picked from the
-/// list if one was. The 1.12.1 client (build 5875, `0x4AA00B`) sends the
-/// map, the instance and the group's byte, as `CMSG_BATTLEMASTER_JOIN`
-/// without its battlemaster (Thistle Tea's `CmsgBattlefieldJoin`, which
-/// reads the map alone too as an instance of 0, alone); wow_messages wants
-/// the map alone, and so read none the client sent.
-pub fn join_raw(map: &mut Map, g: Guid, body: &[u8]) {
-    let u32_at = |at: usize| {
-        body.get(at..at + 4)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    };
-    let Some(map_id) = u32_at(0) else {
-        return;
-    };
-    let instance = u32_at(4).unwrap_or(0);
-    let as_group = body.get(8).is_some_and(|b| *b != 0);
+/// `CMSG_BATTLEFIELD_JOIN`: from a list shown with no battlemaster, into
+/// the queue of the battleground on its map, alone or, for its leader,
+/// with the whole group, into the match picked from the list if one was.
+/// The 1.12.1 client (build 5875, `0x4AA00B`) sends the map, the instance
+/// and the group's byte, as `CMSG_BATTLEMASTER_JOIN` without its
+/// battlemaster (Thistle Tea's `CmsgBattlefieldJoin` reads the map alone
+/// too, as an instance of 0, alone; one the client never sends, which
+/// wow_messages refuses).
+fn battlefield_join(map: &mut Map, g: Guid, map_id: u32, as_group: bool, instance: u32) {
     if let Some(bg) = crate::game::battlegrounds::bg_of_map(map_id) {
         join_as(map, g, bg, as_group, instance);
     }

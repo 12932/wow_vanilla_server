@@ -733,27 +733,28 @@ fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
     }
 }
 
+/// The unit a cast is aimed at, if any: the 1.12.1 client writes one
+/// object's guid for a unit, a game object or a corpse, and only the
+/// first is a unit.
+pub(crate) fn unit_of(t: &SpellCastTargets) -> Option<Guid> {
+    match t.target_flags.get_unit()? {
+        SpellCastTargets_SpellCastTargetFlags_Unit::Unit { unit_target } => Some(*unit_target),
+        _ => None,
+    }
+}
+
 pub(crate) fn targets_of(t: &SpellCastTargets) -> Targets {
+    use SpellCastTargets_SpellCastTargetFlags_Unit as U;
     let f = &t.target_flags;
     Targets {
-        unit: f.get_unit().map(|u| u.unit_target),
+        unit: unit_of(t),
         // A corpse (Remove Insignia's) goes with the objects.
-        object: f
-            .get_gameobject()
-            .map(|g| match g {
-                SpellCastTargets_SpellCastTargetFlags_Gameobject::Gameobject { gameobject }
-                | SpellCastTargets_SpellCastTargetFlags_Gameobject::ObjectUnk {
-                    object_unk: gameobject,
-                } => *gameobject,
-            })
-            .or_else(|| {
-                f.get_corpse().map(|c| match c {
-                    SpellCastTargets_SpellCastTargetFlags_Corpse::Corpse { corpse }
-                    | SpellCastTargets_SpellCastTargetFlags_Corpse::PvpCorpse {
-                        pvp_corpse: corpse,
-                    } => *corpse,
-                })
-            }),
+        object: f.get_unit().and_then(|o| match o {
+            U::Unit { .. } => None,
+            U::Gameobject { gameobject: o }
+            | U::Corpse { corpse: o }
+            | U::PvpCorpse { pvp_corpse: o } => Some(*o),
+        }),
         item: f.get_item().map(|i| match i {
             SpellCastTargets_SpellCastTargetFlags_Item::Item { item }
             | SpellCastTargets_SpellCastTargetFlags_Item::TradeItem { trade_item: item } => *item,
@@ -766,7 +767,7 @@ pub(crate) fn targets_of(t: &SpellCastTargets) -> Targets {
 pub fn wire_targets(t: &Targets) -> SpellCastTargets {
     let mut flags = SpellCastTargets_SpellCastTargetFlags::empty();
     if let Some(u) = t.unit {
-        flags = flags.set_unit(SpellCastTargets_SpellCastTargetFlags_Unit { unit_target: u });
+        flags = flags.set_unit(SpellCastTargets_SpellCastTargetFlags_Unit::Unit { unit_target: u });
     }
     if let Some(d) = t.dest {
         flags = flags.set_dest_location(SpellCastTargets_SpellCastTargetFlags_DestLocation {

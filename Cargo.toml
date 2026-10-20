@@ -29,10 +29,10 @@ tokio = { version = "1.53.3", features = [
     "rt-multi-thread",
     "signal",
 ] }
-wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "2c9fe11624ae790a2b817261964cf4c04cd2d96e", features = ["tokio"] }
-wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "2c9fe11624ae790a2b817261964cf4c04cd2d96e", features = ["sync", "tokio", "vanilla"] }
-wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "2c9fe11624ae790a2b817261964cf4c04cd2d96e", features = ["extended", "vanilla", "serde"] }
-wow_items = { git = "https://github.com/12932/wow_messages", rev = "2c9fe11624ae790a2b817261964cf4c04cd2d96e", features = ["vanilla"] }
+wow_login_messages = { git = "https://github.com/12932/wow_messages", rev = "361d2ed82f355aa7ad5dacedb4bc9d57aec7ee95", features = ["tokio"] }
+wow_world_messages = { git = "https://github.com/12932/wow_messages", rev = "361d2ed82f355aa7ad5dacedb4bc9d57aec7ee95", features = ["sync", "tokio", "vanilla"] }
+wow_world_base = { git = "https://github.com/12932/wow_messages", rev = "361d2ed82f355aa7ad5dacedb4bc9d57aec7ee95", features = ["extended", "vanilla", "serde"] }
+wow_items = { git = "https://github.com/12932/wow_messages", rev = "361d2ed82f355aa7ad5dacedb4bc9d57aec7ee95", features = ["vanilla"] }
 # The revision wow_world_messages pins: its encrypted reads and writes take
 # this wow_srp's header halves, so another would be a second, unlike copy.
 # 1.12 only: no TBC or Wrath headers (and with them no hmac).

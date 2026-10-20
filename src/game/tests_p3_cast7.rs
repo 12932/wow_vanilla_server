@@ -184,7 +184,8 @@ fn floats(v: [f32; 3]) -> Vec<u8> {
 
 /// The targets of a cast as the client sends them: an item's GUID, a
 /// destination's three floats, a unit and a destination in their order,
-/// a corpse alone as an object; and what the server writes of a unit and a
+/// a corpse as an object, alone or before a destination; and what the
+/// server writes of a unit and a
 /// destination reads back as it was (Thistle Tea's `TargetCodec`).
 #[test]
 fn a_casts_targets_read_from_the_packet_and_round_trip() {
@@ -202,13 +203,30 @@ fn a_casts_targets_read_from_the_packet_and_round_trip() {
         both.dest
             .is_some_and(|d| (d.x, d.y, d.z) == (1.0, 2.0, 3.0))
     );
-    // A corpse alone (wow_messages reads a corpse's GUID after the
-    // locations, where 1.12 sends it before them).
+    // A corpse alone, as an object.
     for flags in [0x0200u16, 0x8000] {
         let corpse = 0xF000_0000_0000_002A;
         let t = read_targets(flags, &packed(corpse)).unwrap();
         assert_eq!(t.object, Some(Guid::new(corpse)), "a corpse, {flags:#x}");
     }
+    // Thistle Tea's "round trips enemy and allied corpses before location
+    // fields": an enemy's (0x0240) and an ally's (0x8040) corpse with a
+    // destination, the corpse's GUID first, as the 1.12.1 client writes them
+    // (0x7E4E10). Before, wow_messages read the corpse after the locations.
+    for flags in [0x0240u16, 0x8040] {
+        let corpse = 0xF000_0000_0000_002A;
+        let mut fields = packed(corpse);
+        fields.extend(floats([1.0, 2.0, 3.0]));
+        let t = read_targets(flags, &fields).unwrap_or_else(|| panic!("read, {flags:#x}"));
+        assert_eq!(t.object, Some(Guid::new(corpse)), "a corpse, {flags:#x}");
+        assert!(
+            t.dest.is_some_and(|d| (d.x, d.y, d.z) == (1.0, 2.0, 3.0)),
+            "its destination, {flags:#x}"
+        );
+    }
+    // A unit's flag with 0x80 set too is one GUID, as the client writes it.
+    let t = read_targets(0x0082, &packed(0xAABBCC)).unwrap();
+    assert_eq!(t.unit, Some(Guid::new(0xAABBCC)));
     let back = crate::game::map::spells::targets_of(&crate::game::map::spells::wire_targets(&both));
     assert_eq!(back.unit, both.unit);
     assert!(

@@ -143,9 +143,10 @@ and a shutdown saves a player between maps.
   caster views of a creature's fields (Empathy), creature-group routes, cases that need a navmesh that refuses, and
   Thistle Tea internals. The leftovers each round named are in `<runs>/prompts/_carryover.md`, and round 9's briefs
   are written by `<runs>/prompts/gen_round.py 9 docs/parity/matrix.csv`.
-- **The fork (12932/wow_messages):** three 1.12 layouts are wrong there and worked around in wvs: `HitInfo` read as
-  one value (it is flags), `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a byte (a u32 in 1.12) and
-  `CMSG_BATTLEFIELD_JOIN` without its instance and group byte.
+- **The fork (12932/wow_messages):** its 1.12 `HitInfo` is flags (with the debug trailer under 0x1),
+  `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u32, `CMSG_BATTLEFIELD_JOIN` the map, the instance and the group
+  byte, and a spell's targets the client's (a corpse's guid before the locations), so wvs encodes and reads them
+  with its types.
 - **Open questions:** 50 or so, in [SITREP.md](SITREP.md). Each says what wvs does until you answer.
 - **The hard findings** ([CODE_REVIEW.md](CODE_REVIEW.md)):
   - a client claiming a transport skips the speed check;

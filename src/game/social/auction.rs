@@ -187,6 +187,10 @@ fn mail_from(
 type R2 = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo;
 type R = SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult;
 
+/// `SMSG_AUCTION_COMMAND_RESULT`, as mangos-classic's
+/// `SendAuctionCommandResult` writes it (and the client's handler,
+/// `0x4CC460`, reads it): the auction, the action and the result, each a
+/// u32, then the result's trailer, an inventory error's reason a u32 too.
 fn command_result(
     map: &Map,
     g: Guid,
@@ -194,91 +198,12 @@ fn command_result(
     action: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction,
 ) {
     if let Some(p) = map.players.get(&g) {
-        p.outbound.send_frame(command_result_frame(id, &action));
+        p.outbound.send(&SMSG_AUCTION_COMMAND_RESULT {
+            auction_id: id,
+            action,
+        });
     }
 }
-
-/// What follows a command's result: a bid's next increment, an inventory
-/// error's reason, or the higher bid that beat one.
-enum Trailer {
-    None,
-    Outbid(u32),
-    Inventory(InventoryResult),
-    Higher(Guid, u32, u32),
-}
-
-/// `SMSG_AUCTION_COMMAND_RESULT` by hand, as mangos-zero's
-/// `SendAuctionCommandResult` writes it (and the client's handler,
-/// `0x4CC460`, reads it): the auction, the action and the result, each a
-/// u32, then the result's trailer, an inventory error's reason a u32 too.
-/// wow_messages writes that reason as a byte, which the client can't read
-/// as its u32: it showed its own default error in its place.
-pub(crate) fn command_result_frame(
-    id: u32,
-    action: &SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction,
-) -> std::sync::Arc<[u8]> {
-    use SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as A;
-    let two = |r: &R2| match r {
-        R2::Ok => (0, Trailer::None),
-        R2::ErrInventory { inventory_result2 } => (1, Trailer::Inventory(*inventory_result2)),
-        R2::ErrDatabase => (2, Trailer::None),
-        R2::ErrNotEnoughMoney => (3, Trailer::None),
-        R2::ErrItemNotFound => (4, Trailer::None),
-        R2::ErrHigherBid {
-            auction_outbid3,
-            higher_bidder2,
-            new_bid2,
-        } => (
-            5,
-            Trailer::Higher(*higher_bidder2, *new_bid2, *auction_outbid3),
-        ),
-        R2::ErrBidIncrement => (7, Trailer::None),
-        R2::ErrBidOwn => (10, Trailer::None),
-        R2::ErrRestrictedAccount => (13, Trailer::None),
-    };
-    let (action_id, (result, trailer)) = match action {
-        A::Started { result2 } => (0u32, two(result2)),
-        A::Removed { result2 } => (1, two(result2)),
-        A::BidPlaced { result } => (
-            2,
-            match result {
-                R::Ok { auction_outbid1 } => (0, Trailer::Outbid(*auction_outbid1)),
-                R::ErrInventory { inventory_result } => (1, Trailer::Inventory(*inventory_result)),
-                R::ErrDatabase => (2, Trailer::None),
-                R::ErrNotEnoughMoney => (3, Trailer::None),
-                R::ErrItemNotFound => (4, Trailer::None),
-                R::ErrHigherBid {
-                    auction_outbid2,
-                    higher_bidder,
-                    new_bid,
-                } => (
-                    5,
-                    Trailer::Higher(*higher_bidder, *new_bid, *auction_outbid2),
-                ),
-                R::ErrBidIncrement => (7, Trailer::None),
-                R::ErrBidOwn => (10, Trailer::None),
-                R::ErrRestrictedAccount => (13, Trailer::None),
-            },
-        ),
-    };
-    let mut b = crate::game::data::items::Body::default();
-    b.u32(id).u32(action_id).u32(result);
-    match trailer {
-        Trailer::None => {}
-        Trailer::Outbid(n) => {
-            b.u32(n);
-        }
-        Trailer::Inventory(r) => {
-            b.u32(u32::from(r.as_int()));
-        }
-        Trailer::Higher(bidder, bid, outbid) => {
-            b.u64(bidder.guid()).u32(bid).u32(outbid);
-        }
-    }
-    b.frame(OP_AUCTION_COMMAND_RESULT)
-}
-
-const OP_AUCTION_COMMAND_RESULT: u16 = 0x25B;
 
 /// The house an auctioneer near the player is of, if they may use it now
 /// (the services' shared checks, as Thistle Tea checks each auction).

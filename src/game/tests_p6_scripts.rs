@@ -492,10 +492,7 @@ pub(super) async fn cast_among(
         (caster == g && spells.contains(&spell)).then(|| {
             (
                 spell,
-                targets
-                    .target_flags
-                    .get_unit()
-                    .map_or(Guid::zero(), |u| u.unit_target),
+                crate::game::map::spells::unit_of(targets).unwrap_or_else(Guid::zero),
             )
         })
     })
