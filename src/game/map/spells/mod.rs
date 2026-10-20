@@ -2146,6 +2146,9 @@ pub fn periodic_damage_of(
                 auras::AURA_PERIODIC_DAMAGE
                     | auras::AURA_PERIODIC_LEECH
                     | auras::AURA_PERIODIC_DAMAGE_PERCENT
+                    // A burn's tick takes its own effect's coefficient
+                    // (Thistle Tea's `PowerBurn.damage_effect`).
+                    | auras::AURA_POWER_BURN_MANA
             )
         })
         .unwrap_or(0);

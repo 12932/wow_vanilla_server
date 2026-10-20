@@ -1097,7 +1097,10 @@ pub fn behind(victim: &UnitView, attacker: &UnitView) -> bool {
 /// `SetInCombatState`).
 pub fn enter(map: &mut Map, g: Guid, pvp: bool) {
     let now = map.now;
-    if guid::is_player(g) && !map.unit_view(g).is_some_and(|u| u.alive) {
+    // Only the living are in a fight (mangos's `SetInCombatState`): a
+    // blow that comes after a death doesn't put the corpse in one (Thistle
+    // Tea's `die/1`).
+    if !map.unit_view(g).is_some_and(|u| u.alive) {
         return;
     }
     let Some(f) = map.unit_fields_mut(g) else {
@@ -1217,6 +1220,10 @@ pub fn engage(map: &mut Map, a: Guid, b: Guid) {
         crate::game::map::pets::master(map, b),
     );
     for (x, y) in [(a, b), (b, a)] {
+        // The dead take no foe.
+        if !map.unit_view(x).is_some_and(|u| u.alive) {
+            continue;
+        }
         if let Some(c) = map.combat_mut(x) {
             c.attackers.insert(y);
         }

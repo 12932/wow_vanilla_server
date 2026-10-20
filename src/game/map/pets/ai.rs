@@ -385,6 +385,11 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
                 // Where its habitat lets it go (Thistle Tea's
                 // `Acquisition.nearest`, `CreatureMovement.accessible?`).
                 && crate::game::map::creature_motion::may_reach(map, g, *v)
+                // In its sight (mangos's `PetAI::MoveInLineOfSight`,
+                // `IsWithinLOSInMap`; Thistle Tea's obstructed units).
+                && map.position_of(*v).is_some_and(|p| {
+                    crate::game::map::spells::checks::sight(map, pos, p)
+                })
         })
         // The nearest, the lower guid of two as near (Thistle Tea's).
         .min_by(|a, b| {

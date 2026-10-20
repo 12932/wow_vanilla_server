@@ -219,6 +219,22 @@ pub fn summon_totem(
     }
 }
 
+/// Whether a pulse of unit `g`'s auras due at `due` goes: a totem's goes
+/// only while its shaman is here and alive, and not one due after its time
+/// (mangos's `Totem::Update` unsummons it before its auras tick; Thistle
+/// Tea's totem lifetime keeps a pulse due by its end). Any other unit's
+/// goes.
+pub fn pulses(map: &Map, g: Guid, due: Option<Instant>) -> bool {
+    let Some(s) = state(map, g).filter(|s| s.kind == Kind::Totem) else {
+        return true;
+    };
+    map.unit_view(s.owner).is_some_and(|u| u.alive)
+        && match (s.expires, due) {
+            (Some(end), Some(t)) => t <= end,
+            _ => true,
+        }
+}
+
 /// Destroy Totems: every totem of the shaman's goes.
 pub fn destroy_all(map: &mut Map, owner: Guid) {
     let totems: Vec<Guid> = map

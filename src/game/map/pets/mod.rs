@@ -295,7 +295,7 @@ pub fn drawn_in(map: &Map, g: Guid) -> Option<Guid> {
 }
 
 pub use possess::{not_mover, set_mover};
-pub use totems::immune;
+pub use totems::{immune, pulses};
 
 /// The pet of `owner` (or the unit they charm), if one is out.
 pub fn pet_of(map: &Map, owner: Guid) -> Option<Guid> {
