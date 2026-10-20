@@ -628,3 +628,39 @@ async fn an_aura_state_or_form_past_the_mask_names_no_bit() {
         .unwrap();
     assert_eq!(r, (false, true));
 }
+
+/// Review 5's combat 6: the update finds a creature's cast through the
+/// creatures casting (`Map::casting`), one far from anyone and in no fight
+/// too, and lets go of it once the cast is done; debug builds check every
+/// look against one through every creature.
+#[tokio::test]
+async fn a_cast_far_from_anyone_is_found_among_the_casting_and_let_go_when_done() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let far = spawn(m, ga, BRUTE, 20, 2_000.0);
+            for _ in 0..50 {
+                spawn(m, ga, BRUTE, 20, 2_100.0);
+            }
+            let now = m.now;
+            m.caster_mut(far).unwrap().casting = Some(spells::Casting {
+                spell: 1,
+                targets: spells::Targets::default(),
+                ends: now,
+                item: None,
+                pushbacks: 0,
+                channel_until: None,
+                duration: 0,
+            });
+            let noted = m.casting.iter().copied().collect::<Vec<_>>();
+            spells::update(m);
+            let done = m.caster(far).unwrap().casting.is_none();
+            spells::update(m);
+            (noted, done, m.casting.len())
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0.len(), 1, "the one casting noted");
+    assert!(r.1, "its cast done");
+    assert_eq!(r.2, 0, "and let go");
+}

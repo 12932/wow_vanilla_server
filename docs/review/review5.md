@@ -883,7 +883,13 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   logging at `debug`. Optionally, refuse self-triggers at load.
 - **Effort:** easy.
 
-#### 4. A fighting creature checks every unit on its threat list two or three times an update, two of them for nothing
+#### 4. A fighting creature checks every unit on its threat list two or three times an update, two of them for nothing **Fixed** (1 and 2)
+- **Fixed:** a creature's turn asks once of each on its list: after `prune_threat`, `overtake` and `pick_victim` take
+  the list as it is (`ai::overtake_of`, `pruned`); `ai::overtake` from elsewhere still asks. `can_attack` works out
+  the other way's regard only if this way isn't hostile. The fix's third part (a bitset of the aura kinds each unit
+  has) is left: medium, and it touches every aura's coming and going. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: 100 creatures each holding the same 40
+  players, `ai::update_creatures` 129.9 ms before, 31.7 ms after; `can_attack(creature, player)` 9.7 µs, 6.3 µs.
+  The threat and victim tests cover the choice.
 - **Severity:** medium. **Kind:** speed.
 - **Where:** `ai.rs:1263-1278` (`fight_step`), `:1144` (`prune_threat`), `:1164` (`pick_victim`), `:1216-1261`
   (`overtake`, its `sorted` at `:1240`) and `:1120` (`valid_victim`). Also `combat.rs:816` (`can_attack`'s
@@ -953,7 +959,12 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   - gather the owner's modifier holders once per `run`.
 - **Effort:** easy.
 
-#### 6. While any creature on the map casts, every update looks through every creature twice
+#### 6. While any creature on the map casts, every update looks through every creature twice **Fixed.**
+- **Fixed:** the map keeps the creatures that may be casting (`Map::casting`, added by `caster_mut`, where every
+  cast begins, and `add_creature`; `Map::casting_where` lets go of those done), and the update's two looks and Feign
+  Death's go through it; the `casting` flag of `RareStates` is gone. Debug builds check each look against one
+  through every creature. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: 20,001 creatures, one casting, `spells::update` 691 µs before, 1.9 µs after. Test
+  `a_cast_far_from_anyone_is_found_among_the_casting_and_let_go_when_done`.
 - **Severity:** low. **Kind:** speed.
 - **Where:** `spells/mod.rs:2648-2652` (`channels_in_reach`) and `:2696-2709` (`update`), both under
   `map.rare.casting`.
@@ -969,7 +980,12 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
   creatures casting, noted in `Map::caster_mut`.
 - **Effort:** easy.
 
-#### 7. `leave_finished_fights` builds a set of every fighting creature's whole threat list, nearly every update
+#### 7. `leave_finished_fights` builds a set of every fighting creature's whole threat list, nearly every update **Fixed.**
+- **Fixed:** each due player whose answer needs it (in a fight with no PvP timer or Bloodrage holding them, or out
+  of one with a creature's war) asks the fighting creatures, found once and only then, stopping at the first that
+  holds them. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: one player due and in a fight, held by the last of 100 creatures holding 40 each (the most a look
+  takes), `combat::update_players` 702 µs before, 20.5 µs after. The fight's tests (`tests_p3_combat5`) cover who
+  leaves.
 - **Severity:** low. **Kind:** speed.
 - **Where:** `combat.rs:3486-3537`, the `held` set at `:3497-3512`.
 - **What:** whenever any player's `next_check` is due, the whole set is built. With 40 players on 1.2 s checks, that
@@ -994,7 +1010,12 @@ agent's 8 GB: it was killed at opt-level 3, 2 and 1. So each speed finding gives
 - **The fix:** `checked_shl(..).unwrap_or(0)`, as R4-39 proposes.
 - **Effort:** easy.
 
-#### 9. A chain spell runs a line-of-sight ray for every unit within a jump, before it picks the nearest
+#### 9. A chain spell runs a line-of-sight ray for every unit within a jump, before it picks the nearest **Fixed.**
+- **Fixed:** a jump tests everyone within it for the cheap things (taken already, alive, the spell's types, hurt
+  for a heal), puts them in its order (nearest; a heal's group, most hurt, nearest), and asks the costly ones
+  (whom an area may hit or the caster help, stealth, sight) only until one passes; the same one is picked. Timed in a test build of the crate at opt-level 0 with its debug assertions off (`cargo nextest run --config 'profile.dev.package.wow_vanilla_server.debug-assertions=false'`; the debug checks' own full looks hide the change), a scratch test, before and after the same commit: a
+  three-jump bolt into 100 stacked kobolds, 1,331 µs a cast before, 416 µs after (no navmesh here, so a ray is
+  cheap: with one the gain is more). The chain tests (`tests_p3_cast8`) cover the order.
 - **Severity:** low. **Kind:** speed.
 - **Where:** `spells/targets.rs:520-579` (`chain`) through `units_around` (`:167-186`).
 - **What:** `units_around` applies its whole predicate to every unit within the jump's radius before it sorts them:

@@ -521,6 +521,13 @@ pub struct Map {
     /// arrives with auras; `Map::with_auras_where` lets go of those
     /// without.
     pub with_auras: ahash::AHashSet<Guid>,
+    /// Creatures that may be casting: every creature that is, and some
+    /// that were. Every cast begins at `Map::caster_mut`, which adds its
+    /// creature, as `Map::add_creature` adds one that arrives casting;
+    /// `Map::casting_where` lets go of those not. The update's looks for a
+    /// creature's cast go through it, where they went through every
+    /// creature while any on the map cast (review 5's combat 6).
+    pub casting: ahash::AHashSet<Guid>,
     /// Escort and follower quests under way.
     pub escorts: Vec<escorts::Active>,
     /// The Elemental Invasion's rifts and their invaders.
@@ -1088,6 +1095,7 @@ impl Map {
             rare: Default::default(),
             awake: Awake::default(),
             with_auras: ahash::AHashSet::new(),
+            casting: ahash::AHashSet::new(),
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
@@ -2125,6 +2133,30 @@ impl Map {
         found
     }
 
+    /// [`Map::awake_where`] for the creatures casting (`casting`): `pred`
+    /// takes only creatures with a cast under way.
+    pub fn casting_where<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        pred: impl Fn(&Creature) -> bool,
+        out: impl Fn(usize, &Creature) -> T,
+    ) -> Vec<T> {
+        let found = members_where(
+            &mut self.casting,
+            &self.creatures,
+            &self.creature_by_guid,
+            |c| c.caster.casting.is_some(),
+            &pred,
+            &out,
+        );
+        debug_assert_eq!(
+            found,
+            every_creature_where(&self.creatures, &pred, &out),
+            "{}: a creature casts but isn't in Map::casting",
+            self.key
+        );
+        found
+    }
+
     pub fn gameobject(&self, guid: Guid) -> Option<&GameObject> {
         self.gameobject_by_guid
             .get(&guid)
@@ -2160,6 +2192,9 @@ impl Map {
         }
         if !c.auras.is_empty() {
             self.with_auras.insert(guid);
+        }
+        if c.caster.casting.is_some() {
+            self.casting.insert(guid);
         }
         let at = c.position;
         let key = self.creatures.insert(c);

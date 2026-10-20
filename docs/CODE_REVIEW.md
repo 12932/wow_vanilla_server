@@ -84,6 +84,15 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   connection, and the player went offline unsaved, still in the copy.
 
 The lows of the world, combat and realm-wide sections (`fix/lowsb`):
+- combat 4 fixed in part, 6, 7 and 9 fixed, measured in a test build with its debug checks off:
+  - 4: a creature's turn asks once of each on its threat list, and `can_attack` the second regard only if needed
+    (100 creatures holding 40: 129.9 ms an update's turns before, 31.7 ms after). The aura kinds' bitset is left.
+  - 6: the creatures casting kept in a set (`Map::casting`), so the update's looks for casts go through them
+    (20,001 creatures, one casting: `spells::update` 691 µs before, 1.9 µs after).
+  - 7: a player due for leaving their fight asks the fighting creatures until one holds them, where a set of all
+    they held was built (702 µs before, 20.5 µs after, at the worst).
+  - 9: a chain's jump asks the costly things, sight among them, only until one passes, in its order (a bolt into
+    100: 1,331 µs before, 416 µs after).
 - combat 8 fixed: an aura state, form or creature type past the 32nd names no bit (`checks::bit`), where the
   shift by a data value panicked in a debug build and tested another bit in release.
 - social 8 fixed: a guild's rank, a group's lead or a summons sent as a player changes maps follows them

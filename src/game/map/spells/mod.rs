@@ -790,8 +790,10 @@ impl Map {
         if self.players.contains_key(&g) {
             return self.players.get_mut(&g).map(|p| &mut p.caster);
         }
-        // Every cast begins here (see `RareStates`).
-        self.rare.casting = true;
+        // Every cast begins here (see `Map::casting`).
+        if self.creature_by_guid.contains_key(&g) {
+            self.casting.insert(g);
+        }
         self.creature_mut(g).map(|c| &mut c.caster)
     }
 
@@ -2683,13 +2685,14 @@ fn channels_in_reach(map: &mut Map) {
         .values()
         .filter_map(|p| at_other(p.guid, &p.caster))
         .collect();
-    if map.rare.casting {
-        channels.extend(
-            map.creatures
-                .iter()
-                .filter_map(|(_, c)| at_other(c.guid, &c.caster)),
-        );
-    }
+    channels.extend(
+        map.casting_where(
+            |c| at_other(c.guid, &c.caster).is_some(),
+            |_, c| at_other(c.guid, &c.caster),
+        )
+        .into_iter()
+        .flatten(),
+    );
     if channels.is_empty() {
         return;
     }
@@ -2731,26 +2734,10 @@ pub fn update(map: &mut Map) {
         .filter(|p| p.caster.casting.as_ref().is_some_and(|c| c.ends <= now))
         .map(|p| p.guid)
         .collect();
-    if map.rare.casting {
-        let mut any = false;
-        done.extend(
-            map.creatures
-                .iter()
-                .filter(|(_, c)| {
-                    any |= c.caster.casting.is_some();
-                    c.caster.casting.as_ref().is_some_and(|x| x.ends <= now)
-                })
-                .map(|(_, c)| c.guid),
-        );
-        map.rare.casting = any;
-    } else {
-        debug_assert!(
-            map.creatures
-                .iter()
-                .all(|(_, c)| c.caster.casting.is_none()),
-            "a creature casts unnoted (RareStates)"
-        );
-    }
+    done.extend(map.casting_where(
+        |c| c.caster.casting.as_ref().is_some_and(|x| x.ends <= now),
+        |_, c| c.guid,
+    ));
     for g in done {
         // The Death Ray's hurt has its last tick while its channel is
         // still under way.
