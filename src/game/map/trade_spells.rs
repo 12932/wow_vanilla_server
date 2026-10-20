@@ -291,6 +291,16 @@ pub fn check(map: &Map, caster: Guid, owner: Guid, c: &TradeCast) -> Option<u8> 
         let Some(index) = index else {
             return Some(fail::ITEM_GONE);
         };
+        // An item the caster may not use (a key of a skill they lack) isn't
+        // theirs to cast with, as at any use of it (mangos's `CanUseItem`;
+        // Thistle Tea's item gone).
+        let usable = p
+            .item_by_guid(item)
+            .and_then(|i| data.item(p.items[i].entry))
+            .is_some_and(|t| crate::game::map::inventory::can_use(p, data, t).is_ok());
+        if !usable {
+            return Some(fail::ITEM_GONE);
+        }
         if let Some(code) = crate::game::map::items::check_use(map, caster, item, index) {
             return Some(code);
         }

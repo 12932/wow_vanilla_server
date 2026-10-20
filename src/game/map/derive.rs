@@ -806,7 +806,13 @@ pub fn player(p: &mut Player, data: &GameData) {
     }
     let cast = period_multiplier(a, &[AURA_MOD_CASTING_SPEED]);
     f.set_f32(UNIT_MOD_CAST_SPEED, cast);
-    // Damage done, as the client shows it.
+    // Spell power from spirit's share (aura 174).
+    let spirit_power = |school: u32| {
+        let pct = a.sum_mask(AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT, 1 << school);
+        (spirit as i32 * pct / 100).max(0)
+    };
+    // Damage done, as the client shows it: spirit's share in it too (mangos's
+    // `UpdateSpellDamageBonus`, Thistle Tea's `TemporarySpellPower`).
     for i in 0..7u16 {
         let bit = 1u32 << i;
         let (pos, neg) = a
@@ -818,7 +824,10 @@ pub fn player(p: &mut Player, data: &GameData) {
                 let v = x.amount * h.stacks.max(1) as i32;
                 if v >= 0 { (p + v, n) } else { (p, n - v) }
             });
-        f.set_u32(PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i, pos as u32);
+        f.set_u32(
+            PLAYER_FIELD_MOD_DAMAGE_DONE_POS + i,
+            (pos + spirit_power(u32::from(i))) as u32,
+        );
         f.set_u32(PLAYER_FIELD_MOD_DAMAGE_DONE_NEG + i, neg as u32);
         // A spell's share: none that asks for a weapon (mangos's
         // `SpellDamageBonusDone` leaves those out).
@@ -880,10 +889,6 @@ pub fn player(p: &mut Player, data: &GameData) {
             + a.sum(AURA_MOD_SPELL_CRIT_CHANCE) as f32
             + a.sum_mask(AURA_MOD_SPELL_CRIT_CHANCE_SCHOOL, 1 << i) as f32
     });
-    let spirit_power = |school: u32| {
-        let pct = a.sum_mask(AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT, 1 << school);
-        (spirit as i32 * pct / 100).max(0)
-    };
     let spell_power = std::array::from_fn(|i| {
         a.effects()
             .filter(|(h, x)| {

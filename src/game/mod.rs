@@ -931,6 +931,24 @@ mod tests_p8_world_system;
 #[cfg(test)]
 mod tests_p8_world_units;
 #[cfg(test)]
+mod tests_p9_core_class;
+#[cfg(test)]
+mod tests_p9_core_class_real;
+#[cfg(test)]
+mod tests_p9_core_entity;
+#[cfg(test)]
+mod tests_p9_core_motion;
+#[cfg(test)]
+mod tests_p9_core_pets;
+#[cfg(test)]
+mod tests_p9_core_power;
+#[cfg(test)]
+mod tests_p9_core_scripts;
+#[cfg(test)]
+mod tests_p9_core_terrain;
+#[cfg(test)]
+mod tests_p9_core_trade;
+#[cfg(test)]
 mod tests_p9_creatures;
 #[cfg(test)]
 mod tests_p9_creatures_pets;

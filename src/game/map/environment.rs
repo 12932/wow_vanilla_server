@@ -491,6 +491,27 @@ pub fn lava(map: &mut Map, g: Guid, touching: Option<bool>, now: Instant) {
     }
 }
 
+/// A player under a liquid's spell moved: the spell goes as they leave
+/// the liquid, not at their next check, so it doesn't tick on one who has
+/// left it (Thistle Tea reconciles the liquid at each move, mangos-classic
+/// at `Player::SetPosition`'s `UpdateTerainEnvironmentFlags`). Only those
+/// under one look at the liquid here; the rest wait for the check.
+pub fn moved(map: &mut Map, g: Guid) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let Some(spell) = p.misc.liquid_spell else {
+        return;
+    };
+    let (at, alive) = (p.position(), p.death == Death::Alive);
+    let now_in = liquid_at(map, at)
+        .filter(|_| alive)
+        .and_then(|l| l.spell(at.z));
+    if now_in != Some(spell) {
+        liquid_spell(map, g, now_in);
+    }
+}
+
 /// The spell the liquid a player is in puts on: on while in it, off out of
 /// it (and off one brought from another map).
 pub fn liquid_spell(map: &mut Map, g: Guid, spell: Option<u32>) {

@@ -1513,7 +1513,20 @@ pub fn weapon_damage(
     };
     let min = f.get_f32(lo).max(1.0);
     let max = f.get_f32(hi).max(min);
-    let speed = f.get_u32(period).max(100) as f32 / 1000.0;
+    // Attack power's bonuses go by the hand's speed before haste: its
+    // weapon's, or a creature's own (mangos's `GetAPMultiplier` of
+    // `GetAttackTime`, the field over `m_modAttackSpeedPct`; Thistle Tea's
+    // "offhand speed, penalty, and damage modifiers without haste").
+    let unhasted = hand_weapon(map, attacker, hand)
+        .map(|w| w.delay)
+        .or_else(|| {
+            map.creature(attacker)
+                .filter(|_| hand != Hand::Ranged)
+                .map(|c| c.base.attack_time)
+        })
+        .filter(|t| *t > 0)
+        .unwrap_or_else(|| f.get_u32(period));
+    let speed = unhasted.max(100) as f32 / 1000.0;
     let rolled = if max > min {
         rng.random_range(min..=max)
     } else {

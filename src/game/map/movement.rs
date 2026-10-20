@@ -257,6 +257,10 @@ pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
         };
         crate::game::map::auras::interrupt(map, guid, mask);
     }
+    // Out of a liquid whose spell is on them: it goes as they leave.
+    if moved {
+        crate::game::map::environment::moved(map, guid);
+    }
     if let Some(drop) = fall {
         fall_damage(map, guid, drop);
     }
