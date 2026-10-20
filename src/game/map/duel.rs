@@ -236,14 +236,16 @@ fn end(map: &mut Map, loser: Guid, how: Option<DuelWinnerReason>) {
             }
         }
     }
-    for p in [loser, winner] {
-        if let Some(p) = map.players.get_mut(&p) {
+    for g in [loser, winner] {
+        if let Some(p) = map.players.get_mut(&g) {
             p.duel = None;
             p.fields.set_guid(PLAYER_DUEL_ARBITER, Guid::zero());
             p.fields.set_u32(PLAYER_DUEL_TEAM, 0);
             p.outbound.send(&SMSG_DUEL_COMPLETE {
                 ended_without_interruption: how.is_some(),
             });
+            // Back to what they were to each other: worked out again.
+            map.visibility_dirty.insert(g);
         }
     }
     // Their pets stop fighting the other side.
@@ -325,6 +327,9 @@ pub fn update(map: &mut Map) {
                     p.fields
                         .set_u32(PLAYER_DUEL_TEAM, if d.initiator { 1 } else { 2 });
                 }
+                // Each may now attack the other: what they see is worked
+                // out again (the other's stealthed traps hide from them).
+                map.visibility_dirty.insert(g);
             }
             Phase::Fighting => {
                 let Some(flag) = map.gameobject(d.flag).map(|f| f.position) else {
