@@ -537,6 +537,14 @@ pub fn melee_roll(
     let Some(mut r) = combat::roll_for(map, caster, target, hand) else {
         return (Hit::Miss, false);
     };
+    // An ability of no weapon (a ranged one not of the ranged slot: Scorpid
+    // Sting, Wing Clip's kind) rolls with the most skill of its caster's
+    // level, not a weapon's (mangos-classic's `IsSpellUseWeaponSkill` and
+    // `GetSkillMaxForLevel`; Thistle Tea's level skill for one needing no
+    // weapon).
+    if !uses_weapon_skill(s) {
+        r.attacker_skill = r.attacker_level * 5;
+    }
     r.crit += m.flat[mods::OP_CRITICAL_CHANCE] as f32;
     r.can_crit = !s.attr(2, sd::ATTR_EX2_CANT_CRIT);
     if s.attr(0, 0x20_0000) {
@@ -566,6 +574,15 @@ pub fn melee_roll(
         combat::Outcome::Crit => (Hit::Hit, true),
         _ => (Hit::Hit, false),
     }
+}
+
+/// Whether ability `s` rolls with its weapon's skill: one wanting a weapon,
+/// a melee one, or a ranged one of the ranged slot (mangos-classic's
+/// `IsSpellUseWeaponSkill`).
+pub fn uses_weapon_skill(s: &SpellTemplate) -> bool {
+    s.equipped_item_class == 2
+        || s.dmg_class == 2
+        || (s.dmg_class == 3 && s.attr(0, sd::ATTR_RANGED))
 }
 
 /// What a block of ability `s` is: a miss for one blocked whole (Shield

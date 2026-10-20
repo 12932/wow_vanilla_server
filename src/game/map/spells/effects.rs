@@ -168,6 +168,11 @@ pub fn dr_aura_gone(map: &mut Map, target: Guid, spell: u32) {
     }
 }
 
+/// `SPELL_EFFECT_SPAWN`, and the flag of a unit still spawning in (not to
+/// be fought, mangos's `UNIT_FLAG_SPAWNING`).
+pub const EFFECT_SPAWN: u32 = 46;
+pub const UNIT_FLAG_SPAWNING: u32 = 0x2;
+
 /// A finisher's duration at `combo` points: from the base at none to the
 /// most at five, a fifth of the way for each, as mangos's
 /// `CalculateSpellDuration` and Thistle Tea's `duration_for_combo_points`;
@@ -427,7 +432,11 @@ fn apply_auras(
     l: &Landing,
     item: Option<Guid>,
 ) {
-    if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
+    if !aura_effects.is_empty()
+        && map
+            .unit_view(target)
+            .is_some_and(|u| u.alive || held_by_the_dead(s))
+    {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);
         // The target's returns before, should the aura not go on.
         let returns = map.caster(target).map(|c| c.diminishing.clone());
@@ -501,6 +510,17 @@ fn apply_auras(
             super::threat(map, caster, target, s, 0.0, &l.mods, false);
         }
     }
+}
+
+/// Whether `s`'s auras go on a corpse: one that lasts through death, is
+/// for the dead alone, or may be cast at the dead (mangos-classic's
+/// `AddSpellAuraHolder`: `IsDeathPersistentSpell`, `IsDeathOnlySpell`,
+/// `SPELL_ATTR_EX2_ALLOW_DEAD_TARGET`); any other is shed.
+pub fn held_by_the_dead(s: &SpellTemplate) -> bool {
+    s.attr(3, sd::ATTR_EX3_DEATH_PERSISTENT)
+        || s.attr(3, sd::ATTR_EX3_ONLY_ON_GHOSTS)
+        || s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET)
+        || s.id == 2584
 }
 
 /// A weapon's speed for normalized damage: 1.7 for daggers, 3.3 for
@@ -677,6 +697,16 @@ fn effect(
         19 => {
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
             super::log::extra_attacks(map, caster, s.id, caster, amount.max(1) as u32);
+        }
+        // A spawn-in: the Rookery Whelp's and Birth's (26262) caster is
+        // done spawning, and may be fought (mangos-classic's `EffectSpawn`
+        // clearing `UNIT_FLAG_SPAWNING` for these two only).
+        EFFECT_SPAWN => {
+            if matches!(s.id, 15_750 | 26_262)
+                && let Some(f) = map.unit_fields_mut(caster)
+            {
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SPAWNING, false);
+            }
         }
         // The ritual's summons: for its target, by its owner.
         crate::game::map::objects::EFFECT_SUMMON_PLAYER => {
@@ -1928,6 +1958,9 @@ pub fn tick_areas(map: &mut Map) {
                     heal(map, area.caster, g, area.spell, h as u32, true);
                 }
                 AURA_PERIODIC_TRIGGER_SPELL if e.trigger_spell != 0 => {
+                    // Frost Trap's pulse is its trap's activation, for
+                    // Entrapment (mangos-classic's dummy 18350 rolling it).
+                    super::class_scripts::periodic_triggered(map, g, &area_holder(&area, s));
                     cast_triggered(map, area.caster, e.trigger_spell, Some(g));
                 }
                 _ => {

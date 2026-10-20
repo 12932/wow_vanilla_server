@@ -121,6 +121,8 @@ mod tests_order;
 #[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
+mod tests_p10_spell;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
