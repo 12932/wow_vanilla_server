@@ -943,6 +943,8 @@ mod tests_p9_world_spells2;
 #[cfg(test)]
 mod tests_p9_world_spells3;
 #[cfg(test)]
+mod tests_p9_world_system;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
