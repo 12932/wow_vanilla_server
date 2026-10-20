@@ -3,7 +3,11 @@
 //! `go_cheer_speaker`): the cheers, the fireworks, and each city's launch
 //! sites, x, y, z and facing.
 
-#![allow(clippy::excessive_precision, clippy::unreadable_literal)]
+#![allow(
+    clippy::excessive_precision,
+    clippy::unreadable_literal,
+    clippy::approx_constant
+)]
 
 pub const CHEERS: [u32; 4] = [8574, 8573, 8572, 8571];
 
