@@ -735,6 +735,17 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   Balnazzar's Domination window), a route's last point gone by the next update (`came_to`); and tests that
   reconnected so fast they took their player over (`harness::offline`).
 
+## Round 9: the last gaps
+Phase 1, the rows where wvs was said to do it already: six agents by area; tests, and small fixes where a test
+showed a difference. Phase 2 takes what is left.
+- **9creatures:** #57 done (a party aura shows on its caster too, as mangos's `IsNeedVisibleSlot`); a direct power
+  burn takes the target's damage-taken modifiers (mangos's `CalculateSpellDamage`); an aggressive pet takes on
+  no one out of sight (`PetAI::MoveInLineOfSight`); a totem's pulse due at or after its end goes with it; a dead
+  unit can't be put back in a fight. Four rows where mangos does as wvs and Thistle Tea is stricter are
+  `wrong-for-1.12` (an unflagged player's pet at a flagged enemy, autocast under a stun, a pet kept at any
+  distance, a partial path's point). **For phase 2:** EventAI for owned creatures (`event_ai::fire` skips every
+  creature with an owner), how long a pet stays in its fight, guardians' distance and map rules, Devour Magic.
+
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
