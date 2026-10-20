@@ -555,11 +555,13 @@ async fn balnazzars_shadow_magic_repeats_on_its_timers() {
             cr.category_cooldowns.clear();
         }
     };
-    for (event, spell, at, again) in [
-        (1, 17399, Some(me), 11.0),
-        (2, 12098, Some(second), 15.0),
-        (3, 13704, None, 20.0),
-        (4, 17405, Some(second), 30.0),
+    // Each sends itself again at its soonest and latest: Domination picks
+    // 25, 27.5 or 30 seconds (a third each); the rest have one time.
+    for (event, spell, at, soonest, latest) in [
+        (1, 17399, Some(me), 11.0, 11.0),
+        (2, 12098, Some(second), 15.0, 15.0),
+        (3, 13704, None, 20.0, 20.0),
+        (4, 17405, Some(second), 25.0, 30.0),
     ] {
         c.clear();
         map.query(move |m| {
@@ -572,11 +574,12 @@ async fn balnazzars_shadow_magic_repeats_on_its_timers() {
         if let Some(at) = at {
             assert_eq!(aimed, Some(at), "{spell} aimed");
         }
-        // Not before its time; at it, again.
+        // Not before its time; by its latest, again. (The hurry to 27
+        // seconds the test had sent Domination at once a third of the time.)
         c.clear();
         map.query(move |m| {
             ready(m);
-            hurry_runs(m, Some(d), Duration::from_secs_f32(again - 3.0));
+            hurry_runs(m, Some(d), Duration::from_secs_f32(soonest - 3.0));
         })
         .await;
         assert!(
@@ -587,14 +590,14 @@ async fn balnazzars_shadow_magic_repeats_on_its_timers() {
         );
         map.query(move |m| {
             ready(m);
-            hurry_runs(m, Some(d), Duration::from_secs(3));
+            hurry_runs(m, Some(d), Duration::from_secs_f32(latest - soonest + 3.0));
         })
         .await;
         assert!(
             cast_any_of(&mut c, d, spell, Duration::from_secs(3))
                 .await
                 .is_some(),
-            "{spell} again {again} seconds on"
+            "{spell} again {soonest} to {latest} seconds on"
         );
         map.query(move |m| crate::game::map::scripts::stop_for(m, d))
             .await;
