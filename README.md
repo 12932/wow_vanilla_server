@@ -20,7 +20,8 @@ cargo run --release
 ```
 
 The first start offers to build the navmesh and the terrain from your WoW client: answer Y, say where the client is,
-and the server starts when they are done. All 36 maps take about 9 GB and, on 16 threads, three minutes;
+and the server starts when they are done. A "no", or no answer within 30 seconds (a server started again by a script,
+in tmux or screen), starts it as it is, and isn't asked again while `data/setup-declined.txt` is there. All 36 maps take about 9 GB and, on 16 threads, three minutes;
 the Eastern Kingdoms alone (Gurubashi Arena, Stormwind, the Undercity) about 3 GB and one minute. The terrain takes
 seconds. To build without starting the server, or again later (more maps, another client):
 

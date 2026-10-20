@@ -20,6 +20,8 @@ characters.sqlite*
 !/data/db/dbc.sqlite
 /data/nav
 /data/terrain
+# The start's offer to build them, declined: not asked again while it's there.
+/data/setup-declined.txt
 
 # Python bytecode cache (tools/client_check and the like).
 __pycache__/

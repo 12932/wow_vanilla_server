@@ -28,6 +28,8 @@ missing world data). None fixed yet; waiting on your choice.
 - **#21** fixed: before the store is touched the start takes a lock beside it (`characters.sqlite.lock`, `flock`;
   `store::lock`) and binds the world's port, and refuses to go on (exit 2) if either is taken; a store about to be
   migrated is copied first (`characters.sqlite.v4.bak`, `VACUUM INTO`).
+- **#20** fixed: the start's offer to build the navmesh waits 30 s for a typed answer (`ui::confirm_within`), then
+  starts as it is; a "no" or no answer is remembered (`data/setup-declined.txt`) and only the hint is logged after.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

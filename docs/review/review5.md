@@ -26,7 +26,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 17 | medium | maps | After a restart, dungeon copies are swept at once, by the time of their last kill |
 | 18 | medium | maps | A teleport during a logout's countdown leaves the player stunned |
 | 19 | medium | data | A record that doesn't parse is dropped at start-up and its id given out again **Fixed.** |
-| 20 | medium | data | On a terminal, a start without the navmesh waits for an answer and never starts unattended |
+| 20 | medium | data | On a terminal, a start without the navmesh waits for an answer and never starts unattended **Fixed.** |
 | 21 | medium | data | A second server on the same store migrates it and runs its sweeps before it fails to bind **Fixed.** |
 
 The rest (about 35, low or speed) are in each area's section below, with the "checked and sound" lists.
