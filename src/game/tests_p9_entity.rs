@@ -716,7 +716,7 @@ async fn a_delayed_summon_comes_where_its_summoner_has_walked_to() {
         DELAYED_SUMMON,
         vec![ScriptStep {
             id: DELAYED_SUMMON,
-            delay_ms: 1_000,
+            delay_ms: 60_000,
             command: 10,
             datalong: [HELPER, 0, 0, 0],
             ..Default::default()
@@ -755,23 +755,32 @@ async fn a_delayed_summon_comes_where_its_summoner_has_walked_to() {
         })
         .await
         .unwrap();
+    // Walked there (the map's own steps move it), the step's minute is
+    // hurried by: it runs now.
     let deadline = tokio::time::Instant::now() + harness::WAIT;
-    let summoned = loop {
-        let found = map
-            .query(move |m| {
-                m.creatures
-                    .iter()
-                    .find(|(_, c)| c.entry == HELPER)
-                    .map(|(_, c)| c.position)
-            })
-            .await
-            .unwrap();
-        if let Some(p) = found {
-            break p;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "no summon");
+    while !map
+        .query(move |m| m.position_of(caller).is_some_and(|p| dist(p, to) < 0.01))
+        .await
+        .unwrap()
+    {
+        assert!(tokio::time::Instant::now() < deadline, "it never got there");
         tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    }
+    let summoned = map
+        .query(move |m| {
+            let none_yet = m.creatures.iter().all(|(_, c)| c.entry != HELPER);
+            crate::game::tests_p3_scripts::hurry_runs(m, Some(caller), Duration::from_secs(60));
+            let at = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == HELPER)
+                .map(|(_, c)| c.position);
+            assert!(none_yet, "not before its time");
+            at
+        })
+        .await
+        .unwrap()
+        .expect("the summon");
     assert!(
         dist(summoned, to) < 0.5,
         "at the walk's end {to:?}, not its start {from:?}: {summoned:?}"
