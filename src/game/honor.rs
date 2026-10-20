@@ -153,6 +153,13 @@ impl Ledger {
         l
     }
 
+    /// A character deleted: their entry goes (mangos's honor is columns of
+    /// the row it deletes). Whether there was one, to delete from the store.
+    pub fn forget(&mut self, guid: u32) -> bool {
+        self.dirty.remove(&guid);
+        self.entries.remove(&guid).is_some()
+    }
+
     /// A character honor knows of, with its team and level now.
     pub fn register(&mut self, guid: u32, team: u8, level: u8) {
         let e = self.entries.entry(guid).or_insert_with(|| Entry {

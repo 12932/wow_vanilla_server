@@ -909,6 +909,25 @@ pub fn reset(map: &Map, g: Guid) {
     }
 }
 
+/// A character deleted: their raid binds go, as mangos's `DeleteFromDB`
+/// deletes their `character_instance` rows.
+pub fn character_deleted(realm: &Realm, me: u32) {
+    let changed: Vec<RaidSave> = {
+        let mut inst = realm.social.instances.lock();
+        inst.raids
+            .values_mut()
+            .filter(|r| r.players.contains(&me))
+            .map(|r| {
+                r.players.retain(|p| *p != me);
+                r.clone()
+            })
+            .collect()
+    };
+    for r in changed {
+        realm.store.put_record(KIND_RAID, u64::from(r.id), &r);
+    }
+}
+
 /// The raids player `me` is bound to, and how long each has left.
 fn raid_infos(realm: &Realm, me: u32) -> Vec<RaidInfo> {
     let now = now();

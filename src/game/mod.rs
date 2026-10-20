@@ -1212,8 +1212,10 @@ pub struct Realm {
     pub registry: Registry,
     pub maps: Maps,
     pub social: social::Social,
-    pub next_character: AtomicU32,
-    pub next_item: AtomicU32,
+    /// The next character and item GUIDs: kept by the store with its
+    /// writes, so none is given twice (`Store::keep_counters`).
+    pub next_character: Arc<AtomicU32>,
+    pub next_item: Arc<AtomicU32>,
     /// Bones ids, and the kept bones of maps yet to start.
     pub bones: map::bones::Kept,
     /// The auth server's sessions, for the world handshake.
@@ -1251,6 +1253,9 @@ impl Realm {
                 level: n.level.into(),
             });
         }
+        let next_character = Arc::new(AtomicU32::new(startup.max_character_guid + 1));
+        let next_item = Arc::new(AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1));
+        store.keep_counters(next_character.clone(), next_item.clone());
         let realm = Arc::new(Self {
             config: parking_lot::RwLock::new(Arc::new(config)),
             config_generation: std::sync::atomic::AtomicU64::new(0),
@@ -1260,8 +1265,8 @@ impl Realm {
             registry,
             maps: Maps::default(),
             social,
-            next_character: AtomicU32::new(startup.max_character_guid + 1),
-            next_item: AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1),
+            next_character,
+            next_item,
             bones: map::bones::Kept::load(startup.bones, startup.max_bones_id),
             users,
         });

@@ -19,6 +19,9 @@ missing world data). None fixed yet; waiting on your choice.
 - **#6** fixed: the start refuses data that was looked for and doesn't load (missing, an LFS pointer, unreadable, no
   creatures, spells, areas or skill lines), and no data at all over a store with characters (`game::world_data`); a
   skill the data gives no slot is saved as it was loaded (`skills::saved`).
+- **#11** fixed: the next character and item GUIDs are kept in the store with every write (migration 5,
+  `counters`; `Store::keep_counters`), so none is handed out twice; a deleted character's honor entry and raid binds
+  go with them, as mangos's `DeleteFromDB`.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

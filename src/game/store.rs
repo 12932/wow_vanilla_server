@@ -12,7 +12,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::thread;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -121,6 +121,16 @@ const MIGRATIONS: &[&str] = &[
         flags INTEGER NOT NULL,
         dynamic_flags INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
+    );
+    "#,
+    // 5: the next character and item GUIDs to hand out, by name
+    // (`character`, `item`), kept with every write: a GUID is never given
+    // twice, though what had it is gone (a deleted character, an item
+    // destroyed), and what is still kept under it is never inherited.
+    r#"
+    CREATE TABLE counters (
+        name TEXT PRIMARY KEY,
+        next INTEGER NOT NULL
     );
     "#,
 ];
@@ -374,7 +384,7 @@ pub struct CharacterRow {
 pub const AT_LOGIN_FIRST: u32 = 0x1;
 
 /// What the store knows at start-up: every character's name, and the
-/// highest GUIDs in use.
+/// highest GUIDs in use or ever handed out (the `counters`).
 #[derive(Debug, Default)]
 pub struct Startup {
     pub names: Vec<NameRow>,
@@ -446,6 +456,8 @@ enum Request {
     /// Characters and records an item or money moved between: written in
     /// one transaction, never apart.
     Together(Vec<CharacterRow>, Vec<RecordOp>),
+    /// The realm's next character and item GUIDs, to keep with each write.
+    KeepCounters(Arc<AtomicU32>, Arc<AtomicU32>),
     Flush(oneshot::Sender<()>),
     /// A record as stored, for the tests to read back.
     #[cfg(test)]
@@ -546,7 +558,7 @@ impl Store {
             let queued = queued.clone();
             thread::Builder::new()
                 .name("store".into())
-                .spawn(move || run(conn, rx, &queued))
+                .spawn(move || store_thread(conn, rx, &queued))
                 .expect("spawn the store thread");
         }
         Ok((Store { tx, queued }, startup))
@@ -663,6 +675,12 @@ impl Store {
         rx.await.unwrap_or_default()
     }
 
+    /// Keep the realm's next character and item GUIDs with every write from
+    /// now on, so that none is handed out twice, across restarts too.
+    pub fn keep_counters(&self, character: Arc<AtomicU32>, item: Arc<AtomicU32>) {
+        self.send(Request::KeepCounters(character, item));
+    }
+
     /// Wait until everything sent before is written.
     pub async fn flush(&self) {
         let (tx, rx) = oneshot::channel();
@@ -729,15 +747,30 @@ fn read_startup(conn: &Connection) -> rusqlite::Result<Startup> {
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let max_character_guid: u32 =
-        conn.query_row("SELECT COALESCE(MAX(guid), 0) FROM characters", [], |r| {
-            r.get(0)
-        })?;
-    let max_item_guid: u32 = conn.query_row(
-        "SELECT COALESCE(MAX(guid), 0) FROM character_items",
-        [],
-        |r| r.get(0),
-    )?;
+    let handed_out = |name: &str| -> rusqlite::Result<u32> {
+        let next: Option<i64> = conn
+            .query_row(
+                "SELECT next FROM counters WHERE name = ?1",
+                params![name],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(next.map_or(0, |n| {
+            u32::try_from(n.saturating_sub(1).max(0)).unwrap_or(u32::MAX)
+        }))
+    };
+    let max_character_guid: u32 = conn
+        .query_row("SELECT COALESCE(MAX(guid), 0) FROM characters", [], |r| {
+            r.get::<_, u32>(0)
+        })?
+        .max(handed_out(COUNTER_CHARACTER)?);
+    let max_item_guid: u32 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(guid), 0) FROM character_items",
+            [],
+            |r| r.get::<_, u32>(0),
+        )?
+        .max(handed_out(COUNTER_ITEM)?);
     let mut stmt = conn.prepare("SELECT kind, id, data FROM records")?;
     let records = stmt
         .query_map([], |r| {
@@ -792,11 +825,57 @@ fn sweep_bones(conn: &Connection, now: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// The `counters` rows.
+const COUNTER_CHARACTER: &str = "character";
+const COUNTER_ITEM: &str = "item";
+
+/// The realm's next character and item GUIDs, kept by the store with each
+/// write ([`Store::keep_counters`]): a GUID in a write was handed out
+/// before it, so the counters written with it are past it.
+struct Counters {
+    character: Arc<AtomicU32>,
+    item: Arc<AtomicU32>,
+    /// What was last written of each.
+    written: (u32, u32),
+}
+
+impl Counters {
+    /// The counters now, if they moved since they were last written.
+    fn moved(&self) -> Option<(u32, u32)> {
+        let now = (
+            self.character.load(Ordering::Relaxed),
+            self.item.load(Ordering::Relaxed),
+        );
+        (now != self.written).then_some(now)
+    }
+}
+
+fn write_counters(conn: &Connection, (character, item): (u32, u32)) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "INSERT INTO counters (name, next) VALUES (?1, ?2) \
+         ON CONFLICT (name) DO UPDATE SET next = MAX(next, excluded.next)",
+    )?;
+    stmt.execute(params![COUNTER_CHARACTER, character])?;
+    stmt.execute(params![COUNTER_ITEM, item])?;
+    Ok(())
+}
+
+/// What the store's thread keeps between requests.
+#[derive(Default)]
+struct Kept {
+    counters: Option<Counters>,
+}
+
 /// The store's thread. It outlives a panic in what it does: that request
 /// is lost (its caller hears nothing), not every save after it.
-fn run(mut conn: Connection, mut rx: mpsc::UnboundedReceiver<Request>, queued: &AtomicUsize) {
+fn store_thread(
+    mut conn: Connection,
+    mut rx: mpsc::UnboundedReceiver<Request>,
+    queued: &AtomicUsize,
+) {
+    let mut kept = Kept::default();
     loop {
-        match catch(|| serve_all(&mut conn, &mut rx, queued)) {
+        match catch(|| serve_all(&mut conn, &mut kept, &mut rx, queued)) {
             Ok(()) => return,
             Err(e) => error!("the store panicked: {e}; going on"),
         }
@@ -805,6 +884,7 @@ fn run(mut conn: Connection, mut rx: mpsc::UnboundedReceiver<Request>, queued: &
 
 fn serve_all(
     conn: &mut Connection,
+    kept: &mut Kept,
     rx: &mut mpsc::UnboundedReceiver<Request>,
     queued: &AtomicUsize,
 ) {
@@ -826,12 +906,12 @@ fn serve_all(
             }
             // Keep order: what was saved before a read is written before
             // it.
-            write_saves(conn, std::mem::take(&mut saves));
-            if let Err(e) = catch(|| serve(conn, req)) {
+            write_saves(conn, kept, std::mem::take(&mut saves));
+            if let Err(e) = catch(|| serve(conn, kept, req)) {
                 error!("a store request panicked: {e}; its caller hears nothing");
             }
         }
-        write_saves(conn, saves);
+        write_saves(conn, kept, saves);
     }
 }
 
@@ -892,15 +972,21 @@ const BUSY_TRIES: u32 = 3;
 /// its timeout, a bad row, a panic), the busy are tried again, and the
 /// rest each go alone: one bad save is lost, not those batched with it. A
 /// save together is one request, so it goes alone whole: never in parts.
-fn write_saves(conn: &mut Connection, saves: Vec<Request>) {
+fn write_saves(conn: &mut Connection, kept: &mut Kept, saves: Vec<Request>) {
     if saves.is_empty() {
         return;
     }
+    let counters = kept.counters.as_ref().and_then(Counters::moved);
+    let written = |kept: &mut Kept| {
+        if let (Some(c), Some(now)) = (&mut kept.counters, counters) {
+            c.written = now;
+        }
+    };
     let mut tries = 0;
     let failed = loop {
         tries += 1;
-        match catch(|| write_batch(conn, &saves)) {
-            Ok(Ok(())) => return,
+        match catch(|| write_batch(conn, counters, &saves)) {
+            Ok(Ok(())) => return written(kept),
             Ok(Err(e)) if busy(&e) && tries < BUSY_TRIES => {
                 warn!(
                     "the character store is busy ({e}); trying {} saves again",
@@ -921,8 +1007,8 @@ fn write_saves(conn: &mut Connection, saves: Vec<Request>) {
         saves.len()
     );
     for s in &saves {
-        match catch(|| write_batch(conn, std::slice::from_ref(s))) {
-            Ok(Ok(())) => {}
+        match catch(|| write_batch(conn, counters, std::slice::from_ref(s))) {
+            Ok(Ok(())) => written(kept),
             Ok(Err(e)) => error!("lost a save ({}): {e}", describe(s)),
             Err(e) => error!("lost a save ({}): it panicked: {e}", describe(s)),
         }
@@ -936,11 +1022,19 @@ fn busy(e: &rusqlite::Error) -> bool {
     )
 }
 
-fn write_batch(conn: &mut Connection, saves: &[Request]) -> rusqlite::Result<()> {
+/// Write `saves` in one transaction, with the counters if they moved.
+fn write_batch(
+    conn: &mut Connection,
+    counters: Option<(u32, u32)>,
+    saves: &[Request],
+) -> rusqlite::Result<()> {
     let z = crate::zone!("store transaction");
     z.value(saves.len() as u64);
     {
         let tx = conn.transaction()?;
+        if let Some(counters) = counters {
+            write_counters(&tx, counters)?;
+        }
         for s in saves {
             match s {
                 Request::Save(row) => save_row(&tx, row)?,
@@ -1017,9 +1111,16 @@ fn delete_record(conn: &Connection, kind: &str, id: u64) -> rusqlite::Result<()>
     Ok(())
 }
 
-fn serve(conn: &Connection, req: Request) {
+fn serve(conn: &Connection, kept: &mut Kept, req: Request) {
     let _z = crate::zone!("store request");
     match req {
+        Request::KeepCounters(character, item) => {
+            kept.counters = Some(Counters {
+                character,
+                item,
+                written: (0, 0),
+            });
+        }
         Request::Characters(account, reply) => {
             let rows = characters_for(conn, &account).unwrap_or_else(|e| {
                 warn!("listing characters for {account}: {e}");
@@ -1048,7 +1149,22 @@ fn serve(conn: &Connection, req: Request) {
             let result = if exists {
                 Err(CreateError::NameInUse)
             } else {
-                save_row(conn, &row).map_err(|e| {
+                // With the counters past its GUID and its items'.
+                let counters = kept.counters.as_ref().and_then(Counters::moved);
+                (|| {
+                    let tx = conn.unchecked_transaction()?;
+                    save_row(&tx, &row)?;
+                    if let Some(c) = counters {
+                        write_counters(&tx, c)?;
+                    }
+                    tx.commit()
+                })()
+                .map(|()| {
+                    if let (Some(c), Some(now)) = (&mut kept.counters, counters) {
+                        c.written = now;
+                    }
+                })
+                .map_err(|e| {
                     warn!("creating character {}: {e}", row.name);
                     CreateError::Failed
                 })
