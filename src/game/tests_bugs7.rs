@@ -327,7 +327,7 @@ fn created_running(m: &ServerOpcodeMessage, g: Guid) -> Option<bool> {
 /// gone, and Cid, coming after, is told of her body standing: no client
 /// runs a corpse on along the ground. Bea's capture, for the client check.
 async fn deaths_on_the_run() -> (Client, Client) {
-    let (realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let (realm, a, ga, map) = setup_with(world(), Class::Warrior).await;
     let mut b = Client::connect(&realm, "B");
     b.enter("Bea", Race::Human, Class::Warrior).await;
     b.heartbeat(START.0, START.1, START.2).await;
