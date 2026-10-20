@@ -40,7 +40,9 @@ async fn corina_steele_sells_and_repairs() {
         crate::game::tests_p3_combat::spawn(m, g, CORINA_STEELE, 10, 2.0)
     })
     .await;
-    a.sees(corina).await;
+    // Told of her by the map's updates, however slowly a busy machine
+    // runs them (20 s of real time alone wasn't always enough under load).
+    a.sees_on(&map, corina).await;
     a.send(CMSG_LIST_INVENTORY { guid: corina }).await;
     let wares = a
         .wait_for("SMSG_LIST_INVENTORY", |m| match m {

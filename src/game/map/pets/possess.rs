@@ -230,6 +230,18 @@ pub fn set_mover(map: &mut Map, player: Guid, mover: Guid) {
 
 /// `CMSG_MOVE_NOT_ACTIVE_MOVER`: the client no longer moves `old`.
 pub fn not_mover(map: &mut Map, player: Guid, old: Guid) {
+    // One still theirs to move stays their mover: control changes with
+    // `CMSG_SET_ACTIVE_MOVER` (mangos's `HandleMoveNotActiveMover`
+    // ignores the mover's own guid; Thistle Tea's "a remote mover that
+    // remains controlled").
+    let controlled = map
+        .players
+        .get(&player)
+        .is_some_and(|p| p.owned.charm == Some(old))
+        || super::eyes::controls(map, player, old);
+    if controlled {
+        return;
+    }
     if let Some(p) = map.players.get_mut(&player)
         && p.owned.mover == Some(old)
     {
@@ -266,6 +278,10 @@ pub fn moved(
         let Some(v) = map.players.get_mut(&unit) else {
             return true;
         };
+        // Feared or confused, the server moves them, as a creature.
+        if v.driven.is_some() {
+            return true;
+        }
         let (anchor, old_cell) = (v.vis_anchor, v.cell);
         v.movement = *info;
         let new_cell = crate::game::map::grid::cell_of(info.position.x, info.position.y);

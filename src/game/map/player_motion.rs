@@ -244,10 +244,24 @@ pub fn control(map: &mut Map, g: Guid) {
         return;
     }
     stop(map, g);
-    let possessed = map
-        .players
-        .get(&g)
-        .is_some_and(|p| p.owned.possessed_by.is_some());
+    let possession = map.players.get(&g).and_then(|p| p.owned.possessed_by);
+    let possessed = possession.is_some();
+    // A player's possessor moves them: theirs is the client a fear or a
+    // confusion takes them from, and gives them back to (mangos's
+    // `UpdateClientControl` to the client controlling; Thistle Tea's
+    // fear recovery restoring the controller, the victim kept locked).
+    let possessor = possession
+        .filter(|pos| pos.manual && want != Some(Mode::Charm))
+        .map(|pos| pos.master);
+    if let Some(m) = possessor.and_then(|m| map.players.get(&m)) {
+        let taken = want.is_some() && (had.is_none() || had == Some(Mode::Charm));
+        if taken || want.is_none() {
+            m.outbound.send(&SMSG_CLIENT_CONTROL_UPDATE {
+                guid: g,
+                allow_movement: want.is_none(),
+            });
+        }
+    }
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };

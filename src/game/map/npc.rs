@@ -271,7 +271,17 @@ pub fn greeting(map: &Map, menu_id: u32, npc: Guid, player: Guid) -> u32 {
                 })
                 .min_by_key(|(text, cond)| (std::cmp::Reverse(*cond), *text))
         })
-        .map_or(DEFAULT_TEXT, |(t, _)| *t)
+        .map(|(t, _)| *t)
+        // With no menu, a creature spawn's own (`npc_gossip`); else the
+        // default (mangos's `SendPreparedGossip` and `GetGossipTextId`).
+        .or_else(|| {
+            if menu_id != 0 {
+                return None;
+            }
+            let spawn = map.creature(npc)?.spawn_guid?;
+            map.realm.data.npc.npc_gossip.get(&spawn).copied()
+        })
+        .unwrap_or(DEFAULT_TEXT)
 }
 
 pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u32) {

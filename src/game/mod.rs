@@ -943,6 +943,22 @@ mod tests_p9_entity_pets;
 #[cfg(test)]
 mod tests_p9_entity_real;
 #[cfg(test)]
+mod tests_p9_player_bank;
+#[cfg(test)]
+mod tests_p9_player_bg;
+#[cfg(test)]
+mod tests_p9_player_control;
+#[cfg(test)]
+mod tests_p9_player_items;
+#[cfg(test)]
+mod tests_p9_player_locks;
+#[cfg(test)]
+mod tests_p9_player_quests;
+#[cfg(test)]
+mod tests_p9_player_social;
+#[cfg(test)]
+mod tests_p9_player_spells_real;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

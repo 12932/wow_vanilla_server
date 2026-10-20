@@ -1330,8 +1330,11 @@ impl Map {
                 eviction::logged_in(self, guid);
                 spells::apply_passives(self, guid);
                 spell_areas::reconcile(self, guid);
-                pets::owner_arrived(self, guid);
+                // A flight first: a pet waits for its landing, never
+                // called out to be sent away (Thistle Tea's
+                // `restore_companion` with a taxi route unfinished).
                 npc::resume_flight(self, guid);
+                pets::owner_arrived(self, guid);
                 social::logged_in(self, guid);
                 self.visibility_dirty.insert(guid);
             }

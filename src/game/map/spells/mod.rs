@@ -299,8 +299,23 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
             .find(|t| t.ranks.contains(&spell))
             .map(|t| t.ranks.to_vec())
             .unwrap_or_default();
+        let gone: Vec<u32> = p
+            .spells
+            .iter()
+            .copied()
+            .filter(|s| *s != spell && ranks.contains(s))
+            .collect();
         p.spells.retain(|s| *s == spell || !ranks.contains(s));
+        // And their passive auras with them: the ranks never stack (mangos's
+        // `removeSpell` of the rank below, Thistle Tea's "without duplicate
+        // ranks").
+        for r in gone {
+            auras::remove_spell(map, player, r, Some(player));
+        }
     }
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
     p.spells.push(spell);
     if let Some(old) = old {
         log::superceded(map, player, old, spell);
@@ -2774,7 +2789,14 @@ pub fn update(map: &mut Map) {
         // The target must still be here; a player's still alive, a foe, in
         // range and in front as the cast ends, or it fails before it costs.
         let m = mods::for_spell(map, g, s);
-        if let Some(code) = checks::at_finish(map, g, s, &casting.targets, &m) {
+        // And its profession's: the lock, node or lockbox still there, in
+        // reach, nobody else's and not beyond the skill, its tools and
+        // focus by (mangos's `CheckCast(false)` at `Spell::cast`, Thistle
+        // Tea's launch recheck), failed before it costs or spends a charge.
+        let at_finish = checks::at_finish(map, g, s, &casting.targets, &m).or_else(|| {
+            crate::game::map::professions::check(map, g, s, &casting.targets, casting.item)
+        });
+        if let Some(code) = at_finish {
             if code == checks::fail::BAD_TARGETS {
                 if let Some(p) = map.players.get(&g) {
                     p.outbound.send(&SMSG_SPELL_FAILURE {

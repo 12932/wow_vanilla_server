@@ -201,6 +201,9 @@ pub const QUEST_SPECIAL_EXPLORATION_OR_EVENT: u32 = 0x2;
 #[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 pub struct NpcData {
     pub gossip_menus: AHashMap<u32, GossipMenu>,
+    /// `npc_gossip`: a creature spawn's own greeting, by its guid, where
+    /// its menu gives none (mangos's `GetNpcGossip`).
+    pub npc_gossip: AHashMap<u32, u32>,
     pub npc_texts: AHashMap<u32, [NpcTextChoice; 8]>,
     pub broadcast_texts: AHashMap<u32, BroadcastText>,
     /// By creature entry, and by trainer template.

@@ -29,7 +29,7 @@ const AV: u32 = 30;
 
 /// The wing commanders: entry, side, supply quest, goal, reputation per
 /// turn-in, beacon, the point of their road that is home.
-const COMMANDERS: [(u32, usize, u32, u32, i32, u32, usize); 6] = [
+pub(super) const COMMANDERS: [(u32, usize, u32, u32, i32, u32, usize); 6] = [
     (13179, 1, 6825, 90, 1, 17324, 74),
     (13180, 1, 6826, 60, 2, 17325, 84),
     (13181, 1, 6827, 30, 5, 17323, 97),
@@ -43,9 +43,9 @@ const MULVERICK: u32 = 13181;
 const SMITHS: [u32; 2] = [13257, 13176];
 const SUMMONERS: [u32; 2] = [13442, 13236];
 const RAM_COMMANDER: u32 = 13577;
-const QUARTERMASTERS: [u32; 2] = [12096, 12097];
+pub(super) const QUARTERMASTERS: [u32; 2] = [12096, 12097];
 const MARSHAL: u32 = 13446;
-const ORDERS: u32 = 17353;
+pub(super) const ORDERS: u32 = 17353;
 
 fn text(d: &mut GameData, id: u32, line: &str) {
     d.npc.broadcast_texts.insert(
@@ -74,7 +74,7 @@ fn item(d: &mut GameData, entry: u32, name: &str) {
 /// their roads home), the Alliance's ram commander and quartermaster, the
 /// Horde's quartermaster, the beacons and the orders, and each menu
 /// option's line.
-fn data() -> GameData {
+pub(super) fn data() -> GameData {
     let mut d = valley();
     npc(&mut d, SMITHS[1], "Smith Regzar", 35);
     npc(&mut d, SUMMONERS[1], "Primalist Thurloga", 35);
@@ -133,11 +133,11 @@ fn data() -> GameData {
     d
 }
 
-fn x(m: &World) -> &Extras {
+pub(super) fn x(m: &World) -> &Extras {
     &m.battleground.as_ref().unwrap().av.as_ref().unwrap().extras
 }
 
-fn xm(m: &mut World) -> &mut Extras {
+pub(super) fn xm(m: &mut World) -> &mut Extras {
     &mut m.battleground.as_mut().unwrap().av.as_mut().unwrap().extras
 }
 
@@ -175,7 +175,7 @@ fn standing(m: &World, g: Guid, faction: u32) -> i32 {
     crate::game::map::reputation::standing(&m.players[&g], &m.realm.data, faction)
 }
 
-async fn set_standing(map: &MapHandle, g: Guid, faction: u32, to: i32) {
+pub(super) async fn set_standing(map: &MapHandle, g: Guid, faction: u32, to: i32) {
     map.query(move |m| {
         let delta = to - standing(m, g, faction);
         crate::game::map::reputation::modify(m, g, faction, delta, false);
@@ -229,7 +229,7 @@ async fn until(map: &MapHandle, what: impl Fn(&World) -> bool + Send + Clone + '
     false
 }
 
-async fn of(map: &MapHandle, entry: u32) -> Guid {
+pub(super) async fn of(map: &MapHandle, entry: u32) -> Guid {
     map.query(move |m| creature(m, entry))
         .await
         .flatten()
@@ -252,7 +252,7 @@ async fn setup() -> (Arc<Realm>, Client, Guid, Client, Guid, MapHandle) {
 
 /// The menu `npc` opens with: its title and its options' lines. The
 /// NPC's own (template) menu is `(68, [])`: no menu of the valley's.
-async fn menu(c: &mut Client, npc: Guid) -> (u32, Vec<String>) {
+pub(super) async fn menu(c: &mut Client, npc: Guid) -> (u32, Vec<String>) {
     c.clear();
     c.send(CMSG_GOSSIP_HELLO { guid: npc }).await;
     c.wait_for("the menu", |m| match m {
@@ -268,7 +268,7 @@ async fn menu(c: &mut Client, npc: Guid) -> (u32, Vec<String>) {
 const NONE: (u32, Vec<String>) = (68, Vec::new());
 
 /// An option chosen that closes the menu.
-async fn pick(c: &mut Client, npc: Guid, option: u32) {
+pub(super) async fn pick(c: &mut Client, npc: Guid, option: u32) {
     c.clear();
     choose(c, npc, option).await;
     c.wait_for("SMSG_GOSSIP_COMPLETE", |m| {

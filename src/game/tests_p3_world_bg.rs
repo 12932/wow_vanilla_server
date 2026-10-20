@@ -1205,6 +1205,15 @@ async fn walk_into(map: &MapHandle, c: &mut Client, trigger: u32, x: f32) {
     .await;
 }
 
+/// What an area trigger told `c` it wants (`SMSG_AREA_TRIGGER_MESSAGE`).
+async fn area_message(c: &mut Client) -> String {
+    c.wait_for("SMSG_AREA_TRIGGER_MESSAGE", |m| match m {
+        ServerOpcodeMessage::SMSG_AREA_TRIGGER_MESSAGE(t) => Some(t.message.clone()),
+        _ => None,
+    })
+    .await
+}
+
 #[tokio::test]
 async fn a_battleground_portal_lists_its_battle_for_its_side_and_levels_and_says_what_it_wants() {
     let realm = harness::realm_with(portals());
@@ -1230,13 +1239,13 @@ async fn a_battleground_portal_lists_its_battle_for_its_side_and_levels_and_says
     // Horde's to her at any level.
     walk_into(&map, &mut a, 3650, 100.0).await;
     assert_eq!(
-        a.system_message("to enter").await,
+        area_message(&mut a).await,
         "You must be in the Alliance and at least 10th level to enter."
     );
     map.query(level(alice, 10)).await;
     walk_into(&map, &mut a, 3651, 200.0).await;
     assert_eq!(
-        a.system_message("to enter").await,
+        area_message(&mut a).await,
         "You must be in the Horde and at least 10th level to enter."
     );
     // At tenth, her own lists the Gulch's battles, and she's out at its
@@ -1258,7 +1267,7 @@ async fn a_battleground_portal_lists_its_battle_for_its_side_and_levels_and_says
     // Fiftieth is short of Alterac Valley's fifty-first for Grom.
     walk_into(&gmap, &mut b, 3652, 300.0).await;
     assert_eq!(
-        b.system_message("to enter").await,
+        area_message(&mut b).await,
         "You must be in the Horde and at least 51st level to enter."
     );
 }
