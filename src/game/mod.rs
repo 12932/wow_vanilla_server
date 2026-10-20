@@ -793,6 +793,8 @@ mod tests_p8_ai_scripts;
 #[cfg(test)]
 mod tests_p8_ai_spells;
 #[cfg(test)]
+mod tests_p8_entity;
+#[cfg(test)]
 mod tests_p8_entity_mob;
 #[cfg(test)]
 mod tests_p8_entity_objects;
