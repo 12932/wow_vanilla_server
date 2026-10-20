@@ -952,8 +952,8 @@ pub fn gm(map: &mut Map, g: Guid, args: &[&str]) -> String {
             settle_now(&map.realm);
             "The week is ranked.".to_owned()
         }
-        ["points", n] => match n.parse::<f32>() {
-            Ok(points) => {
+        ["points", n] => match n.parse::<f32>().ok().filter(|p| p.is_finite()) {
+            Some(points) => {
                 map.realm
                     .social
                     .honor
@@ -962,7 +962,7 @@ pub fn gm(map: &mut Map, g: Guid, args: &[&str]) -> String {
                 refresh(map, target);
                 format!("Rank points set to {points}.")
             }
-            Err(_) => "Use: .honor points <n>".to_owned(),
+            None => "Use: .honor points <n>".to_owned(),
         },
         _ => {
             let h = map.realm.social.honor.lock();

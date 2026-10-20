@@ -134,17 +134,24 @@ const ON_THE_WAY_SECS: i64 = 60;
 impl Instances {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut i = Self::default();
-        for (kind, _, data) in records {
+        use crate::game::store::parse_record;
+        for (kind, id, data) in records {
+            let id = *id as u32;
             match kind.as_str() {
                 KIND_RAID => {
-                    if let Ok(save) = serde_json::from_str::<RaidSave>(data) {
-                        i.next_id = i.next_id.max(save.id);
+                    // Every id counts, read or not (`Mails::load`).
+                    i.next_id = i.next_id.max(id);
+                    if let Some(mut save) = parse_record::<RaidSave>(KIND_RAID, id.into(), data) {
+                        save.id = id;
                         i.raids.insert(save.id, save);
                     }
                 }
                 KIND_INSTANCE => {
-                    if let Ok(mut save) = serde_json::from_str::<InstanceSave>(data) {
-                        i.next_id = i.next_id.max(save.id);
+                    i.next_id = i.next_id.max(id);
+                    if let Some(mut save) =
+                        parse_record::<InstanceSave>(KIND_INSTANCE, id.into(), data)
+                    {
+                        save.id = id;
                         // Groups don't outlive a restart, and their ids come
                         // again: a group's copy is left without an owner, for
                         // its old leader's next group to take up.

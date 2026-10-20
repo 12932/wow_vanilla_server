@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::thread;
 
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
@@ -1270,6 +1271,47 @@ fn parse_state(json: &str) -> CharacterState {
         }
     }
     serde_json::from_value(serde_json::Value::Object(fields)).unwrap_or_default()
+}
+
+/// A record from its JSON (a mail, an auction, a guild, an honor entry),
+/// as [`parse_state`] reads a character's state: a field that won't parse
+/// (a NaN, saved as `null`) goes back to its default, and only it; the
+/// rest are kept. `None`, logged at `error`, for a record that isn't an
+/// object at all: it is left in the store as it is, and its id isn't
+/// handed out again (the loaders count every record's id, read or not).
+pub fn parse_record<T: DeserializeOwned + Serialize + Default>(
+    kind: &str,
+    id: u64,
+    json: &str,
+) -> Option<T> {
+    use serde_json::Value;
+    let e = match serde_json::from_str(json) {
+        Ok(record) => return Some(record),
+        Err(e) => e,
+    };
+    let (Ok(Value::Object(fields)), Ok(Value::Object(base))) = (
+        serde_json::from_str::<Value>(json),
+        serde_json::to_value(T::default()),
+    ) else {
+        error!("{kind} {id} doesn't parse ({e}); left as it is in the store");
+        return None;
+    };
+    let mut kept = base.clone();
+    for (name, value) in fields {
+        let mut alone = base.clone();
+        alone.insert(name.clone(), value.clone());
+        match serde_json::from_value::<T>(Value::Object(alone)) {
+            Ok(_) => {
+                kept.insert(name, value);
+            }
+            Err(e) => {
+                error!("{kind} {id}: its {name} doesn't parse ({e}); it goes back to its default")
+            }
+        }
+    }
+    serde_json::from_value(Value::Object(kept))
+        .inspect_err(|e| error!("{kind} {id} doesn't parse ({e}); left as it is in the store"))
+        .ok()
 }
 
 fn row_from(r: &rusqlite::Row) -> rusqlite::Result<CharacterRow> {

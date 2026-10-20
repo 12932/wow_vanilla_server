@@ -76,7 +76,7 @@ pub struct Emblem {
     pub background: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Guild {
     pub id: u32,
     pub name: String,
@@ -138,7 +138,7 @@ impl Guild {
 }
 
 /// A guild charter: its owner, the guild's name and who has signed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Petition {
     /// The charter item's GUID counter.
     pub id: u32,
@@ -161,24 +161,31 @@ impl Guilds {
     /// The guilds and charters kept in the store.
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut g = Self::default();
-        for (kind, _, data) in records {
+        for (kind, id, data) in records {
+            let id = *id as u32;
             match kind.as_str() {
-                KIND_GUILD => match serde_json::from_str::<Guild>(data) {
-                    Ok(guild) => {
-                        for m in &guild.members {
-                            g.of.insert(m.guid, guild.id);
-                        }
-                        g.next_id = g.next_id.max(guild.id);
-                        g.guilds.insert(guild.id, guild);
+                KIND_GUILD => {
+                    // Every id counts, read or not (`Mails::load`).
+                    g.next_id = g.next_id.max(id);
+                    let Some(mut guild) =
+                        crate::game::store::parse_record::<Guild>(KIND_GUILD, id.into(), data)
+                    else {
+                        continue;
+                    };
+                    guild.id = id;
+                    for m in &guild.members {
+                        g.of.insert(m.guid, guild.id);
                     }
-                    Err(e) => tracing::warn!("a guild record doesn't read: {e}"),
-                },
-                KIND_PETITION => match serde_json::from_str::<Petition>(data) {
-                    Ok(p) => {
-                        g.petitions.insert(p.id, p);
+                    g.guilds.insert(guild.id, guild);
+                }
+                KIND_PETITION => {
+                    if let Some(mut p) =
+                        crate::game::store::parse_record::<Petition>(KIND_PETITION, id.into(), data)
+                    {
+                        p.id = id;
+                        g.petitions.insert(id, p);
                     }
-                    Err(e) => tracing::warn!("a charter record doesn't read: {e}"),
-                },
+                }
                 _ => {}
             }
         }

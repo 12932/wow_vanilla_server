@@ -69,11 +69,15 @@ pub struct Tickets {
 impl Tickets {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut t = Self::default();
-        for (kind, _, data) in records.iter().filter(|(k, _, _)| k == KIND_TICKET) {
-            let _ = kind;
-            if let Ok(ticket) = serde_json::from_str::<Ticket>(data) {
-                t.next_id = t.next_id.max(ticket.id);
-                t.tickets.insert(ticket.id, ticket);
+        for (_, id, data) in records.iter().filter(|(k, _, _)| k == KIND_TICKET) {
+            // Every id counts, read or not (`Mails::load`).
+            let id = *id as u32;
+            t.next_id = t.next_id.max(id);
+            if let Some(mut ticket) =
+                crate::game::store::parse_record::<Ticket>(KIND_TICKET, id.into(), data)
+            {
+                ticket.id = id;
+                t.tickets.insert(id, ticket);
             }
         }
         t

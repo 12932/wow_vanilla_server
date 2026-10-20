@@ -22,6 +22,9 @@ missing world data). None fixed yet; waiting on your choice.
 - **#11** fixed: the next character and item GUIDs are kept in the store with every write (migration 5,
   `counters`; `Store::keep_counters`), so none is handed out twice; a deleted character's honor entry and raid binds
   go with them, as mangos's `DeleteFromDB`.
+- **#19** fixed: records (honor, mail, auctions, guilds, charters, copies, tickets) load field by field as a
+  character's state does (`store::parse_record`), one that doesn't read at all is logged at `error` and left in the
+  store, and each kind's next id counts every record's id; `.honor points` and `set_rank_points` refuse a NaN.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

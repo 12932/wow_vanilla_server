@@ -301,3 +301,59 @@ async fn a_deleted_characters_guid_is_never_given_again() {
     );
     assert_eq!(raids.map(|r| r.players), Some(vec![999]));
 }
+
+/// #19: a NaN in an honor entry (`.honor points nan`) was saved as `null`
+/// and the whole entry, 5,000 kills and rank 12, dropped at the next
+/// start. A NaN isn't taken now, and an entry with a field that doesn't
+/// read keeps the rest.
+#[test]
+fn an_honor_entry_with_a_nan_keeps_the_rest_at_load() {
+    use crate::game::honor::{Entry, KIND, Ledger};
+    let mut ledger = Ledger::new(20_000, 2);
+    ledger.register(7, 0, 60);
+    let e = ledger.entries.get_mut(&7).unwrap();
+    e.lifetime_honorable_kills = 5_000;
+    e.highest_rank = 12;
+    e.rank_points = 1_000.0;
+    ledger.set_rank_points(7, f32::NAN);
+    assert_eq!(ledger.entries[&7].rank_points, 1_000.0, "a NaN isn't taken");
+    // One saved before, with its NaN.
+    let mut bad: Entry = ledger.entries[&7].clone();
+    bad.rank_points = f32::NAN;
+    let json = serde_json::to_string(&bad).unwrap();
+    assert!(json.contains("\"rank_points\":null"), "{json}");
+    let back = Ledger::load(&[(KIND.to_owned(), 7, json)], 20_000, 2);
+    let e = back.entries.get(&7).expect("the entry is kept");
+    assert_eq!(
+        (e.lifetime_honorable_kills, e.highest_rank, e.rank_points),
+        (5_000, 12, 0.0)
+    );
+}
+
+/// #19: a record that doesn't read at all is left in the store, and its
+/// id isn't given to the next record of its kind (which would write over
+/// it, item and all).
+#[test]
+fn a_record_that_doesnt_read_keeps_its_id() {
+    use crate::game::social::{auction, mail};
+    let records = vec![
+        (
+            mail::KIND_MAIL.to_owned(),
+            3,
+            "{\"id\":3,\"receiver\":1}".to_owned(),
+        ),
+        (mail::KIND_MAIL.to_owned(), 9, "[\"not a mail\"]".to_owned()),
+        (auction::KIND_AUCTION.to_owned(), 4, "17".to_owned()),
+        (
+            crate::game::instances::KIND_INSTANCE.to_owned(),
+            12,
+            "\"no\"".to_owned(),
+        ),
+    ];
+    let mut mails = mail::Mails::load(&records);
+    assert_eq!(mails.mails.len(), 1);
+    assert_eq!(mails.next_id(), 10, "past the mail that doesn't read");
+    assert!(auction::Auctions::load(&records).auctions.is_empty());
+    let mut instances = crate::game::instances::Instances::load(&records);
+    assert_eq!(instances.new_id(), 13);
+}

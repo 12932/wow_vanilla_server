@@ -75,18 +75,28 @@ impl Mails {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut m = Self::default();
         for (kind, id, data) in records {
+            // Every id counts, read or not: a mail that doesn't read stays
+            // in the store, and a new one mustn't take its id over it.
+            let id = *id as u32;
             match kind.as_str() {
-                KIND_MAIL => match serde_json::from_str::<Mail>(data) {
-                    Ok(mail) => {
-                        m.next_id = m.next_id.max(mail.id);
-                        m.mails.insert(mail.id, mail);
+                KIND_MAIL => {
+                    m.next_id = m.next_id.max(id);
+                    if let Some(mut mail) =
+                        crate::game::store::parse_record::<Mail>(KIND_MAIL, id.into(), data)
+                    {
+                        mail.id = id;
+                        m.mails.insert(id, mail);
                     }
-                    Err(e) => tracing::warn!("a mail record doesn't read: {e}"),
-                },
+                }
                 KIND_TEXT => {
-                    if let Ok(text) = serde_json::from_str::<String>(data) {
-                        m.next_id = m.next_id.max(*id as u32);
-                        m.texts.insert(*id as u32, text);
+                    m.next_id = m.next_id.max(id);
+                    match serde_json::from_str::<String>(data) {
+                        Ok(text) => {
+                            m.texts.insert(id, text);
+                        }
+                        Err(e) => tracing::error!(
+                            "{KIND_TEXT} {id} doesn't parse ({e}); left as it is in the store"
+                        ),
                     }
                 }
                 _ => {}

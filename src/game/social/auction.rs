@@ -98,14 +98,15 @@ pub struct Auctions {
 impl Auctions {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut a = Self::default();
-        for (kind, _, data) in records.iter().filter(|r| r.0 == KIND_AUCTION) {
-            let _ = kind;
-            match serde_json::from_str::<Auction>(data) {
-                Ok(auction) => {
-                    a.next_id = a.next_id.max(auction.id);
-                    a.auctions.insert(auction.id, auction);
-                }
-                Err(e) => tracing::warn!("an auction record doesn't read: {e}"),
+        for (_, id, data) in records.iter().filter(|r| r.0 == KIND_AUCTION) {
+            // Every id counts, read or not (`Mails::load`).
+            let id = *id as u32;
+            a.next_id = a.next_id.max(id);
+            if let Some(mut auction) =
+                crate::game::store::parse_record::<Auction>(KIND_AUCTION, id.into(), data)
+            {
+                auction.id = id;
+                a.auctions.insert(id, auction);
             }
         }
         a
