@@ -40,6 +40,9 @@ continents_yards = 100.0
 instances_yards = 170.0
 # Further in a battleground, so a battle's far side is in view.
 battleground_yards = 400.0
+# Further on a flight master's gryphon or wyvern, as the land goes by below; back to the map's own on
+# landing.
+flight_yards = 400.0
 
 [rates]
 # Multipliers, mangos's Rate.*: 1 is 1.12's own.

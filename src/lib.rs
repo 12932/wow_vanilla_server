@@ -10,3 +10,8 @@ pub mod numeric;
 pub mod server;
 pub mod setup;
 pub mod tracy;
+
+/// The server's version and the commit it was built from, as
+/// `0.1.35 (c31f3df)`: the crate's version and git's short hash
+/// (`build.rs`).
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("WVS_GIT_HASH"), ")");

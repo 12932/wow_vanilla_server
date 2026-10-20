@@ -126,7 +126,7 @@ The world: saves, the message of the day, the character store and the data's pat
 | `nav_dir` | A rustigator bake, the directory with `Azeroth.map`; `data/nav` if unset and there. Without it creatures walk straight lines and zones come from the client. | `unset` |  | restart |  |
 | `terrain_dir` | Thistle Tea's terrain tiles (`nix run .#terrain-data`); `data/terrain` if unset and there. Without them liquids have no kind outside WMOs: no deep-sea fatigue, no lava in the open. | `unset` |  | restart |  |
 | `tile_unload_secs` | Seconds a navmesh or terrain tile is kept with no player or awake creature near it and nothing asking about it; then it is let go, and read again if it is needed. 0 keeps every tile read. | `300` | 0 to 86400, clamped | live | `GridCleanUpDelay` |
-| `motd` | Shown to every player at login. | `"Welcome to wow_vanilla_server."` |  | live | `Motd` |
+| `motd` | Shown to every player at login. The server's version and commit (`0.1.35 (c31f3df)`) follow it; empty, neither is sent. | `"Welcome to wow_vanilla_server."` |  | live | `Motd` |
 | `reserved_names` | Names no character may take. | `[]` |  | restart |  |
 | `petition_signatures` | Signatures a guild charter needs. | `9` | 0 to 9, clamped | live | `MinPetitionSigns` |
 | `mail_delay_secs` | Seconds mail with money or an item takes between accounts. | `3600` | 0 to 2592000, clamped | live | `MailDeliveryDelay` |

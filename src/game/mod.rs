@@ -1377,6 +1377,7 @@ pub async fn run(users: crate::auth::UserCache) {
     let listener = TcpListener::bind("0.0.0.0:8085")
         .await
         .expect("bind the world listener on 0.0.0.0:8085");
+    info!("wow_vanilla_server {}", crate::VERSION);
     info!("world: listening on 0.0.0.0:8085");
     let accept = {
         let realm = realm.clone();

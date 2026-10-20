@@ -174,9 +174,15 @@ fn send_world_after(map: &Map, p: &Player) {
             );
         }
     }
+    // The message of the day, and under it the server's version and commit
+    // (none of either with no message of the day).
     let motd = &map.cfg.motd;
     if !motd.is_empty() {
         chat::send_system(&p.outbound, motd);
+        chat::send_system(
+            &p.outbound,
+            &format!("wow_vanilla_server {}", crate::VERSION),
+        );
     }
 }
 
