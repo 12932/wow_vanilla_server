@@ -23,7 +23,9 @@ use crate::game::map::creature_motion::{route, water};
 use crate::game::map::spells::{self, Targets, dynamic};
 use crate::game::map::{Map, MapKey};
 use crate::game::tests_client_emu::{spawn, template};
-use crate::game::tests_p3_cast_kit::{KOBOLD, LASTS_15S, bare, effect, fast_realm, human, insert};
+use crate::game::tests_p3_cast_kit::{
+    KOBOLD, LASTS_15S, bare, data_with, effect, fast_realm, human, insert,
+};
 use crate::game::tests_p3_spells_kit::{self as kit, cast_fresh};
 
 static BAKE: std::sync::LazyLock<std::path::PathBuf> =
@@ -207,6 +209,57 @@ fn blink(d: &mut GameData) {
         },
     );
     insert(d, [s]);
+}
+
+/// Thistle Tea's `collision_position/3`, "clips the collision ray without
+/// snapping its height to the ground" and "retains an unobstructed
+/// airborne destination", the way its leap goes under water
+/// (`SpellMovement.swim_destination`): a mage's Blink under the sea goes
+/// its twenty yards at her depth; with a wall in the way it stops short of
+/// it, on her line, at her depth, where she sees from where she was
+/// (mangos's front leap, "we are under water so next z equal prev z").
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_blink_under_the_sea_keeps_its_depth() {
+    if !BAKE.join("Azeroth.map").exists() {
+        return;
+    }
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = Realm::new(cfg, store, startup, data_with(blink), None);
+    let (_c, a, map) = human(&realm, "P9WN1", "Diver", Class::Mage).await;
+    let wall_x = SEA.x + 10.0;
+    let (open, (walled, sees)) = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[BLINK]);
+            m.near_teleport(a, SEA, 0.0);
+            assert!(cast_fresh(m, a, BLINK, Targets::default()));
+            let open = m.players[&a].position();
+            m.spells.walls.push((
+                v(wall_x, SEA.y - 10.0, SEA.z),
+                v(wall_x, SEA.y + 10.0, SEA.z),
+            ));
+            m.near_teleport(a, SEA, 0.0);
+            assert!(cast_fresh(m, a, BLINK, Targets::default()));
+            let walled = m.players[&a].position();
+            let sees = spells::checks::line_of_sight(m, SEA, walled);
+            (open, (walled, sees))
+        })
+        .await
+        .unwrap();
+    assert!(
+        (open.x - (SEA.x + 20.0)).abs() < 0.05 && (open.y - SEA.y).abs() < 0.05,
+        "twenty yards on: {open:?}"
+    );
+    assert!((open.z - SEA.z).abs() < 0.01, "at her depth: {open:?}");
+    assert!(
+        walled.x > SEA.x + 1.0 && walled.x < wall_x,
+        "short of the wall: {walled:?}"
+    );
+    assert!((walled.y - SEA.y).abs() < 0.05, "on her line: {walled:?}");
+    assert!((walled.z - SEA.z).abs() < 0.01, "at her depth: {walled:?}");
+    assert!(sees, "where she sees from where she was");
 }
 
 /// `world_position_test.exs`'s `grounded_target_position/2` "keeps an

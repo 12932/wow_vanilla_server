@@ -991,10 +991,10 @@ fn effect(
                 } else if selectors.contains(&18) {
                     from
                 } else if selectors.contains(&47) && !selectors.contains(&17) {
-                    first_clear(map, from, ahead(radius))
+                    first_clear(map, from, ahead(radius), false)
                 } else {
                     let d = radius + size(map, target) + size(map, caster);
-                    first_clear(map, from, ahead(d))
+                    first_clear(map, from, ahead(d), false)
                 };
                 let facing = (-o).rem_euclid(std::f32::consts::TAU);
                 map.near_teleport(target, at, facing);
@@ -1047,7 +1047,12 @@ fn effect(
                     y: me.position.y + d * o.sin(),
                     z: me.position.z,
                 };
-                let to = first_clear(map, me.position, want);
+                // Under water it keeps its depth (mangos's front leap: "we
+                // are under water so next z equal prev z"; Thistle Tea's
+                // `swim_destination`).
+                let swim = crate::game::map::creature_motion::water(map, me.position)
+                    .is_some_and(|(surface, _)| me.position.z < surface);
+                let to = first_clear(map, me.position, want, swim);
                 if map.players.contains_key(&caster) {
                     map.near_teleport(caster, to, me.orientation);
                 } else {
@@ -1474,9 +1479,20 @@ fn leap_angle(target_a: u32, target_b: u32) -> f32 {
 /// Where a leap from `from` toward `to` ends, on the ground: `to` if it can
 /// be seen, else the farthest point toward it that can, found by halving
 /// the way ten times as Thistle Tea's `first_collision_position` does, and
-/// half a yard back from what stopped it (its `collision_position`).
-fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
+/// half a yard back from what stopped it (its `collision_position`). One
+/// that `swim`s keeps its way's height where that is in the water, over
+/// its floor.
+fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d, swim: bool) -> Vector3d {
     let ground = |map: &mut Map, p: Vector3d| {
+        if swim
+            && let Some((surface, floor)) = crate::game::map::creature_motion::water(map, p)
+            && p.z < surface
+        {
+            return Vector3d {
+                z: p.z.max(floor),
+                ..p
+            };
+        }
         let z = map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z + 2.0));
         Vector3d {
             z: z.unwrap_or(p.z),
