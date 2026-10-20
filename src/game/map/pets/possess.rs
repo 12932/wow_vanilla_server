@@ -256,6 +256,12 @@ pub fn moved(
     let Some(unit) = p.owned.mover else {
         return false;
     };
+    // Checked as the controller's own movement is: a NaN or far-off place
+    // would be told to everyone who sees the unit, and saved with it.
+    if !crate::game::map::movement::finite(info) {
+        tracing::debug!("{}'s client moved {unit:?} out of the world", p.name);
+        return true;
+    }
     if guid::is_player(unit) {
         let Some(v) = map.players.get_mut(&unit) else {
             return true;

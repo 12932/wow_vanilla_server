@@ -18,6 +18,8 @@ missing world data). None fixed yet; waiting on your choice.
 - #1 fixed: an express route passes a node once, 128 at most, and a flight has 2,000 points at most; a frame too big
   for its size field isn't built (`update::frame`, `conn::encode`), and the writer skips one whose size field isn't
   its length.
+- #16 fixed: a possessed unit's movement is checked as its controller's own is (`movement::finite`: no NaN, nothing
+  past 20,000 yards, a deck's offset on a deck), and dropped when it fails. The speed check isn't applied to it.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

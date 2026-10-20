@@ -22,7 +22,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 13 | medium | net | Account names keep the case typed: a lowercase login is another account in the world |
 | 14 | medium | social | A refund taken before its post is written comes back after a restart |
 | 15 | medium | social | A client can have every mail in the realm scanned 1,000 times a second |
-| 16 | medium | world | A possessed unit's position isn't validated (a NaN relayed to observers, saved) |
+| 16 | medium | world | A possessed unit's position isn't validated (a NaN relayed to observers, saved) **Fixed.** |
 | 17 | medium | maps | After a restart, dungeon copies are swept at once, by the time of their last kill |
 | 18 | medium | maps | A teleport during a logout's countdown leaves the player stunned |
 | 19 | medium | data | A record that doesn't parse is dropped at start-up and its id given out again |

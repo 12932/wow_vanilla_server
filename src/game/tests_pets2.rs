@@ -389,6 +389,69 @@ async fn mind_control_moves_a_player_only_once_made_the_active_mover_and_ends_cl
     assert_eq!((faction, mover, charm), (before, None, None));
 }
 
+/// The first movement a client sends of `unit` that is told to `to`.
+async fn first_heartbeat_of(to: &mut Client, unit: Guid) -> Vector3d {
+    to.wait_for("a heartbeat", |m| match m {
+        ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(h) if h.guid == unit => Some(h.info.position),
+        _ => None,
+    })
+    .await
+}
+
+/// Review 5's world finding 2: the controller's client put a possessed
+/// unit anywhere, NaN too, told to everyone who saw it and saved, where
+/// its own movement is checked. A place out of the world is dropped.
+#[tokio::test]
+async fn a_possessed_player_isnt_moved_out_of_the_world() {
+    let realm = harness::realm_with(more());
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    bring(&map, gb, ga, 8.0).await;
+    a.sees(gb).await;
+    flag_pvp(&map, vec![ga, gb]);
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(control_update(&mut a, gb).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: gb }).await;
+    let at = position(&map, gb).await;
+    b.clear();
+    a.heartbeat(f32::NAN, at.y, at.z).await;
+    a.heartbeat(at.x - 25_000.0, at.y, at.z).await;
+    a.heartbeat(at.x + 2.0, at.y, at.z).await;
+    // The victim's own client hears each move taken, in order.
+    let told = first_heartbeat_of(&mut b, gb).await;
+    assert_eq!(told.x, at.x + 2.0, "the first move told is the good one");
+    until(&map, "the victim moved", move |m| {
+        (m.players[&gb].position().x - (at.x + 2.0)).abs() < 0.01
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
+    let realm = harness::realm_with(more());
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[EYE_OF_KILROGG]);
+    cast(&w, EYE_OF_KILROGG, None).await;
+    let eye = w
+        .wait_for("control of the eye", |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid != gw && u.allow_movement =>
+            {
+                Some(u.guid)
+            }
+            _ => None,
+        })
+        .await;
+    w.send(CMSG_SET_ACTIVE_MOVER { guid: eye }).await;
+    let at = position(&map, eye).await;
+    w.heartbeat(at.x, at.y, f32::NAN).await;
+    w.heartbeat(at.x, at.y, at.z - 30_000.0).await;
+    w.heartbeat(at.x + 3.0, at.y, at.z).await;
+    let told = first_heartbeat_of(&mut w, eye).await;
+    assert_eq!(told.x, at.x + 3.0, "the first move told is the good one");
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());
