@@ -9,7 +9,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 |---|---|---|---|
 | 1 | high | world | A crafted express flight route overflows an update frame's size field and corrupts the packet stream of every player near |
 | 2 | high | net | A connection's writer outlives its close while the client doesn't read, keeping its socket and its frames |
-| 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox |
+| 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox **Fixed.** |
 | 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue |
 | 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live |
 | 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
@@ -20,8 +20,8 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 11 | medium | data, social | A deleted character's GUID, honor, tickets and raid binds go to the next character made after a restart |
 | 12 | medium | net | An account can have any number of world sessions; a ban doesn't reach one on the character screen |
 | 13 | medium | net | Account names keep the case typed: a lowercase login is another account in the world |
-| 14 | medium | social | A refund taken before its post is written comes back after a restart |
-| 15 | medium | social | A client can have every mail in the realm scanned 1,000 times a second |
+| 14 | medium | social | A refund taken before its post is written comes back after a restart **Fixed.** |
+| 15 | medium | social | A client can have every mail in the realm scanned 1,000 times a second **Fixed.** |
 | 16 | medium | world | A possessed unit's position isn't validated (a NaN relayed to observers, saved) |
 | 17 | medium | maps | After a restart, dungeon copies are swept at once, by the time of their last kill |
 | 18 | medium | maps | A teleport during a logout's countdown leaves the player stunned |
@@ -1128,7 +1128,7 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
   sent. Or put the mail into `Mails` only after its store request has gone.
 - **Effort:** easy to medium.
 
-#### 4. One player queued alone at a meeting stone who logs out stops it grouping anyone alone (medium, reliability)
+#### 4. One player queued alone at a meeting stone who logs out stops it grouping anyone alone (medium, reliability) **Fixed.**
 - **Where:** `src/game/map/meeting_stones.rs:207` (`leave`, documented "or gone offline", called only for
   `CMSG_MEETINGSTONE_LEAVE`, `:84`); `map/social.rs:508` (`logged_out` doesn't leave the queue); the sweep,
   `meeting_stones.rs:241-330`.

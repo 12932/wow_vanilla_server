@@ -15,6 +15,16 @@ Six reviewers, by area: [review/review5.md](review/review5.md), its first table 
 crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
 the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
 missing world data). None fixed yet; waiting on your choice.
+- #3 fixed: a mail keeps its subject to the client's 64 letters and its body to 8,000 bytes, and the mail list
+  stops at the client's 32,766 bytes, as mangos's `HandleGetMailList` does (`social/mail.rs`).
+- rev5-social 4 fixed: a logout leaves a meeting stone's queue (mangos's `LogoutPlayer`), and the sweep drops
+  anyone offline first (`map/meeting_stones.rs`).
+- #14 fixed: `mail::post_in` takes the mail already locked, and every poster (a mail sent, cash on delivery paid,
+  a bid, a cancel, the auction sweep, a deleted seller) holds the lock until its save is sent, so a take can't be
+  written before the post (`social/mail.rs`, `social/auction.rs`).
+- #15 fixed (R4-44 with it): the mail is indexed by receiver, kept by `Mails::insert`, `remove` and the send-back,
+  so the next mail time, the mail list, a mailbox's count and a deletion look through one character's mail
+  (1,000 next-mail-time queries over 100,000 mails: 1.51 s before, 1 ms now, in a test build).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
