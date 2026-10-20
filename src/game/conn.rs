@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Notify, Semaphore, mpsc};
 use tracing::{debug, warn};
 use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, HeaderCrypto};
 use wow_world_messages::Guid;
@@ -127,6 +127,34 @@ struct Shared {
     /// channel, so from then on the queue's far end takes nothing more, and
     /// what was queued is dropped unwritten.
     closed: AtomicBool,
+    /// Signalled at the close, for whoever waits on it
+    /// ([`Shared::wait_closed`]): the writer, in a write that a client
+    /// which doesn't read holds up; the reader, in its read; the session.
+    closing: Notify,
+}
+
+impl Shared {
+    /// Close, and wake whoever waits on it: true if it wasn't closed.
+    fn close(&self) -> bool {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        self.closing.notify_waiters();
+        true
+    }
+
+    /// Completes once the queue is closed.
+    async fn wait_closed(&self) {
+        let notified = self.closing.notified();
+        let mut notified = std::pin::pin!(notified);
+        // Waiting from here, so a close between the check and the wait
+        // still wakes it.
+        notified.as_mut().enable();
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
+    }
 }
 
 impl std::fmt::Debug for Outbound {
@@ -156,7 +184,10 @@ impl Frames {
         if self.closed() {
             return None;
         }
-        let frame = self.rx.recv().await?;
+        let frame = tokio::select! {
+            frame = self.rx.recv() => frame?,
+            () = self.shared.wait_closed() => return None,
+        };
         (!self.closed()).then_some(frame)
     }
 
@@ -185,6 +216,7 @@ fn queue(budget: usize) -> (Outbound, Frames) {
     let shared = Arc::new(Shared {
         budget: Semaphore::new(budget),
         closed: AtomicBool::new(false),
+        closing: Notify::new(),
     });
     let outbound = Outbound {
         inner: Arc::new(OutboundInner {
@@ -358,12 +390,20 @@ impl Outbound {
     }
 
     /// Close the queue: nothing more is queued, what is queued and not yet
-    /// taken is dropped, the writer task ends once the write under way is
-    /// done, and the connection closes.
+    /// taken is dropped, the writer task ends at once (a write under way
+    /// left unfinished), the reader and the session end, and the
+    /// connection closes.
     pub fn close(&self) {
-        if !self.inner.shared.closed.swap(true, Ordering::AcqRel) {
-            // Wakes the writer, which sees the queue closed.
-            let _ = self.inner.tx.send(Arc::from([]));
+        self.inner.shared.close();
+    }
+
+    /// Completes once the queue is closed or its writer has gone: what the
+    /// reader and the session wait on beside their own work, to end with
+    /// their connection.
+    pub async fn closed(&self) {
+        tokio::select! {
+            () = self.inner.shared.wait_closed() => {}
+            () = self.inner.tx.closed() => {}
         }
     }
 
@@ -420,8 +460,16 @@ pub fn start(stream: TcpStream, crypto: HeaderCrypto) -> Connection {
     let _ = stream.set_nodelay(true);
     let (read, write) = stream.into_split();
     let (encrypter, decrypter) = crypto.split();
-    let (outbound, frames) = queue(crate::config::config().network.outbound_channel_bytes);
-    tokio::spawn(run_writer(write, encrypter, frames));
+    let network = &crate::config::config().network;
+    let (outbound, frames) = queue(network.outbound_channel_bytes);
+    // A client that takes nothing for as long as one may send nothing is
+    // gone.
+    tokio::spawn(run_writer(
+        write,
+        encrypter,
+        frames,
+        network.client_idle_timeout(),
+    ));
     let (in_tx, in_rx) = mpsc::channel(256);
     tokio::spawn(run_reader(read, decrypter, in_tx, outbound.clone()));
     Connection {
@@ -441,8 +489,15 @@ pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
     let idle = crate::config::config().network.client_idle_timeout();
     let mut bad = BadPacketLimit::new();
     loop {
-        let read_one = read_packet(&mut read, &mut decrypter);
-        let Ok(msg) = tokio::time::timeout(idle, read_one).await else {
+        // Closed (over budget, taken over, its map gone), the connection
+        // ends now, its socket with it: not at the client's next packet.
+        let read_one = tokio::time::timeout(idle, read_packet(&mut read, &mut decrypter));
+        let got = tokio::select! {
+            biased;
+            () = outbound.closed() => break,
+            got = read_one => got,
+        };
+        let Ok(msg) = got else {
             debug!("client sent nothing for {idle:?}; disconnecting");
             break;
         };
@@ -536,19 +591,32 @@ async fn read_packet<R: AsyncRead + Unpin + Send>(
 pub const MAX_AUTH_SESSION: usize = 8 * 1024;
 
 /// Drain queued frames, encrypt each header in order (ARC4 is a stream
-/// cipher) and write each burst with one `write_all`.
-pub(crate) async fn run_writer<W>(mut write: W, mut encrypter: EncrypterHalf, mut frames: Frames)
-where
+/// cipher) and write each burst at once. The writer ends at the close,
+/// whether it waits for frames or is in a write, and when a write makes no
+/// progress for `stall`: a client that doesn't read (its window shut, its
+/// acknowledgements still coming) holds its socket and its frames no
+/// longer than that, nor past the close.
+pub(crate) async fn run_writer<W>(
+    mut write: W,
+    mut encrypter: EncrypterHalf,
+    mut frames: Frames,
+    stall: Duration,
+) where
     W: AsyncWrite + Unpin,
 {
     const BATCH_LIMIT: usize = 128;
     let mut staging: Vec<Arc<[u8]>> = Vec::with_capacity(BATCH_LIMIT);
     let mut scratch: Vec<u8> = Vec::with_capacity(16 * 1024);
+    let shared = frames.shared.clone();
     loop {
         staging.clear();
         // Waits for a frame, then takes what else is queued: none once every
         // sender has gone. Closed, what was taken goes unwritten.
-        if frames.rx.recv_many(&mut staging, BATCH_LIMIT).await == 0 || frames.closed() {
+        let taken = tokio::select! {
+            n = frames.rx.recv_many(&mut staging, BATCH_LIMIT) => n,
+            () = shared.wait_closed() => 0,
+        };
+        if taken == 0 || frames.closed() {
             break;
         }
         scratch.clear();
@@ -565,19 +633,48 @@ where
             scratch.extend_from_slice(&buf[4..]);
             written += 1;
         }
-        frames.shared.budget.add_permits(drained);
+        shared.budget.add_permits(drained);
         if scratch.is_empty() {
             continue;
         }
-        if write.write_all(&scratch).await.is_err() {
+        let wrote = tokio::select! {
+            r = write_within(&mut write, &scratch, stall) => r,
+            () = shared.wait_closed() => Err(std::io::ErrorKind::ConnectionAborted.into()),
+        };
+        if let Err(e) = wrote {
+            debug!("a client's write ended: {e}");
             break;
         }
         PACKETS_OUT.fetch_add(written, Ordering::Relaxed);
     }
-    // The senders see the queue closed, and what it held is let go.
+    // The senders, the reader and the session see the queue closed, and
+    // what it held is let go.
+    shared.close();
     drop(staging);
+    drop(scratch);
     drop(frames);
-    let _ = write.shutdown().await;
+    // A TCP half's shutdown doesn't wait on the client; bounded all the
+    // same, as the write was.
+    let _ = tokio::time::timeout(stall, write.shutdown()).await;
+}
+
+/// Write all of `buf`, or fail once a write has taken nothing for `stall`.
+async fn write_within<W>(write: &mut W, mut buf: &[u8], stall: Duration) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    while !buf.is_empty() {
+        match tokio::time::timeout(stall, write.write(buf)).await {
+            Ok(Ok(0)) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(Ok(n)) => buf = &buf[n..],
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                warn!("a client took nothing for {stall:?}; disconnecting it");
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// How many unknown or unparseable packets a client may send in a window
@@ -642,6 +739,80 @@ mod tests {
         crate::game::update::frame(opcode, body)
     }
 
+    /// A stall bound no test reaches.
+    const LONG: Duration = Duration::from_secs(600);
+
+    /// Review 5's net 1: a writer in a write that a client which doesn't
+    /// read holds up ends at the close, with every sender gone, while the
+    /// client is still there: before, it stayed in the write, holding the
+    /// socket and its frames, until the client went.
+    #[tokio::test]
+    async fn a_writer_on_a_client_that_doesnt_read_ends_at_its_close() {
+        let (server, _) = paired_crypto();
+        let (encrypter, _) = server.split();
+        let (peer, b) = duplex(64);
+        let (out, frames) = queue(1 << 20);
+        let writer = tokio::spawn(run_writer(b, encrypter, frames, LONG));
+        assert!(out.send_frame(frame(0x1F6, &[0; 16 * 1024])));
+        // In the write: the frame taken, the pipe full.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while out.queued_bytes() > 0 {
+            assert!(tokio::time::Instant::now() < deadline, "the writer takes");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!writer.is_finished(), "held up in the write");
+        out.close();
+        drop(out);
+        tokio::time::timeout(Duration::from_secs(5), writer)
+            .await
+            .expect("the writer ends at the close, the client still there")
+            .unwrap();
+        drop(peer);
+    }
+
+    /// A write that takes nothing for the stall bound ends the writer, and
+    /// the queue is closed for its senders, with no close asked for.
+    #[tokio::test]
+    async fn a_write_that_takes_nothing_ends_the_writer() {
+        let (server, _) = paired_crypto();
+        let (encrypter, _) = server.split();
+        let (peer, b) = duplex(64);
+        let (out, frames) = queue(1 << 20);
+        let stall = Duration::from_millis(200);
+        let writer = tokio::spawn(run_writer(b, encrypter, frames, stall));
+        assert!(out.send_frame(frame(0x1F6, &[0; 16 * 1024])));
+        tokio::time::timeout(Duration::from_secs(5), writer)
+            .await
+            .expect("the writer gives up")
+            .unwrap();
+        assert!(out.is_closed());
+        tokio::time::timeout(Duration::from_secs(1), out.closed())
+            .await
+            .expect("and whoever waits on the close is woken");
+        drop(peer);
+    }
+
+    /// A close wakes whoever waits on it, from before or after it.
+    #[tokio::test]
+    async fn a_close_wakes_its_waiters() {
+        let (out, _frames) = queue(1 << 20);
+        let waiting = {
+            let out = out.clone();
+            tokio::spawn(async move { out.closed().await })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiting.is_finished());
+        out.close();
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("woken")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), out.closed())
+            .await
+            .expect("closed already");
+    }
+
     #[tokio::test]
     async fn the_writer_keeps_the_cipher_in_step_across_bursts() {
         let (server, client) = paired_crypto();
@@ -649,7 +820,7 @@ mod tests {
         let (_, mut decrypter) = client.split();
         let (mut a, b) = duplex(64 * 1024);
         let (out, frames) = queue(1 << 20);
-        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        let writer = tokio::spawn(run_writer(b, encrypter, frames, LONG));
         for burst in [1u16, 3, 2] {
             for i in 0..burst {
                 assert!(out.send_frame(frame(100 + i, &[i as u8; 4])));
@@ -678,7 +849,7 @@ mod tests {
         let (encrypter, _) = server.split();
         let (mut a, b) = duplex(64 * 1024);
         let (out, frames) = queue(1 << 20);
-        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        let writer = tokio::spawn(run_writer(b, encrypter, frames, LONG));
         assert!(out.send_frame(frame(1, &[0; 4])));
         let mut first = [0u8; 8];
         a.read_exact(&mut first).await.unwrap();
@@ -710,7 +881,7 @@ mod tests {
         let (a, b) = duplex(64);
         drop(a);
         let (out, frames) = queue(1 << 20);
-        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        let writer = tokio::spawn(run_writer(b, encrypter, frames, LONG));
         assert!(out.send_frame(frame(1, &[0; 4])));
         tokio::time::timeout(Duration::from_secs(10), writer)
             .await

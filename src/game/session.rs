@@ -224,11 +224,16 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
     enum Next {
         Packet(Option<crate::game::conn::Inbound>),
         Control(Option<Control>),
+        /// The connection is closed (over budget, taken over, its writer
+        /// gone): the session goes with it.
+        Closed,
     }
+    let outbound = s.outbound.clone();
     loop {
         let next = tokio::select! {
             msg = inbound.recv() => Next::Packet(msg),
             ctl = s.control_rx.recv() => Next::Control(ctl),
+            () = outbound.closed() => Next::Closed,
         };
         match next {
             Next::Packet(Some(msg)) => {
@@ -252,7 +257,7 @@ pub async fn run(realm: Arc<Realm>, account: String, connection: Connection) {
                     break;
                 }
             }
-            Next::Packet(None) | Next::Control(None) => break,
+            Next::Packet(None) | Next::Control(None) | Next::Closed => break,
         }
     }
     // Dropping the session disconnects it.

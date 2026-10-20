@@ -15,6 +15,8 @@ Six reviewers, by area: [review/review5.md](review/review5.md), its first table 
 crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
 the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
 missing world data). None fixed yet; waiting on your choice.
+- **#2** fixed (`fix/fixnet`): a close wakes the writer out of its write (a `Notify` in the queue), and a write that
+  takes nothing for `client_idle_timeout_secs` ends it; the reader and the session end at the close too.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
