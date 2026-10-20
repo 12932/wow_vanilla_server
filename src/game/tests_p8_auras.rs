@@ -523,3 +523,52 @@ async fn a_normalized_ability_takes_the_hands_flat_bonus_and_percentages() {
         "Overpower, normalized, with both"
     );
 }
+
+const VANISH: u32 = 1856;
+const STEALTH: u32 = 1784;
+
+/// For a second after Vanish no one detects the rogue, close up neither, as
+/// Thistle Tea's `undetectable_until` and mangos-classic's vanilla
+/// `SetCannotBeDetectedTimer(1000)` in `EffectSanctuary` have it; then a
+/// kobold a yard away sees her again, and she is looked at afresh for it.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_vanished_rogue_is_undetectable_for_a_second() {
+    use super::tests_p3_spells_kit::{dummy, has, have_data, player, ready, realm};
+    use crate::game::map::spells::{self, stealth};
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_c, g, map) = player(&realm, "P8AV", "Vanisher", Race::Human, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[STEALTH]);
+            let kobold = dummy(m, g, 60, 1.0);
+            let seen_before = stealth::sees(m, kobold, g);
+            spells::cast_triggered(m, g, VANISH, Some(g));
+            let stealthed = has(m, g, STEALTH);
+            let unseen = !stealth::sees(m, kobold, g);
+            m.now += Duration::from_millis(999);
+            let still = !stealth::sees(m, kobold, g);
+            m.now += Duration::from_millis(1);
+            m.visibility_dirty.clear();
+            crate::game::map::misc::update(m);
+            let looked_at = m.visibility_dirty.contains(&g);
+            (
+                seen_before,
+                stealthed,
+                unseen,
+                still,
+                stealth::sees(m, kobold, g),
+                looked_at,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (true, true, true, true, true, true),
+        "(seen, stealthed, unseen a yard off, unseen at 999 ms, seen at a second, looked at afresh)"
+    );
+}

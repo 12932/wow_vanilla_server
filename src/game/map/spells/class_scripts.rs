@@ -769,7 +769,17 @@ pub fn after_effects(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     cast_triggered(map, infernal, INFERNAL_LANDING, None);
 }
 
+/// How long after Vanish no one detects the rogue.
+pub const VANISH_UNDETECTABLE: std::time::Duration = std::time::Duration::from_secs(1);
+
 fn vanish(map: &mut Map, rogue: Guid) {
+    // For a second no one detects the rogue's stealth, close up too
+    // (mangos-classic's vanilla `SetCannotBeDetectedTimer(1000)` in
+    // `EffectSanctuary`, Thistle Tea's `undetectable_until`).
+    let until = map.now + VANISH_UNDETECTABLE;
+    if let Some(p) = map.players.get_mut(&rogue) {
+        p.misc.undetectable_until = Some(until);
+    }
     auras::remove_where(map, rogue, |h| {
         !h.positive
             && (h.has(auras::AURA_MOD_STALKED)

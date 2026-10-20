@@ -83,6 +83,9 @@ pub struct PlayerMisc {
     pub healed_at: Option<Instant>,
     /// The banker whose bank the player opened (`map/bank.rs`).
     pub banker: Option<Guid>,
+    /// Vanished: no one detects the player's stealth until then
+    /// (`spells::stealth::sees`).
+    pub undetectable_until: Option<Instant>,
 }
 
 /// A summons: to the summoner's side.
@@ -234,10 +237,19 @@ pub fn update(map: &mut Map) {
     crate::game::map::environment::update(map);
     crate::game::map::item_rules::update(map);
     let now = map.now;
+    let mut detectable = Vec::new();
     for p in map.players.values_mut() {
         if p.misc.summon.is_some_and(|s| s.until <= now) {
             p.misc.summon = None;
         }
+        if p.misc.undetectable_until.is_some_and(|t| t <= now) {
+            p.misc.undetectable_until = None;
+            detectable.push(p.guid);
+        }
+    }
+    // A vanished player's second is out: who is near enough sees them now.
+    for g in detectable {
+        map.visibility_dirty.insert(g);
     }
 }
 

@@ -113,6 +113,15 @@ pub fn sees(map: &Map, viewer: Guid, target: Guid) -> bool {
     if !stealthed {
         return true;
     }
+    // Vanished a moment ago: no one detects them, close up neither.
+    if map
+        .players
+        .get(&target)
+        .and_then(|p| p.misc.undetectable_until)
+        .is_some_and(|t| t > map.now)
+    {
+        return false;
+    }
     // A stunned viewer sees no one stealthed.
     if va.is_some_and(|v| v.has(AURA_MOD_STUN)) {
         return false;
