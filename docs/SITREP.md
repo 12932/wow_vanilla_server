@@ -689,6 +689,12 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   (`characters.sqlite.v4.bak`). **Its calls:** the 30 s a constant; saves still kept at a shutdown are lost, logged.
   Merging with fixnet: a test reconnected so fast it took its player over (one session an account) where it looked
   for a logout; it waits for the logout now.
+- **Your flight fix (`fix/flight-splines`, 12932's):** merged as it was; the fast suite, the taxi tests and the
+  client check pass with it, and nothing needed fixing.
+- **A session's stale map handle (`fix/stalehandle`, found by fixmaps):** a copy that stops and hands its arrival
+  to its restarted copy now has that copy tell the player's session its new handle, so their packets reach it and
+  they're saved on logout (they had been dropped unsaved at their next packet); a player whose client goes while
+  handed on is saved there.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
