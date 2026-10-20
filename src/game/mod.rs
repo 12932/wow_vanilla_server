@@ -939,6 +939,8 @@ mod tests_p9_core_entity;
 #[cfg(test)]
 mod tests_p9_core_motion;
 #[cfg(test)]
+mod tests_p9_core_pets;
+#[cfg(test)]
 mod tests_p9_core_power;
 #[cfg(test)]
 mod tests_p9_core_scripts;
