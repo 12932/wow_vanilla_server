@@ -15,6 +15,16 @@ Six reviewers, by area: [review/review5.md](review/review5.md), its first table 
 crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
 the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
 missing world data). None fixed yet; waiting on your choice.
+- #4 fixed: a copy counts as in use while anyone let in is on their way, so a reset answers "zoning" and a raid's
+  reset waits, asked and decided under the copies' lock; a copy stopped with players in it saves each and sends them
+  to the character screen.
+- #7 fixed: a map's shutdown saves each player under a guard of their own; the fallback takes offline a player the
+  panic caught after they were taken out.
+- #17 fixed: a dungeon copy loaded at start-up counts as empty from then, with the five minutes a copy left empty has.
+- #18 fixed: a far teleport keeps a logout's countdown going, as mangos does; the client is rooted again on the new
+  map, and a cancel there undoes it.
+- Maps 6 fixed: every way out of the world (let go with a map, a lost map, a reaped ghost, a panic's fallback) leaves
+  the channels, battleground queues, friends, guild and group, through one `went_offline`.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

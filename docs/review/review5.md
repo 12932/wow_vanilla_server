@@ -10,10 +10,10 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 1 | high | world | A crafted express flight route overflows an update frame's size field and corrupts the packet stream of every player near |
 | 2 | high | net | A connection's writer outlives its close while the client doesn't read, keeping its socket and its frames |
 | 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox |
-| 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue |
+| 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue **Fixed.** |
 | 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live |
 | 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
-| 7 | medium | maps | One panic in a map's shutdown loses the saves of every player on it |
+| 7 | medium | maps | One panic in a map's shutdown loses the saves of every player on it **Fixed.** |
 | 8 | medium | combat | A panic inside a death leaves its victim unkillable at no health |
 | 9 | medium | combat | Triggered spells recurse without a bound (a spell that triggers itself aborts the server) |
 | 10 | medium | data | A store that can't write loses every save while the realm plays on |
@@ -23,8 +23,8 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 14 | medium | social | A refund taken before its post is written comes back after a restart |
 | 15 | medium | social | A client can have every mail in the realm scanned 1,000 times a second |
 | 16 | medium | world | A possessed unit's position isn't validated (a NaN relayed to observers, saved) |
-| 17 | medium | maps | After a restart, dungeon copies are swept at once, by the time of their last kill |
-| 18 | medium | maps | A teleport during a logout's countdown leaves the player stunned |
+| 17 | medium | maps | After a restart, dungeon copies are swept at once, by the time of their last kill **Fixed.** |
+| 18 | medium | maps | A teleport during a logout's countdown leaves the player stunned **Fixed.** |
 | 19 | medium | data | A record that doesn't parse is dropped at start-up and its id given out again |
 | 20 | medium | data | On a terminal, a start without the navmesh waits for an answer and never starts unattended |
 | 21 | medium | data | A second server on the same store migrates it and runs its sweeps before it fails to bind |
@@ -448,7 +448,7 @@ asserts the bug, so it passes while the bug is there.
   removes that need.
 - **Effort:** easy.
 
-#### 6. Players let go or lost with a map go offline without the social logout
+#### 6. Players let go or lost with a map go offline without the social logout **Fixed.**
 - **Severity:** low. **Kind:** reliability (stale state elsewhere).
 - **Where:**
   - `src/game/map/mod.rs:901` (`let_go`);
