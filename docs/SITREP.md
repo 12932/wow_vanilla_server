@@ -717,6 +717,13 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   for the two are gone, its melee blow through the fork's type. **Pins:** rustigator `732cec2`, wvs and peon at the
   fork's `361d2ed` and rustigator's `732cec2`. **Its call:** a `CMSG_BATTLEFIELD_JOIN` of the map alone is refused
   (Thistle Tea takes it; the client never sends it).
+- **Review 5's lows, the world, combat and realm-wide state (`fix/lowsb`):** faster: a creature's turn no longer
+  re-checks its threat list after pruning it (100 creatures holding 40 players: 130 → 32 ms an update), the casters
+  kept in a set (20,001 creatures, one casting: 691 → 1.9 µs), a player's combat check stops at the first creature
+  holding them (702 → 20 µs), a chain's sight rays only until one passes (1.3 → 0.4 ms); fixed: an aura state, form
+  or creature type past 32 matches nothing (mangos's mask), what a service changes on a player between maps is
+  forwarded, two event sweeps can't leave a map the older set, a champion whose farewell was lost comes home,
+  the member-stats push holds the groups lock briefly. **Left:** world 3 and 4, social 7, 9 and 12 (queued).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
