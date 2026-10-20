@@ -737,6 +737,81 @@ async fn a_player_turned_on_the_spot_passes_the_client() {
     run_checker(&check_py, &wow_exe, &capture);
 }
 
+/// A flight east of the start, 20 yards up, from a node with the
+/// Alliance's gryphon and no place of its own (a script's flight needs no
+/// flight master).
+const FLIGHT_PATH: u32 = 600;
+
+fn flight() -> GameData {
+    use crate::game::data::npc::{TaxiNode, TaxiPathNode};
+    let mut d = GameData::empty();
+    d.npc.taxi_nodes.insert(
+        60,
+        TaxiNode {
+            id: 60,
+            map: 0,
+            name: "Here".into(),
+            mounts: [541, 0],
+            ..Default::default()
+        },
+    );
+    d.npc.taxi_paths.insert((60, 61), (FLIGHT_PATH, 0));
+    d.npc.taxi_path_nodes.insert(
+        FLIGHT_PATH,
+        (0..4)
+            .map(|i| TaxiPathNode {
+                map: 0,
+                x: START.0 + 50.0 * i as f32,
+                y: START.1,
+                z: START.2 + 20.0,
+                ..Default::default()
+            })
+            .collect(),
+    );
+    d
+}
+
+/// A player on a flight, told of to one who comes into view of them
+/// partway: on her gryphon, her create carries the flight as a flying
+/// spline, its time passed and its whole path, which the client copies
+/// into the unit as it does a flying creature's.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_flier_coming_into_view_passes_the_client() {
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let realm = harness::realm_with(flight());
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    let flying = map
+        .query(move |m| {
+            crate::game::map::npc::fly_path(m, ga, FLIGHT_PATH);
+            m.players[&ga].flight.is_some()
+        })
+        .await
+        .unwrap();
+    assert!(flying, "Alice flies");
+    harness::an_update(&map).await;
+    let (mut b, _) = enter(&realm, "B", "Bob").await;
+    b.sees(ga).await;
+    let still = map
+        .query(move |m| m.players[&ga].flight.is_some())
+        .await
+        .unwrap();
+    assert!(still, "Bob was told of her on her way");
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = capture(vec![&mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "her create was captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
 /// Every frame `clients` received, of a kind the checker knows,
 /// deduplicated, back to back; and how many of each opcode.
 pub(crate) fn capture(

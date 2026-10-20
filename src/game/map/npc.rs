@@ -1033,12 +1033,17 @@ pub fn taxi_nodes(map: &mut Map, player: Guid, npc: Guid) {
     });
 }
 
+/// A flight's spline flags: run mode and flying (a Catmull-Rom spline),
+/// in its `SMSG_MONSTER_MOVE` and in a create of the flier on its way.
+pub const FLIGHT_SPLINE: u32 =
+    crate::game::map::creature::SPLINE_RUN_MODE | crate::game::map::creature::SPLINE_FLYING;
+
 /// A flight's `SMSG_MONSTER_MOVE`: flying, every point in full.
 fn flight_packet(g: Guid, from: Vector3d, walk: &Walk, spline_id: u32) -> Arc<[u8]> {
     let mut b = Body::default();
     crate::game::update::write_packed_guid(&mut b.0, g);
     b.f32(from.x).f32(from.y).f32(from.z).u32(spline_id).u8(0);
-    b.u32(0x0000_0300).u32(walk.duration.as_millis() as u32);
+    b.u32(FLIGHT_SPLINE).u32(walk.duration.as_millis() as u32);
     let points = &walk.points[1..];
     b.u32(points.len() as u32);
     for p in points {

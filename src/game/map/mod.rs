@@ -1911,7 +1911,10 @@ impl Map {
         let now = self.now;
         let block: Arc<[u8]> = if guid::is_player(object) {
             let p = self.players.get(&object)?;
-            Arc::from(update::create_block(&p.create(false), Visibility::Public))
+            Arc::from(update::create_block(
+                &p.create_for_others(now),
+                Visibility::Public,
+            ))
         } else if guid::is_unit(object) {
             let c = self.creature(object)?;
             Arc::from(update::create_block(&c.create(now), Visibility::Public))

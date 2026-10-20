@@ -272,7 +272,7 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
                 && crate::game::map::objects::same_group(map, observer, object) =>
         {
             Some(std::sync::Arc::from(update::create_block(
-                &p.create(false),
+                &p.create_for_others(map.now),
                 crate::game::fields::Visibility::Group,
             )))
         }
