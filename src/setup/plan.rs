@@ -365,6 +365,16 @@ pub fn has_navmesh(dir: &Path, builder: &dyn Builder) -> bool {
         .any(|m| builder.navmesh_current(dir, m.name))
 }
 
+/// The continents (by title) `dir` has no current navmesh for: where most
+/// players are, so the start names them though another map's is there.
+pub fn continents_without_navmesh(dir: &Path, builder: &dyn Builder) -> Vec<&'static str> {
+    MAPS.iter()
+        .filter(|m| m.id <= 1)
+        .filter(|m| !builder.navmesh_current(dir, m.name))
+        .map(|m| m.title)
+        .collect()
+}
+
 /// Whether `dir` holds any terrain tiles.
 pub fn has_terrain(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|r| {
@@ -476,6 +486,8 @@ mod tests {
         assert_eq!(again.built.len(), 3);
         assert!(has_navmesh(&dirs.nav, &fake));
         assert!(has_terrain(&dirs.terrain));
+        // rev5-data 8: Kalimdor's is still to build, and the start says so.
+        assert_eq!(continents_without_navmesh(&dirs.nav, &fake), ["Kalimdor"]);
     }
 
     #[test]

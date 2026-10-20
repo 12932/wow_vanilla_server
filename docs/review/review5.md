@@ -1452,7 +1452,7 @@ Each finding: severity, kind, where, what, how it shows, the fix and its effort.
   and need a GM or their reagents.
 - **Effort:** medium, for the fallout.
 
-#### 8. A partial bake is quiet, and a tile whose read panics is never read again (low, robustness)
+#### 8. A partial bake is quiet, and a tile whose read panics is never read again (low, robustness) **Fixed.**
 - **Where:** `src/game/map/nav.rs:113-129` (`read`: a tile the header lists that is missing or doesn't decode is a
   `debug!`), `src/setup/plan.rs:362-366` (`has_navmesh`: any one map built counts), `src/game/map/tiles.rs:59`
   with `nav.rs:179-216` and `:302`.

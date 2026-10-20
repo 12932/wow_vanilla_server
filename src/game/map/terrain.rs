@@ -502,8 +502,8 @@ impl Terrain {
                 let tile = match &self.background {
                     Some((tx, _)) => {
                         let (tx, dir) = (tx.clone(), dir.clone());
-                        crate::game::map::tiles::read(move || {
-                            let _ = tx.send((key, read(&dir, map, key)));
+                        crate::game::map::tiles::read_into(tx, key, None, move || {
+                            read(&dir, map, key)
                         });
                         None
                     }

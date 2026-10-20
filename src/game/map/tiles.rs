@@ -70,6 +70,24 @@ pub fn read(job: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// [`read`] `job` for the tile `key`, and send `tx` the key and what it
+/// read. A read that panics sends `missing`: the map takes the tile as not
+/// to be had, where it would wait on it, loading, until the map restarted.
+pub fn read_into<K, V>(
+    tx: mpsc::UnboundedSender<(K, V)>,
+    key: K,
+    missing: V,
+    job: impl FnOnce() -> V + Send + 'static,
+) where
+    K: Send + 'static,
+    V: Send + 'static,
+{
+    read(move || {
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+        let _ = tx.send((key, read.unwrap_or(missing)));
+    });
+}
+
 /// The ADT tiles (`nav::tile_of`) within `r` yards of `(x, y)`, as eight
 /// points on the circle and its centre find them: one to four.
 pub fn tiles_around(x: f32, y: f32, r: f32) -> SmallVec<[(i32, i32); 4]> {
@@ -180,5 +198,27 @@ pub fn ahead(map: &mut Map, at: Vector3d) {
         for &t in &tiles {
             terrain.want(t);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// rev5-data 8: a tile whose read panics is answered as missing, so its
+    /// map doesn't wait on it, loading, for good.
+    #[test]
+    fn a_read_that_panics_answers_missing() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        read_into(tx.clone(), (1, 2), None, || -> Option<u32> {
+            panic!("a tile that doesn't decode")
+        });
+        read_into(tx, (3, 4), None, || Some(7));
+        let mut got = [
+            rx.blocking_recv().expect("an answer"),
+            rx.blocking_recv().expect("an answer"),
+        ];
+        got.sort();
+        assert_eq!(got, [((1, 2), None), ((3, 4), Some(7))]);
     }
 }

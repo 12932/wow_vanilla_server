@@ -445,11 +445,21 @@ pub fn at_startup_with(
 ) -> bool {
     let dirs = Dirs::of(world);
     let note = declined_note(&dirs);
-    let question = match startup(
-        Missing::of(&dirs, builder),
-        &dirs,
-        terminal && !note.exists(),
-    ) {
+    let missing = Missing::of(&dirs, builder);
+    if !missing.nav {
+        // Some map's navmesh is there; a continent without one is said
+        // once, not asked about (a build of one continent is a choice).
+        let without = plan::continents_without_navmesh(&dirs.nav, builder);
+        if !without.is_empty() {
+            tracing::warn!(
+                "the navmesh in {} has no {}: creatures there walk straight lines \
+                 (`cargo run --release --bin wvs-setup` builds it)",
+                dirs.nav.display(),
+                without.join(" or ")
+            );
+        }
+    }
+    let question = match startup(missing, &dirs, terminal && !note.exists()) {
         Startup::Ready => return true,
         Startup::Hint(hint) => {
             tracing::warn!("{hint}");

@@ -86,6 +86,9 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   `.arena start`'s numbers are held to the same; the arena's times are added without a panic (`arena::later`).
 - **data 9** fixed (`fix/lowsa`): a reload (SIGHUP, `.reload config`) that finds the file missing or empty, where the
   running settings aren't the defaults, is an error that changes nothing (`game::reload_from`).
+- **data 8** fixed (`fix/lowsa`): a navmesh whose header lists tiles that aren't there warns at its open with the
+  count; a navmesh or terrain tile whose read panics is answered as missing (`tiles::read_into`), where it stayed
+  loading until the map restarted; the start warns of a continent with no navmesh when another map has one.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
