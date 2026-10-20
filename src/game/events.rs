@@ -184,28 +184,37 @@ pub fn current(realm: &Realm) -> AHashSet<u32> {
 }
 
 /// Events that started or ended: every map brings its spawns into line.
+///
+/// Worked out, compared, kept and sent to the maps under the events' lock
+/// (then the driven events', the GM's and the maps'; the sends are channel
+/// sends): two sweeps at once, from the five-second sweep and a map (an
+/// invader slain, Omen, `.event`), keep and send their sets in turn, so
+/// the last kept is worked out from the latest driven events and is the
+/// last each map hears. Before, one begun on older driven events could
+/// keep its set after a newer one, and the two fan-outs reach a map in
+/// either order; a map left with the older set stayed so, every later
+/// sweep finding nothing changed (review 5's social 10).
 pub fn sweep(realm: &Realm) {
     let now = crate::game::social::mail::now();
+    let mut events = realm.social.events.lock();
     let driven = realm.social.driven_events.lock().clone();
     let mut on = active_with(&realm.data, now, &driven);
     overridden(realm, now, &mut on);
-    {
-        let mut events = realm.social.events.lock();
-        if *events == on {
-            return;
-        }
-        for e in on.difference(&events) {
-            if let Some(ev) = realm.data.events.get(e) {
-                tracing::info!("event {} ({}) begins", e, ev.name);
-            }
-        }
-        for e in events.difference(&on) {
-            if let Some(ev) = realm.data.events.get(e) {
-                tracing::info!("event {} ({}) ends", e, ev.name);
-            }
-        }
-        *events = on.clone();
+    if *events == on {
+        return;
     }
+    for e in on.difference(&events) {
+        if let Some(ev) = realm.data.events.get(e) {
+            tracing::info!("event {} ({}) begins", e, ev.name);
+        }
+    }
+    for e in events.difference(&on) {
+        if let Some(ev) = realm.data.events.get(e) {
+            tracing::info!("event {} ({}) ends", e, ev.name);
+        }
+    }
+    *events = on.clone();
+    let on = std::sync::Arc::new(on);
     for h in realm.maps.all() {
         let on = on.clone();
         h.call(move |m| apply(m, &on));

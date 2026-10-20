@@ -1213,7 +1213,12 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
 - **Fix:** a mailbox (a game object of type 19) within interaction range, as R4-15 did for auctions.
 - **Effort:** easy.
 
-#### 10. Two event sweeps at once can leave a map with the older events (low, reliability)
+#### 10. Two event sweeps at once can leave a map with the older events (low, reliability) **Fixed.**
+- **Fixed:** `events::sweep` works the set out, compares, keeps it and sends it to the maps under the events'
+  lock (then the driven events', the GM's and the maps' handles; nothing takes them the other way), so the last
+  kept is worked out from the latest driven events and is the last each map hears. Test
+  `event_sweeps_at_once_keep_the_latest_events` (four threads driving events at once); it didn't catch the old
+  race in its runs, whose window is microseconds, so it guards the rule rather than showing the fault.
 - **Where:** `events.rs:187-212` (`sweep`). It runs from the five-second sweep and from maps: each elemental invader
   slain (`elemental.rs:198`, `:207`), Omen (`omen.rs:64`, `:126`), a necropolis falling (`invasion.rs:309`), and
   `.event` or script command 53 (`events.rs:119`).

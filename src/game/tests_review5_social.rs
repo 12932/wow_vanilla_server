@@ -504,3 +504,57 @@ async fn what_a_service_asks_of_a_player_changing_maps_follows_them() {
         .unwrap();
     assert_eq!(fields, Some((3, 7)));
 }
+
+/// rev5-social 10: sweeps run at once, from four threads each starting and
+/// stopping events the world drives, leave the realm's events as the latest
+/// driven ones make them. Before, a sweep begun on older driven events
+/// could keep its set after a newer one's, and the next sweeps found
+/// nothing changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn event_sweeps_at_once_keep_the_latest_events() {
+    use crate::game::data::{GameData, GameEvent};
+    use crate::game::events;
+    let mut d = GameData::empty();
+    for id in [200, 201] {
+        d.events.insert(
+            id,
+            GameEvent {
+                id,
+                name: "Driven".into(),
+                hardcoded: true,
+                ..Default::default()
+            },
+        );
+    }
+    // A calendar of others, so a sweep takes as long as a real one.
+    for id in 1_000..6_000 {
+        d.events.insert(
+            id,
+            GameEvent {
+                id,
+                ..Default::default()
+            },
+        );
+    }
+    let (store, startup) = Store::open(":memory:").unwrap();
+    let realm = Realm::new(harness::test_config(), store, startup, d, None);
+    let mut stale = 0;
+    for round in 0..10 {
+        std::thread::scope(|s| {
+            for t in 0..4u32 {
+                let realm = &realm;
+                s.spawn(move || {
+                    for i in 0..200u32 {
+                        events::drive(realm, 200 + t % 2, (i + t + round) % 3 != 0);
+                    }
+                });
+            }
+        });
+        let driven = realm.social.driven_events.lock().clone();
+        let latest = events::active_with(&realm.data, mail::now(), &driven);
+        if events::current(&realm) != latest {
+            stale += 1;
+        }
+    }
+    assert_eq!(stale, 0, "rounds left with older events");
+}

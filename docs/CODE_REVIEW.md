@@ -90,6 +90,8 @@ The lows of the world, combat and realm-wide sections (`fix/lowsb`):
   (`map::call_player`; `deliver` names the new map as the arrival is sent), where it went to the map they had left.
 - social 11 fixed: a champion whose farewell was lost with their city's map is brought home 30 s past when they
   were due (`champions::State::home_by`), where Jaina or Rexxar never came again until a restart.
+- social 10 fixed: an event sweep works out, keeps and sends its set under the events' lock, so two at once can't
+  leave a map with the older events.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
