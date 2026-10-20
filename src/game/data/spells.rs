@@ -135,6 +135,9 @@ pub const ATTR_EX_ONLY_PEACEFUL_TARGETS: u32 = 0x100;
 pub const ATTR_EX_FROM_BEHIND: u32 = 0x200;
 pub const ATTR_EX_NO_THREAT: u32 = 0x400;
 pub const ATTR_EX_FAILURE_BREAKS_STEALTH: u32 = 0x1000;
+/// Its aura holds the bearer's body (`UNIT_FLAG_PREVENT_ANIM`): stuns,
+/// Polymorph, Sap, Sleep, Feign Death.
+pub const ATTR_EX_PREVENTS_ANIM: u32 = 0x4_0000;
 pub const ATTR_EX_DISCOUNT_POWER_ON_MISS: u32 = 0x800_0000;
 pub const ATTR_EX_REQ_COMBO_POINTS: u32 = 0x10_0000 | 0x40_0000;
 /// `AttributesEx2` (word 2).

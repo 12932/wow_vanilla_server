@@ -789,6 +789,8 @@ mod tests_p8_ai_scripts;
 #[cfg(test)]
 mod tests_p8_ai_spells;
 #[cfg(test)]
+mod tests_p8_auras;
+#[cfg(test)]
 mod tests_p8_combat;
 #[cfg(test)]
 mod tests_p8_combat_block;
