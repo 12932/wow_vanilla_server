@@ -1805,14 +1805,24 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
             c.extra_attacks = 0;
             c.in_extra_attack = true;
         }
-        for _ in 0..owed {
-            if !still_swinging(map, attacker, victim) {
-                break;
+        // Put back however the swings end, a panic's unwinding too: left
+        // set, it would refuse every extra attack after (Windfury, Sword
+        // Specialization, Hand of Justice) until a new login.
+        let swings = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for _ in 0..owed {
+                if !still_swinging(map, attacker, victim) {
+                    break;
+                }
+                #[cfg(test)]
+                map.faults.check(&format!("extra swing of {attacker}"));
+                swing(map, attacker, victim, Hand::Main, true);
             }
-            swing(map, attacker, victim, Hand::Main, true);
-        }
+        }));
         if let Some(c) = map.combat_mut(attacker) {
             c.in_extra_attack = false;
+        }
+        if let Err(panic) = swings {
+            std::panic::resume_unwind(panic);
         }
     }
     // Casting, the regular swings wait without a word.
@@ -3123,9 +3133,10 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         })
         .collect();
     // Being killed, it isn't killed again meanwhile (by a kill's proc).
-    DYING.with(|d| d.borrow_mut().push(victim));
-    kill_once(map, killer, victim, spell);
-    DYING.with(|d| d.borrow_mut().retain(|g| *g != victim));
+    {
+        let _dying = Dying::enter(victim);
+        kill_once(map, killer, victim, spell);
+    }
     for a in fighting {
         crate::game::map::ai::victim_died(map, a);
     }
@@ -3136,7 +3147,27 @@ thread_local! {
     static DYING: std::cell::RefCell<Vec<Guid>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// A unit on [`DYING`] while it lives: taken off as it goes, a panic's
+/// unwinding too. Left on, the unit could never be killed on that thread
+/// again (a worker's thread runs every map on it), at no health.
+struct Dying(Guid);
+
+impl Dying {
+    fn enter(victim: Guid) -> Self {
+        DYING.with(|d| d.borrow_mut().push(victim));
+        Self(victim)
+    }
+}
+
+impl Drop for Dying {
+    fn drop(&mut self) {
+        DYING.with(|d| d.borrow_mut().retain(|g| *g != self.0));
+    }
+}
+
 fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
+    #[cfg(test)]
+    map.faults.check(&format!("death of {victim}"));
     let attackers: Vec<Guid> = map
         .combat(victim)
         .map(|c| c.attackers.iter().copied().collect())

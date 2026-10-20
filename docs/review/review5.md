@@ -14,7 +14,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live **Fixed.** |
 | 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
 | 7 | medium | maps | One panic in a map's shutdown loses the saves of every player on it |
-| 8 | medium | combat | A panic inside a death leaves its victim unkillable at no health |
+| 8 | medium | combat | A panic inside a death leaves its victim unkillable at no health **Fixed.** |
 | 9 | medium | combat | Triggered spells recurse without a bound (a spell that triggers itself aborts the server) |
 | 10 | medium | data | A store that can't write loses every save while the realm plays on |
 | 11 | medium | data, social | A deleted character's GUID, honor, tickets and raid binds go to the next character made after a restart |

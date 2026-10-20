@@ -24,6 +24,8 @@ missing world data). None fixed yet; waiting on your choice.
   `CanHaveThreatList`), isn't taunted, and one attacking a unit that vanishes or feigns stops (`ai::forget`); a passive
   creature in a fight has its turn though no one sees it, and lets go of one gone past its threat radius with no blow
   for the leash's time (`creature_combat::gone_from_fight`).
+- #8 fixed: a victim is on `DYING` behind a guard that takes it off as it drops, a panic's unwinding too; the extra
+  swings run under `catch_unwind`, `in_extra_attack` put back before the panic goes on.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
