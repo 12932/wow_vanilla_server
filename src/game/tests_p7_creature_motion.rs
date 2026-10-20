@@ -228,6 +228,8 @@ async fn a_flyer_killed_over_no_known_ground_stays_where_it_died() {
     let g = of(ROOTED);
     a.sees(g).await;
     let out = on(&map, move |m| {
+        // Where its circle has brought it now: where it dies.
+        crate::game::map::ai::advance_motion(m, g);
         let at = m.position_of(g).unwrap();
         crate::game::map::combat::deal_damage(m, ga, g, 1_000_000);
         let c = m.creature(g).unwrap();

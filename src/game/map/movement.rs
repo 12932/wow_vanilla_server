@@ -180,11 +180,21 @@ pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     // The dead lie where they fell until they release or rise: a client
     // still sending moves (one that ignores its root, as a bot may) moves
     // the body no further than straight down, as it lands.
-    if matches!(p.death, crate::game::map::death::Death::Dead { .. })
-        && horizontal(p.position(), info.position) > 0.5
-    {
+    let dead = matches!(p.death, crate::game::map::death::Death::Dead { .. });
+    if dead && horizontal(p.position(), info.position) > 0.5 {
         return;
     }
+    // What it says of its run (a client that hasn't yet heard of its
+    // death, a bot) isn't told on: those who see the body would move it
+    // along.
+    let info = if dead {
+        MovementInfo {
+            flags: unsteered(info.flags),
+            ..info
+        }
+    } else {
+        info
+    };
     // Faster than the player can go: pulled back to where they were.
     let now = map.now;
     let check = &map.cfg.anticheat;
@@ -331,6 +341,30 @@ fn body_moved(map: &mut Map, g: Guid, moved: bool, turned: bool, jumped: bool) {
 
 /// vmangos's safe fall: below this many yards a fall doesn't hurt.
 const SAFE_FALL: f32 = 14.57;
+
+/// Whether a client is steering: on the run forward or back, strafing or
+/// turning.
+pub fn steered(f: &MovementInfo_MovementFlags) -> bool {
+    f.get_forward()
+        || f.get_backward()
+        || f.get_strafe_left()
+        || f.get_strafe_right()
+        || f.get_turn_left()
+        || f.get_turn_right()
+}
+
+/// `f` with no steering: a dead body's, which goes nowhere under its own
+/// power (mangos's `MoveSplineInit::Stop` takes `MOVEFLAG_FORWARD` off at
+/// death; Thistle Tea's death clears every flag), so no client moves it on
+/// by them.
+pub fn unsteered(f: MovementInfo_MovementFlags) -> MovementInfo_MovementFlags {
+    f.clear_forward()
+        .clear_backward()
+        .clear_strafe_left()
+        .clear_strafe_right()
+        .clear_turn_left()
+        .clear_turn_right()
+}
 
 fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()

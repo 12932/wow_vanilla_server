@@ -458,6 +458,10 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
     let spline_id = map.next_spline_id;
     let cfg = map.cfg.clone();
     crate::game::map::spells::threat_sync::wiped(map, creature);
+    // A run stops where it has come to now, not where the map's last
+    // update left it (mangos's `MoveSplineInit::Stop` computes the
+    // spline's position): its watchers' clients would have it slide back.
+    advance_motion(map, creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
