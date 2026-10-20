@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use ahash::AHashMap;
-use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
     Language, PlayerChatTag, SMSG_MESSAGECHAT, SMSG_MESSAGECHAT_ChatType,
@@ -119,6 +119,9 @@ pub struct Channel {
     pub owner: Guid,
     pub members: Vec<Member>,
     pub banned: Vec<Guid>,
+    /// Taken out of the directory, its last member gone: one who found it
+    /// just before finds no channel (`Channels::with`).
+    dropped: bool,
 }
 
 impl Channel {
@@ -137,6 +140,7 @@ impl Channel {
             owner: Guid::zero(),
             members: Vec::new(),
             banned: Vec::new(),
+            dropped: false,
         }
     }
 
@@ -144,8 +148,8 @@ impl Channel {
         self.id != 0
     }
 
-    /// Its last member gone, and not a built-in one: it goes (its password
-    /// and bans with it), and until it has, a join finds it new.
+    /// Its last member gone, and not a built-in one: it goes, its password
+    /// and bans with it (`Channels::run`).
     fn gone(&self) -> bool {
         self.members.is_empty() && !self.constant()
     }
@@ -218,16 +222,14 @@ impl Channel {
 /// A channel's key: its team, and its name lowercased.
 type Key = (Team, String);
 
+/// A channel, behind its own lock.
+type Shared = Arc<Mutex<Channel>>;
+
 /// Every channel, each behind a lock of its own: two channels' lines,
-/// joins and commands never wait for each other. The directory's lock is
-/// taken for reading by all of them, and held while a channel is, so that
-/// the channel can't go meanwhile; for writing only to make a channel or
-/// drop an empty one.
-///
-/// The order: the directory, then one channel, then the registry or the
-/// ignore lists. Never a channel then the directory, never two channels at
-/// once, never the directory again while it is held (a read under a read,
-/// a writer waiting between them, waits for good).
+/// joins and commands never wait for each other. The directory is locked
+/// only to find a channel (a read), or to put one in or take one out (a
+/// write), never while waiting for a channel's lock: a command on one
+/// channel, its notices sent under its lock, holds up no other.
 #[derive(Debug, Default)]
 pub struct Channels {
     directory: RwLock<Directory>,
@@ -236,7 +238,7 @@ pub struct Channels {
 /// The channels, by key.
 #[derive(Debug, Default)]
 pub struct Directory {
-    by_key: AHashMap<Key, Mutex<Channel>>,
+    by_key: AHashMap<Key, Shared>,
 }
 
 fn key(me: &Online, name: &str) -> Key {
@@ -255,60 +257,102 @@ fn not_member(realm: &Realm, me: &Online, name: &str) {
 }
 
 impl Channels {
-    /// The directory, read: the channels to look at, each locked in turn.
-    pub fn lock(&self) -> RwLockReadGuard<'_, Directory> {
+    /// The directory, read, for a test to look at the channels.
+    #[cfg(test)]
+    pub fn lock(&self) -> parking_lot::RwLockReadGuard<'_, Directory> {
         self.directory.read()
+    }
+
+    fn find(&self, k: &Key) -> Option<Shared> {
+        self.directory.read().by_key.get(k).cloned()
     }
 
     /// `f` on `k`'s channel, locked; `None` if there is none.
     fn with<R>(&self, k: &Key, f: impl FnOnce(&mut Channel) -> R) -> Option<R> {
-        let directory = self.directory.read();
-        let c = directory.by_key.get(k)?;
-        Some(f(&mut c.lock()))
-    }
-
-    /// `f` on `k`'s channel, locked, made as `name` if there is none or it
-    /// has [`Channel::gone`] (its last leaver yet to drop it).
-    fn with_made<R>(&self, k: Key, name: &str, f: impl FnOnce(&mut Channel) -> R) -> R {
-        let fresh = |mut c: MutexGuard<'_, Channel>| {
-            if c.gone() {
-                *c = Channel::new(name);
-            }
-            f(&mut c)
-        };
-        let directory = self.directory.read();
-        if let Some(c) = directory.by_key.get(&k) {
-            return fresh(c.lock());
+        let c = self.find(k)?;
+        let guard = c.lock();
+        // Taken out after it was found: there is none.
+        if guard.dropped {
+            return None;
         }
-        drop(directory);
-        let mut directory = self.directory.write();
-        directory
-            .by_key
-            .entry(k.clone())
-            .or_insert_with(|| Mutex::new(Channel::new(name)));
-        let directory = RwLockWriteGuard::downgrade(directory);
-        fresh(directory.by_key[&k].lock())
+        Some(self.run(k, &c, guard, f))
     }
 
-    /// `k`'s channel goes, if it is [`Channel::gone`] still: empty (mangos's
-    /// `ChannelMgr::LeftChannel`, Thistle Tea's `Channels.put`). Kept, an
+    /// `f` on `k`'s channel, locked, made as `name` if there is none.
+    fn with_made<R>(&self, k: Key, name: &str, f: impl FnOnce(&mut Channel) -> R) -> R {
+        loop {
+            if let Some(c) = self.find(&k) {
+                let guard = c.lock();
+                if !guard.dropped {
+                    return self.run(&k, &c, guard, f);
+                }
+                // Its last leaver is about to take it out: out it goes now,
+                // and a new one in.
+                drop(guard);
+                self.take_out(&k, &c);
+                continue;
+            }
+            // Locked before it is in: no one finds it empty, before its
+            // first member.
+            let c: Shared = Arc::new(Mutex::new(Channel::new(name)));
+            let guard = c.lock();
+            {
+                let mut directory = self.directory.write();
+                if directory.by_key.contains_key(&k) {
+                    // Made meanwhile: that one.
+                    continue;
+                }
+                directory.by_key.insert(k.clone(), c.clone());
+            }
+            return self.run(&k, &c, guard, f);
+        }
+    }
+
+    /// `f` on `c`, `k`'s channel, under `guard`. Left empty, and not a
+    /// built-in one, it goes, its password and bans with it (mangos's
+    /// `ChannelMgr::LeftChannel`, Thistle Tea's `Channels.put`): kept, an
     /// empty channel locked by a password nobody remembers would stay for
     /// good, one for every name a client cares to lock.
-    fn drop_if_gone(&self, k: &Key) {
+    fn run<R>(
+        &self,
+        k: &Key,
+        c: &Shared,
+        mut guard: MutexGuard<'_, Channel>,
+        f: impl FnOnce(&mut Channel) -> R,
+    ) -> R {
+        let r = f(&mut guard);
+        let gone = guard.gone();
+        guard.dropped = gone;
+        drop(guard);
+        if gone {
+            self.take_out(k, c);
+        }
+        r
+    }
+
+    /// `c`, dropped, out of the directory, if it is still `k`'s channel.
+    fn take_out(&self, k: &Key, c: &Shared) {
         let mut directory = self.directory.write();
-        if directory
-            .by_key
-            .get_mut(k)
-            .is_some_and(|c| c.get_mut().gone())
-        {
+        if directory.by_key.get(k).is_some_and(|d| Arc::ptr_eq(d, c)) {
             directory.by_key.remove(k);
         }
     }
+
+    /// The channels a player is in.
+    pub fn of(&self, g: Guid) -> Vec<String> {
+        let all: Vec<Shared> = self.directory.read().by_key.values().cloned().collect();
+        all.iter()
+            .filter_map(|c| {
+                let c = c.lock();
+                (!c.dropped && c.member(g).is_some()).then(|| c.name.clone())
+            })
+            .collect()
+    }
 }
 
+#[cfg(test)]
 impl Directory {
     /// How many channels there are.
-    #[cfg(test)]
     pub fn count(&self) -> usize {
         self.by_key.len()
     }
@@ -374,30 +418,26 @@ pub fn join(realm: &Realm, me: &Online, name: &str, password: &str) {
 
 /// `CMSG_LEAVE_CHANNEL`; at logout, without the notice to the leaver.
 pub fn leave(realm: &Realm, me: &Online, name: &str, tell: bool) {
-    let k = key(me, name);
-    let left = realm.social.channels.with(&k, |c| {
+    let found = realm.social.channels.with(&key(me, name), |c| {
         if c.member(me.guid).is_none() {
             if tell {
                 to_one(realm, me.guid, &c.notify(NOT_MEMBER));
             }
-            return false;
+            return;
         }
         if tell {
             to_one(realm, me.guid, &c.notify(YOU_LEFT));
         }
         c.remove(realm, me.guid);
-        c.gone()
     });
-    match left {
-        None if tell => not_member(realm, me, name),
-        Some(true) => realm.social.channels.drop_if_gone(&k),
-        _ => {}
+    if found.is_none() && tell {
+        not_member(realm, me, name);
     }
 }
 
 /// A player going offline leaves every channel.
 pub fn leave_all(realm: &Realm, me: &Online) {
-    let names = realm.social.channels.lock().of(me.guid);
+    let names = realm.social.channels.of(me.guid);
     for name in names {
         leave(realm, me, &name, false);
     }
@@ -482,21 +522,17 @@ pub fn list(realm: &Realm, me: &Online, name: &str) {
 }
 
 /// What a command on a channel needs: the channel, with the player in it.
+/// Its last member kicked out, it goes, as at a leave (`Channels::run`).
 fn with_member(realm: &Realm, me: &Online, name: &str, f: impl FnOnce(&mut Channel)) {
-    let k = key(me, name);
-    let done = realm.social.channels.with(&k, |c| {
+    let found = realm.social.channels.with(&key(me, name), |c| {
         if c.member(me.guid).is_none() {
             to_one(realm, me.guid, &c.notify(NOT_MEMBER));
-            return false;
+            return;
         }
         f(c);
-        c.gone()
     });
-    match done {
-        None => not_member(realm, me, name),
-        // Its last member kicked out: it goes, as at a leave.
-        Some(true) => realm.social.channels.drop_if_gone(&k),
-        Some(false) => {}
+    if found.is_none() {
+        not_member(realm, me, name);
     }
 }
 
@@ -755,10 +791,22 @@ mod tests {
         out
     }
 
-    /// A line said in one channel while, on other threads, another channel
-    /// is made and dropped over and over and a third player joins and
-    /// leaves the speaker's: nothing waits for good, and every line reaches
-    /// every member, in order.
+    /// The `SMSG_CHANNEL_NOTIFY` kinds in what `frames` holds, in order.
+    fn notices(frames: &mut crate::game::conn::Frames) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Some(f) = frames.try_recv() {
+            if f.len() > 4 && u16::from_le_bytes([f[2], f[3]]) == SMSG_CHANNEL_NOTIFY {
+                out.push(f[4]);
+            }
+        }
+        out
+    }
+
+    /// A line said in one channel while, on other threads, two players make
+    /// and drop another channel over and over (each joining and leaving
+    /// it, racing the other) and a third joins and leaves the speaker's:
+    /// nothing waits for good, every line reaches every member in order,
+    /// and every join and leave is one.
     #[tokio::test]
     async fn lines_said_while_channels_are_joined_elsewhere_all_arrive() {
         const LINES: usize = 2000;
@@ -767,11 +815,12 @@ mod tests {
         let (alice, mut alice_frames) = player(&realm, &map, 1);
         let (bob, mut bob_frames) = player(&realm, &map, 2);
         let (carol, _carol_frames) = player(&realm, &map, 3);
-        let (dave, _dave_frames) = player(&realm, &map, 4);
+        let (dave, dave_frames) = player(&realm, &map, 4);
+        let (erin, erin_frames) = player(&realm, &map, 5);
         join(&realm, &alice, "Tea", "");
         join(&realm, &bob, "Tea", "");
         let (done, finished) = std::sync::mpsc::channel();
-        let threads = [
+        let mut threads = vec![
             {
                 let (realm, done) = (realm.clone(), done.clone());
                 std::thread::spawn(move || {
@@ -786,17 +835,7 @@ mod tests {
                             PlayerChatTag::None,
                         );
                     }
-                    done.send("alice").unwrap();
-                })
-            },
-            {
-                let (realm, done) = (realm.clone(), done.clone());
-                std::thread::spawn(move || {
-                    for _ in 0..LINES {
-                        join(&realm, &dave, "Coffee", "");
-                        leave(&realm, &dave, "Coffee", true);
-                    }
-                    done.send("dave").unwrap();
+                    done.send(()).unwrap();
                 })
             },
             {
@@ -806,17 +845,40 @@ mod tests {
                         join(&realm, &carol, "Tea", "");
                         leave_all(&realm, &carol);
                     }
-                    done.send("carol").unwrap();
+                    done.send(()).unwrap();
                 })
             },
         ];
-        for _ in &threads {
+        let mut makers = Vec::new();
+        for (who, mut frames) in [(dave, dave_frames), (erin, erin_frames)] {
+            let (realm, done) = (realm.clone(), done.clone());
+            makers.push(std::thread::spawn(move || {
+                let mut heard = Vec::new();
+                for _ in 0..LINES {
+                    join(&realm, &who, "Coffee", "");
+                    leave(&realm, &who, "Coffee", true);
+                    heard.extend(notices(&mut frames));
+                }
+                done.send(()).unwrap();
+                heard
+            }));
+        }
+        for _ in 0..threads.len() + makers.len() {
             finished
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .expect("no thread waits for good");
         }
-        for t in threads {
+        for t in threads.drain(..) {
             t.join().unwrap();
+        }
+        for m in makers {
+            let heard = m.join().unwrap();
+            let count = |kind: u8| heard.iter().filter(|k| **k == kind).count();
+            assert_eq!(
+                (count(YOU_JOINED), count(YOU_LEFT), count(NOT_MEMBER)),
+                (LINES, LINES, 0),
+                "every join and leave of Coffee's is one"
+            );
         }
         let expected: Vec<String> = (0..LINES).map(|i| format!("line {i}")).collect();
         assert_eq!(lines(&mut bob_frames), expected);
@@ -824,5 +886,6 @@ mod tests {
         let directory = realm.social.channels.lock();
         assert!(directory.get(Team::Alliance, "Coffee").is_none());
         assert_eq!(directory.of(bob.guid), vec!["Tea".to_owned()]);
+        assert_eq!(directory.count(), 1);
     }
 }
