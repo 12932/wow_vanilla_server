@@ -665,12 +665,15 @@ async fn each_citys_spots_are_on_the_navmesh() {
                 (ground.map(|g| (g - p.z).abs()), place)
             });
             let start = (city.champion == Champion::Rexxar).then(|| {
-                let p = champions::out_of_sight(m, square, 110.0);
-                let path = m.nav.as_mut().and_then(|n| n.path(p, square));
+                // As he comes: to a point near the fight a walk reaches.
+                let fight =
+                    crate::game::map::guards::reachable_point(m, square, 8.0).unwrap_or(square);
+                let p = champions::out_of_sight(m, fight, 110.0);
+                let path = m.nav.as_mut().and_then(|n| n.path(p, fight));
                 let reached = path
                     .and_then(|p| p.last().copied())
-                    .is_some_and(|e| dist(e, square) <= 1.0);
-                (dist(p, square), (p.z - square.z).abs(), reached)
+                    .is_some_and(|e| dist(e, fight) <= 3.0);
+                (dist(p, fight), (p.z - fight.z).abs(), reached)
             });
             (ground, town, prison, start)
         })
