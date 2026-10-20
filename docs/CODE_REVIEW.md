@@ -17,6 +17,8 @@ the reader off, a player dropped by a copy stopped from outside, a pet's threat 
 missing world data). None fixed yet; waiting on your choice.
 - #3 fixed: a mail keeps its subject to the client's 64 letters and its body to 8,000 bytes, and the mail list
   stops at the client's 32,766 bytes, as mangos's `HandleGetMailList` does (`social/mail.rs`).
+- rev5-social 4 fixed: a logout leaves a meeting stone's queue (mangos's `LogoutPlayer`), and the sweep drops
+  anyone offline first (`map/meeting_stones.rs`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

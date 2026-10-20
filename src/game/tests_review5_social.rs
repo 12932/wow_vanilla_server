@@ -175,3 +175,85 @@ async fn a_full_mailbox_lists_what_fits_the_clients_cap() {
         mails.len()
     );
 }
+
+/// rev5-social 4: a player queued alone at a meeting stone who logged out
+/// stayed queued; as the longest waiting they led, and every sweep handed
+/// the others to them, offline, and grouped none. A logout leaves the
+/// queue (mangos's `LogoutPlayer`), and the sweep drops anyone offline.
+#[tokio::test]
+async fn one_queued_and_gone_doesnt_stall_a_meeting_stone() {
+    const AREA: u32 = 1581; // the Deadmines
+    let realm = harness::realm();
+    let map0 = realm.maps.get(&realm, MapKey::world(0));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Gone", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bee", Race::Human, Class::Priest).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Cee", Race::Human, Class::Mage).await;
+    for g in [ga, gb, gc] {
+        map0.query(move |m| crate::game::map::meeting_stones::queue(m, g, AREA))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    a.send(CMSG_LOGOUT_REQUEST {}).await;
+    a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    // The social logout runs as the map lets the player go.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while realm.registry.online(ga).is_some() {
+        assert!(Instant::now() < deadline, "Gone never went offline");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        realm.social.meeting_stones.lock().of(ga).is_none(),
+        "a logout leaves the queue"
+    );
+    crate::game::map::meeting_stones::sweep(&realm);
+    let groups = realm.social.groups.lock();
+    let bee = groups.group_of(gb).expect("Bee is grouped");
+    assert!(bee.members.iter().any(|m| m.guid == gc), "with Cee");
+}
+
+/// rev5-social 4: one gone without the social logout (a player lost with
+/// their map) is dropped by the sweep, which groups those online.
+#[tokio::test]
+async fn the_sweep_drops_one_queued_and_offline() {
+    const AREA: u32 = 1581;
+    let realm = harness::realm();
+    let map0 = realm.maps.get(&realm, MapKey::world(0));
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bee", Race::Human, Class::Priest).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Cee", Race::Human, Class::Mage).await;
+    // The longest waiting, and offline.
+    let ghost = guid::player(99_999);
+    realm
+        .social
+        .meeting_stones
+        .lock()
+        .queue
+        .push(crate::game::map::meeting_stones::Queued {
+            guid: ghost,
+            area: AREA,
+            team: crate::game::registry::Team::Alliance,
+            class: 1,
+            leader: false,
+            since: Instant::now() - Duration::from_secs(60),
+            progress_at: Instant::now() + Duration::from_secs(300),
+        });
+    for g in [gb, gc] {
+        map0.query(move |m| crate::game::map::meeting_stones::queue(m, g, AREA))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    crate::game::map::meeting_stones::sweep(&realm);
+    assert!(realm.social.meeting_stones.lock().of(ghost).is_none());
+    let groups = realm.social.groups.lock();
+    let bee = groups.group_of(gb).expect("Bee is grouped");
+    assert!(bee.members.iter().any(|m| m.guid == gc), "with Cee");
+}

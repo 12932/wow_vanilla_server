@@ -514,6 +514,8 @@ pub fn logged_out(map: &Map, g: Guid) {
     }
     friends::logged_out(realm, g);
     crate::game::battlegrounds::logged_out(realm, g);
+    // Out of a meeting stone's queue, as mangos's `LogoutPlayer` takes them.
+    crate::game::map::meeting_stones::leave(realm, g);
     guilds::logged_out(realm, g);
     groups::logged_out(realm, g);
 }

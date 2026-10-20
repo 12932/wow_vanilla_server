@@ -203,7 +203,7 @@ pub fn queue(map: &mut Map, g: Guid, area: u32) {
     status(&map.realm, g, area, MeetingStoneStatus::JoinedQueue);
 }
 
-/// `CMSG_MEETINGSTONE_LEAVE`, or gone offline.
+/// `CMSG_MEETINGSTONE_LEAVE`, or gone offline (`social::logged_out`).
 pub fn leave(realm: &Realm, g: Guid) {
     let was = {
         let mut stones = realm.social.meeting_stones.lock();
@@ -239,6 +239,29 @@ fn best_for(have: &[Role], solos: &[&Queued]) -> Option<Guid> {
 /// Match each dungeon's queue: parties take who they lack, and players
 /// alone make parties of their own.
 pub fn sweep(realm: &Realm) {
+    // Anyone offline leaves: one lost with their map had no logout. Kept,
+    // the longest waiting of them would lead, and every player alone be
+    // handed to them and grouped with no one.
+    let queued: Vec<Guid> = realm
+        .social
+        .meeting_stones
+        .lock()
+        .queue
+        .iter()
+        .map(|q| q.guid)
+        .collect();
+    let gone: Vec<Guid> = queued
+        .into_iter()
+        .filter(|g| realm.registry.online(*g).is_none())
+        .collect();
+    if !gone.is_empty() {
+        realm
+            .social
+            .meeting_stones
+            .lock()
+            .queue
+            .retain(|q| !gone.contains(&q.guid));
+    }
     // A party still searching hears so, every five minutes.
     let now = Instant::now();
     let searching: Vec<Guid> = {

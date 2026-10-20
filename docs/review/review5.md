@@ -1128,7 +1128,7 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
   sent. Or put the mail into `Mails` only after its store request has gone.
 - **Effort:** easy to medium.
 
-#### 4. One player queued alone at a meeting stone who logs out stops it grouping anyone alone (medium, reliability)
+#### 4. One player queued alone at a meeting stone who logs out stops it grouping anyone alone (medium, reliability) **Fixed.**
 - **Where:** `src/game/map/meeting_stones.rs:207` (`leave`, documented "or gone offline", called only for
   `CMSG_MEETINGSTONE_LEAVE`, `:84`); `map/social.rs:508` (`logged_out` doesn't leave the queue); the sweep,
   `meeting_stones.rs:241-330`.
