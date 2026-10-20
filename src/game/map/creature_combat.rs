@@ -635,6 +635,26 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     extended_at(map, c).is_none_or(|t| now.duration_since(t) > timeout)
 }
 
+/// Whether `t`, on the list of `g` (a passive creature, which stays where
+/// it is), has left its fight: outside a dungeon, gone past the threat
+/// radius of where the fight began, with no hostile act for the leash's
+/// time, as [`should_evade`] has it of a fighting creature's victim.
+pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
+    let Some(c) = map.creature(g) else {
+        return true;
+    };
+    let extra = template(map, g).map_or(0, |x| x.flags_extra);
+    if map.key.instance != 0 || extra & EXTRA_NO_LEASH != 0 {
+        return false;
+    }
+    let origin = c.engagement.origin.unwrap_or(c.home);
+    let far = map
+        .position_of(t)
+        .is_none_or(|p| dist(p, origin) > map.cfg.creatures.leash_radius);
+    let timeout = Duration::from_secs(map.cfg.creatures.leash_timeout_secs);
+    far && extended_at(map, c).is_none_or(|at| map.now.duration_since(at) > timeout)
+}
+
 /// `static_flags1`: no defence against spells (the water guardians').
 const STATIC_NO_SPELL_DEFENSE: u32 = 0x8000;
 

@@ -23,7 +23,17 @@ pub static PACKETS_IN: AtomicU64 = AtomicU64::new(0);
 
 /// Encode a server message as `[size BE][opcode LE][body]`, the shape the
 /// writer task encrypts. Encode once and share the frame between clients.
+/// None for a message too big for the size field (wow_messages would cut
+/// the size short, and the client's stream would be out of step).
 pub fn encode<M: ServerMessage>(m: &M) -> Option<Arc<[u8]>> {
+    let body = m.size_without_header() as usize;
+    if body > crate::game::update::MAX_FRAME_BODY {
+        warn!(
+            "not sending opcode {:#x}: its {body} bytes don't fit a frame",
+            M::OPCODE
+        );
+        return None;
+    }
     let mut buf = Vec::with_capacity(m.size_without_header() as usize + 4);
     m.write_unencrypted_server(&mut buf).ok()?;
     Some(Arc::from(buf))
@@ -636,6 +646,15 @@ pub(crate) async fn run_writer<W>(
             }
             let size = u16::from_be_bytes([buf[0], buf[1]]);
             let opcode = u16::from_le_bytes([buf[2], buf[3]]);
+            // A size that isn't the frame's would put the client's stream out
+            // of step: what is built refuses one, and nothing gets past here.
+            if usize::from(size) != buf.len() - 2 {
+                warn!(
+                    "not writing opcode {opcode:#x}: its size field says {size}, its frame {}",
+                    buf.len()
+                );
+                continue;
+            }
             scratch.extend_from_slice(&encrypter.encrypt_server_header(size, opcode));
             scratch.extend_from_slice(&buf[4..]);
             written += 1;
@@ -881,6 +900,46 @@ mod tests {
             }
         }
         assert_eq!(out.queued_bytes(), 0, "the writer gave the budget back");
+        drop(out);
+        writer.await.unwrap();
+    }
+
+    /// Review 5's world finding 1: a body over 64 KB went out with its size
+    /// field cut short, and the client read the rest of it as the packets
+    /// after it. A frame too big isn't built, and the writer doesn't write
+    /// one whose size field isn't its length.
+    #[tokio::test]
+    async fn a_frame_too_big_for_its_size_field_is_never_sent() {
+        use crate::game::update::MAX_FRAME_BODY;
+        assert!(frame(9, &vec![0; MAX_FRAME_BODY + 1]).is_empty());
+        let fits = frame(9, &vec![0; MAX_FRAME_BODY]);
+        assert_eq!(
+            usize::from(u16::from_be_bytes([fits[0], fits[1]])),
+            fits.len() - 2
+        );
+        let note = wow_world_messages::vanilla::SMSG_NOTIFICATION {
+            notification: "a".repeat(MAX_FRAME_BODY),
+        };
+        assert!(encode(&note).is_none(), "wow_messages would cut its size");
+
+        let (server, client) = paired_crypto();
+        let (encrypter, _) = server.split();
+        let (_, mut decrypter) = client.split();
+        let (mut a, b) = duplex(256 * 1024);
+        let (out, frames) = queue(1 << 20);
+        let writer = tokio::spawn(run_writer(b, encrypter, frames));
+        // 70,000 bytes under a size of 0xFFFF, as `frame` built it before.
+        let mut lying = vec![0xFF, 0xFF, 0xDD, 0x00];
+        lying.extend(std::iter::repeat_n(0xAB, 70_000));
+        assert!(out.send_frame(Arc::from(lying)));
+        assert!(out.send_frame(frame(100, &[7; 4])));
+        let mut header = [0u8; 4];
+        a.read_exact(&mut header).await.unwrap();
+        let h = decrypter.decrypt_server_header(header);
+        assert_eq!((h.opcode, h.size), (100, 6), "the next frame, in step");
+        let mut body = [0u8; 4];
+        a.read_exact(&mut body).await.unwrap();
+        assert_eq!(body, [7; 4]);
         drop(out);
         writer.await.unwrap();
     }

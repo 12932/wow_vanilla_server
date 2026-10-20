@@ -46,6 +46,19 @@ missing world data). None fixed yet; waiting on your choice.
 - **net 5** fixed (`fix/fixnet`): pings are counted in the reader by mangos's rule (more than
   `[network] max_overspeed_pings`, 2, in a row each under 27 s after the last disconnect); a closed queue ends the
   reader and the session at once (with #2).
+- #1 fixed: an express route passes a node once, 128 at most, and a flight has 2,000 points at most; a frame too big
+  for its size field isn't built (`update::frame`, `conn::encode`), and the writer skips one whose size field isn't
+  its length.
+- #16 fixed: a possessed unit's movement is checked as its controller's own is (`movement::finite`: no NaN, nothing
+  past 20,000 yards, a deck's offset on a deck), and dropped when it fails. The speed check isn't applied to it.
+- #5 fixed: a pet, totem, guardian or charmed creature keeps no threat list (`ai::keeps_threat`, mangos's
+  `CanHaveThreatList`), isn't taunted, and one attacking a unit that vanishes or feigns stops (`ai::forget`); a passive
+  creature in a fight has its turn though no one sees it, and lets go of one gone past its threat radius with no blow
+  for the leash's time (`creature_combat::gone_from_fight`).
+- #8 fixed: a victim is on `DYING` behind a guard that takes it off as it drops, a panic's unwinding too; the extra
+  swings run under `catch_unwind`, `in_extra_attack` put back before the panic goes on.
+- #9 fixed: spells go off at most 32 inside one another on a thread (`spells::execute`, a depth kept by a guard as
+  procs' `Deeper`); the one past it isn't cast, logged at `debug`. 1.12's deepest chain, 20, lands whole.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

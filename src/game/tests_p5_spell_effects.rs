@@ -311,3 +311,73 @@ async fn avoided_abilities_reach_the_victims_procs_and_caster_effects_stay_with_
     assert!(mine && !theirs, "the trigger at the caster");
     assert!(healed, "the heal on the caster");
 }
+
+const LOOP: u32 = 991_330;
+const RING_A: u32 = 991_331;
+const RING_B: u32 = 991_332;
+/// A chain of 25 made-up spells from here, each triggering the next.
+const CHAIN: u32 = 991_340;
+
+/// Review 5's combat finding 3: a spell that triggered itself, or a ring of
+/// them, went off inside itself until the stack overflowed, which aborts
+/// the server. Spells go 32 deep at most; a chain as deep as 1.12's
+/// deepest (20, Onyxia's Breath) lands whole. Each landing gives a point of
+/// rage, to count them.
+#[tokio::test]
+async fn triggered_spells_go_32_deep_at_most() {
+    let realm = fast_realm(|d| {
+        let link = |id: u32, next: u32| {
+            let mut s = bare(id, 0);
+            effect(
+                &mut s,
+                0,
+                SpellEffect {
+                    effect: spells::EFFECT_ENERGIZE,
+                    misc_value: 1,
+                    base_dice: 1,
+                    target_a: 1,
+                    ..Default::default()
+                },
+            );
+            if next != 0 {
+                effect(
+                    &mut s,
+                    1,
+                    SpellEffect {
+                        effect: spells::EFFECT_TRIGGER_SPELL,
+                        trigger_spell: next,
+                        target_a: 1,
+                        ..Default::default()
+                    },
+                );
+            }
+            s
+        };
+        insert(
+            d,
+            [link(LOOP, LOOP), link(RING_A, RING_B), link(RING_B, RING_A)],
+        );
+        insert(
+            d,
+            (0..25).map(|i| link(CHAIN + i, if i < 24 { CHAIN + i + 1 } else { 0 })),
+        );
+    });
+    let (_c, g, map) = human(&realm, "P5TRIG", "Looper", Class::Warrior).await;
+    let rage = map
+        .query(move |m| {
+            let rage = |m: &Map| {
+                m.unit_fields(g)
+                    .map(|f| f.get_u32(crate::game::fields::UNIT_FIELD_POWER1 + 1))
+            };
+            let mut gained = Vec::new();
+            for first in [CHAIN, LOOP, RING_A] {
+                let before = rage(m);
+                spells::cast_triggered(m, g, first, Some(g));
+                gained.push(rage(m).zip(before).map(|(a, b)| a - b));
+            }
+            gained
+        })
+        .await
+        .expect("the map lives");
+    assert_eq!(rage, [Some(25), Some(32), Some(32)]);
+}

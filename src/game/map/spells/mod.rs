@@ -1171,6 +1171,40 @@ fn resolve(
     out
 }
 
+/// The most spells going off inside one another on a thread: one lands and
+/// triggers the next ([`EFFECT_TRIGGER_SPELL`], a missile, a class script,
+/// a death's cast). 1.12's deepest chain is 20 (Onyxia's Breath); a spell
+/// that triggers itself, or a ring of them, would overflow the stack and
+/// abort the server. As deep as a script's starts go (`scripts::MAX_DEPTH`).
+const MAX_DEPTH: u8 = 32;
+
+thread_local! {
+    /// How many spells are going off inside one another now, on this thread.
+    static DEPTH: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// A spell deeper, while it lives: the depth before is put back as it goes,
+/// a panic's unwinding too (as procs' `Deeper`).
+struct Deeper(u8);
+
+impl Deeper {
+    /// A spell deeper, unless spells are already as deep as they go.
+    fn enter() -> Option<Self> {
+        let depth = DEPTH.get();
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        DEPTH.set(depth + 1);
+        Some(Self(depth))
+    }
+}
+
+impl Drop for Deeper {
+    fn drop(&mut self) {
+        DEPTH.set(self.0);
+    }
+}
+
 /// A cast completes: power and reagents taken, cooldowns started, the
 /// spell goes off.
 fn execute(
@@ -1181,6 +1215,10 @@ fn execute(
     item: Option<Guid>,
     triggered: bool,
 ) {
+    let Some(_deeper) = Deeper::enter() else {
+        tracing::debug!("spell {} not cast: {MAX_DEPTH} spells deep", s.id);
+        return;
+    };
     let now = map.now;
     let m = mods::for_spell(map, caster, s);
     // The item cast from, by its entry, before it is spent.

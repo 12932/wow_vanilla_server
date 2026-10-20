@@ -389,6 +389,120 @@ async fn mind_control_moves_a_player_only_once_made_the_active_mover_and_ends_cl
     assert_eq!((faction, mover, charm), (before, None, None));
 }
 
+/// Review 5's combat finding 1: whoever struck a player's pet went on its
+/// threat list, which nothing prunes, and so stayed in their fight while
+/// both lived. A pet keeps no list (mangos's `CanHaveThreatList`): the
+/// blow's PvP timer run out, the striker is out of it; and a pet fighting
+/// one who vanishes stops, as the creatures on their list do.
+#[tokio::test]
+async fn whoever_strikes_a_pet_leaves_the_fight_once_its_timer_runs_out() {
+    use crate::game::map::combat;
+    use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
+    let realm = harness::realm_with(more());
+    let (realm, _h, gh, map, pet, _wolf) = tamed_on(realm).await;
+    let (_b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    bring(&map, gb, gh, 8.0).await;
+    flag_pvp(&map, vec![gh, gb]);
+    let fighting = |m: &crate::game::map::Map, g: Guid| {
+        m.unit_fields(g)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT))
+    };
+    let r = map
+        .query(move |m| {
+            // A blow, as a swing deals it.
+            combat::engage(m, gb, pet);
+            combat::deal_damage(m, gb, pet, 1);
+            combat::enter(m, gb, true);
+            let struck = fighting(m, gb);
+            // The pet strikes no one back (a passive one), and the PvP
+            // timer runs out.
+            combat::stop_attack(m, pet);
+            let listed = m.creature(pet).map(|c| c.threat.len());
+            let now = m.now;
+            let c = m.combat_mut(gb).unwrap();
+            c.combat_until = Some(now);
+            c.next_check = Some(now);
+            combat::update_players(m);
+            (struck, listed, fighting(m, gb))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (true, Some(0), false), "out once nothing holds them");
+    let attacking = map
+        .query(move |m| {
+            pets::attack_target(m, pet, gb);
+            let before = m.combat(pet).is_some_and(|c| c.attacking);
+            crate::game::map::ai::forget(m, gb);
+            (before, m.combat(pet).is_some_and(|c| c.attacking))
+        })
+        .await
+        .unwrap();
+    assert_eq!(attacking, (true, false), "Vanish or Feign Death stops it");
+}
+
+/// The first movement a client sends of `unit` that is told to `to`.
+async fn first_heartbeat_of(to: &mut Client, unit: Guid) -> Vector3d {
+    to.wait_for("a heartbeat", |m| match m {
+        ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(h) if h.guid == unit => Some(h.info.position),
+        _ => None,
+    })
+    .await
+}
+
+/// Review 5's world finding 2: the controller's client put a possessed
+/// unit anywhere, NaN too, told to everyone who saw it and saved, where
+/// its own movement is checked. A place out of the world is dropped.
+#[tokio::test]
+async fn a_possessed_player_isnt_moved_out_of_the_world() {
+    let realm = harness::realm_with(more());
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    bring(&map, gb, ga, 8.0).await;
+    a.sees(gb).await;
+    flag_pvp(&map, vec![ga, gb]);
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(control_update(&mut a, gb).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: gb }).await;
+    let at = position(&map, gb).await;
+    b.clear();
+    a.heartbeat(f32::NAN, at.y, at.z).await;
+    a.heartbeat(at.x - 25_000.0, at.y, at.z).await;
+    a.heartbeat(at.x + 2.0, at.y, at.z).await;
+    // The victim's own client hears each move taken, in order.
+    let told = first_heartbeat_of(&mut b, gb).await;
+    assert_eq!(told.x, at.x + 2.0, "the first move told is the good one");
+    until(&map, "the victim moved", move |m| {
+        (m.players[&gb].position().x - (at.x + 2.0)).abs() < 0.01
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
+    let realm = harness::realm_with(more());
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[EYE_OF_KILROGG]);
+    cast(&w, EYE_OF_KILROGG, None).await;
+    let eye = w
+        .wait_for("control of the eye", |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid != gw && u.allow_movement =>
+            {
+                Some(u.guid)
+            }
+            _ => None,
+        })
+        .await;
+    w.send(CMSG_SET_ACTIVE_MOVER { guid: eye }).await;
+    let at = position(&map, eye).await;
+    w.heartbeat(at.x, at.y, f32::NAN).await;
+    w.heartbeat(at.x, at.y, at.z - 30_000.0).await;
+    w.heartbeat(at.x + 3.0, at.y, at.z).await;
+    let told = first_heartbeat_of(&mut w, eye).await;
+    assert_eq!(told.x, at.x + 3.0, "the first move told is the good one");
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());

@@ -118,7 +118,9 @@ pub fn movement_of(msg: ClientOpcodeMessage) -> Result<(MovementInfo, Relay), Cl
     }
 }
 
-fn finite(info: &MovementInfo) -> bool {
+/// A place a client may say a unit is: in the world (no NaN, nothing past
+/// 20,000 yards), and on a deck if on one.
+pub(crate) fn finite(info: &MovementInfo) -> bool {
     let p = info.position;
     let in_world = p.x.is_finite()
         && p.y.is_finite()
