@@ -1165,6 +1165,13 @@ pub fn fly_path(map: &mut Map, player: Guid, path: u32) {
 pub const FLIGHT_FORMS: [u8; 6] = [0, 17, 18, 19, 28, 30];
 /// How near the flight's first node its flier must be.
 const TAXI_START_YARDS: f32 = 31.622_776;
+/// The most nodes an express route names: 1.12 has 80 flight nodes, and its
+/// longest shortest route passes 9 of them.
+const MAX_ROUTE_NODES: usize = 128;
+/// The most points a flight's path has. 1.12's longest shortest route has
+/// 317 (Thistle Tea's stitch trims a few); 12 bytes each, 2,000 make a
+/// 24 KB `SMSG_MONSTER_MOVE`, well inside a frame's 64 KB.
+const MAX_FLIGHT_POINTS: usize = 2_000;
 
 /// Why `player` can't take a flight along `route` now, as Thistle Tea
 /// refuses it: busy (dead, flying, fighting, casting), mounted, in a form,
@@ -1230,6 +1237,12 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
     if let Some(r) = taxi_refusal(map, player, route) {
         return reply(map, r);
     }
+    // The client's route is its shortest, which passes a node once: one back
+    // and forth between two nodes would make a flight with no end of points.
+    let mut seen = ahash::AHashSet::with_capacity(route.len());
+    if route.len() > MAX_ROUTE_NODES || !route.iter().all(|n| seen.insert(*n)) {
+        return reply(map, ActivateTaxiReply::NoSuchPath);
+    }
     let mut cost = 0u32;
     let mut hops: Vec<(u32, Vec<TaxiPathNode>)> = Vec::new();
     for hop in route.windows(2) {
@@ -1254,6 +1267,10 @@ pub fn activate_route(map: &mut Map, player: Guid, npc: Guid, route: &[u32]) {
         .into_iter()
         .filter(|n| n.map == map.key.map)
         .collect();
+    // The flight goes out as one SMSG_MONSTER_MOVE, every point in it.
+    if nodes.len() > MAX_FLIGHT_POINTS {
+        return reply(map, ActivateTaxiReply::NoSuchPath);
+    }
     let (from, to) = (route[0], route[route.len() - 1]);
     let now = map.now;
     let spline_id = map.next_spline_id;

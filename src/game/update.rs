@@ -542,9 +542,24 @@ fn creates_transport(block: &[u8]) -> bool {
     crate::game::guid::high(Guid::new(guid)) == Some(crate::game::guid::HighGuid::MoTransport)
 }
 
-/// `[size BE][opcode LE][body]`, the shape the writer task encrypts.
+/// The largest body a 1.12 frame carries: its size field is two bytes and
+/// counts the opcode's two as well. wow_messages adds the size field's own
+/// two in a `u16` too, so the bound is the same for what it encodes.
+pub const MAX_FRAME_BODY: usize = u16::MAX as usize - 4;
+
+/// `[size BE][opcode LE][body]`, the shape the writer task encrypts. A body
+/// too big for the size field gives an empty frame, which the writer skips:
+/// sent with its size cut short, the client would read the rest of the
+/// body as the packets after it, and be out of step from then on.
 pub fn frame(opcode: u16, body: &[u8]) -> Arc<[u8]> {
-    let size = u16::try_from(body.len() + 2).unwrap_or(u16::MAX);
+    if body.len() > MAX_FRAME_BODY {
+        tracing::warn!(
+            "not sending opcode {opcode:#x}: its {} bytes don't fit a frame",
+            body.len()
+        );
+        return Arc::from([]);
+    }
+    let size = (body.len() + 2) as u16;
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&size.to_be_bytes());
     out.extend_from_slice(&opcode.to_le_bytes());

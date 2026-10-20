@@ -7,7 +7,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 ## The ones that matter most
 | # | Severity | Area | Finding |
 |---|---|---|---|
-| 1 | high | world | A crafted express flight route overflows an update frame's size field and corrupts the packet stream of every player near |
+| 1 | high | world | A crafted express flight route overflows an update frame's size field and corrupts the packet stream of every player near **Fixed.** |
 | 2 | high | net | A connection's writer outlives its close while the client doesn't read, keeping its socket and its frames |
 | 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox |
 | 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue |

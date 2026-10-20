@@ -962,6 +962,78 @@ async fn an_express_flight_pays_for_each_hop() {
     assert_eq!((money, flying), (88, true));
 }
 
+/// Review 5's world finding 1: an express route back and forth between two
+/// nodes built one flight of any number of points, sent to everyone near
+/// as one SMSG_MONSTER_MOVE whose size field it overflowed. A route passes
+/// a node once, and a flight's points are bounded.
+#[tokio::test]
+async fn an_express_route_back_and_forth_or_too_long_is_refused() {
+    let mut d = data();
+    let path = |x: f32, n: usize| -> Vec<TaxiPathNode> {
+        (0..n)
+            .map(|i| TaxiPathNode {
+                map: 0,
+                x: x + i as f32 * 0.01,
+                y: START.1,
+                z: START.2 + 10.0,
+                ..Default::default()
+            })
+            .collect()
+    };
+    d.npc.taxi_paths.insert((3, 2), (11, 5));
+    d.npc.taxi_path_nodes.insert(11, path(START.0 + 64.0, 2));
+    let mut far = d.npc.taxi_nodes[&4].clone();
+    far.id = 5;
+    d.npc.taxi_nodes.insert(5, far);
+    d.npc.taxi_paths.insert((4, 5), (12, 1));
+    d.npc
+        .taxi_path_nodes
+        .insert(12, path(START.0 + 124.0, 6_000));
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let g = a.guid;
+    let master = guid::unit(FLIGHT_MASTER, 13);
+    a.sees(master).await;
+    on_map(&realm, move |m| {
+        let p = m.players.get_mut(&g).unwrap();
+        p.row.state.taxi_mask = vec![(1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)];
+        p.set_money(10_000);
+    })
+    .await;
+    async fn fly(a: &mut Client, master: Guid, nodes: Vec<u32>) -> ActivateTaxiReply {
+        a.send(CMSG_ACTIVATETAXIEXPRESS {
+            guid: master,
+            total_cost: 0,
+            nodes,
+        })
+        .await;
+        a.wait_for("SMSG_ACTIVATETAXIREPLY", |m| match m {
+            ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(r) => Some(r.reply),
+            _ => None,
+        })
+        .await
+    }
+    let back_and_forth = [2, 3].repeat(200);
+    assert_eq!(
+        fly(&mut a, master, back_and_forth).await,
+        ActivateTaxiReply::NoSuchPath
+    );
+    assert_eq!(
+        fly(&mut a, master, vec![2, 3, 4, 5]).await,
+        ActivateTaxiReply::NoSuchPath
+    );
+    let (money, flying) = on_map(&realm, move |m| {
+        (m.players[&g].money(), m.players[&g].flight.is_some())
+    })
+    .await;
+    assert_eq!((money, flying), (10_000, false), "nothing paid, not flying");
+    assert_eq!(
+        fly(&mut a, master, vec![2, 3, 4]).await,
+        ActivateTaxiReply::Ok
+    );
+}
+
 #[tokio::test]
 async fn talents_reset_for_a_rising_price_and_skills_unlearn() {
     let (realm, mut a) = setup().await;

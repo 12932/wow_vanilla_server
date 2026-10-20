@@ -15,6 +15,9 @@ Six reviewers, by area: [review/review5.md](review/review5.md), its first table 
 crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
 the reader off, a player dropped by a copy stopped from outside, a pet's threat list never pruned, skills wiped on
 missing world data). None fixed yet; waiting on your choice.
+- #1 fixed: an express route passes a node once, 128 at most, and a flight has 2,000 points at most; a frame too big
+  for its size field isn't built (`update::frame`, `conn::encode`), and the writer skips one whose size field isn't
+  its length.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
