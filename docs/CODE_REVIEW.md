@@ -86,6 +86,8 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
 The lows of the world, combat and realm-wide sections (`fix/lowsb`):
 - combat 8 fixed: an aura state, form or creature type past the 32nd names no bit (`checks::bit`), where the
   shift by a data value panicked in a debug build and tested another bit in release.
+- social 8 fixed: a guild's rank, a group's lead or a summons sent as a player changes maps follows them
+  (`map::call_player`; `deliver` names the new map as the arrival is sent), where it went to the map they had left.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

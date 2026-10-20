@@ -376,9 +376,6 @@ pub fn offer_summon(map: &Map, summoner: Guid, target: Guid) {
     let Some(s) = map.players.get(&summoner) else {
         return;
     };
-    let Some(online) = map.realm.registry.online(target) else {
-        return;
-    };
     let summon = Summon {
         by: summoner,
         to: map.key,
@@ -387,7 +384,7 @@ pub fn offer_summon(map: &Map, summoner: Guid, target: Guid) {
         until: Instant::now() + SUMMON_FOR,
     };
     let zone = s.zone;
-    online.map().call(move |m| {
+    crate::game::map::call_player(&map.realm, target, move |m| {
         let Some(p) = m.players.get_mut(&target) else {
             return;
         };

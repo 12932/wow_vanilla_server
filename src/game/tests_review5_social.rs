@@ -435,3 +435,72 @@ async fn the_sweep_drops_one_queued_and_offline() {
     let bee = groups.group_of(gb).expect("Bee is grouped");
     assert!(bee.members.iter().any(|m| m.guid == gc), "with Cee");
 }
+
+/// rev5-social 8: what a service changes on a player (a guild's rank, a
+/// group's lead, a summons) as they change maps reaches them on the map
+/// they go to: one sent as the map they left has let them go, passed on
+/// by their session behind them, and one sent while their arrival waits
+/// in the new map's queue, sent there. Before, both went to the map they
+/// had left, found no one, and were lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_a_service_asks_of_a_player_changing_maps_follows_them() {
+    use crate::game::fields::{PLAYER_GUILDID, PLAYER_GUILDRANK};
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // Kalimdor kept busy, so her arrival waits in its queue.
+    let kalimdor = realm.maps.get(&realm, MapKey::world(1));
+    let (go, held) = std::sync::mpsc::channel::<()>();
+    kalimdor.call(move |_| {
+        let _ = held.recv_timeout(Duration::from_secs(5));
+    });
+    realm
+        .maps
+        .get(&realm, MapKey::world(0))
+        .query(move |m| {
+            m.teleport(
+                ga,
+                MapKey::world(1),
+                Vector3d {
+                    x: 1_600.0,
+                    y: -4_400.0,
+                    z: 10.0,
+                },
+                0.0,
+            );
+            // Let go here, not yet passed on by her session.
+            crate::game::map::call_player(&m.realm.clone(), ga, move |m| {
+                if let Some(p) = m.players.get_mut(&ga) {
+                    p.fields.set_u32(PLAYER_GUILDRANK, 3);
+                }
+            });
+        })
+        .await
+        .unwrap();
+    // Passed on by her session, waiting in Kalimdor's queue.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let online = realm.registry.online(ga).unwrap();
+    let _ = online
+        .session
+        .send(crate::game::session::Control::Probe(tx));
+    let routed = rx.await.unwrap().expect("in the world");
+    assert_eq!(routed.key, MapKey::world(1));
+    crate::game::map::call_player(&realm, ga, move |m| {
+        if let Some(p) = m.players.get_mut(&ga) {
+            p.fields.set_u32(PLAYER_GUILDID, 7);
+        }
+    });
+    let _ = go.send(());
+    let fields = kalimdor
+        .query(move |m| {
+            m.players.get(&ga).map(|p| {
+                (
+                    p.fields.get_u32(PLAYER_GUILDRANK),
+                    p.fields.get_u32(PLAYER_GUILDID),
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(fields, Some((3, 7)));
+}

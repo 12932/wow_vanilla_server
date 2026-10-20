@@ -1187,7 +1187,11 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
   `pending` rebuilt from the mails whose `deliver_at` is still ahead.
 - **Effort:** easy to medium.
 
-#### 8. What a service asks of a player's map while they change maps is lost (low, reliability)
+#### 8. What a service asks of a player's map while they change maps is lost (low, reliability) **Fixed.**
+- **Fixed:** `deliver` names the new map in the online list as the arrival is sent, and the services reach a
+  player through `map::call_player`, which follows them: a map that has let them go sends it on to the map the
+  list names now or, while their session has yet to pass them on, through the session behind them
+  (`Control::ToPlayer`). Test `what_a_service_asks_of_a_player_changing_maps_follows_them` (both lost before).
 - **Where:** `map/mod.rs:1091` (`Online::set_map` runs when the new map handles the arrival), `session.rs:296-306`
   and `:784-792` (`deliver`). The callers: `guilds.rs:240` (`set_fields`), `groups.rs:198` (`set_leader_flag`),
   `map/misc.rs:390` (a summons).
