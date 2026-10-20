@@ -259,3 +259,161 @@ async fn the_real_lunar_rockets_go_up_and_count_toward_lunar_fireworks() {
         ]
     );
 }
+
+/// On the real data: a Target Dummy (4071), a wild summon, is of its
+/// summoner's side, fights nothing and stands where it is put, with its
+/// passive (4044) on; its spawn effect taunts the enemy beside it onto it;
+/// and fifteen seconds on it kills itself, in its fight (Thistle Tea's
+/// "all target dummies apply their passive and initial area taunt";
+/// mangos-classic's `npc_advanced_target_dummy`). wvs left it hostile to
+/// its summoner, and for ever.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_target_dummy_stands_taunts_and_dies_at_its_time() {
+    use crate::game::fields::{UNIT_FIELD_FACTIONTEMPLATE, UNIT_FIELD_FLAGS};
+    use crate::game::map::assistance::{Reaction, reaction};
+    use crate::game::tests_p3_scripts::{hero, realm, summon_near};
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = hero(&realm, "Engineer").await;
+    let at = map.query(move |m| m.players[&me].position()).await.unwrap();
+    // A Defias Thug, an enemy beside the spot.
+    let thug = summon_near(
+        &map,
+        38,
+        Vector3d {
+            x: at.x + 4.0,
+            ..at
+        },
+    )
+    .await;
+    let (dummy, now) = map
+        .query(move |m| {
+            crate::game::map::spells::cast_triggered(m, me, 4071, Some(me));
+            let dummy = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == 2673)
+                .map(|(_, c)| c.guid);
+            (dummy, m.now)
+        })
+        .await
+        .unwrap();
+    let dummy = dummy.expect("the dummy");
+    let seen = map
+        .query(move |m| {
+            let c = m.creature(dummy).unwrap();
+            (
+                crate::game::map::auras::auras(m, dummy).is_some_and(|a| a.has_spell(4044)),
+                reaction(m, dummy) == Reaction::Passive,
+                c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE)
+                    == m.players[&me].fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+                m.creature(thug).map(|t| t.combat.victim) == Some(dummy),
+                m.objects.pending_spells.iter().any(|(t, _, s, by)| {
+                    *s == 7 && *by == dummy && *t == now + Duration::from_secs(15)
+                }),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen, (true, true, true, true, true));
+    for _ in 0..20 {
+        harness::an_update(&map).await;
+    }
+    let (moved, fighting, still) = map
+        .query(move |m| {
+            let c = m.creature(dummy).unwrap();
+            (
+                dist(c.position, at) > 3.0,
+                c.fields.get_u32(UNIT_FIELD_FLAGS) & crate::game::map::player::UNIT_FLAG_IN_COMBAT
+                    != 0,
+                !c.combat.attacking,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(!moved, "it stands where it was put");
+    assert!(fighting, "in its fight");
+    assert!(still, "striking no one");
+    map.query(move |m| {
+        let now = m.now;
+        for p in m.objects.pending_spells.iter_mut() {
+            if p.3 == dummy {
+                p.0 = now;
+            }
+        }
+    })
+    .await;
+    let mut dead = false;
+    for _ in 0..40 {
+        harness::an_update(&map).await;
+        dead = map
+            .query(move |m| m.creature(dummy).is_none_or(|c| !c.alive()))
+            .await
+            .unwrap();
+        if dead {
+            break;
+        }
+    }
+    assert!(dead, "dead at its time, fighting");
+}
+
+/// On the real data: a Mechanical Dragonling (4073) comes with its passive
+/// (23051) on, and at the full health that gives it (Thistle Tea's
+/// "dragonlings start with their passive health"; mangos's
+/// `HandleAuraModIncreaseHealth` raises the health with the most).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_dragonling_comes_at_the_full_health_of_its_passive() {
+    use crate::game::fields::{UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH};
+    use crate::game::tests_p3_scripts::{hero, realm};
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (_c, me, map) = hero(&realm, "Tinker").await;
+    let seen = map
+        .query(move |m| {
+            crate::game::map::spells::cast_triggered(m, me, 4073, Some(me));
+            let g = m.players[&me].owned.guardians.first().copied()?;
+            let c = m.creature(g)?;
+            let bonus = m
+                .realm
+                .data
+                .spells
+                .get(23051)
+                .map_or(0, |s| s.effects[0].base_points + 1);
+            Some((
+                c.entry,
+                crate::game::map::auras::auras(m, g).is_some_and(|a| a.has_spell(23051)),
+                c.fields.get_u32(UNIT_FIELD_HEALTH),
+                c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+                0u32,
+                bonus,
+            ))
+        })
+        .await
+        .unwrap()
+        .expect("the dragonling");
+    let (entry, passive, health, max, _, bonus) = seen;
+    assert_eq!(entry, 2678);
+    assert!(passive, "its passive on");
+    assert!(bonus > 0);
+    assert_eq!(health, max, "at its full health: {seen:?}");
+    // And keeps it as its stats are worked out again.
+    for _ in 0..60 {
+        harness::an_update(&map).await;
+    }
+    let later = map
+        .query(move |m| {
+            let g = m.players[&me].owned.guardians[0];
+            let c = m.creature(g).unwrap();
+            (
+                c.fields.get_u32(UNIT_FIELD_HEALTH),
+                c.fields.get_u32(UNIT_FIELD_MAXHEALTH),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(later, (max, max), "kept");
+}

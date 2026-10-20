@@ -223,6 +223,9 @@ pub fn summon(
         if let Some(s) = event_ai::scripted_mut(map, caster) {
             s.summoned.push(g);
         }
+        if !guardian {
+            crate::game::map::item_scripts::wild_summoned(map, g, caster);
+        }
     }
 }
 

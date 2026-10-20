@@ -90,6 +90,17 @@ const GUARDIAN_PASSIVES: [(u32, u32); 5] = [
     (8937, 13260),
     (12473, 23052),
 ];
+/// The target dummies, wild summons (vmangos's `npc_target_dummy`, Thistle
+/// Tea's `WildSummon.target_dummy`): each one's passive (threat on the
+/// enemies about it every few seconds) and the taunt it comes with. A
+/// dummy is of its summoner's side, stands where it is put, fights
+/// nothing, and after fifteen seconds kills itself, in a fight or not
+/// (mangos-classic's `npc_advanced_target_dummy`: its spawn effect,
+/// passive react, and Suicide at 15 s).
+const TARGET_DUMMIES: [(u32, u32, u32); 3] =
+    [(2673, 4044, 4507), (2674, 4048, 4092), (12426, 19809, 4092)];
+pub const DUMMY_LIFETIME: Duration = Duration::from_secs(15);
+const SUICIDE: u32 = 7;
 /// The Explosive Sheep and the Goblin Bomb: how long each lasts, and the
 /// blast it ends in.
 const GUARDIAN_LIFETIMES: [(u32, Duration, u32); 2] = [
@@ -397,11 +408,48 @@ pub fn guardian_passive(entry: u32) -> Option<u32> {
         .map(|(_, p)| *p)
 }
 
-/// An engineered guardian came: its passive, and the Sheep's and the
-/// Bomb's own time.
+/// A creature's wild summon `g` came, of `caster`'s: a target dummy takes
+/// their side, fights nothing, puts its passive on, taunts those about it,
+/// and is to kill itself in fifteen seconds.
+pub fn wild_summoned(map: &mut Map, g: Guid, caster: Guid) {
+    let Some(entry) = map.creature(g).map(|c| c.entry) else {
+        return;
+    };
+    let Some((_, passive, taunt)) = TARGET_DUMMIES.iter().find(|(e, ..)| *e == entry) else {
+        return;
+    };
+    let data = map.realm.data.clone();
+    let faction = map
+        .unit_fields(caster)
+        .map(|f| f.get_u32(UNIT_FIELD_FACTIONTEMPLATE));
+    if let Some(c) = map.creature_mut(g) {
+        if let Some(faction) = faction {
+            c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
+            c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, faction, false);
+        }
+        let s = c.scripted.get_or_insert_with(Default::default);
+        s.passive = true;
+        s.reaction = Some(crate::game::map::assistance::Reaction::Passive);
+    }
+    trigger(map, g, *passive, g);
+    trigger(map, g, *taunt, g);
+    let when = map.now + DUMMY_LIFETIME;
+    map.objects
+        .pending_spells
+        .push((when, Guid::zero(), SUICIDE, g));
+}
+
+/// An engineered guardian came: its passive, at the full health it gives
+/// (a dragonling's is nearly all its passive's; Thistle Tea's "dragonlings
+/// start with their passive health"), and the Sheep's and the Bomb's own
+/// time.
 pub fn guardian_summoned(map: &mut Map, g: Guid, entry: u32) {
     if let Some((_, passive)) = GUARDIAN_PASSIVES.iter().find(|(e, _)| *e == entry) {
         trigger(map, g, *passive, g);
+        if let Some(c) = map.creature_mut(g) {
+            let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, max);
+        }
     }
     let now = map.now;
     if let Some((_, life, _)) = GUARDIAN_LIFETIMES.iter().find(|(e, _, _)| *e == entry)
