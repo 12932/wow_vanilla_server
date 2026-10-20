@@ -939,6 +939,8 @@ mod tests_p9_player_locks;
 #[cfg(test)]
 mod tests_p9_player_quests;
 #[cfg(test)]
+mod tests_p9_player_social;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
