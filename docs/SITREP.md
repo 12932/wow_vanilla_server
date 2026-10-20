@@ -119,7 +119,8 @@ hours), the crate version bumped with each merge.
   turning, jumping or lying down ends the meal. Only players sit (mangos sits any unit). Jumping ends it as you asked,
   though mangos's mask doesn't include the jump.
 - **Bones (0.1.6):** a risen player's corpse becomes bones (flags 0x05, gear slots cleared), seen by everyone, for
-  `[players] bones_hours` (18; 0 for none); not saved across a restart, as mangos never saves them. **mangos's own
+  `[players] bones_hours` (18; 0 for none); **kept across a restart since 0.1.35** (your ask: the store's `bones`
+  table; open-world bones only, a copy's or a battleground's not), where mangos never saves them. **mangos's own
   numbers:** an unclaimed corpse turns to bones after 3 days (checked every 20 minutes); bones last until their grid
   unloads, about 5 minutes with no one near. wvs has no 3-day expiry for unclaimed corpses yet.
 - **Raid movement (peon `cec3e2a`):** raiders jump, side-step, back up, pause, turn with a reaction delay and walk off

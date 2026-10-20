@@ -34,6 +34,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   man standing, and 20 seconds of free-for-all after walking out of an arena's area (`[arena] ffa_grace_secs`;
   neither Thistle Tea nor mangos has it); a heal's chain (Chain Heal) jumping 12.5 yards between friends, where
   mangos and Thistle Tea jump 10 (your call, 2026-10-20; a harmful chain still jumps 10).
+- **Bones are kept across a restart** in the open world (the store's `bones` table, with their time left); mangos
+  never saves bones (`Corpse::SaveToDB` refuses them), and they go when their grid unloads or the server stops.
 - **The battleground scoreboard** shows each player's real honor rank; Thistle Tea always shows 4.
 - **Creatures' speed changes** go to those who see them as `SMSG_SPLINE_SET_RUN_SPEED`, as mangos-classic sends
   them; Thistle Tea sends nothing for a creature no player moves. Both send its run again at the new speed, and tell
