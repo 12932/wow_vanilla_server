@@ -571,6 +571,16 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   percentages and Hunter's Mark); for a second after Vanish no one detects the rogue (mangos sets the timer;
   Thistle Tea reads it); a ground channel pushed back cuts its areas short. **My calls:** the off hand gets half the
   flat bonus (mangos; Thistle Tea all of it); a ground area's caster is read as it hits (mangos), not at the cast.
+- **8l, movement and the network, round 8:** **a player sent to a copy as it stops isn't lost** (it closes its queue
+  and reads it to its end; a late arrival goes to the copy started again, or is saved: m2m3's find); the client
+  check now reads melee blows (`0x6255B0`): wvs's layout of HitInfo 32770 and 18 was right, they are flags (a
+  crushing blow 0x8002, a main-hand miss 0x12), and the fork reads the field as one value; **an auction error's
+  reason is a u32** (the fork writes a byte, so the client showed its own default error; now by hand, as
+  mangos-zero); **`CMSG_BATTLEFIELD_JOIN` as 1.12.1 sends it** (map, instance, group byte; the fork took only the
+  map, so a join without a battlemaster was refused; now read by hand); a pet's ground spell keeps its place.
+  **For the fork (your call):** three of its 1.12 layouts are wrong: `HitInfo` as an enum, not flags;
+  `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u8, not a u32; `CMSG_BATTLEFIELD_JOIN` without its instance and
+  group byte. wvs works around the last two by hand.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.

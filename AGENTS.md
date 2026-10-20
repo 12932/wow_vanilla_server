@@ -89,8 +89,10 @@ There is no world tick.
   `send_unheld`.
 - **Packets wow_messages lays out unlike 1.12 are encoded by hand** (`data::items::Body`), as mangos-zero lays
   them out: the item and game object queries, the loot window, `SMSG_CAST_RESULT`, channel notices, friend status,
-  `/who`, party member stats, raid icons and the battlefield status. Everything else uses wow_messages' types, so
-  peon (which reads with wow_messages) reads it. mangos-zero's source is the reference for 1.12's layouts.
+  `/who`, party member stats, raid icons, the battlefield status and the auction command's result. Inbound,
+  `CMSG_BATTLEFIELD_JOIN` is read by hand (1.12.1 sends map, instance and a group byte). Everything else uses
+  wow_messages' types, so peon (which reads with wow_messages) reads it. mangos-zero's source is the reference for
+  1.12's layouts.
 - **Values blocks always carry the object type**, and a GUID field's two halves are dirtied together: wow_messages
   can't read a block without them.
 - **GUIDs are typed** (`src/game/guid.rs`): players by counter, items `0x4000`, creatures `0xF130` with their entry,
