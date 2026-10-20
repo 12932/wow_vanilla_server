@@ -316,27 +316,30 @@ pub(crate) async fn enter(
 /// Put a creature of `entry` `d` yards before `g`, with the GUID counter
 /// `counter`.
 pub(crate) async fn place(map: &MapHandle, g: Guid, entry: u32, counter: u32, d: f32) -> Guid {
-    map.query(move |m| {
-        let data = m.realm.data.clone();
-        let t = data.creature_template(entry).cloned().unwrap();
-        let p = &m.players[&g];
-        let (pos, o) = (p.position(), p.movement.orientation);
-        let at = Vector3d {
-            x: pos.x + d * o.cos(),
-            y: pos.y + d * o.sin(),
-            z: pos.z,
-        };
-        let c = Creature::new(
-            guid::unit(entry, counter),
-            &t,
-            1,
-            at,
-            o + std::f32::consts::PI,
-        );
-        m.add_creature(c)
-    })
-    .await
-    .unwrap()
+    map.query(move |m| place_in(m, g, entry, counter, d))
+        .await
+        .unwrap()
+}
+
+/// [`place`], inside a query.
+pub(crate) fn place_in(m: &mut Map, g: Guid, entry: u32, counter: u32, d: f32) -> Guid {
+    let data = m.realm.data.clone();
+    let t = data.creature_template(entry).cloned().unwrap();
+    let p = &m.players[&g];
+    let (pos, o) = (p.position(), p.movement.orientation);
+    let at = Vector3d {
+        x: pos.x + d * o.cos(),
+        y: pos.y + d * o.sin(),
+        z: pos.z,
+    };
+    let c = Creature::new(
+        guid::unit(entry, counter),
+        &t,
+        1,
+        at,
+        o + std::f32::consts::PI,
+    );
+    m.add_creature(c)
 }
 
 pub(crate) fn learn(map: &MapHandle, g: Guid, spells: &'static [u32]) {

@@ -10,12 +10,17 @@ use wow_world_messages::vanilla::*;
 use crate::game::data::spells::SpellEffect;
 use crate::game::harness::{self, Client};
 use crate::game::map::{Map, MapHandle};
-use crate::game::tests_pets::{SUMMON_IMP, WOLF, cast, data, enter, learn, pet_bar, place, spell};
+use crate::game::tests_pets::{
+    SUMMON_IMP, WOLF, cast, data, enter, learn, pet_bar, place, place_in, spell,
+};
 
 /// A ground spell a possessed creature may cast: fire on all enemies at a
 /// place, three seconds to cast.
 const RAIN: u32 = 900_801;
 const THREE_SECONDS: u32 = 14;
+/// What holds the wolf: a possession's aura, without which it goes free
+/// at its next step.
+const POSSESS: u32 = 900_802;
 
 /// Wait until `f` holds on `map`, up to two seconds.
 async fn until(
@@ -72,13 +77,26 @@ async fn a_pets_stop_and_a_possessed_casters_ground_spell_go_as_its_master_says(
     rain.casting_time_index = THREE_SECONDS;
     d.spells.spells.insert(RAIN, rain);
     d.spells.cast_times.insert(THREE_SECONDS, 3000);
+    let mut hold = SpellEffect {
+        effect: 6,
+        target_a: 6,
+        ..Default::default()
+    };
+    hold.aura = crate::game::map::auras::AURA_MOD_POSSESS;
+    d.spells.spells.insert(
+        POSSESS,
+        spell(
+            POSSESS,
+            "Possession",
+            [hold, SpellEffect::default(), SpellEffect::default()],
+        ),
+    );
     let realm = harness::realm_with(d);
     let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
     let (mut s, _gs, _) = enter(&realm, "S", "Stranger", Race::Human, Class::Warrior).await;
     let (_c, gc, _) = enter(&realm, "C", "Carol", Race::Human, Class::Warrior).await;
     learn(&map, gw, &[SUMMON_IMP]);
     let wolf = place(&map, gw, WOLF, 0x70_0801, 10.0).await;
-    let other = place(&map, gw, WOLF, 0x70_0802, 6.0).await;
     w.sees(wolf).await;
     cast(&w, SUMMON_IMP, None).await;
     let imp = pet_bar(&mut w).await;
@@ -120,16 +138,22 @@ async fn a_pets_stop_and_a_possessed_casters_ground_spell_go_as_its_master_says(
     w.send(CMSG_PET_STOP_ATTACK { pet: gc }).await;
     until(&map, "Carol stops", move |m| !attacking(m, gc)).await;
 
-    // A wolf possessed, its rain at a place on the ground.
-    let place_at = map
+    // A wolf possessed, its rain at a place on the ground. It comes as it
+    // is taken, and an aura holds it: taken bare, it went free at its next
+    // step and turned on the warlock, and her imp killed it (a dead wolf
+    // casts nothing) whenever an update came before her cast.
+    let (other, place_at) = map
         .query(move |m| {
-            crate::game::map::pets::charmed(m, gw, other, true);
+            let other = place_in(m, gw, WOLF, 0x70_0802, 6.0);
+            let possess = m.realm.data.spells.get(POSSESS).cloned().unwrap();
+            crate::game::map::auras::apply(m, gw, other, &possess, 0, 0);
             let at = m.players[&gw].position();
-            Vector3d {
+            let place_at = Vector3d {
                 x: at.x + 3.0,
                 y: at.y - 2.0,
                 z: at.z,
-            }
+            };
+            (other, place_at)
         })
         .await
         .unwrap();
