@@ -587,7 +587,19 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 2. The Horde's city protection, Rexxar their champion (`feat/cities`, running).
 3. and 4. Peon's healers target whom they heal and cancel half the time when the target dies; shamans' Chain Heal
    (peon `feat/heals`, running).
-5. and 6. Officer Jaxon's and Thomas Miller's patrols and held items; corpses sliding (`fix/bugs1020`, running).
+5. **Done (`fix/bugs1020`): patrols and held items.** Officer Jaxon (14423) and Thomas Miller (3518) are movement
+   type 2 with no path of their own: their paths are by entry (`creature_movement_template`, 112 and 46 points),
+   which wvs never fell back to (mangos's `GetDefaultPath`); and their `creature_addon` has `equipment_id = -1`,
+   which in vmangos means "the template's weapons", where wvs read it as none (and 0, none, as the template's).
+   Both fixed: **185 spawns now walk their entry's path** (18 formation leaders, such as Princess), and **2,517
+   spawns now hold their weapons** (Nethergarde Miners, Venture Co. Workers, Defias Miners); creatures with an
+   off hand now swing both (mangos). A creature home from a fight walks its entry's path again.
+6. **Done (`fix/bugs1020`): corpses sliding.** Your theory was right for players: a player dying on the run kept
+   their forward flag and watchers got no stop, so their clients carried the body on. Now death clears the run
+   flags and sends watchers a stop at the body (mangos's `SetDeathState`, `StopMoving`); a dead client's late
+   movement is passed on without them. Creatures already got a stop, but at the last update's place, so the corpse
+   jumped back a little; now at where the walk had reached. Client check passed. **Left:** 38 places put a creature
+   at rest without a stop (each could let a client run it to the end of its walk); not audited yet.
 - **Chain Heal jumps 12.5 yards** between friends (your call): wvs's heal chains reach 12.5, harmful chains 10
    (mangos's); peon's shamans aim by the same 12.5.
 7. **Done (`feat/arenagrace`):** walking out of an arena's area keeps free-for-all for 20 seconds (`[arena]
