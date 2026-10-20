@@ -752,6 +752,13 @@ showed a difference. Phase 2 takes what is left.
   **For phase 2:** summon spots unchecked against terrain and sight; triggered casts' cast-end procs (Arcane
   Missiles spends one Unstable Power stack a channel); `inverseEffectMask` unloaded; script command 27's level; **a
   player's wild summon isn't tapped by its creator and can give XP.**
+- **9player:** a lock spell's object not in this world is no target, and a cast ending runs the profession checks
+  again (mangos's `CheckCast(false)`); a coating's last charge spent stops its other spells; a spawn's own greeting
+  (`npc_gossip`) where it has no menu (mangos's `SendPreparedGossip`); at login a saved flight is taken up before
+  the pet is asked for; a held player's mover stays through a not-active-mover; a battleground portal's refusal is
+  an area trigger's message; a talent's rank learned takes the rank below's aura with it. Four rows where wvs
+  follows mangos are `wrong-for-1.12` (a dead player taking from an open item-loot window, a node's window left
+  open on walking away, a random property rolled for a new item, only the caster's form checked).
 
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
