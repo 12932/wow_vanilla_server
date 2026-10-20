@@ -621,6 +621,22 @@ pub async fn an_update(map: &crate::game::map::MapHandle) {
     }
 }
 
+/// Wait until `g` has left the world, saved and offline, as their client
+/// going away has them leave it. A connection of the account before that
+/// takes them over where they are (one session an account), with no
+/// logout: a test of what a logout keeps waits for this before it comes
+/// back.
+pub async fn offline(realm: &Arc<Realm>, g: Guid) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while realm.registry.online(g).is_some() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{g:?} never went offline"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 /// The objects an update packet creates.
 pub fn creates(m: &ServerOpcodeMessage) -> Vec<Guid> {
     objects(m)

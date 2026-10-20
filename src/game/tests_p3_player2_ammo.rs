@@ -259,6 +259,9 @@ async fn chosen_ammunition_adds_its_damage_and_is_kept_over_a_logout() {
         "none spent"
     );
     a.disconnect();
+    // Logged out before she comes back, or her new connection takes her
+    // over where she is, and nothing is loaded.
+    crate::game::harness::offline(&realm, ga).await;
     let mut b = Client::connect(&realm, "A");
     b.send(CMSG_CHAR_ENUM {}).await;
     b.wait_for("SMSG_CHAR_ENUM", |m| {
