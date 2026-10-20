@@ -709,6 +709,14 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   a walk's first segment). Ruled out with tests: a missed next leg (a flight is one walk in wvs), relayed movement
   after the create, the frame's size. The client check now runs the client's own `0x618940` on each create.
   **Left:** a player under fear, confusion or a charge is created for a newcomer without their spline.
+- **The fork's four 1.12 layouts (`fix/fork`, pushed to your fork at `361d2ed`):** `HitInfo` is flags (a crushing
+  blow 0x8002, a main-hand miss 0x12 now read; the debug trailer under 0x1 too); `SMSG_AUCTION_COMMAND_RESULT`'s
+  inventory error a u32 (the client's `0x4CC460`); `CMSG_BATTLEFIELD_JOIN` the map, instance and group byte
+  (`0x4AA00B`); a cast's targets in the client's order (one GUID for unit, corpse or object first, `0x7E4E10`;
+  mangos's `SpellCastTargets::read` has the corpse last). TBC's layouts untouched. wvs's hand encoder and reader
+  for the two are gone, its melee blow through the fork's type. **Pins:** rustigator `732cec2`, wvs and peon at the
+  fork's `361d2ed` and rustigator's `732cec2`. **Its call:** a `CMSG_BATTLEFIELD_JOIN` of the map alone is refused
+  (Thistle Tea takes it; the client never sends it).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.

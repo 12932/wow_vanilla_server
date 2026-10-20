@@ -1,6 +1,6 @@
 [package]
 name = "wow_vanilla_server"
-version = "0.1.47"
+version = "0.1.48"
 edition = "2024"
 default-run = "wow_vanilla_server"
 
