@@ -49,6 +49,9 @@ pub use wild::remove_guardians;
 // Spell effects that make or touch pets.
 pub const EFFECT_SUMMON: u32 = 28;
 pub const EFFECT_SUMMON_WILD: u32 = 41;
+/// vmangos's `CREATURE_STATIC_FLAG_CREATOR_LOOT`: a creature lootable by
+/// its creator alone (an engineer's Target Dummy).
+pub const CREATOR_LOOT: u32 = 0x2000;
 pub const EFFECT_SUMMON_GUARDIAN: u32 = 42;
 pub const EFFECT_TAME_CREATURE: u32 = 55;
 pub const EFFECT_SUMMON_PET: u32 = 56;

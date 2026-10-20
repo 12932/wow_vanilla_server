@@ -192,6 +192,18 @@ pub fn summon(
             t.faction
         };
         c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, faction, t.civilian);
+        // One whose loot is its creator's (an engineer's Target Dummy) is
+        // made by its caster and tapped for the player whose side that is
+        // and their group, whoever strikes it first (mangos's
+        // `CREATOR_LOOT`, `SetLootRecipient(GetCreator())`; Thistle Tea's
+        // `creator_loot`).
+        if t.static_flags1 & CREATOR_LOOT != 0 {
+            c.fields.set_guid(UNIT_FIELD_CREATEDBY, caster);
+            let side = master(map, caster);
+            if guid::is_player(side) {
+                crate::game::map::tap::take(&map.realm, &mut c, side);
+            }
+        }
         let mut c = c.with_base();
         let scripted = c.scripted.get_or_insert_with(Default::default);
         scripted.summoner = Some(caster);
