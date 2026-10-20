@@ -26,6 +26,8 @@ missing world data). None fixed yet; waiting on your choice.
   for the leash's time (`creature_combat::gone_from_fight`).
 - #8 fixed: a victim is on `DYING` behind a guard that takes it off as it drops, a panic's unwinding too; the extra
   swings run under `catch_unwind`, `in_extra_attack` put back before the panic goes on.
+- #9 fixed: spells go off at most 32 inside one another on a thread (`spells::execute`, a depth kept by a guard as
+  procs' `Deeper`); the one past it isn't cast, logged at `debug`. 1.12's deepest chain, 20, lands whole.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
