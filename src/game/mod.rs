@@ -827,6 +827,8 @@ mod tests_p8_loader_rogue;
 #[cfg(test)]
 mod tests_p8_loader_spells;
 #[cfg(test)]
+mod tests_p8_movement_client;
+#[cfg(test)]
 mod tests_p8_pets_control;
 #[cfg(test)]
 mod tests_p8_pets_dummy;
