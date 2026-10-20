@@ -701,6 +701,14 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   knows every capital's guards, Elite Guards and champions; `--raid-at stormwind|ironforge|darnassus|orgrimmar|
   undercity|thunderbluff` (or `map,x,y,z`); `--raid-side alliance` sends Alliance raiders at a Horde city (naming
   a Horde city picks it). Merged with your peon flight path storm (`--mode flight`).
+- **Gryphons frozen in the air (`fix/flightbug`, your bug):** a create on a spline carried `SPLINE_ENABLED` and no
+  direction; the 1.12 client moves a unit each frame only if its create has it going somewhere (`0x618940`), so a
+  newcomer's client froze the flier where it was told she was (before your fix, with no spline, it dropped her to
+  the ground). Now a create on a spline goes FORWARD, walking unless it runs (mangos's `MoveSplineInit::Launch`),
+  for every unit; and a walk's spline is laid out as the client reads it (a point before the first: it had dropped
+  a walk's first segment). Ruled out with tests: a missed next leg (a flight is one walk in wvs), relayed movement
+  after the create, the frame's size. The client check now runs the client's own `0x618940` on each create.
+  **Left:** a player under fear, confusion or a charge is created for a newcomer without their spline.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
