@@ -78,6 +78,9 @@ pub struct Session {
     /// The character last logged in: the client uploads its caches after
     /// its logout, on the character screen.
     last_character: Option<u32>,
+    /// The digest of each cache this session wrote on the character
+    /// screen, by its key and kind: the same again isn't written.
+    screen_caches: ahash::AHashMap<(String, u8), [u8; 16]>,
 }
 
 /// However a session ends (the client goes, the task panics or is
@@ -251,6 +254,7 @@ pub fn run(
         control_rx,
         state: State::Screen,
         last_character: None,
+        screen_caches: ahash::AHashMap::new(),
     };
     s.serve(inbound, replaced)
 }
@@ -283,6 +287,7 @@ impl Session {
         // in the flood guard's.
         let mut rate = PacketRate::new(self.realm.config().max_packets_per_sec);
         let mut queries = PacketRate::new(self.realm.config().max_queries_per_sec);
+        let mut cooldowns = Cooldowns::new(self.realm.config().packet_cooldown);
         let mut recent = Recent::default();
         #[allow(clippy::large_enum_variant)] // Each packet goes through once.
         enum Next {
@@ -312,6 +317,10 @@ impl Session {
                             recent.summary(now)
                         );
                         break;
+                    }
+                    if !cooldowns.allow(now, &msg) {
+                        debug!("{}: a packet on its cooldown, dropped", self.account);
+                        continue;
                     }
                     self.packet(msg).await
                 }
@@ -746,7 +755,7 @@ impl Session {
     /// A cache the client uploads on the character screen, after a
     /// logout: the account's, or the character last logged in's, as
     /// Thistle Tea's `AccountCaches` files it.
-    fn screen_account_data(&self, body: &[u8]) {
+    fn screen_account_data(&mut self, body: &[u8]) {
         use crate::game::map::account_data;
         let Some((kind, data)) = account_data::parse_update(body) else {
             return;
@@ -758,6 +767,11 @@ impl Session {
         };
         let now = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
         let k = account_data::key(&self.account, character, kind);
+        // The same again as this session last wrote: nothing to write.
+        let digest = account_data::digest(&data);
+        if self.screen_caches.insert((k.clone(), kind), digest) == Some(digest) {
+            return;
+        }
         self.realm.store.set_account_data(&k, kind, now, data);
     }
 
@@ -1254,6 +1268,49 @@ mod tests {
             valid_name("Abcdefghijklm"),
             Err(WorldResult::CharNameTooLong)
         );
+    }
+}
+
+/// What a client may ask only so often, whatever its rate: `/who`, whois
+/// and inspect, each once in [`COOLDOWN`], as mangos's `InitOpcodeCooldowns`
+/// has them; one sooner is dropped. A `/who` costs a look at everyone
+/// online.
+pub struct Cooldowns {
+    every: std::time::Duration,
+    who: Option<std::time::Instant>,
+    whois: Option<std::time::Instant>,
+    inspect: Option<std::time::Instant>,
+}
+
+/// mangos's 5 s (`RealmConfig::packet_cooldown`).
+pub const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl Cooldowns {
+    pub fn new(every: std::time::Duration) -> Self {
+        Self {
+            every,
+            who: None,
+            whois: None,
+            inspect: None,
+        }
+    }
+
+    /// Whether `msg` may go now; if it is one with a cooldown, it starts.
+    pub fn allow(&mut self, now: std::time::Instant, msg: &crate::game::conn::Inbound) -> bool {
+        let crate::game::conn::Inbound::Msg(msg) = msg else {
+            return true;
+        };
+        let last = match msg {
+            ClientOpcodeMessage::CMSG_WHO(_) => &mut self.who,
+            ClientOpcodeMessage::CMSG_WHOIS(_) => &mut self.whois,
+            ClientOpcodeMessage::CMSG_INSPECT(_) => &mut self.inspect,
+            _ => return true,
+        };
+        if last.is_some_and(|at| now.saturating_duration_since(at) < self.every) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
 }
 

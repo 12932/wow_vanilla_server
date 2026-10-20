@@ -160,7 +160,7 @@ under "Found by the other reviews too", with what this review adds.
   session at once: the session's `select!` waits on the same `Notify` as finding 1's writer.
 - **Effort:** easy.
 
-#### 6. The flood guard counts a packet as a packet, whatever it costs (low-medium, speed)
+#### 6. The flood guard counts a packet as a packet, whatever it costs (low-medium, speed) **Fixed.**
 - **Where:** `src/game/session.rs:236-247` (one bucket for everything but the queries: 100 a second, 300 at once),
   `src/game/map/account_data.rs:114-137` (`parse_update` inflates up to 64 KB) and `:150-165` (`update` clones it
   into a store write), on the map's thread, and on the session's task on the character screen

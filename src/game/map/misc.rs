@@ -74,6 +74,10 @@ pub struct PlayerMisc {
     pub timed_told: Vec<Guid>,
     /// A logout under way sat and rooted the player.
     pub logout_rooted: bool,
+    /// When each cache (`account_data`) was last written to the store,
+    /// and those changed since that wait for their next write.
+    pub caches_written: [Option<Instant>; crate::game::map::account_data::TYPES as usize],
+    pub caches_unwritten: u8,
     /// A fall under way: whether it went far, and the transport it is
     /// measured on.
     pub fall_far: bool,

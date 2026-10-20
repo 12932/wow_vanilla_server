@@ -81,6 +81,8 @@ mod tests_combat5;
 #[cfg(test)]
 mod tests_config;
 #[cfg(test)]
+mod tests_cooldowns;
+#[cfg(test)]
 mod tests_creatures4;
 #[cfg(test)]
 mod tests_dead_body;
@@ -1056,6 +1058,9 @@ pub struct RealmConfig {
     /// Read-only queries a client may send a second, sustained, apart
     /// from the packets (`session::is_query`).
     pub max_queries_per_sec: u32,
+    /// How seldom a `/who`, whois or inspect may come (`session::Cooldowns`):
+    /// mangos's 5 s; none in the tests.
+    pub packet_cooldown: Duration,
     /// The weekday honor's week turns over on: 1 Monday to 7 Sunday.
     pub honor_reset_weekday: u8,
     /// Whether spells roll to hit, crit and resist (tests fix them).
@@ -1120,6 +1125,7 @@ impl RealmConfig {
             pvp_realm: c.players.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
             max_queries_per_sec: c.network.max_queries_per_sec,
+            packet_cooldown: session::COOLDOWN,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
             spell_travel: true,

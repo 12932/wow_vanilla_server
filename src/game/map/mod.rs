@@ -1374,6 +1374,7 @@ impl Map {
         }
         let row = p.to_row(self.now);
         self.realm.store.save(row);
+        account_data::flush(&self.realm, &mut p, self.now);
         social::went_offline(&self.realm, p.guid);
     }
 
@@ -1401,6 +1402,7 @@ impl Map {
             let row = p.to_row(now);
             p.save_at = now + self.cfg.save_interval;
             self.realm.store.save(row);
+            account_data::flush(&self.realm, p, now);
         }
     }
 

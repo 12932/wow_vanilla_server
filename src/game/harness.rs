@@ -158,6 +158,8 @@ pub fn test_config() -> RealmConfig {
         pvp_realm: false,
         max_packets_per_sec: 200,
         max_queries_per_sec: 2000,
+        // A test asks `/who` as often as it likes.
+        packet_cooldown: Duration::ZERO,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
         spell_rolls: false,
         spell_travel: false,

@@ -100,6 +100,10 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   copy first, which ran, empty and populated, for good.
 - **maps 8** fixed (`fix/lowsa`): one who logged out aboard a boat or zeppelin that has crossed to its other map
   since logs in on that map, on its deck (`transports::aboard_at_login`, as mangos's `LoadFromDB`).
+- **net 6** fixed (`fix/lowsa`): `/who`, whois and inspect come at most once in 5 s each, one sooner dropped
+  (`session::Cooldowns`, mangos's `InitOpcodeCooldowns`); a cache upload the same as what is held isn't written, and
+  one changed again within 5 s of its kind's last write is held and written at the player's next save or logout
+  (`account_data::flush`). On the character screen, the same upload again isn't written; a changed one still is.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

@@ -153,14 +153,69 @@ pub fn update_raw(map: &mut Map, g: Guid, body: &[u8]) {
     }
 }
 
+/// The least time between two store writes of one cache: one changed again
+/// sooner waits, kept, for its next write ([`flush`]).
+pub const WRITE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A cache the client uploaded: held at once (its requests answer it), and
+/// written unless it is what is held already, at most once a
+/// [`WRITE_EVERY`] a kind: an upload is up to 64 KB inflated, and a client
+/// may send a hundred a second.
 fn update(map: &mut Map, g: Guid, kind: u8, data: Vec<u8>) {
-    store(map, g, kind, data.clone());
-    if let Some(p) = map.players.get_mut(&g) {
-        let caches = &mut p.row.state.caches;
-        caches.retain(|(k, _)| *k != kind);
-        if !data.is_empty() {
-            caches.push((kind, data));
-        }
+    let now = map.now;
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
+    let caches = &mut p.row.state.caches;
+    let held = caches
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map_or(&[][..], |(_, d)| &d[..]);
+    if held == data {
+        return;
+    }
+    caches.retain(|(k, _)| *k != kind);
+    if !data.is_empty() {
+        caches.push((kind, data));
+    }
+    let i = usize::from(kind);
+    let misc = &mut p.misc;
+    if misc.caches_written[i].is_some_and(|at| now.saturating_duration_since(at) < WRITE_EVERY) {
+        misc.caches_unwritten |= 1 << kind;
+        return;
+    }
+    misc.caches_written[i] = Some(now);
+    misc.caches_unwritten &= !(1 << kind);
+    write(map, g, kind);
+}
+
+/// Write cache `kind` as the player holds it.
+fn write(map: &Map, g: Guid, kind: u8) {
+    if let Some(p) = map.players.get(&g) {
+        put(&map.realm, p, kind);
+    }
+}
+
+fn put(realm: &Realm, p: &crate::game::map::player::Player, kind: u8) {
+    let data = p
+        .row
+        .state
+        .caches
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map_or_else(Vec::new, |(_, d)| d.clone());
+    let now = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
+    let k = key(&p.account, crate::game::guid::counter(p.guid), kind);
+    realm.store.set_account_data(&k, kind, now, data);
+}
+
+/// Write the caches changed since their last write ([`WRITE_EVERY`]): at
+/// each save of the player, and as they leave the world.
+pub fn flush(realm: &Realm, p: &mut crate::game::map::player::Player, now: std::time::Instant) {
+    let unwritten = std::mem::take(&mut p.misc.caches_unwritten);
+    for kind in (0..TYPES).filter(|k| unwritten & (1 << k) != 0) {
+        p.misc.caches_written[usize::from(kind)] = Some(now);
+        put(realm, p, kind);
     }
 }
 
