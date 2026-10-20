@@ -485,9 +485,7 @@ async fn a_flyer_falling_dead_passes_the_client() {
     cfg.nav_dir = Some(bake);
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = crate::game::Realm::new(cfg, store, startup, d, None);
-    let map = realm
-        .maps
-        .get(&realm, crate::game::map::MapKey::world(0));
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
     let bat = guid::unit(BAT, 7_950);
     let mut a = crate::game::harness::Client::connect(&realm, "A");
     a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -503,7 +501,10 @@ async fn a_flyer_falling_dead_passes_the_client() {
     // Mid-fall: lower than it died, not down yet; and Bob comes.
     tokio::time::sleep(Duration::from_millis(600)).await;
     let mid = on(&map, move |m| m.creature(bat).unwrap().position.z).await;
-    assert!(mid < HIGH.2 - 1.0 && mid > ground + 1.0, "{mid} over {ground}");
+    assert!(
+        mid < HIGH.2 - 1.0 && mid > ground + 1.0,
+        "{mid} over {ground}"
+    );
     let mut b = crate::game::harness::Client::connect(&realm, "B");
     b.enter("Bob", Race::Human, Class::Warrior).await;
     b.heartbeat(HIGH.0 - 5.0, HIGH.1, 66.0).await;
@@ -513,6 +514,9 @@ async fn a_flyer_falling_dead_passes_the_client() {
     let landed = on(&map, move |m| m.creature(bat).unwrap().position.z).await;
     assert!((landed - ground).abs() < 0.1, "{landed} over {ground}");
     let (frames, counts) = capture(vec![&mut a, &mut b]);
-    assert!(counts.get(&0x0DD).copied().unwrap_or(0) > 0, "the fall: {counts:?}");
+    assert!(
+        counts.get(&0x0DD).copied().unwrap_or(0) > 0,
+        "the fall: {counts:?}"
+    );
     run_checker(&check_py, &wow_exe, &frames);
 }
