@@ -57,21 +57,13 @@ Until you answer, wvs keeps what the line says.
 - **#29 Talent reset cost:** fall back to 1 gold after a month (Thistle Tea), or stay at 5 (mangos, wvs)?
 - **#48 Druid form attack power:** which is 1.12's? Thistle Tea, mangos and wvs all differ.
 - **#8 Failed openings:** hold back `SMSG_SPELL_GO` for one, as Thistle Tea does?
-- **#57 A passive party aura on its caster** (from 5d): shown on the caster too, as mangos-classic's
-  `IsNeedVisibleSlot` has it, or hidden, as Thistle Tea and wvs have it? Which is 1.12's?
-- **#58 Buffs on a shapeshifted target** (from 5d): refuse one that shapeshifting cancels (Water Walking), as Thistle
-  Tea does? mangos-classic and wvs allow it.
 
 **Pets**
 - **#19 and #44 Stay:** should Stay from the action bar stop the pet's attack (mangos, wvs), or keep the fight
   (vmangos, Thistle Tea)?
 - **#40 Healing:** how does a creature a player controls heal out of combat? Thistle Tea, mangos and wvs all differ.
-- **#51 A creature-owned pet's death:** what does the killer get? Nothing (mangos, wvs), or three quarters of the XP
-  (Thistle Tea)?
 
 **Quests, items and the world**
-- **#56 Unlearning a profession** (from 4d): should it drop that profession's quests, as Thistle Tea does? mangos and
-  wvs don't.
 - **#23 An untapped creature's soul shard:** give one, as mangos does, or none, as Thistle Tea?
 - **#36 The Warsong flag:** may a mounted player pick it up? wvs refuses, as Thistle Tea does.
 - **#52 `.honor week`:** it loses the rest of the week's honor. When should the week re-rank?
@@ -744,6 +736,7 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   reconnected so fast they took their player over (`harness::offline`).
 
 ## Answered
+- **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
 - **Feign Death and emotes** (2026-10-20): mangos: an emote is refused while feigning (`UNIT_FLAG_PREVENT_ANIM`).
 - **Distract** (2026-10-20): it turns players too, as mangos's `EffectDistract`.
