@@ -284,7 +284,7 @@ pub fn attack_started(map: &mut Map, caller: Guid, victim: Guid) {
 fn town_at(map: &mut Map, g: Guid) -> Option<u32> {
     let c = map.creature(g)?;
     let (at, known) = (c.position, c.zone_area);
-    let (zone, area) = crate::game::cities::zone_and_area(map, at).or(known)?;
+    let (zone, area) = crate::game::map::world::zone_and_area(map, at).or(known)?;
     town(area, zone)
 }
 

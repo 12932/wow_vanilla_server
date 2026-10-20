@@ -863,7 +863,7 @@ fn watch(map: &mut Map, who: Champion, g: Guid, city: u32) {
     let fighting = map.creature(g).is_some_and(|c| c.combat.attacking);
     if fighting {
         let at = map.creature(g).map(|c| c.position);
-        let place = at.and_then(|at| crate::game::cities::zone_and_area(map, at));
+        let place = at.and_then(|at| crate::game::map::world::zone_and_area(map, at));
         if place.is_some_and(|(zone, area)| zone != city && area != city) {
             crate::game::map::ai::enter_evade(map, g);
         }

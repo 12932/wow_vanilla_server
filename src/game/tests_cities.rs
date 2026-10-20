@@ -109,6 +109,87 @@ async fn thrall(
     (b, gb, kalimdor)
 }
 
+/// Ironforge's Commons (`game_tele`'s `Ironforge`), inside the mountain.
+const THE_COMMONS: (f32, f32, f32) = (-4918.88, -940.406, 501.564);
+/// Ironforge's explore bit (`AreaTable.dbc`).
+const IRONFORGE_BIT: u32 = 689;
+
+/// Alice, teleported to the Commons with no navmesh nor terrain,
+/// is in Ironforge, zone and area, as the server's box has it (the
+/// navmesh and terrain read Dun Morogh there): her zone is the one `/who`
+/// and her friends see, and the city is explored. Where the guards are
+/// in Ironforge, she is too.
+#[tokio::test]
+async fn a_player_inside_ironforge_is_in_ironforge() {
+    let mut d = cities_world();
+    for (id, bit, flags, name) in [
+        (cities::IRONFORGE, IRONFORGE_BIT, 312, "Ironforge"),
+        (1, 119, 64, "Dun Morogh"),
+    ] {
+        d.areas.insert(
+            id,
+            AreaInfo {
+                id,
+                map: 0,
+                zone: 0,
+                explore_bit: bit,
+                flags,
+                level: 1,
+                name: name.into(),
+                team: 0,
+            },
+        );
+    }
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(harness::test_config(), store, startup, d, None);
+    let (mut a, ga, map) = alice(&realm).await;
+    on(&map, move |m| {
+        let (x, y, z) = THE_COMMONS;
+        m.teleport(ga, m.key, Vector3d { x, y, z }, 0.0);
+    })
+    .await;
+    a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: a.teleport_order(),
+        time: Default::default(),
+    })
+    .await;
+    let explored = a
+        .wait_for("SMSG_EXPLORATION_EXPERIENCE", |m| match m {
+            ServerOpcodeMessage::SMSG_EXPLORATION_EXPERIENCE(e) => Some(e.area.as_int()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(explored, cities::IRONFORGE, "Ironforge explored");
+    let seen = on(&map, move |m| {
+        let (x, y, z) = THE_COMMONS;
+        let town = crate::game::map::world::zone_and_area(m, Vector3d { x, y, z })
+            .and_then(|(zone, area)| crate::game::map::guards::town(area, zone));
+        let p = &m.players[&ga];
+        let word = p
+            .fields
+            .get_u32(crate::game::fields::PLAYER_EXPLORED_ZONES_1 + (IRONFORGE_BIT / 32) as u16);
+        (
+            (p.zone, p.area, p.online.zone()),
+            word & (1 << (IRONFORGE_BIT % 32)) != 0,
+            town,
+        )
+    })
+    .await;
+    let ironforge = cities::IRONFORGE;
+    assert_eq!(
+        seen.0,
+        (ironforge, ironforge, ironforge),
+        "zone, area, /who"
+    );
+    assert!(seen.1, "its explore bit set");
+    assert_eq!(seen.2, Some(ironforge), "the guards' town");
+}
+
 fn place_of(m: &Map, who: Champion) -> Place {
     who.state(&m.realm).lock().place
 }
@@ -656,11 +737,11 @@ async fn each_citys_spots_are_on_the_navmesh() {
                 y,
                 z: ground.unwrap_or(z),
             };
-            let town = cities::zone_and_area(m, square)
+            let town = crate::game::map::world::zone_and_area(m, square)
                 .and_then(|(zone, a)| crate::game::map::guards::town(a, zone));
             let prison = jaina::prison(m, area).map(|(_, p, _)| {
                 let ground = m.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z));
-                let place = cities::zone_and_area(m, p)
+                let place = crate::game::map::world::zone_and_area(m, p)
                     .and_then(|(zone, a)| crate::game::map::guards::town(a, zone));
                 (ground.map(|g| (g - p.z).abs()), place)
             });
@@ -744,5 +825,56 @@ fn the_real_data_has_every_capitals_elite_guard_and_rexxar() {
     ] {
         let s = spawns.iter().find(|s| s.guid == spawn).expect("the spawn");
         assert_eq!(s.entries, [entry]);
+    }
+}
+
+/// On the real navmesh and terrain, which read Dun Morogh inside the
+/// mountain and the Gates of Ironforge (809) down the gate's hall: a
+/// player anywhere in Ironforge, from the hall in to its wards, is in the
+/// city, zone and area; out on the gate's steps (`game_tele`'s
+/// `GatesOfIronforge`) and in Kharanos, still in Dun Morogh.
+#[tokio::test]
+#[ignore = "extended"]
+async fn on_the_real_navmesh_a_player_inside_ironforge_is_in_ironforge() {
+    if !BAKE.as_path().join("Azeroth.map").exists() {
+        return;
+    }
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(BAKE.clone());
+    cfg.terrain_dir = Some(harness::real_data("terrain"));
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, cities_world(), None);
+    let (_a, ga, map) = alice(&realm).await;
+    let ironforge = cities::IRONFORGE;
+    let inside = [
+        ("the Commons", THE_COMMONS),
+        ("the Great Forge", (-4792.95, -1119.12, 498.806)),
+        ("the Military Ward", (-4968.86, -1225.49, 501.669)),
+        ("Tinker Town", (-4831.62, -1279.2, 501.869)),
+        ("the Mystic Ward", (-4662.07, -952.721, 500.378)),
+        ("the gate's hall", (-4990.0, -858.0, 500.7)),
+        ("just in the gate", (-5016.0, -846.0, 497.0)),
+    ];
+    let outside = [
+        ("the gate's steps", (-5040.5, -814.817, 495.128)),
+        ("Kharanos", (-5597.31, -483.398, 396.981)),
+    ];
+    let places = inside
+        .map(|(name, at)| (name, at, Some(ironforge)))
+        .into_iter()
+        .chain(outside.map(|(name, at)| (name, at, None)));
+    for (name, (x, y, z), want) in places {
+        let (zone, area) = on(&map, move |m| {
+            let z = m.nav.as_mut().and_then(|n| n.ground(x, y, z)).unwrap_or(z);
+            let p = m.players.get_mut(&ga).unwrap();
+            p.movement.position = Vector3d { x, y, z };
+            crate::game::map::world::update_zone(m, ga);
+            (m.players[&ga].zone, m.players[&ga].area)
+        })
+        .await;
+        match want {
+            Some(city) => assert_eq!((zone, area), (city, city), "{name}"),
+            None => assert_eq!(zone, 1, "{name}: Dun Morogh ({area})"),
+        }
     }
 }

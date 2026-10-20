@@ -193,29 +193,49 @@ pub const CITIES: &[City] = &[
     },
 ];
 
-/// Cities the navmesh's areas don't know, by the box they are in: map,
-/// area, and x, y and z from and to. Ironforge is inside its mountain, a
-/// world model whose areas the bake hasn't: it reads as Dun Morogh's
-/// there (and its gate as the Gates of Ironforge, 809, outside it).
-const INDOORS: &[(u32, u32, [f32; 6])] = &[(
-    0,
-    IRONFORGE,
-    [-5050.0, -4560.0, -1500.0, -760.0, 480.0, 540.0],
-)];
+/// A city the navmesh's areas don't know: its map and area, the box it is
+/// in (x, y and z from and to), and its gate's line (a point on it and the
+/// way in, across it), the box's side of which is outside.
+struct Indoors {
+    map: u32,
+    area: u32,
+    bounds: [f32; 6],
+    gate: (f32, f32, f32, f32),
+}
 
-/// The zone and area at `at` on `map`: the navmesh's (or the terrain's),
-/// but inside a city it doesn't know ([`INDOORS`]), the city's.
-pub fn zone_and_area(map: &mut crate::game::map::Map, at: Vector3d) -> Option<(u32, u32)> {
-    let indoors = INDOORS.iter().find(|(m, _, b)| {
-        *m == map.key.map
-            && (b[0]..=b[1]).contains(&at.x)
-            && (b[2]..=b[3]).contains(&at.y)
-            && (b[4]..=b[5]).contains(&at.z)
-    });
-    match indoors {
-        Some((_, area, _)) => Some((*area, *area)),
-        None => crate::game::map::world::zone_and_area(map, at),
-    }
+/// Ironforge is inside its mountain, a world model whose areas the bake
+/// hasn't: the navmesh and the terrain read Dun Morogh there, and the
+/// Gates of Ironforge (809) from the gate down its hall to the Commons,
+/// where the client reads Ironforge from the gate in (every one of the
+/// world model's areas, `WMOAreaTable.dbc`, is the city's own). Its box,
+/// from the bake's floors at the city's height: the Military Ward to the
+/// Mystic Ward, Tinker Town to the gate's hall, short of the mountain's
+/// outside to the north-east and south-west. Its gate: the bake's one
+/// patch of Ironforge, where the hall meets the steps, across the road
+/// in.
+const INDOORS: &[Indoors] = &[Indoors {
+    map: 0,
+    area: IRONFORGE,
+    bounds: [-5050.0, -4570.0, -1460.0, -790.0, 480.0, 540.0],
+    gate: (-5030.0, -835.0, 0.906, -0.423),
+}];
+
+/// The city whose inside ([`INDOORS`]) `at` on map `map` is: its zone,
+/// and its area too, as the client has it there.
+/// [`crate::game::map::world::zone_and_area`] asks it first, for players,
+/// creatures and the rest alike.
+pub fn indoors(map: u32, at: Vector3d) -> Option<u32> {
+    INDOORS
+        .iter()
+        .find(|c| {
+            let (b, (gx, gy, dx, dy)) = (c.bounds, c.gate);
+            c.map == map
+                && (b[0]..=b[1]).contains(&at.x)
+                && (b[2]..=b[3]).contains(&at.y)
+                && (b[4]..=b[5]).contains(&at.z)
+                && (at.x - gx) * dx + (at.y - gy) * dy >= 0.0
+        })
+        .map(|c| c.area)
 }
 
 /// The capital of `area`.

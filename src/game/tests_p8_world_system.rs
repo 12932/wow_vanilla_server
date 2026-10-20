@@ -131,6 +131,72 @@ async fn a_member_leaves_its_group_and_its_leader_leaving_disbands_it() {
     );
 }
 
+const CAPTAIN: u32 = 997_857;
+const MATE: u32 = 997_858;
+const DECKHAND: u32 = 997_859;
+
+/// Thistle Tea's `CreatureGroups` leader's leave, for a group a script
+/// made (vmangos's `SCRIPT_COMMAND_JOIN_CREATURE_GROUP`): its leader gone
+/// from the map for good (Thistle Tea's `script_remove_object`), the
+/// group is disbanded, as its leader's leave disbands it: neither member
+/// is of a group, nor keeps a place in its formation, and one joining
+/// either afterwards joins it alone, not the leader gone, where they were
+/// left pointing at the leader, a group of the three still.
+#[tokio::test]
+async fn a_script_groups_leader_gone_disbands_it() {
+    let mut d = world();
+    for (i, entry) in [CAPTAIN, MATE, DECKHAND].into_iter().enumerate() {
+        d.creature_templates
+            .insert(entry, template(entry, &format!("Sailor {i}")));
+        spawn(
+            &mut d,
+            0,
+            entry,
+            (START.0 - 10.0 - 3.0 * i as f32, START.1, START.2),
+        );
+    }
+    let realm = realm_of(d);
+    let (mut a, _ga, map) = player(&realm, "Alice").await;
+    let (captain, mate, deckhand) = (creature(CAPTAIN), creature(MATE), creature(DECKHAND));
+    a.sees(deckhand).await;
+    let out = map
+        .query(move |m| {
+            let join = ScriptStep {
+                x: 3.0,
+                ..step(78, [GROUP_FORMATION | GROUP_AGGRO_TOGETHER, 0, 0, 0])
+            };
+            assert!(scripts::execute(m, &join, mate, captain));
+            assert!(scripts::execute(m, &join, deckhand, captain));
+            let mut crew = members_of(m, mate);
+            crew.sort();
+            scripts::remove_for_good(m, captain);
+            let gone = m.creature(captain).is_none();
+            let left = (
+                members_of(m, mate),
+                creature_groups::group_leader(m, mate),
+                creature_groups::formation_home(m, mate).is_some(),
+                members_of(m, deckhand),
+                creature_groups::is_leader(m, captain),
+                m.script_groups.len(),
+            );
+            assert!(scripts::execute(m, &join, deckhand, mate));
+            (crew, gone, left, members_of(m, deckhand))
+        })
+        .await
+        .unwrap();
+    let (crew, gone, left, joined) = out;
+    let mut all = vec![captain, mate, deckhand];
+    all.sort();
+    assert_eq!(crew, all, "a group of three");
+    assert!(gone, "its leader gone for good");
+    assert_eq!(
+        left,
+        (vec![], None, false, vec![], false, 0),
+        "disbanded, every member free"
+    );
+    assert_eq!(joined, vec![mate, deckhand], "a new group, of the two");
+}
+
 const TRAP: u32 = 997_855;
 const TRAP_SPAWN: u32 = 7_855;
 const MARK: u32 = 997_856;
