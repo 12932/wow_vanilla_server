@@ -1025,6 +1025,20 @@ pub fn cast_now(map: &mut Map, caster: Guid, spell: u32, targets: Targets) -> bo
 
 /// A spell cast for free, as another spell or an aura's tick does.
 pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Guid>) {
+    cast_triggered_from(map, caster, spell, target, None);
+}
+
+/// [`cast_triggered`], of the item a spell was cast from: its go names
+/// the item, as mangos's `CastSpell(.., TRIGGERED_OLD_TRIGGERED,
+/// m_CastItem)` passes it on (an engineer's trinket's summon). Nothing of
+/// the item is spent.
+pub fn cast_triggered_from(
+    map: &mut Map,
+    caster: Guid,
+    spell: u32,
+    target: Option<Guid>,
+    item: Option<Guid>,
+) {
     let data = map.realm.data.clone();
     let Some(s) = data.spells.get(spell) else {
         return;
@@ -1035,7 +1049,7 @@ pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Gu
         dest,
         ..Default::default()
     };
-    execute(map, caster, s, targets, None, true);
+    execute(map, caster, s, targets, item, true);
 }
 
 /// `s`'s reagents taken from what `caster` carries (none from a GM).
