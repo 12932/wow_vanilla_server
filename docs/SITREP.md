@@ -625,6 +625,17 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
    **My calls:** everyone gets it (not only those recently in PvP, AzerothCore's rule); only walking out starts it
    (a battle's end still lets fighters go at once); it covers every arena-flagged area (the Rumble Cage, the Maul).
    mangos has no such timer (its flag goes at once); AzerothCore's is about 60 s for the recently flagged.
+- **Settings for what was hard-coded (`feat/cfgreview`, your ask):** about 40 new keys at today's values, most with
+  mangos's name: chat's say, yell and emote ranges and flood control (`[chat]`), health, mana, rage, energy, fall
+  damage and auction rates (`[rates]`), the low-level reputation floors, the group reward range (one, 74 yards, for
+  XP, loot, quest credit, reputation and honor), death sickness's level, primary professions (2), breath, fatigue
+  and lava (`[environment]`), instances' unload delay, reset hour and entries an hour (`[instances]`), Deserter,
+  outdoor PvP, the elemental and Scourge invasions, the weather's interval, the realm's name, the movement check's
+  allowance, the arena's timers. All live but the realm name and outdoor PvP. **Its calls:** the `[arena]` keys are
+  live now (the arena reads them as it uses them); **the realm list shows PvP when `[players] pvp_realm` is on** (it
+  said normal on every realm: the one behaviour change); a flood count of 0 turns flood control off, as mangos.
+  **Left for you** (in its report): mangos's `PlayerLimit`, `InstantLogout`, `Rate.Creature.*`, ghost speed, mail
+  expiry and the 100-mail box, the invasions' script numbers, ports and bind address, and more.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
