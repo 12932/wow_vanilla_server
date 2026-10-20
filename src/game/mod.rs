@@ -933,6 +933,8 @@ mod tests_p8_world_units;
 #[cfg(test)]
 mod tests_p9_world_data;
 #[cfg(test)]
+mod tests_p9_world_nav;
+#[cfg(test)]
 mod tests_p9_world_spells;
 #[cfg(test)]
 mod tests_p9_world_spells2;
