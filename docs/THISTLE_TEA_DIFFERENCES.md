@@ -31,7 +31,8 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   turn it happened in, and a map that keeps panicking is restarted, as a supervisor restarts a child
   ([RELIABILITY.md](RELIABILITY.md)).
 - **What wvs adds.** Persistence, accounts and GM levels, movement and rate checks (above); Gurubashi Arena's last
-  man standing.
+  man standing, and 20 seconds of free-for-all after walking out of an arena's area (`[arena] ffa_grace_secs`;
+  neither Thistle Tea nor mangos has it).
 - **The battleground scoreboard** shows each player's real honor rank; Thistle Tea always shows 4.
 - **Creatures' speed changes** go to those who see them as `SMSG_SPLINE_SET_RUN_SPEED`, as mangos-classic sends
   them; Thistle Tea sends nothing for a creature no player moves. Both send its run again at the new speed, and tell

@@ -582,6 +582,18 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u8, not a u32; `CMSG_BATTLEFIELD_JOIN` without its instance and
   group byte. wvs works around the last two by hand.
 
+## Your list of 2026-10-20
+1. Jaina for Ironforge (to the Mystic Ward) and Darnassus; their elite guards (`feat/cities`, running).
+2. The Horde's city protection, Rexxar their champion (`feat/cities`, running).
+3. and 4. Peon's healers target whom they heal and cancel half the time when the target dies; shamans' Chain Heal
+   (peon `feat/heals`, running).
+5. and 6. Officer Jaxon's and Thomas Miller's patrols and held items; corpses sliding (`fix/bugs1020`, running).
+7. **Done (`feat/arenagrace`):** walking out of an arena's area keeps free-for-all for 20 seconds (`[arena]
+   ffa_grace_secs`, live); back in within it carries on; death or a far teleport ends it; a Blink out keeps it.
+   **My calls:** everyone gets it (not only those recently in PvP, AzerothCore's rule); only walking out starts it
+   (a battle's end still lets fighters go at once); it covers every arena-flagged area (the Rumble Cage, the Maul).
+   mangos has no such timer (its flag goes at once); AzerothCore's is about 60 s for the recently flagged.
+
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
 - **Feign Death and emotes** (2026-10-20): mangos: an emote is refused while feigning (`UNIT_FLAG_PREVENT_ANIM`).
