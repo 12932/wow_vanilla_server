@@ -412,3 +412,107 @@ async fn a_critter_with_no_point_to_run_to_stands_a_while_and_strikes_no_one() {
     .await;
     assert_eq!(health, 100_000_000, "Alice unharmed");
 }
+
+/// Thistle Tea's `land_corpse/3`, "falls to the highest surface below the
+/// corpse with matching acceleration": a flyer's corpse falling twenty
+/// yards takes a fall's time, its spline falling (0x2, with run mode
+/// 0x100 as every move is sent), and is where gravity has it as it goes:
+/// half a second down, 2.41 yards lower; on the ground at its end.
+#[test]
+fn a_corpses_fall_goes_under_gravity_to_the_ground() {
+    use crate::game::map::creature::Walk;
+    use crate::game::map::creature_motion::fall_time;
+    let (from, to) = (
+        Vector3d {
+            x: 0.0,
+            y: 0.0,
+            z: 30.0,
+        },
+        Vector3d {
+            x: 0.0,
+            y: 0.0,
+            z: 10.0,
+        },
+    );
+    let time = fall_time(20.0);
+    let t0 = std::time::Instant::now();
+    let mut w = Walk::new(vec![from, to], 20.0 / time, t0, 1, false);
+    w.falling = true;
+    assert!((w.duration.as_secs_f32() - time).abs() < 0.001);
+    assert_eq!(w.monster_move_flags(), 0x102);
+    let half = w.position_at(t0 + Duration::from_millis(500)).0;
+    assert!((half.z - 27.588_612).abs() < 0.001, "{half:?}");
+    assert_eq!((half.x, half.y), (0.0, 0.0));
+    let end = w.position_at(t0 + w.duration).0;
+    assert!((end.z - 10.0).abs() < 0.001, "{end:?}");
+    assert!(w.done(t0 + w.duration));
+}
+
+/// The real navmesh: a flyer killed in the air falls where the map has
+/// it, a client coming into view mid-fall told of it falling (a create
+/// with its falling spline), and what they are sent passes the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_flyer_falling_dead_passes_the_client() {
+    use crate::game::tests_client_emu::{capture, checker, run_checker};
+    let bake = crate::game::harness::real_data("nav");
+    if !bake.join("Azeroth.map").exists() {
+        return;
+    }
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    const BAT: u32 = 3_795;
+    const HIGH: (f32, f32, f32) = (-9460.0, 62.0, 120.0);
+    let mut d = data();
+    let mut bat = template(BAT, 1);
+    bat.inhabit_type = 4;
+    d.creature_templates.insert(BAT, bat);
+    d.creature_spawns.insert(
+        0,
+        vec![CreatureSpawn {
+            guid: 7_950,
+            entries: vec![BAT],
+            map: 0,
+            x: HIGH.0,
+            y: HIGH.1,
+            z: HIGH.2,
+            respawn_min: 600,
+            respawn_max: 600,
+            ..Default::default()
+        }],
+    );
+    let mut cfg = crate::game::harness::test_config();
+    cfg.nav_dir = Some(bake);
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, d, None);
+    let map = realm
+        .maps
+        .get(&realm, crate::game::map::MapKey::world(0));
+    let bat = guid::unit(BAT, 7_950);
+    let mut a = crate::game::harness::Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(HIGH.0 + 5.0, HIGH.1, 66.0).await;
+    a.sees(bat).await;
+    let ground = on(&map, move |m| {
+        let ground = m.nav.as_mut().unwrap().ground(HIGH.0, HIGH.1, 80.0);
+        crate::game::map::combat::deal_damage(m, bat, bat, 1_000_000);
+        ground
+    })
+    .await
+    .expect("Goldshire's ground");
+    // Mid-fall: lower than it died, not down yet; and Bob comes.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mid = on(&map, move |m| m.creature(bat).unwrap().position.z).await;
+    assert!(mid < HIGH.2 - 1.0 && mid > ground + 1.0, "{mid} over {ground}");
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.heartbeat(HIGH.0 - 5.0, HIGH.1, 66.0).await;
+    b.sees(bat).await;
+    let falls = crate::game::map::creature_motion::fall_time(HIGH.2 - ground);
+    tokio::time::sleep(Duration::from_secs_f32(falls)).await;
+    let landed = on(&map, move |m| m.creature(bat).unwrap().position.z).await;
+    assert!((landed - ground).abs() < 0.1, "{landed} over {ground}");
+    let (frames, counts) = capture(vec![&mut a, &mut b]);
+    assert!(counts.get(&0x0DD).copied().unwrap_or(0) > 0, "the fall: {counts:?}");
+    run_checker(&check_py, &wow_exe, &frames);
+}

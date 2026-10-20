@@ -134,6 +134,20 @@ impl Walk {
     /// Where along the walk the creature is at `now`, and which way it
     /// faces.
     pub fn position_at(&self, now: Instant) -> (Vector3d, f32) {
+        // A fall drops under gravity, straight down to where it lands
+        // (mangos's falling spline, its `computeFallElevation`).
+        if self.falling {
+            let (from, to) = (self.points[0], self.destination());
+            let t = now.duration_since(self.started).as_secs_f32();
+            let z = from.z - crate::game::map::creature_motion::fall_distance(t);
+            return (
+                Vector3d {
+                    z: z.max(to.z),
+                    ..to
+                },
+                0.0,
+            );
+        }
         let travelled = now.duration_since(self.started).as_secs_f32() * self.speed;
         for i in 1..self.points.len() {
             if travelled <= self.lengths[i] {
@@ -701,6 +715,8 @@ impl Creature {
         let (position, orientation, spline) = match &self.motion {
             Motion::Moving(w) if !w.done(now) => {
                 let (p, o) = w.position_at(now);
+                // A fall keeps the way it faced.
+                let o = if w.falling { self.orientation } else { o };
                 let elapsed = now.duration_since(w.started).as_millis() as u32;
                 (
                     p,

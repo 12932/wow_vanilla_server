@@ -508,7 +508,8 @@ fn swim_point(map: &mut Map, anchor: Vector3d, radius: f32) -> Option<Vector3d> 
     None
 }
 
-/// A flyer that died falls to the ground under it.
+/// A flyer that died falls to the ground under it, under gravity, where
+/// the map has it as its client is shown it ([`fall_on`] as it goes).
 pub fn fall_dead(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
@@ -542,15 +543,33 @@ pub fn fall_dead(map: &mut Map, g: Guid) {
     );
     walk.falling = true;
     let frame = walk.frame(g, at);
-    c.position = to;
-    c.motion = Motion::Idle { until: None };
-    let (anchor, old) = (c.vis_anchor, c.cell);
-    let cell = crate::game::map::grid::cell_of(to.x, to.y);
-    c.cell = cell;
-    map.grid.relocate(g, old, cell);
-    crate::game::map::visibility::moved(map, g, anchor, to);
+    c.motion = Motion::Moving(walk);
     if let Some(frame) = frame {
         map.send_to_observers(g, &frame, false);
+    }
+}
+
+/// A corpse falling (a flyer's): where its fall has it by now, and on the
+/// ground once it lands.
+pub fn fall_on(map: &mut Map, g: Guid) {
+    if map
+        .creature(g)
+        .is_some_and(|c| matches!(&c.motion, Motion::Moving(w) if w.falling))
+    {
+        crate::game::map::ai::advance_motion(map, g);
+    }
+}
+
+/// How far a fall goes in `seconds` (Thistle Tea's `Falling.distance`,
+/// mangos's `computeFallElevation`): under gravity, then at its terminal
+/// velocity.
+pub fn fall_distance(seconds: f32) -> f32 {
+    let terminal_time = TERMINAL_VELOCITY / GRAVITY;
+    if seconds <= terminal_time {
+        GRAVITY * seconds * seconds / 2.0
+    } else {
+        TERMINAL_VELOCITY * TERMINAL_VELOCITY / (2.0 * GRAVITY)
+            + (seconds - terminal_time) * TERMINAL_VELOCITY
     }
 }
 
