@@ -786,6 +786,13 @@ showed a difference. Phase 2 takes what is left.
   Ascendance's charge.
 - **Phase 1 done:** 406 rows: about 330 covered or settled, 23 small fixes merged with them, the rest phase 2's.
   The matrix at the phase's end in the table below.
+- **Phase 2 (round 10), started 2026-10-20 12:55:** seven agents by area, every gap row in their area (the partly,
+  differs and lacks rows), fixing wvs to Thistle Tea's behaviour checked against mangos; where wvs does as mangos
+  and Thistle Tea differs, the row is `wrong-for-1.12` (your rule each time it was asked).
+- **My call for phase 3 (your goal of 2026-10-20 left the choice to me):** build every missing feature that a
+  player would see (the Scourge camps, spells at places and objects' casts, proc origins, launch-time combat,
+  the quest mechanics, the single items), and mark only Thistle Tea's internals `not-applicable`. Anything a phase
+  can't settle goes into `THISTLE_TEA_DIFFERENCES.md` with its reason in phase 4.
 
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
