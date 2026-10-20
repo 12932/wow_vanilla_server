@@ -283,3 +283,136 @@ async fn a_join_from_the_windows_list_queues_as_the_client_asks() {
     .await;
     queued_for_arathi(&mut c).await;
 }
+
+/// Until the realm's count of those online is `n`.
+async fn online(realm: &std::sync::Arc<crate::game::Realm>, n: usize) {
+    for _ in 0..1000 {
+        if realm.registry.online_count() == n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(realm.registry.online_count(), n, "online");
+}
+
+/// Thistle Tea's sessions_test: the realm's population (what shortens a
+/// vendor's restock, past 2,500) counts each account once, a second
+/// login of the account taking the first's place, and drops one as it
+/// goes. wvs counts those in the world (`Registry::online_count`), not
+/// those on the character screen, where Thistle Tea counts each session
+/// authenticated.
+#[tokio::test]
+async fn the_population_counts_each_account_in_the_world_once() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let first = a.enter("Firstone", Race::Human, Class::Warrior).await;
+    online(&realm, 1).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    online(&realm, 2).await;
+    // The account again, with another character: the first goes.
+    let mut again = Client::connect(&realm, "A");
+    again
+        .send(CMSG_CHAR_CREATE {
+            name: "Secondone".to_owned(),
+            race: Race::Human,
+            class: Class::Warrior,
+            gender: Gender::Female,
+            skin_color: 1,
+            face: 1,
+            hair_style: 1,
+            hair_color: 1,
+            facial_hair: 1,
+        })
+        .await;
+    again
+        .wait_for("SMSG_CHAR_CREATE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_CHAR_CREATE(_)).then_some(())
+        })
+        .await;
+    let second = realm.registry.guid_by_name("Secondone").unwrap();
+    again.send(CMSG_PLAYER_LOGIN { guid: second }).await;
+    again
+        .wait_for("the first login's refusal, as it kicks the first", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(_)).then_some(())
+        })
+        .await;
+    for _ in 0..1000 {
+        if realm.registry.online(first).is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    again.login(second).await;
+    online(&realm, 2).await;
+    assert!(realm.registry.online(first).is_none(), "the first has gone");
+    drop(a);
+    b.disconnect();
+    online(&realm, 1).await;
+    again.disconnect();
+    online(&realm, 0).await;
+}
+
+/// Thistle Tea's update_batcher_test, "personalizes updates drained out of
+/// the mailbox too": every creature in an update's batch is each viewer's
+/// own view of it, not the first alone. Two raptors tapped by Ana in one
+/// update reach Bea grey, both in the one packet, and Ana not.
+#[tokio::test]
+async fn every_creature_in_an_updates_batch_is_its_viewers_own() {
+    use crate::game::tests_client_emu::{START, spawn, template};
+    const RAPTOR: u32 = 900_810;
+    const TAPPED: u32 = 0x4;
+    let mut d = crate::game::data::GameData::empty();
+    let mut raptor = template(RAPTOR, "Raptor", 7);
+    raptor.speed_walk = 0.01;
+    raptor.speed_run = 0.01;
+    raptor.detection_range = 0.1;
+    d.creature_templates.insert(RAPTOR, raptor);
+    d.creature_spawns.insert(
+        0,
+        vec![
+            spawn(81, RAPTOR, (START.0 + 8.0, START.1, START.2)),
+            spawn(82, RAPTOR, (START.0 + 8.0, START.1 + 4.0, START.2)),
+        ],
+    );
+    let realm = harness::realm_with(d);
+    let (mut a, ga, map) = enter(&realm, "A", "Ana", Race::Human, Class::Warrior).await;
+    let (mut b, _gb, _) = enter(&realm, "B", "Bea", Race::Human, Class::Warrior).await;
+    let (r1, r2) = (
+        crate::game::guid::unit(RAPTOR, 81),
+        crate::game::guid::unit(RAPTOR, 82),
+    );
+    for c in [&mut a, &mut b] {
+        c.sees(r1).await;
+        c.sees(r2).await;
+        c.clear();
+    }
+    map.query(move |m| {
+        crate::game::map::ai::attacked(m, r1, ga);
+        crate::game::map::ai::attacked(m, r2, ga);
+    })
+    .await
+    .unwrap();
+    let both = |m: &ServerOpcodeMessage| {
+        let flags = |of: Guid| {
+            harness::values(m)
+                .into_iter()
+                .filter_map(|(g, mask)| match mask {
+                    UpdateMask::Unit(u) if g == of => u.unit_dynamic_flags(),
+                    _ => None,
+                })
+                .next_back()
+        };
+        Some((flags(r1)? as u32, flags(r2)? as u32))
+    };
+    let (f1, f2) = b.wait_for("both raptors, in one packet", both).await;
+    assert!(
+        f1 & TAPPED != 0 && f2 & TAPPED != 0,
+        "grey to Bea: {f1:#x} {f2:#x}"
+    );
+    let (f1, f2) = a.wait_for("both raptors, in one packet", both).await;
+    assert!(
+        f1 & TAPPED == 0 && f2 & TAPPED == 0,
+        "not to Ana: {f1:#x} {f2:#x}"
+    );
+}
