@@ -104,7 +104,7 @@ fn spells(d: &mut GameData) {
 /// loader puts it in: the Royal Guard there as he is where it matters (his
 /// name, and his notice of 18 yards), a level-62 warrior creature's stats
 /// (vmangos's), and its spells.
-fn elite_world_with(f: impl FnOnce(&mut GameData)) -> GameData {
+pub(crate) fn elite_world_with(f: impl FnOnce(&mut GameData)) -> GameData {
     let mut d = world();
     let royal = d.creature_templates.get_mut(&ROYAL_GUARD).unwrap();
     royal.name = "Stormwind Royal Guard".into();
@@ -173,7 +173,7 @@ fn summon_elite(m: &mut Map, summoner: Guid, at: Vector3d, yards: f32) -> Guid {
 }
 
 /// The index of the Elite Guard's event whose first step casts `spell`.
-fn event_of(m: &Map, spell: u32) -> usize {
+pub(crate) fn event_of(m: &Map, spell: u32) -> usize {
     let data = &m.realm.data.scripts;
     data.ai_events[&ELITE_GUARD]
         .iter()
@@ -187,7 +187,7 @@ fn event_of(m: &Map, spell: u32) -> usize {
 }
 
 /// `g`'s event `i` due now, and its events looked at.
-fn fire(m: &mut Map, g: Guid, i: usize) {
+pub(crate) fn fire(m: &mut Map, g: Guid, i: usize) {
     let now = m.now;
     let s = event_ai::scripted_mut(m, g).unwrap();
     s.timers[i] = Some(now);
@@ -196,7 +196,7 @@ fn fire(m: &mut Map, g: Guid, i: usize) {
     event_ai::tick(m, g);
 }
 
-fn spell_go(m: &ServerOpcodeMessage, spell: u32, caster: Guid) -> bool {
+pub(crate) fn spell_go(m: &ServerOpcodeMessage, spell: u32, caster: Guid) -> bool {
     matches!(m, ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == spell && s.caster == caster)
 }
 

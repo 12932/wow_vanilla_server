@@ -290,6 +290,10 @@ pub struct Creature {
     pub motion: Motion,
     /// Players whose clients know this creature.
     pub observers: AHashSet<Guid>,
+    /// Awake though no one sees it and it isn't fighting, so that it moves
+    /// (`map::awake`): Rexxar and his company running into a city from out
+    /// of sight (`champions.rs`). Set through `Map::keep_awake`.
+    pub keep_awake: bool,
     pub vis_anchor: Vector3d,
     pub cell: CellKey,
     pub life: Life,
@@ -439,6 +443,7 @@ impl Creature {
             last_waypoint: None,
             motion: Motion::Idle { until: None },
             observers: AHashSet::new(),
+            keep_awake: false,
             vis_anchor: position,
             cell: cell_of(position.x, position.y),
             life: Life::Alive,

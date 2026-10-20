@@ -61,15 +61,17 @@ pub const STOCKADE_DOOR: (Vector3d, f32) = (
     },
     3.83972,
 );
-/// The Mystic Ward in Ironforge, the mages' and priests' quarter: on its
-/// upper floor, by the stair's head, out of the trainers' way below.
+/// The Mystic Ward in Ironforge, the mages' and priests' quarter (the
+/// user's "Mystic Cavern"): on its upper floor's east side, seven yards
+/// past Nittlebur Sparkfizzle, out of the way of the trainers below,
+/// facing the ward.
 pub const MYSTIC_WARD: (Vector3d, f32) = (
     Vector3d {
-        x: -4627.0,
-        y: -921.0,
-        z: 501.07,
+        x: -4598.0,
+        y: -925.0,
+        z: 524.7,
     },
-    0.6,
+    2.45,
 );
 /// The Temple of the Moon in Darnassus: its lower hall, by its west wall,
 /// past the priest trainers.
@@ -190,6 +192,31 @@ pub const CITIES: &[City] = &[
         prison: None,
     },
 ];
+
+/// Cities the navmesh's areas don't know, by the box they are in: map,
+/// area, and x, y and z from and to. Ironforge is inside its mountain, a
+/// world model whose areas the bake hasn't: it reads as Dun Morogh's
+/// there (and its gate as the Gates of Ironforge, 809, outside it).
+const INDOORS: &[(u32, u32, [f32; 6])] = &[(
+    0,
+    IRONFORGE,
+    [-5050.0, -4560.0, -1500.0, -760.0, 480.0, 540.0],
+)];
+
+/// The zone and area at `at` on `map`: the navmesh's (or the terrain's),
+/// but inside a city it doesn't know ([`INDOORS`]), the city's.
+pub fn zone_and_area(map: &mut crate::game::map::Map, at: Vector3d) -> Option<(u32, u32)> {
+    let indoors = INDOORS.iter().find(|(m, _, b)| {
+        *m == map.key.map
+            && (b[0]..=b[1]).contains(&at.x)
+            && (b[2]..=b[3]).contains(&at.y)
+            && (b[4]..=b[5]).contains(&at.z)
+    });
+    match indoors {
+        Some((_, area, _)) => Some((*area, *area)),
+        None => crate::game::map::world::zone_and_area(map, at),
+    }
+}
 
 /// The capital of `area`.
 pub fn city(area: u32) -> Option<&'static City> {

@@ -467,6 +467,7 @@ pub fn released(map: &mut Map, who: Champion) {
     for e in &company {
         crate::game::map::creature_groups::leave(map, *e);
         crate::game::champions::set_run(map, *e, 1.0);
+        map.keep_awake(*e, false);
         if let Some(s) = crate::game::map::event_ai::scripted_mut(map, *e) {
             s.follow = None;
         }

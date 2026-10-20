@@ -275,6 +275,8 @@ pub struct Local {
 
 #[derive(Debug, Clone)]
 pub struct Coming {
+    /// Where he came into the city.
+    pub from: Vector3d,
     pub to: Vector3d,
     pub foe: Guid,
     pub words: String,
@@ -466,12 +468,55 @@ fn gone_from_home(map: &mut Map, who: Champion, d: Departure) {
         .call(move |m| arrive(m, who, city, near, foe));
 }
 
-/// A point about `yards` from `at` that a walk from it reaches, nearer
-/// where none is: out of the fight's sight, for Rexxar to run in from.
-fn out_of_sight(map: &mut Map, at: Vector3d, yards: f32) -> Vector3d {
+/// Points tried, at each distance, for Rexxar's start.
+const START_TRIES: usize = 40;
+/// How far above or below the fight his start may be, and how much longer
+/// than straight his run in.
+const START_RISE: f32 = 20.0;
+const START_DETOUR: f32 = 2.0;
+
+/// A point about `yards` from `at` that a walk from it reaches, about as
+/// high (not the foot of Thunder Bluff's mesa) and by a walk at most twice
+/// as long: out of the fight's sight, for Rexxar to run in from; nearer
+/// where none is; with no navmesh (or its tile not in yet), on the circle
+/// at a random angle.
+pub fn out_of_sight(map: &mut Map, at: Vector3d, yards: f32) -> Vector3d {
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    let ready = map.nav.as_mut().is_some_and(|n| n.ready_at(&[at]));
+    let Some(nav) = map.nav.as_mut().filter(|_| ready) else {
+        let a = rng.random_range(0.0..std::f32::consts::TAU);
+        return Vector3d {
+            x: at.x + yards * a.cos(),
+            y: at.y + yards * a.sin(),
+            z: at.z,
+        };
+    };
     for share in [1.0, 0.75, 0.5, 0.25] {
-        if let Some(p) = crate::game::map::elites::around(map, at, yards * share) {
-            return p;
+        let r = yards * share;
+        for _ in 0..START_TRIES {
+            let a = rng.random_range(0.0..std::f32::consts::TAU);
+            let (x, y) = (at.x + r * a.cos(), at.y + r * a.sin());
+            let Some(z) = nav.ground(x, y, at.z) else {
+                continue;
+            };
+            if (z - at.z).abs() > START_RISE {
+                continue;
+            }
+            let p = Vector3d { x, y, z };
+            let Some(path) = nav.path(p, at) else {
+                continue;
+            };
+            let long: f32 = path
+                .windows(2)
+                .map(|w| crate::game::map::combat::dist(w[0], w[1]))
+                .sum();
+            let reached = path
+                .last()
+                .is_some_and(|end| crate::game::map::combat::dist(*end, at) <= 1.0);
+            if reached && long <= START_DETOUR * r {
+                return p;
+            }
         }
     }
     at
@@ -543,6 +588,7 @@ fn arrive(map: &mut Map, who: Champion, city: u32, near: Vector3d, foe: Guid) {
     local.returning = None;
     if runs {
         local.coming = Some(Coming {
+            from: start,
             to: fight,
             foe,
             words,
@@ -577,8 +623,10 @@ fn arrive(map: &mut Map, who: Champion, city: u32, near: Vector3d, foe: Guid) {
         {
             company.push(misha);
         }
-        for e in &company {
+        // Unseen, they must move all the same.
+        for e in std::iter::once(&g).chain(&company) {
             set_run(map, *e, mult);
+            map.keep_awake(*e, true);
         }
     } else {
         let fights = map.unit_view(foe).is_some_and(|u| u.alive);
@@ -606,10 +654,10 @@ fn coming_in(map: &mut Map, who: Champion, g: Guid) {
         return;
     }
     who.local(map).coming = None;
-    set_run(map, g, 1.0);
     let company = who.local(map).company.clone();
-    for e in company {
+    for e in std::iter::once(g).chain(company) {
         set_run(map, e, 1.0);
+        map.keep_awake(e, false);
     }
     say(map, g, &coming.words);
     let fighting = map.creature(g).is_some_and(|c| c.combat.attacking);
@@ -815,7 +863,7 @@ fn watch(map: &mut Map, who: Champion, g: Guid, city: u32) {
     let fighting = map.creature(g).is_some_and(|c| c.combat.attacking);
     if fighting {
         let at = map.creature(g).map(|c| c.position);
-        let place = at.and_then(|at| crate::game::map::world::zone_and_area(map, at));
+        let place = at.and_then(|at| crate::game::cities::zone_and_area(map, at));
         if place.is_some_and(|(zone, area)| zone != city && area != city) {
             crate::game::map::ai::enter_evade(map, g);
         }

@@ -63,6 +63,8 @@ mod tests_bugs6;
 #[cfg(test)]
 mod tests_charges;
 #[cfg(test)]
+mod tests_cities;
+#[cfg(test)]
 mod tests_client_emu;
 #[cfg(test)]
 mod tests_combat;

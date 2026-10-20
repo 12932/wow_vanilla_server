@@ -851,6 +851,7 @@ pub fn update_creatures(map: &mut Map) {
             c.pet.is_none()
                 && c.alive()
                 && (!c.observers.is_empty()
+                    || c.keep_awake
                     || c.combat.attacking
                     || c.evading
                     || c.scripted

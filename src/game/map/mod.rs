@@ -687,6 +687,7 @@ fn every_creature_where<T>(
 /// list held counting as one (it holds those on it in theirs).
 pub fn awake(c: &Creature) -> bool {
     !c.observers.is_empty()
+        || c.keep_awake
         || c.combat.attacking
         || !c.combat.attackers.is_empty()
         || !c.threat.is_empty()
@@ -1910,6 +1911,18 @@ impl Map {
     ) -> Option<&mut nav::Nav> {
         let nav = self.nav.as_mut()?;
         nav.ready_at(at).then_some(nav)
+    }
+
+    /// `g`, a creature, moves though no one sees it (`on`), or as any
+    /// creature (see `awake`).
+    pub fn keep_awake(&mut self, g: Guid, on: bool) {
+        let Some(c) = self.creature_mut(g) else {
+            return;
+        };
+        c.keep_awake = on;
+        if on {
+            self.awake.insert(g);
+        }
     }
 
     /// `g`, if a creature, may be in a fight from now (see `awake`).
