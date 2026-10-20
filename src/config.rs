@@ -417,8 +417,10 @@ settings! {
     /// creature that calls the guards takes a victim. A town's alarm
     /// counts the guards called there lately and cools when the calls
     /// stop; as it rises, the guards grow harder to fight, a capital sends
-    /// its elite two at a time, Jaina's city its Elite Guards, and Jaina
-    /// Proudmoore comes to her city with more of them.
+    /// its elite two at a time, then its Elite Guards, and at the top its
+    /// champion comes with more of them: Jaina Proudmoore to Stormwind,
+    /// Ironforge and Darnassus, Rexxar to Orgrimmar, the Undercity and
+    /// Thunder Bluff.
     pub struct GuardsConfig in "guards" {
         /// Seconds a called guard stays once out of combat (mangos-classic's
         /// 30); it goes at once when it dies.
@@ -444,30 +446,63 @@ settings! {
         /// Royal Dreadguard, Thunder Bluff's Honor Guard), or two of its
         /// guards where it has none.
         royal_from: u32 = 40, Clamp(1.0, 100_000.0), Live, "";
-        /// Guards in the alarm of Jaina's city whose crossing brings
-        /// `elite_count` Stormwind Elite Guards near the call that crossed
-        /// it, against its attacker: once each time the alarm rises through
+        /// Guards in the alarm of a defended city (one in `jaina_cities` or
+        /// `rexxar_cities`) whose crossing brings `elite_count` of the
+        /// city's Elite Guards (Stormwind's, Ironforge's, Darnassus's
+        /// Sentinels, Orgrimmar's Grunts, the Undercity's Deathguards,
+        /// Thunder Bluff's Bluffwatchers) near the call that crossed it,
+        /// against its attacker: once each time the alarm rises through
         /// it, not at each call.
         elite_from: u32 = 50, Clamp(1.0, 100_000.0), Live, "";
-        /// Stormwind Elite Guards the crossing of `elite_from` brings.
+        /// Elite Guards the crossing of `elite_from` brings.
         elite_count: u32 = 2, Clamp(0.0, 20.0), Live, "";
-        /// Guards in the alarm of Jaina's city from which she comes, if she
-        /// is alive and at home in Theramore.
+        /// The cities Jaina defends, by area: 1519 Stormwind City, 1537
+        /// Ironforge, 1657 Darnassus. Their alarms bring their Elite Guards
+        /// and her; empty, she never leaves Theramore. She is one: called
+        /// by one while she is out, a city waits, and its next call after
+        /// she is home brings her.
+        jaina_cities: Vec<u32> = vec![1519, 1537, 1657], Any, Live, "";
+        /// Guards in the alarm of one of Jaina's cities from which she
+        /// comes, if she is alive and at home in Theramore.
         jaina_from: u32 = 60, Clamp(1.0, 100_000.0), Live, "";
-        /// The area of the city Jaina comes to: 1519, Stormwind City; 0,
-        /// she never leaves Theramore.
-        jaina_city: u32 = 1519, Any, Live, "";
         /// Seconds Jaina stays once she has no one left to fight and is
         /// out of combat, before she goes home.
         jaina_stays_secs: u64 = 60, Clamp(5.0, 86_400.0), Live, "";
-        /// Stormwind Elite Guards who come with Jaina, around her, walk to
+        /// The city's Elite Guards who come with Jaina, around her, walk to
         /// her side fighting what they meet, guard her, and leave with her.
         jaina_elites: u32 = 4, Clamp(0.0, 20.0), Live, "";
         /// Yards from Jaina her Elite Guards come.
         jaina_elites_yards: f32 = 40.0, Clamp(5.0, 100.0), Live, "";
         /// Seconds Jaina takes to come back to Theramore once she has died
-        /// in her city (her spawn's own time, a day).
+        /// in a city (her spawn's own time, a day).
         jaina_respawn_secs: u64 = 86_400, Clamp(5.0, 2_592_000.0), Live, "";
+        /// The cities Rexxar defends, by area: 1637 Orgrimmar, 1497 the
+        /// Undercity, 1638 Thunder Bluff. Their alarms bring their Elite
+        /// Guards and him, with Misha; empty, he never leaves Desolace. One
+        /// Rexxar, as one Jaina.
+        rexxar_cities: Vec<u32> = vec![1637, 1497, 1638], Any, Live, "";
+        /// Guards in the alarm of one of Rexxar's cities from which he
+        /// comes, if he is alive and at home in Desolace.
+        rexxar_from: u32 = 60, Clamp(1.0, 100_000.0), Live, "";
+        /// Seconds Rexxar stays once he has no one left to fight and is out
+        /// of combat, before he goes.
+        rexxar_stays_secs: u64 = 60, Clamp(5.0, 86_400.0), Live, "";
+        /// The city's Elite Guards who run in with Rexxar, behind him,
+        /// guard him, and run off with him.
+        rexxar_elites: u32 = 4, Clamp(0.0, 20.0), Live, "";
+        /// Yards from the fight Rexxar comes into the city, out of sight
+        /// (past the 100 yards a player sees and its 10 more), to run in;
+        /// nearer where no walk from there reaches the fight.
+        rexxar_arrive_yards: f32 = 110.0, Clamp(10.0, 300.0), Live, "";
+        /// Yards Rexxar runs off before he is gone, as he leaves a city
+        /// and as he leaves Desolace for one.
+        rexxar_run_yards: f32 = 40.0, Clamp(5.0, 100.0), Live, "";
+        /// Rexxar's run speed as he comes and goes, as a multiple of his
+        /// own (his template's, 8 yards a second).
+        rexxar_run_speed: f32 = 2.0, Clamp(1.0, 5.0), Live, "";
+        /// Seconds Rexxar takes to come back to Desolace once he has died
+        /// in a city (a day, as Jaina's).
+        rexxar_respawn_secs: u64 = 86_400, Clamp(5.0, 2_592_000.0), Live, "";
     }
 }
 

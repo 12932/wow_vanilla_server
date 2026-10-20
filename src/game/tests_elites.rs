@@ -10,6 +10,7 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
+use crate::game::champions::Champion;
 use crate::game::data::scripts::ScriptTable;
 use crate::game::data::spells::{SpellDuration, SpellEffect, SpellTemplate};
 use crate::game::data::*;
@@ -423,7 +424,7 @@ fn elites_with_her(m: &Map) -> (Guid, Vec<Guid>) {
     let Place::Away { copy, .. } = place(m) else {
         panic!("she is away");
     };
-    (copy, m.guards.jaina.elites.clone())
+    (copy, m.guards.jaina.company.clone())
 }
 
 /// Brings Jaina to Stormwind on a raider's call, the raider dead before
@@ -538,7 +539,7 @@ async fn four_elite_guards_come_with_jaina_walk_to_her_fighting_the_horde_on_the
         a.forgets(e).await;
     }
     until(&map, "gone with her", |m| {
-        called(m, ELITE_GUARD).is_empty() && m.guards.jaina.elites.is_empty()
+        called(m, ELITE_GUARD).is_empty() && m.guards.jaina.company.is_empty()
     })
     .await;
 }
@@ -567,7 +568,7 @@ async fn jaina_dead_her_elite_guards_stay_as_guards() {
                 )
             })
             .collect();
-        (left, m.guards.jaina.elites.len())
+        (left, m.guards.jaina.company.len())
     })
     .await;
     let (left, listed) = after;
@@ -936,9 +937,13 @@ async fn on_the_navmesh_jainas_elite_guards_come_at_reachable_points_and_walk_to
             )
             .with_base(),
         );
-        m.realm.social.jaina.lock().place = Place::Away { map: m.key, copy };
-        elites::with_jaina(m, copy);
-        let elites = m.guards.jaina.elites.clone();
+        m.realm.social.jaina.lock().place = Place::Away {
+            map: m.key,
+            copy,
+            city: STORMWIND,
+        };
+        let elites = elites::with_champion(m, Champion::Jaina, copy, STORMWIND);
+        m.guards.jaina.company = elites.clone();
         let mut came = Vec::new();
         for e in &elites {
             let home = m.creature(*e).unwrap().home;

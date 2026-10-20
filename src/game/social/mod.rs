@@ -42,8 +42,10 @@ pub struct Social {
     pub invasion: Mutex<crate::game::invasion::State>,
     pub elemental: Mutex<crate::game::elemental::State>,
     pub omen: Mutex<crate::game::omen::Watch>,
-    /// Where Jaina Proudmoore is: at home in Theramore, or in her city.
-    pub jaina: Mutex<crate::game::jaina::State>,
+    /// Where Jaina Proudmoore is: at home in Theramore, or in a city.
+    pub jaina: Mutex<crate::game::champions::State>,
+    /// Where Rexxar is: at home in Desolace, or in a city.
+    pub rexxar: Mutex<crate::game::champions::State>,
     /// Gurubashi Arena's champions.
     pub arena: Mutex<crate::game::map::arena::History>,
     /// What the continents' world PvP holds, for the dungeons that share

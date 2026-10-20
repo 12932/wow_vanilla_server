@@ -639,7 +639,8 @@ async fn jaina_comes_to_stormwind_at_the_third_threshold_and_goes_home_after() {
         there,
         Place::Away {
             map: MapKey::world(0),
-            copy
+            copy,
+            city: STORMWIND,
         }
     );
     assert!(fights, "she fights the civilian's attacker");
@@ -897,7 +898,11 @@ async fn jainas_teleport_in_stormwind_sends_its_victim_to_the_stockade() {
         hardy(m, ga);
         let copy = spawn(m, ga, jaina::JAINA, 20, 5.0);
         let other = spawn(m, ga, PACK_MAGE, 20, 5.0);
-        m.realm.social.jaina.lock().place = Place::Away { map: m.key, copy };
+        m.realm.social.jaina.lock().place = Place::Away {
+            map: m.key,
+            copy,
+            city: STORMWIND,
+        };
         let tower = [TOWER.0, TOWER.1, TOWER.2];
         let stand_in = (
             jaina::stand_in(m, Some(copy), tower),
@@ -1059,7 +1064,11 @@ async fn jaina_is_leashed_to_stormwind() {
         for p in [trade, goldshire] {
             let copy = make(m, jaina::JAINA, p);
             let foe = make(m, HELPER, Vector3d { x: p.x + 2.0, ..p });
-            m.realm.social.jaina.lock().place = Place::Away { map: m.key, copy };
+            m.realm.social.jaina.lock().place = Place::Away {
+                map: m.key,
+                copy,
+                city: STORMWIND,
+            };
             ai::attacked(m, copy, foe);
             m.guards.jaina.look_at = None;
             jaina::update(m);
