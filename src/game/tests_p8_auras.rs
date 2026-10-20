@@ -194,3 +194,117 @@ async fn a_spell_that_prevents_animation_holds_emotes_and_postures_until_its_las
     })
     .await;
 }
+
+/// The class scripts' proc auras, each with the spell that sets it off and
+/// the outcome its rule wants: Nightfall by Corruption's tick, Improved
+/// Blizzard by Blizzard's, Improved Mend Pet by Mend Pet's, Corrupted
+/// Healing by a Lesser Heal, and the druid set's Rejuvenation and Regrowth
+/// gifts by theirs.
+const SCRIPTED: [(u32, u32, u32); 6] = [
+    (18094, 172, crate::game::map::procs::EX_NORMAL_HIT),
+    (11185, 10, crate::game::map::procs::EX_NORMAL_HIT),
+    (
+        19572,
+        136,
+        crate::game::map::procs::EX_NORMAL_HIT | crate::game::map::procs::EX_PERIODIC_POSITIVE,
+    ),
+    (23401, 2050, crate::game::map::procs::EX_NORMAL_HIT),
+    (
+        28716,
+        774,
+        crate::game::map::procs::EX_NORMAL_HIT | crate::game::map::procs::EX_PERIODIC_POSITIVE,
+    ),
+    (28744, 8936, crate::game::map::procs::EX_NORMAL_HIT),
+];
+
+/// Every class script wants a living victim on the map (Thistle Tea's
+/// `ClassScript.events`, mangos's `HandleOverrideClassScriptAuraProc`):
+/// with its victim dead or gone, a script's proc comes to nothing, so it
+/// spends no charge and starts no cooldown (mangos's
+/// `SPELL_AURA_PROC_FAILED`, Thistle Tea's reactions); on a living one,
+/// the same proc answers and spends both.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_class_scripts_proc_on_a_dead_or_missing_victim_comes_to_nothing() {
+    use super::tests_p3_spells_kit::{dummy, have_data, holder, player, ready, realm_plus};
+    use crate::game::map::procs;
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        for (aura, _, _) in SCRIPTED {
+            let pe = d.spells.proc_events.entry(aura).or_default();
+            pe.chance = 100.0;
+            pe.cooldown = 1000;
+        }
+    });
+    let (_c, g, map) = player(&realm, "P8AS", "Scripter", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let mut seen = Vec::new();
+            for (aura, by, ex) in SCRIPTED {
+                for victim in ["dead", "gone", "alive"] {
+                    auras::remove_spell(m, g, aura, None);
+                    let s = m.realm.data.spells.get(aura).unwrap().clone();
+                    auras::apply(m, g, g, &s, 0, 100);
+                    if let Some(a) = auras::auras_mut(m, g) {
+                        for h in a.holders.iter_mut().filter(|h| h.spell == aura) {
+                            h.charges = 2;
+                            h.proc_ready_at = None;
+                            for x in &mut h.effects {
+                                x.amount = 100;
+                            }
+                        }
+                    }
+                    let other = dummy(m, g, 60, 5.0);
+                    match victim {
+                        "dead" => crate::game::map::combat::kill(m, g, other),
+                        "gone" => drop(m.remove_creature(other)),
+                        _ => {}
+                    }
+                    let flags = m
+                        .realm
+                        .data
+                        .spells
+                        .proc_events
+                        .get(&aura)
+                        .map_or(0, |p| p.flags);
+                    let school = m.realm.data.spells.get(by).unwrap().school_mask();
+                    procs::trigger(
+                        m,
+                        procs::Event {
+                            actor: g,
+                            target: other,
+                            actor_flags: flags,
+                            ex,
+                            spell: Some(by),
+                            damage: 10,
+                            school,
+                            ..Default::default()
+                        },
+                    );
+                    let h = holder(m, g, aura).unwrap();
+                    seen.push((aura, victim, h.charges, h.proc_ready_at.is_some()));
+                }
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    for (aura, victim, charges, cooling) in out {
+        if victim == "alive" {
+            assert_eq!(
+                (charges, cooling),
+                (1, true),
+                "{aura} answers a living victim"
+            );
+        } else {
+            assert_eq!(
+                (charges, cooling),
+                (2, false),
+                "{aura} comes to nothing on a {victim} victim"
+            );
+        }
+    }
+}
