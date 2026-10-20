@@ -333,6 +333,10 @@ pub fn summon(
         charges: (t.kind == GO_SPELLCASTER && t.data[1] > 0).then_some(t.data[1]),
         party_only: t.kind == GO_SPELLCASTER && t.data[2] != 0,
     });
+    // A Ghost Magnet starts calling as it is set down.
+    if entry == crate::game::ghost_magnet::MAGNET {
+        crate::game::ghost_magnet::start(map, g);
+    }
     Some(g)
 }
 

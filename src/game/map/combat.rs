@@ -2783,6 +2783,37 @@ pub fn pvp_contact(map: &mut Map, me: Guid, other: Guid, role: Contact) {
     }
 }
 
+/// A harmful spell of `attacker`'s side got to `victim`'s, as a hostile
+/// act (mangos's `CasterHitTargetWithSpell`, a fight's or a PvP-enabling
+/// spell's touch): the victim's player is flagged if the attacker's side
+/// is (`SetInCombatWithAggressor`), then the attacker's player, a pet's
+/// master for the pet, flagged and contested if the victim's side is
+/// (`SetInCombatWithVictim`, by `GetBeneficiaryPlayer`). Duelists aren't;
+/// a free-for-all attacker isn't contested (as [`crate::game::map::pvp::damaged`]).
+pub fn hostile_spell_pvp(map: &mut Map, attacker: Guid, victim: Guid) {
+    let (ma, mv) = (
+        crate::game::map::pets::master(map, attacker),
+        crate::game::map::pets::master(map, victim),
+    );
+    if ma == mv || !map.players.contains_key(&ma) || !map.players.contains_key(&mv) {
+        return;
+    }
+    pvp_contact(map, mv, ma, Contact::Attacked);
+    let flagged = map.players[&mv]
+        .fields
+        .has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP);
+    if !flagged || crate::game::map::duel::dueling(map, ma, mv) {
+        return;
+    }
+    pvp_contact(map, ma, mv, Contact::Attack);
+    let ffa = map.players[&ma]
+        .fields
+        .has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP);
+    if !ffa {
+        crate::game::map::pvp::contest(map, ma);
+    }
+}
+
 /// How a player touched another unit, for [`pvp_contact`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Contact {

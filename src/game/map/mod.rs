@@ -506,6 +506,10 @@ pub struct Map {
     /// The Elemental Invasion's rifts and their invaders.
     pub rifts: AHashMap<Guid, crate::game::elemental::Rift>,
     pub rifts_checked_at: Option<Instant>,
+    /// Ghost Magnets calling their spectres.
+    pub magnets: AHashMap<Guid, crate::game::ghost_magnet::Magnet>,
+    /// Cheer speakers running their cities' fireworks shows.
+    pub speakers: AHashMap<Guid, crate::game::cheer_speakers::Speaker>,
     /// Gurubashi Arena's battles and Booty Run (on its continent).
     pub arena: arena::Arena,
     /// Objects spells summoned, traps, rituals and quest objects.
@@ -944,6 +948,8 @@ impl Map {
             escorts: Vec::new(),
             rifts: AHashMap::new(),
             rifts_checked_at: None,
+            magnets: AHashMap::new(),
+            speakers: AHashMap::new(),
             arena: Default::default(),
             objects: Default::default(),
             holding: Vec::new(),
@@ -1472,6 +1478,8 @@ impl Map {
         self.step("creatures' combat", combat::update_creatures);
         self.step("escorts", escorts::update);
         self.step("elemental invasion", crate::game::elemental::update);
+        self.step("ghost magnets", crate::game::ghost_magnet::update);
+        self.step("cheer speakers", crate::game::cheer_speakers::update);
         self.step("the dead", ai::update_dead);
         self.step("visibility", visibility::refresh_dirty);
         self.step("quest objects", quests::update_objects);
@@ -1954,16 +1962,19 @@ impl Map {
         let guid = g.guid;
         let cell = g.cell;
         let at = g.position;
+        let entry = g.entry;
         let key = self.gameobjects.insert(g);
         self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);
         self.visibility_dirty.insert(guid);
         self.hold_near(guid, at);
+        crate::game::cheer_speakers::added(self, guid, entry);
         guid
     }
 
     pub fn remove_gameobject(&mut self, guid: Guid) -> Option<GameObject> {
+        crate::game::cheer_speakers::removed(self, guid);
         let key = self.gameobject_by_guid.remove(&guid)?;
         let mut g = self.gameobjects.try_remove(key)?;
         // A script's lock goes with it: one back again starts as its

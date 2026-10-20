@@ -507,6 +507,27 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     let rolls: Vec<usize> = loot.rolls.iter().map(|r| r.slot).collect();
     map.loot_state.picked.remove(&creature);
     map.loot_state.pockets.retain(|(c, _), _| *c != creature);
+    // Its pockets, open as it dies, shut on those looking in them: the
+    // corpse's loot is another (mangos's `Loot::~Loot`, `SendReleaseForAll`,
+    // as `PrepareCorpseLoot` replaces the pickpocketing loot).
+    let open: Vec<Guid> = map
+        .creature(creature)
+        .and_then(|c| c.loot.as_ref())
+        .map(|l| l.looters.iter().copied().collect())
+        .unwrap_or_default();
+    for g in open {
+        if let Some(p) = map.players.get_mut(&g)
+            && p.looting == Some(creature)
+        {
+            p.looting = None;
+            p.fields
+                .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_LOOTING, false);
+            p.outbound.send(&SMSG_LOOT_RELEASE_RESPONSE {
+                guid: creature,
+                unknown1: 1,
+            });
+        }
+    }
     let Some(c) = map.creature_mut(creature) else {
         return;
     };

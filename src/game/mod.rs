@@ -1,12 +1,15 @@
 //! The world server: sessions, maps, and what they share.
 
 pub mod battlegrounds;
+pub mod cheer_sites;
+pub mod cheer_speakers;
 pub mod conn;
 pub mod data;
 pub mod elemental;
 pub mod events;
 pub mod fields;
 pub mod fireworks;
+pub mod ghost_magnet;
 pub mod guid;
 #[cfg(test)]
 pub mod harness;
@@ -816,11 +819,19 @@ mod tests_p8_combat_share;
 #[cfg(test)]
 mod tests_p8_combat_state;
 #[cfg(test)]
-mod tests_p8_creature;
-#[cfg(test)]
 mod tests_p8_creature2;
 #[cfg(test)]
 mod tests_p8_creature3;
+#[cfg(test)]
+mod tests_p8_creature;
+#[cfg(test)]
+mod tests_p8_entity;
+#[cfg(test)]
+mod tests_p8_entity_mob;
+#[cfg(test)]
+mod tests_p8_entity_objects;
+#[cfg(test)]
+mod tests_p8_entity_pvp;
 #[cfg(test)]
 mod tests_p8_loader_combat;
 #[cfg(test)]
