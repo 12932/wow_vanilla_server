@@ -34,7 +34,8 @@ pub const LEASH_TIMEOUT: Duration = Duration::from_secs(12);
 /// A victim it can't reach this long, and it goes home, by default
 /// (`[creatures] unreachable_timeout_secs`).
 pub const UNREACHABLE_TIMEOUT: Duration = Duration::from_secs(24);
-/// How long a creature flees, and how far it looks for help.
+/// How long a creature flees, by default (`[creatures] flee_delay_ms`),
+/// and how far it looks for help.
 pub const FLEE_FOR: Duration = Duration::from_secs(7);
 pub const FLEE_ASSISTANCE_RADIUS: f32 = 30.0;
 /// How long it waits for help once it reaches it.
@@ -717,12 +718,13 @@ pub fn flee_for_assistance(map: &mut Map, g: Guid, seek: bool) {
     emote(map, g, "%s attempts to run away in fear!");
     crate::game::map::spells::interrupt(map, g);
     map.rare.flee = true;
+    let flee_for = Duration::from_millis(map.cfg.creatures.flee_delay_ms);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
     c.engagement.flee = Some(Flee {
         from,
-        until: now + FLEE_FOR,
+        until: now + flee_for,
         helper,
         called_at: None,
         scripted: false,

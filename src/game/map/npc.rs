@@ -519,13 +519,15 @@ pub fn fits_class_race(
 }
 
 /// Gray if known, red if a level, an earlier rank or a skill is missing,
-/// else green; and a first profession rank's slot. The rank before a
-/// talent's trained rank is the one in the talent's line (Mortal Strike's
-/// second wants the talent), as mangos-classic's `GetTrainerSpellState`
-/// asks for its chain's: vmangos's `spell_chain` doesn't chain them.
+/// else green; and a first profession rank's slot, of the `most` a
+/// player may have. The rank before a talent's trained rank is the one in
+/// the talent's line (Mortal Strike's second wants the talent), as
+/// mangos-classic's `GetTrainerSpellState` asks for its chain's:
+/// vmangos's `spell_chain` doesn't chain them.
 fn teaching(
     data: &crate::game::data::GameData,
     p: &crate::game::map::player::Player,
+    most: usize,
     s: &crate::game::data::npc::TrainerSpell,
 ) -> Teaching {
     use crate::game::map::skills;
@@ -562,7 +564,8 @@ fn teaching(
     Teaching {
         state,
         first_profession,
-        free_profession: already || primaries < 2,
+        // `[players] max_primary_trade_skill`, mangos's two.
+        free_profession: already || primaries < most,
         prev: rank.prev,
         req: rank.req,
     }
@@ -600,6 +603,7 @@ pub fn trainer_list(map: &mut Map, player: Guid, npc: Guid) {
         return;
     };
     let data = map.realm.data.clone();
+    let most = map.cfg.players.max_primary_trade_skill as usize;
     let Some(t) = data.creature_template(entry) else {
         return;
     };
@@ -615,7 +619,7 @@ pub fn trainer_list(map: &mut Map, player: Guid, npc: Guid) {
         .iter()
         .filter(|s| fits_class_race(&data, s.spell, p.row.class, p.row.race))
         .map(|s| {
-            let t = teaching(&data, p, s);
+            let t = teaching(&data, p, most, s);
             TrainerSpell {
                 spell: s.spell,
                 state: t.state,
@@ -658,6 +662,7 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
         return;
     };
     let data = map.realm.data.clone();
+    let most = map.cfg.players.max_primary_trade_skill as usize;
     let trainer_id = data
         .creature_template(entry)
         .map(|t| t.trainer_id)
@@ -683,7 +688,7 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
         });
     };
     let trainer = data.creature_template(entry);
-    let t = teaching(&data, p, &s);
+    let t = teaching(&data, p, most, &s);
     let learnable = t.state == TrainerSpellState::Green
         && (!t.first_profession || t.free_profession)
         && trainer.is_some_and(|tr| trains(&data, p, tr))
@@ -713,6 +718,7 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
 /// The number learned.
 pub fn learn_class_spells(map: &mut Map, player: Guid) -> usize {
     let data = map.realm.data.clone();
+    let most = map.cfg.players.max_primary_trade_skill as usize;
     let Some(p) = map.players.get(&player) else {
         return 0;
     };
@@ -749,7 +755,7 @@ pub fn learn_class_spells(map: &mut Map, player: Guid) -> usize {
         let green: Vec<u32> = offered
             .iter()
             .filter(|s| {
-                let t = teaching(&data, p, s);
+                let t = teaching(&data, p, most, s);
                 t.state == TrainerSpellState::Green && (!t.first_profession || t.free_profession)
             })
             .map(|s| crate::game::map::spells::learns(&data, s.spell))

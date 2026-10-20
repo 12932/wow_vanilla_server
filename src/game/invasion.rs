@@ -127,6 +127,9 @@ pub struct State {
     pub next_pass: i64,
     /// The Mouth over each attacked zone.
     pub mouths: AHashMap<u32, Guid>,
+    /// `[events] scourge_invasion` as last put in: the invasion follows the
+    /// config when it changes, and a GM's `.invasion` in between.
+    pub configured: Option<bool>,
 }
 
 impl State {
@@ -246,8 +249,25 @@ pub fn disable(realm: &Realm) {
     publish(realm);
 }
 
-/// One pass of vmangos's controller over the zones, in order.
+/// One pass of vmangos's controller over the zones, in order; first, the
+/// invasion on or off as `[events] scourge_invasion` has newly put it.
 pub fn sweep(realm: &Realm) {
+    let want = realm.config().events.scourge_invasion;
+    let turn = {
+        let mut s = realm.social.invasion.lock();
+        // Off at start, as the invasion is: the config's first word turns
+        // it on only.
+        let changed = s.configured.unwrap_or(false) != want;
+        s.configured = Some(want);
+        changed && s.enabled != want
+    };
+    if turn {
+        if want {
+            enable(realm);
+        } else {
+            disable(realm);
+        }
+    }
     let t = now();
     let (started, stopped) = {
         let mut s = realm.social.invasion.lock();

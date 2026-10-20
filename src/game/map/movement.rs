@@ -205,7 +205,8 @@ pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     {
         let dt = now.duration_since(at).as_secs_f32();
         let speed = p.speeds.run.max(p.speeds.swim).max(7.0);
-        let allowed = speed * check.speed_tolerance * (dt + check.latency_allowance_secs) + 3.0;
+        let allowed = speed * check.speed_tolerance * (dt + check.latency_allowance_secs)
+            + check.distance_allowance_yards;
         if horizontal(last, info.position) > allowed {
             let o = p.movement.orientation;
             tracing::debug!("{} moved too fast; pulled back", p.name);
@@ -457,7 +458,9 @@ fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     let drop = drop - p.auras.sum(AURA_SAFE_FALL).max(0) as f32;
     let max = p.fields.get_u32(crate::game::fields::UNIT_FIELD_MAXHEALTH) as f32;
     let taken = p.auras.product_mask(AURA_MOD_DAMAGE_PERCENT_TAKEN, 1);
-    let damage = ((0.018 * drop - 0.2426) * max * taken).clamp(0.0, max) as u32;
+    // `[rates] damage_fall`, as mangos's `Rate.Damage.Fall` scales it.
+    let rate = map.cfg.rates.damage_fall;
+    let damage = ((0.018 * drop - 0.2426) * max * taken * rate).clamp(0.0, max) as u32;
     if damage == 0 {
         return;
     }

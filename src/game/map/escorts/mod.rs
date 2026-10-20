@@ -312,7 +312,6 @@ pub fn act(map: &mut Map, creature: Guid, acts: &'static [Act]) -> bool {
 
 /// How far from a player a giver's escortee may stand.
 const GIVER_REACH: f32 = 30.0;
-const SAY_YARDS: f32 = 25.0;
 
 pub fn escort(quest: u32) -> Option<&'static Escort> {
     catalog::ESCORTS.iter().find(|e| e.quest == quest)
@@ -606,7 +605,7 @@ fn say(map: &Map, who: Guid, text: u32) {
     }) else {
         return;
     };
-    for g in map.players_near(c.position, SAY_YARDS) {
+    for g in map.players_near(c.position, map.cfg.chat.say_yards) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }

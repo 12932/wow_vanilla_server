@@ -953,6 +953,7 @@ impl Map {
         let now = Instant::now();
         let instance = instance_script::State::for_map(&realm.data, key.map, key.instance);
         let profile = MapProfile::new(key, &realm);
+        let outdoor = outdoor_pvp::for_map(key, &realm.config().outdoor_pvp);
         Self {
             key,
             // The generation first: a reload in between is taken again.
@@ -989,7 +990,7 @@ impl Map {
             battleground: battleground::for_map(key, Instant::now()),
             globals: Vec::new(),
             loot_state: Default::default(),
-            outdoor: outdoor_pvp::for_map(key),
+            outdoor,
             scripts: Default::default(),
             bosses: Default::default(),
             instance,

@@ -29,12 +29,16 @@ use crate::game::map::{Map, MapKey};
 
 pub const KIND_RAID: &str = "raid";
 pub const KIND_INSTANCE: &str = "instance";
-/// How long an empty copy lasts.
+/// How long an empty copy lasts, by default (`[instances]
+/// unload_delay_secs`); what it remembers is kept at least this long.
 pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(5 * 60);
 /// Raid resets count from a Tuesday, 04:00 UTC.
 const RESET_EPOCH: i64 = 1_101_182_400;
+/// The hour of [`RESET_EPOCH`], the default of `[instances] reset_hour`.
+pub const RESET_HOUR: u32 = 4;
 const DAY: i64 = 86_400;
-/// An account's copies an hour.
+/// An account's copies an hour, by default (`[instances]
+/// entries_per_hour`).
 pub const ENTRIES_AN_HOUR: usize = 5;
 /// `static_flags2`: killing the creature binds the raid.
 pub const STATIC_FLAG2_LOCKS_RAID: u32 = 0x4;
@@ -176,15 +180,15 @@ impl Instances {
     }
 
     /// Whether `account` may enter `key` now: a copy it entered in the
-    /// hour (its hour starts again), or a sixth.
-    fn admit(&mut self, account: &str, key: MapKey, now: i64) -> bool {
+    /// hour (its hour starts again), or one more than the `most` it has.
+    fn admit(&mut self, account: &str, key: MapKey, now: i64, most: usize) -> bool {
         let entries = self.entries.entry(account.to_owned()).or_default();
         entries.retain(|(_, at)| *at + 3600 > now);
         if let Some(e) = entries.iter_mut().find(|(k, _)| *k == key) {
             e.1 = now;
             return true;
         }
-        if entries.len() >= ENTRIES_AN_HOUR {
+        if entries.len() >= most {
             return false;
         }
         entries.push((key, now));
@@ -293,11 +297,18 @@ pub fn reset_days(map: u32) -> i64 {
     }
 }
 
-/// The next reset of `map` after `now`.
+/// The next reset of `map` after `now`, at 04:00 UTC.
 pub fn next_reset(map: u32, now: i64) -> i64 {
+    next_reset_at(map, now, RESET_HOUR)
+}
+
+/// The next reset of `map` after `now`, at `hour` UTC (`[instances]
+/// reset_hour`).
+pub fn next_reset_at(map: u32, now: i64, hour: u32) -> i64 {
+    let epoch = RESET_EPOCH + (i64::from(hour.min(23)) - i64::from(RESET_HOUR)) * 3600;
     let period = reset_days(map) * DAY;
-    let since = (now - RESET_EPOCH).max(0);
-    RESET_EPOCH + (since / period + 1) * period
+    let since = (now - epoch).max(0);
+    epoch + (since / period + 1) * period
 }
 
 /// Why a player can't go into a copy.
@@ -342,6 +353,7 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
     let account = account_of(realm, g);
     let now = now();
+    let reset_hour = realm.config().instances.reset_hour;
     // One lock from choosing the copy to storing it, admission between:
     // two of a group going in at once both find the copy the first made,
     // and two let into a copy's last place can't both take it.
@@ -387,7 +399,7 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
         inst.raids.entry(id).or_insert_with(|| RaidSave {
             id,
             map,
-            reset_at: next_reset(map, now),
+            reset_at: next_reset_at(map, now, reset_hour),
             players: Vec::new(),
         });
     }
@@ -441,7 +453,8 @@ fn admit_locked(
     if inside.len() >= limit(&realm.data, key.map) {
         return Err(Refused::Abort(TransferAbortReason::IsFull));
     }
-    if !inst.admit(account, key, now) {
+    let most = realm.config().instances.entries_per_hour;
+    if !inst.admit(account, key, now, most) {
         return Err(Refused::Abort(TransferAbortReason::TooManyInstances));
     }
     inst.heading(g, key, now);
@@ -798,12 +811,13 @@ pub fn bind_raid(map: &Map) {
         .keys()
         .map(|g| (*g, guid::counter(*g)))
         .collect();
+    let reset_hour = map.cfg.instances.reset_hour;
     let (record, newly) = {
         let mut inst = realm.social.instances.lock();
         let save = inst.raids.entry(key.instance).or_insert_with(|| RaidSave {
             id: key.instance,
             map: key.map,
-            reset_at: next_reset(key.map, now()),
+            reset_at: next_reset_at(key.map, now(), reset_hour),
             players: Vec::new(),
         });
         let mut newly = Vec::new();
@@ -1050,6 +1064,16 @@ mod tests {
         let wednesday = RESET_EPOCH + DAY;
         assert_eq!(next_reset(409, wednesday), RESET_EPOCH + 7 * DAY);
         assert_eq!(next_reset(309, wednesday), RESET_EPOCH + 3 * DAY);
+        // At another hour (`[instances] reset_hour`): the same days, the
+        // hour moved; an hour before 04:00 on the Tuesday, 03:00 is next.
+        assert_eq!(
+            next_reset_at(409, wednesday, 6),
+            RESET_EPOCH + 7 * DAY + 2 * 3600
+        );
+        assert_eq!(
+            next_reset_at(409, RESET_EPOCH + 7 * DAY - 2 * 3600, 3),
+            RESET_EPOCH + 7 * DAY - 3600
+        );
     }
 
     #[test]
@@ -1059,12 +1083,25 @@ mod tests {
             map: 36,
             instance: n,
         };
+        let most = ENTRIES_AN_HOUR;
         for n in 1..=5 {
-            assert!(i.admit("A", key(n), 1000));
+            assert!(i.admit("A", key(n), 1000, most));
         }
-        assert!(!i.admit("A", key(6), 1000), "a sixth is refused");
-        assert!(i.admit("A", key(3), 1500), "one already entered isn't");
-        assert!(i.admit("B", key(6), 1000), "another account has its own");
-        assert!(i.admit("A", key(6), 1000 + 3601), "an hour on, it may");
+        assert!(!i.admit("A", key(6), 1000, most), "a sixth is refused");
+        assert!(
+            i.admit("A", key(3), 1500, most),
+            "one already entered isn't"
+        );
+        assert!(
+            i.admit("B", key(6), 1000, most),
+            "another account has its own"
+        );
+        assert!(
+            i.admit("A", key(6), 1000 + 3601, most),
+            "an hour on, it may"
+        );
+        // At one an hour (`[instances] entries_per_hour`).
+        assert!(i.admit("C", key(1), 1000, 1));
+        assert!(!i.admit("C", key(2), 1000, 1), "one an hour");
     }
 }

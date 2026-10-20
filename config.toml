@@ -34,6 +34,12 @@ mail_delay_secs = 3600
 #reserved_names = ["Thrall", "Jaina"]
 # The weekday honor is ranked on, each week: 1 Monday to 7 Sunday (Tuesday, as Thistle Tea).
 honor_reset_weekday = 2
+# Honorable kills a week needs to be ranked.
+#min_honor_kills = 15
+# The realm's name in the realm list.
+#realm_name = "Location Realm"
+# Zones' rain, snow and storms; off, fine weather everywhere.
+#weather = true
 
 [visibility]
 continents_yards = 100.0
@@ -44,6 +50,13 @@ battleground_yards = 400.0
 # landing.
 flight_yards = 400.0
 
+[chat]
+# How far a say and a yell carry, players' and creatures', in yards.
+#say_yards = 25.0
+#yell_yards = 300.0
+# Lines in a row, each within a second of the last, that mute a player for ten seconds; 0 never.
+#flood_message_count = 10
+
 [rates]
 # Multipliers, mangos's Rate.*: 1 is 1.12's own.
 #xp_kill = 1.0
@@ -53,6 +66,28 @@ flight_yards = 400.0
 [players]
 # A PvP realm: an account's characters are all of one side.
 pvp_realm = false
+# Yards from a kill a group's member must be for its XP, loot, quest credit, reputation and honor.
+#group_reward_yards = 74.0
+# Primary professions a player may learn.
+#max_primary_trade_skill = 2
+
+[instances]
+# Seconds an empty dungeon or raid copy stays up.
+#unload_delay_secs = 300
+# The hour, UTC, raids reset at.
+#reset_hour = 4
+# Copies an account may go into an hour.
+#entries_per_hour = 5
+
+[battleground]
+# A player who leaves a match before its end is a Deserter.
+#cast_deserter = true
+
+[events]
+# The Elemental Invasion's rifts and lords, on from the start.
+#elemental_invasion = true
+# The Scourge Invasion, as `.invasion on`.
+#scourge_invasion = false
 
 [accounts]
 # `auto`: an unknown name gets an account at its first login, with the name as its password (for
@@ -85,6 +120,10 @@ ring_every_secs = 20
 ring_step_yards = 5.0
 ring_min_yards = 6.0
 max_minutes = 20
+# A fighter off the pit's floor this long has fled; the fallen lie this long before going up to the
+# stands.
+off_floor_secs = 5
+lie_secs = 5
 # The champion's prize: copper, an item (Arena Grand Master) and a buff
 # (Spirit of Zandalar).
 reward_copper = 250000

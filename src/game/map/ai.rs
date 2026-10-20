@@ -1773,6 +1773,7 @@ pub fn call_for_help_radius(map: &mut Map, g: Guid, radius: f32) {
 /// another, until its time is up or the one it runs from is dead or gone.
 pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, run_for: Option<Duration>) {
     let now = map.now;
+    let flee_for = Duration::from_millis(map.cfg.creatures.flee_delay_ms);
     if !map.creature(g).is_some_and(|c| c.alive()) || map.unit_view(enemy).is_none() {
         return;
     }
@@ -1782,7 +1783,7 @@ pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, run_for: Option<Duration>)
     };
     c.engagement.flee = Some(crate::game::map::creature_combat::Flee {
         from: enemy,
-        until: now + run_for.unwrap_or(crate::game::map::creature_combat::FLEE_FOR),
+        until: now + run_for.unwrap_or(flee_for),
         helper: None,
         called_at: None,
         scripted: true,

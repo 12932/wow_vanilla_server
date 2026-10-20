@@ -124,6 +124,16 @@ impl<V> UserCacheInner<V> {
     }
 }
 
+/// The realm's name in the realm list, by default (`[world] realm_name`).
+pub const REALM_NAME: &str = "Location Realm";
+
+/// The realm as the 1.12 client's realm list shows it: its name, and PvP
+/// on a PvP realm (`[players] pvp_realm`), else normal.
+fn realm_entry() -> (String, bool) {
+    let cfg = crate::config::config();
+    (cfg.world.realm_name.clone(), cfg.players.pvp_realm)
+}
+
 /// World server `host:port` advertised back to the client in the realm
 /// list. Resolved once at first use from `$WOW_REALM_ADDRESS`, falling
 /// back to `localhost:8085` for single-machine development. Set this on
@@ -697,13 +707,18 @@ async fn print_version_2_3_realm_list(mut stream: TcpStream) {
     use wow_login_messages::version_2::*;
 
     let addr = world_server_address().to_string();
+    let (name, pvp) = realm_entry();
 
     while (expect_idle::<CMD_REALM_LIST_Client>(&mut stream).await).is_ok() {
         let msg = CMD_REALM_LIST_Server {
             realms: vec![Realm {
-                realm_type: RealmType::PlayerVsEnvironment,
+                realm_type: if pvp {
+                    RealmType::PlayerVsPlayer
+                } else {
+                    RealmType::PlayerVsEnvironment
+                },
                 flag: RealmFlag::empty(),
-                name: "Location Realm".to_string(),
+                name: name.clone(),
                 address: addr.clone(),
                 population: Default::default(),
                 number_of_characters_on_realm: 0,

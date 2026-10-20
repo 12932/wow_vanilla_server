@@ -64,14 +64,15 @@ threads. The environment is the process's own, as it started: a variable can't b
 process. A config that doesn't load is reported and changes nothing. Otherwise:
 
 - **What changes live:** every key marked *live* below takes its new value. These are the rates, distances, timers,
-  the MOTD, new characters' settings, the quest givers' grey "!", the battleground, anticheat and GM settings.
+  the MOTD, new characters' settings, the quest givers' grey "!", chat, the instances', battleground, events, arena,
+  anticheat and GM settings.
 - **How:** the realm keeps its settings as an `Arc` behind a lock, with a counter a reload bumps. A map looks at the
   counter at the start of each update (one atomic load) and takes the settings again only when it moved
   (`Map::cfg`), so a reload is seen whole, between updates, never mid-step. Code outside a map reads
   `Realm::config()`, a read lock and an `Arc` clone.
-- **What needs a restart:** keys marked *restart*: the network's limits, the paths, the character store, the
-  accounts, the level cap, the PvP realm type, the honor week, the start position and the arena's battles (its
-  free-for-all grace, `ffa_grace_secs`, is live). A reload leaves them as they run.
+- **What needs a restart:** keys marked *restart*: the network's limits, the paths, the character store, the realm's
+  name, the accounts, the level cap, the PvP realm type, the honor week, the start position and world PvP (each
+  continent's is set up as its map starts). A reload leaves them as they run.
 - **The reply:** the command says which keys changed and which of those need a restart:
   `Config reloaded: [rates] xp_kill. Needs a restart: [world] characters_db.` SIGHUP logs the same.
 
@@ -131,6 +132,12 @@ The world: saves, the message of the day, the character store and the data's pat
 | `petition_signatures` | Signatures a guild charter needs. | `9` | 0 to 9, clamped | live | `MinPetitionSigns` |
 | `mail_delay_secs` | Seconds mail with money or an item takes between accounts. | `3600` | 0 to 2592000, clamped | live | `MailDeliveryDelay` |
 | `honor_reset_weekday` | The weekday honor is ranked on, each week: 1 Monday to 7 Sunday (Tuesday, as Thistle Tea). | `2` | 1 to 7, clamped | restart |  |
+| `min_honor_kills` | Honorable kills a week needs to be ranked at its end. | `15` | 1 to 10000, clamped | live | `MinHonorKills` |
+| `max_who_list_returns` | The most players a `/who` lists (the client shows 50 at most). | `49` | 1 to 49, clamped | live | `MaxWhoListReturns` |
+| `weather` | Zones' weather changes: rain, snow and storms, by the season. Off, the weather is fine everywhere but where a GM set it for good. | `true` |  | live | `ActivateWeather` |
+| `weather_change_secs` | Seconds between a zone's rolls for a change of weather. | `600` | 10 to 86400, clamped | live | `ChangeWeatherInterval` |
+| `auction_deposit_min` | The least deposit an auction takes, in copper. | `0` | 0 to 2147483647, clamped | live | `Auction.Deposit.Min` |
+| `realm_name` | The realm's name in the realm list. | `"Location Realm"` |  | restart |  |
 
 ### `[visibility]`
 
@@ -143,9 +150,22 @@ How far players see, in yards. Further costs the server more and the client more
 | `battleground_yards` | In battlegrounds: further, so a battle's far side is in view. | `400.0` | 20 to 500, clamped | live | `Visibility.Distance.BGArenas` |
 | `flight_yards` | On a flight master's gryphon or wyvern: further, as the land goes by below. Back to the map's own on landing. | `400.0` | 20 to 500, clamped | live |  |
 
+### `[chat]`
+
+Chat: how far it carries, and the flood control. GMs aren't muted.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `say_yards` | Yards a say carries, players' and creatures'. | `25.0` | 1 to 500, clamped | live | `ListenRange.Say` |
+| `yell_yards` | Yards a yell carries, and a boss's emote. | `300.0` | 1 to 1000, clamped | live | `ListenRange.Yell` |
+| `text_emote_yards` | Yards an emote (`/wave`) carries. | `25.0` | 1 to 500, clamped | live | `ListenRange.TextEmote` |
+| `flood_message_count` | Lines in a row, each within `flood_message_delay_secs` of the last, that mute a player; 0 never mutes. | `10` | 0 to 1000, clamped | live | `ChatFlood.MessageCount` |
+| `flood_message_delay_secs` | Seconds within which a line follows the last to count towards a flood. | `1` | 1 to 60, clamped | live | `ChatFlood.MessageDelay` |
+| `flood_mute_secs` | Seconds a flooding player is muted. | `10` | 1 to 86400, clamped | live | `ChatFlood.MuteTime` |
+
 ### `[rates]`
 
-Multipliers on what players earn, and the skill-ups' sizes and chances. 1 is 1.12's own.
+Multipliers on what players earn, regenerate and pay, and the skill-ups' sizes and chances. 1 is 1.12's own.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
@@ -176,6 +196,17 @@ Multipliers on what players earn, and the skill-ups' sizes and chances. 1 is 1.1
 | `skill_chance_yellow` | The chance, in percent, a yellow recipe raises its skill. | `75` | 0 to 100, clamped | live | `SkillChance.Yellow` |
 | `skill_chance_green` | The chance, in percent, a green recipe raises its skill. | `25` | 0 to 100, clamped | live | `SkillChance.Green` |
 | `skill_chance_grey` | The chance, in percent, a grey recipe raises its skill. | `0` | 0 to 100, clamped | live | `SkillChance.Grey` |
+| `reputation_low_level_kill` | The least rate a grey creature's kill gives reputation at. | `0.2` | 0 to 1, clamped | live | `Rate.Reputation.LowLevel.Kill` |
+| `reputation_low_level_quest` | The least rate a quest well below the player gives reputation at: a fifth less for each level past five below, down to this. | `0.2` | 0 to 1, clamped | live | `Rate.Reputation.LowLevel.Quest` |
+| `health` | Health players regenerate from spirit. | `1.0` | 0 to 100, clamped | live | `Rate.Health` |
+| `mana` | Mana players regenerate from spirit. | `1.0` | 0 to 100, clamped | live | `Rate.Mana` |
+| `rage_income` | Rage from blows dealt and taken. | `1.0` | 0 to 100, clamped | live | `Rate.Rage.Income` |
+| `rage_loss` | Rage lost out of combat. | `1.0` | 0 to 100, clamped | live | `Rate.Rage.Loss` |
+| `energy` | Energy regenerated. | `1.0` | 0 to 100, clamped | live | `Rate.Energy` |
+| `damage_fall` | Damage from falls. | `1.0` | 0 to 100, clamped | live | `Rate.Damage.Fall` |
+| `auction_time` | How long auctions run (the deposit is the chosen time's). | `1.0` | 0.01 to 100, clamped | live | `Rate.Auction.Time` |
+| `auction_deposit` | Auctions' deposits. | `1.0` | 0 to 100, clamped | live | `Rate.Auction.Deposit` |
+| `auction_cut` | The auction house's cut of a sale (never more than the sale). | `1.0` | 0 to 100, clamped | live | `Rate.Auction.Cut` |
 
 ### `[creatures]`
 
@@ -190,6 +221,8 @@ Creatures: how near they notice players, how far they chase, how they call for h
 | `assistance_radius` | Yards a creature drawn into a fight calls its kind from. | `5.0` | 0 to 100, clamped | live | `CreatureFamilyAssistanceRadius` |
 | `assistance_delay_ms` | Milliseconds the called take to come. | `1500` | 0 to 60000, clamped | live | `CreatureFamilyAssistanceDelay` |
 | `flee_assistance_radius` | Yards a fleeing creature looks for help within. | `30.0` | 0 to 100, clamped | live | `CreatureFamilyFleeAssistanceRadius` |
+| `flee_delay_ms` | Milliseconds a creature flees for help, where its script doesn't say (mangos's default is 10000). | `7000` | 0 to 60000, clamped | live | `CreatureFamilyFleeDelay` |
+| `interaction_pause_secs` | Seconds a wandering creature stands still once a player talks to it. | `180` | 0 to 3600, clamped | live | `InteractionPauseTimer` |
 | `corpse_decay_normal` | Seconds a normal creature's corpse lies (no longer than its respawn). | `300` | 1 to 86400, clamped | live | `Corpse.Decay.NORMAL` |
 | `corpse_decay_rare` | Seconds a rare's corpse lies. | `900` | 1 to 86400, clamped | live | `Corpse.Decay.RARE` |
 | `corpse_decay_elite` | Seconds an elite's corpse lies. | `600` | 1 to 86400, clamped | live | `Corpse.Decay.ELITE` |
@@ -242,6 +275,22 @@ New characters, the level cap, the realm's type, and what is left of the dead.
 | `pvp_realm` | A PvP realm: an account's characters are all of one side, and everyone is flagged for PvP. | `false` |  | restart | `GameType` |
 | `always_max_skill_for_level` | Weapon skills and Defense at their caps, at login and each level, rather than raised by use from 1. | `false` |  | live | `AlwaysMaxSkillForLevel` |
 | `bones_hours` | Hours the bones a corpse turns to lie where it was, once its player rises (reclaims it, is raised, or a spirit healer raises them), seen by everyone; 0 leaves none. Bones in the open world are kept across a restart, with the time they had left; a dungeon's or a battleground's go with its copy. mangos-classic has no time for them: its bones lie until their grid unloads, aren't saved, and `Death.Bones.World` and `Death.Bones.Battleground` turn them off. | `18` | 0 to 8760, clamped | live |  |
+| `group_reward_yards` | Yards from a kill a group's member must be for a share of it: its XP, loot, quest credit, reputation and honor (in a battleground, its honorable kill). | `74.0` | 5 to 500, clamped | live | `MaxGroupXPDistance` |
+| `death_sickness_level` | The level from which a spirit healer's resurrection brings sickness: a minute at this level, a minute more a level, ten at most. Above the level cap, never. | `11` | 1 to 100, clamped | live | `Death.SicknessLevel` |
+| `max_primary_trade_skill` | Primary professions (alchemy, mining, tailoring, ...) a player may learn. | `2` | 0 to 10, clamped | live | `MaxPrimaryTradeSkill` |
+| `durability_loss_chance_damage` | The chance, in percent, a blow dealt or taken wears a point off a random piece of a player's gear. | `0.5` | 0 to 100, clamped | live | `DurabilityLossChance.Damage` |
+
+### `[environment]`
+
+Water and lava: how long a player has before they come to harm, and lava's burn.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `breath_secs` | Seconds of breath under water before drowning. | `60` | 1 to 3600, clamped | live | `MirrorTimer.Breath.Max` |
+| `fatigue_secs` | Seconds in the deep sea before fatigue. | `60` | 1 to 3600, clamped | live | `MirrorTimer.Fatigue.Max` |
+| `lava_secs` | Seconds touching lava before it burns. | `1` | 0 to 60, clamped | live | `MirrorTimer.Environmental.Max` |
+| `lava_damage_min` | The least fire damage lava does every two seconds. | `605` | 0 to 1000000, clamped | live | `EnvironmentalDamage.Min` |
+| `lava_damage_max` | The most (no less than `lava_damage_min`). | `610` | 0 to 1000000, clamped | live | `EnvironmentalDamage.Max` |
 
 ### `[quests]`
 
@@ -250,6 +299,16 @@ Quests: which givers show what.
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `high_level_hide_diff` | Levels a player may be short of a quest's least level and still see its giver's grey "!"; further below, the giver shows nothing for it. -1 shows it at any gap. | `7` | -1 to 60, clamped | live | `Quests.HighLevelHideDiff` |
+
+### `[instances]`
+
+Dungeon and raid copies.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `unload_delay_secs` | Seconds an empty copy stays up. What it remembers (its dead, who went in) is kept at least five minutes after its last use, for its players to come back to. | `300` | 1 to 86400, clamped | live | `Instance.UnloadDelay` |
+| `reset_hour` | The hour of the day, UTC, raids reset at, on their reset days. | `4` | 0 to 23, clamped | live | `Instance.ResetTimeHour` |
+| `entries_per_hour` | Copies an account may go into an hour; one it was in within the hour doesn't count again. | `5` | 1 to 1000, clamped | live |  |
 
 ### `[battleground]`
 
@@ -261,6 +320,25 @@ Battlegrounds' queues and matches.
 | `min_players` | Players a side needs for a match; 0 for each battleground's own. | `0` | 0 to 40, clamped | live |  |
 | `auto_leave_secs` | Seconds after a match ends before everyone is sent home. | `120` | 10 to 600, clamped | live |  |
 | `invitation_secs` | Seconds an invitation to a match stands. | `120` | 10 to 600, clamped | live |  |
+| `cast_deserter` | A player who leaves a match before its end is a Deserter, kept out of battlegrounds for a while. | `true` |  | live | `Battleground.CastDeserter` |
+
+### `[outdoor_pvp]`
+
+World PvP on the continents.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `eastern_plaguelands` | The Eastern Plaguelands' four towers, their buffs (there and in Stratholme and Scholomance) and the Crown Guard graveyard. | `true` |  | restart | `OutdoorPvp.EPEnabled` |
+| `silithus` | Silithus's silithyst and the Cenarion Favor (there and in Ahn'Qiraj). | `true` |  | restart | `OutdoorPvp.SIEnabled` |
+
+### `[events]`
+
+World events the server runs of itself.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `elemental_invasion` | The Elemental Invasion: rifts in Un'Goro, Silithus, Azshara and Winterspring, their stages and lords, then days of rest. Off, it stops where it is. | `true` |  | live |  |
+| `scourge_invasion` | The Scourge Invasion's necropolises over the zones it attacks, as `.invasion on` (Thistle Tea's `scourge_invasion`, off). A GM's `.invasion on` or `off` holds until this changes. | `false` |  | live |  |
 
 ### `[anticheat]`
 
@@ -271,6 +349,7 @@ The movement check: a player who moves faster than they can is pulled back. GMs 
 | `speed_check` | Check players' movement at all. | `true` |  | live |  |
 | `speed_tolerance` | How much faster than their speed a player may seem to go. | `1.25` | 1 to 10, clamped | live |  |
 | `latency_allowance_secs` | Seconds of lag a movement packet may carry. | `0.5` | 0 to 5, clamped | live |  |
+| `distance_allowance_yards` | Yards a move may go past what its speed and time allow. | `3.0` | 0 to 100, clamped | live |  |
 
 ### `[accounts]`
 
@@ -310,17 +389,21 @@ Gurubashi Arena's last man standing: `.arena start [countdown s] [max minutes]` 
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
-| `every_minutes` | Minutes between scheduled battles; 0 for only those a GM starts. | `0` |  | restart |  |
-| `countdown_secs` | Seconds of countdown before a battle. | `30` |  | restart |  |
-| `ring_after_secs` | Seconds into the fight the ring of fire starts closing. | `120` |  | restart |  |
-| `ring_every_secs` | Seconds between the ring's steps. | `20` | 1 to 3600, clamped | restart |  |
-| `ring_step_yards` | Yards the ring closes by at each step. | `5.0` |  | restart |  |
-| `ring_min_yards` | The ring's smallest radius. | `6.0` |  | restart |  |
-| `max_minutes` | The longest a battle runs: then the ring is at its smallest and burns its hardest. | `20` |  | restart |  |
-| `reward_copper` | The champion's prize in copper. | `250000` |  | restart |  |
-| `reward_item` | The champion's item (Arena Grand Master). | `19024` |  | restart |  |
-| `champion_spell` | The champion's buff (Spirit of Zandalar). | `24425` |  | restart |  |
-| `min_fighters` | Fighters a battle needs to start. | `2` |  | restart |  |
+| `every_minutes` | Minutes between scheduled battles; 0 for only those a GM starts. | `0` |  | live |  |
+| `countdown_secs` | Seconds of countdown before a battle. | `30` |  | live |  |
+| `ring_after_secs` | Seconds into the fight the ring of fire starts closing. | `120` |  | live |  |
+| `ring_every_secs` | Seconds between the ring's steps. | `20` | 1 to 3600, clamped | live |  |
+| `ring_step_yards` | Yards the ring closes by at each step. | `5.0` |  | live |  |
+| `ring_min_yards` | The ring's smallest radius. | `6.0` |  | live |  |
+| `max_minutes` | The longest a battle runs: then the ring is at its smallest and burns its hardest. | `20` |  | live |  |
+| `reward_copper` | The champion's prize in copper. | `250000` |  | live |  |
+| `reward_item` | The champion's item (Arena Grand Master). | `19024` |  | live |  |
+| `champion_spell` | The champion's buff (Spirit of Zandalar). | `24425` |  | live |  |
+| `min_fighters` | Fighters a battle needs to start. | `2` |  | live |  |
+| `off_floor_secs` | Seconds a fighter may stand off the pit's floor before they have fled. | `5` | 0 to 600, clamped | live |  |
+| `lie_secs` | Seconds the fallen lie before their ghosts go up to the stands. | `5` | 0 to 600, clamped | live |  |
+| `multi_kill_secs` | Seconds within which a fighter's kills are a double, triple or more. | `10` | 0 to 600, clamped | live |  |
+| `roll_call_secs` | Seconds between the announcer's counts of the fighters left, when no one falls. | `60` | 5 to 3600, clamped | live |  |
 | `ffa_grace_secs` | Seconds a player keeps the free-for-all flag after walking out of an arena's area (Gurubashi's pit), so the edge can't be teased; back in within them, it carries on. A death or a teleport ends them. 0 drops the flag at once, as mangos does. | `20` | 0 to 3600, clamped | live |  |
 
 
@@ -329,27 +412,50 @@ Gurubashi Arena's last man standing: `.arena start [countdown s] [max minutes]` 
 These tunables were constants and are now keys, at the same defaults:
 
 - **Rates (`[rates]`):** XP from kills, quests and exploration; drop chances by quality, of references and of quest
-  items; money from creatures, chests and items; honor; reputation gains; rested XP in game and offline; creatures'
-  respawn times; skill-up sizes for crafting, gathering, weapons and defense; recipes' skill-up chances by colour.
-- **Visibility (`[visibility]`):** the continents', dungeons' and battlegrounds' distances.
+  items; money from creatures, chests and items; honor; reputation gains, and the least a grey kill or an old quest
+  gives; rested XP in game and offline; creatures' respawn times; skill-up sizes for crafting, gathering, weapons and
+  defense; recipes' skill-up chances by colour; players' health, mana and energy regeneration, rage's gain and loss;
+  fall damage; auctions' times, deposits and cuts.
+- **World (`[world]`):** the honorable kills a week's ranking needs, the `/who` list's length, the weather and how
+  often it changes, the least auction deposit, the realm's name.
+- **Visibility (`[visibility]`):** the continents', dungeons', battlegrounds' and flights' distances.
+- **Chat (`[chat]`):** how far a say, a yell and an emote carry, players' and creatures'; the flood control's lines,
+  gap and mute.
 - **Creatures (`[creatures]`):** the aggro range factor, the leash radius, the leash and unreachable timeouts, the
-  call-for-help radius and delay, the fleeing creature's search radius, and the corpse decay by rank.
-- **Players (`[players]`):** the start level and money, the level cap, the characters per account, the PvP realm.
-- **Battlegrounds (`[battleground]`):** the start delay, the minimum players, the auto-leave and invitation times.
-- **Anticheat (`[anticheat]`):** the speed check, its tolerance and its lag allowance.
+  call-for-help radius and delay, the fleeing creature's search radius and time, a talked-to creature's pause, and
+  the corpse decay by rank.
+- **Players (`[players]`):** the start level and money, the level cap, the characters per account, the PvP realm,
+  the group reward range (XP, loot, quest credit, reputation, honor), resurrection sickness's first level, the
+  primary professions, gear's wear from blows.
+- **Environment (`[environment]`):** the breath, fatigue and lava timers, and lava's damage.
+- **Instances (`[instances]`):** an empty copy's unload time, the raids' reset hour, the copies an account enters an
+  hour.
+- **Battlegrounds (`[battleground]`):** the start delay, the minimum players, the auto-leave and invitation times, the
+  Deserter.
+- **World PvP and events (`[outdoor_pvp]`, `[events]`):** the Eastern Plaguelands' and Silithus's world PvP, the
+  Elemental and Scourge Invasions.
+- **Anticheat (`[anticheat]`):** the speed check, its tolerance, its lag and distance allowances.
+- **The arena (`[arena]`):** its fled, lying, multi-kill and roll-call times.
 - **GM (`[gm]`):** a GM's start level, and each command's GM level.
+
+The realm list shows the realm as PvP when `[players] pvp_realm` is on (it showed every realm as normal).
 
 These stay constants, because they are the client's or 1.12's rules, the game's formulas, or the engine's own
 tuning:
 
 - **The client's and 1.12's rules:** packet layouts and opcodes; the XP formula, its grey levels and group bonuses;
-  the honor brackets, weekly earnings and minimum kills; rest's accrual rate and pool cap (the rates scale them); the
-  6-second combat and 5-minute PvP timeouts; the 5-second regeneration; chat ranges (say 25, yell 300 yards); the
-  corpse reclaim delays and range; the 74-yard group reward range; the logout's 20 seconds; battlegrounds' 30-second
-  resurrection waves, their buffs' and flags' timers; spell rules and the combat table.
+  the honor brackets and weekly earnings; rest's accrual rate and pool cap (the rates scale them); the 6-second
+  combat and 5-minute PvP timeouts; the five-second rule, the 2-second regeneration tick and its formulas (the rates
+  scale them); the
+  corpse reclaim delays and range; the logout's 20 seconds (the client counts them down itself); a loot roll's
+  minute; the 60 seconds before one who doesn't belong in a copy is sent out; mail's 30 days (3 once read, or with
+  cash on delivery); the auction houses' deposit and cut percentages (the rates scale them); the friend and ignore
+  lists' 50 and 25; party and raid sizes; battlegrounds' 30-second resurrection waves, their buffs' and flags'
+  timers; spell rules and the combat table; the scripted events' own numbers (the Elemental Invasion's stages and
+  rests, the Scourge's attack windows, the ghost magnets, Omen).
 - **The engine's tuning:** the aggro scan's half second, the leash sweep's ten, the call-for-help pulse, visibility's
-  margin and move threshold (see [PERFORMANCE.md](PERFORMANCE.md)), an empty instance's unload time, the shutdown's
-  wait, and the 5-second floor on a respawn.
+  margin and move threshold (see [PERFORMANCE.md](PERFORMANCE.md)), the 5-second sweep of mail, auctions and
+  instances, the shutdown's wait, and the 5-second floor on a respawn.
 - **Pets:** their leash and level cap follow their master's.
 - **The listeners:** the login server's port 3724 and the world's 8085, on all interfaces. Making them keys is a
   change to who can reach the server, so it is left for its own decision.

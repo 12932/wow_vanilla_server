@@ -136,9 +136,11 @@ pub fn rates(house: u32) -> (u32, u32) {
 
 /// The house's cut of an auction's bid, worked out wide: a bid of 28,634
 /// gold times the goblins' 15 is past a `u32` (mangos's `GetAuctionCut`
-/// works it out in floats).
-fn cut_of(a: &Auction) -> u32 {
-    (u64::from(a.bid) * u64::from(rates(a.house).1) / 100) as u32
+/// works it out in floats). At `rate` (`[rates] auction_cut`), no more
+/// than the bid.
+fn cut_of(a: &Auction, rate: f32) -> u32 {
+    let cut = (u64::from(a.bid) * u64::from(rates(a.house).1) / 100) as u32;
+    crate::config::scaled(cut, rate).min(a.bid)
 }
 
 /// Thistle Tea's deposit (`Auction.deposit`): the item's sell price, by
@@ -352,7 +354,16 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
     let count = item.count();
     let sell_price = realm.data.item(item.entry).map_or(0, |t| t.sell_price);
     let house_id = house.as_int();
-    let deposit = deposit(sell_price, count, secs, house_id);
+    // mangos's `GetAuctionDeposit`: at least `[world] auction_deposit_min`,
+    // then at `[rates] auction_deposit`; the auction runs the time chosen
+    // at `[rates] auction_time`.
+    let (least, rate, runs) = (
+        map.cfg.auction_deposit_min,
+        map.cfg.rates.auction_deposit,
+        crate::config::scaled(secs, map.cfg.rates.auction_time),
+    );
+    let deposit =
+        crate::config::scaled(deposit(sell_price, count, secs, house_id).max(least), rate);
     if p.money() < deposit {
         fail(map, R2::ErrNotEnoughMoney);
         return;
@@ -376,7 +387,7 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
         bid: 0,
         bidder: 0,
         deposit,
-        expires_at: mail::now() + i64::from(secs),
+        expires_at: mail::now() + i64::from(runs),
     };
     let mut records = Records::new();
     records.put(KIND_AUCTION, u64::from(a.id), &a);
@@ -399,7 +410,7 @@ pub fn sell(map: &mut Map, g: Guid, m: &CMSG_AUCTION_SELL_ITEM) {
 /// The auction won: the item to the winner, the money to the seller.
 /// The mails and the auction's end go in `records`, to be saved together.
 fn settle(realm: &Realm, a: &Auction, records: &mut Records) {
-    let cut = cut_of(a);
+    let cut = cut_of(a, realm.config().rates.auction_cut);
     mail::post_in(
         realm,
         mail_from(a, a.bidder, WON, Some(a.item.clone()), 0, 0),
@@ -601,7 +612,11 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     else {
         return;
     };
-    let fee = if a.bidder > 0 { cut_of(&a) } else { 0 };
+    let fee = if a.bidder > 0 {
+        cut_of(&a, map.cfg.rates.auction_cut)
+    } else {
+        0
+    };
     if map.players.get(&g).is_none_or(|p| p.money() < fee) {
         drop(auctions);
         command_result(

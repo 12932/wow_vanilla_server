@@ -149,12 +149,24 @@ fn drive(realm: &Realm) {
 }
 
 /// The invasion's clock: it begins, endures its hours, lets its lords'
-/// corpses be looted, rests and comes again.
+/// corpses be looted, rests and comes again. `[events] elemental_invasion`
+/// off, it stops where it is, and begins again from its first stage when
+/// it is back on.
 pub fn sweep(realm: &Realm) {
     let t = now();
+    let on = realm.config().events.elemental_invasion;
     let changed = {
         let mut s = realm.social.elemental.lock();
         let before = s.driven(t);
+        if !on {
+            s.started = false;
+            let stopped = s.driven(t) != before;
+            drop(s);
+            if stopped {
+                drive(realm);
+            }
+            return;
+        }
         if !s.started || s.rest_until.is_some_and(|r| r <= t) {
             s.begin(t);
         }

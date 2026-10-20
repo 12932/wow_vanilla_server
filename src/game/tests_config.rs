@@ -1,8 +1,9 @@
 //! The config's tunables, honoured: a kill's XP at `[rates] xp_kill`,
 //! drops at their quality's rate, a corpse's decay and a respawn at their
 //! settings, the aggro range at `[creatures] aggro_rate`, a new
-//! character's level and money; and a reload that changes a live rate
-//! and leaves what needs a restart, saying so.
+//! character's level and money, the chat flood's count, the invasions'
+//! switches; and reloads that change live keys and leave what needs a
+//! restart, saying so.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -306,4 +307,93 @@ async fn a_new_character_starts_at_the_configs_level_and_money() {
         .await
         .flatten();
     assert_eq!(got, Some((10, 12_345)));
+}
+
+/// The keys the constants became: a reload puts in the live ones, at the
+/// realm and at the maps' next update (an empty copy's unload time too,
+/// once kept from the reload), and the week's least kills in the honor
+/// ledger; world PvP waits for a restart.
+#[tokio::test]
+async fn a_reload_puts_in_the_keys_that_were_constants() {
+    let running = ServerConfig::default();
+    let realm = realm_with(RealmConfig::from_config(&running));
+    realm.set_source(running.clone());
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    assert_eq!(
+        realm.social.honor.lock().minimum_kills,
+        Some(crate::game::honor::MINIMUM_KILLS)
+    );
+    let mut new = running.clone();
+    new.chat.say_yards = 40.0;
+    new.world.min_honor_kills = 3;
+    new.instances.unload_delay_secs = 60;
+    new.arena.min_fighters = 5;
+    new.outdoor_pvp.silithus = false;
+    let report = realm.reload(crate::config::Loaded {
+        config: new,
+        warnings: Vec::new(),
+    });
+    assert_eq!(
+        report.applied,
+        vec![
+            "[world] min_honor_kills".to_owned(),
+            "[chat] say_yards".to_owned(),
+            "[instances] unload_delay_secs".to_owned(),
+            "[arena] min_fighters".to_owned(),
+        ]
+    );
+    assert_eq!(report.restart, vec!["[outdoor_pvp] silithus".to_owned()]);
+    let cfg = realm.config();
+    assert_eq!(cfg.chat.say_yards, 40.0);
+    assert_eq!(cfg.instance_unload, Duration::from_secs(60));
+    assert_eq!(cfg.arena.min_fighters, 5);
+    assert!(cfg.outdoor_pvp.silithus, "left for a restart");
+    assert_eq!(realm.social.honor.lock().minimum_kills, Some(3));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if map.query(|m| m.cfg.chat.say_yards).await == Some(40.0) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the map never took the reload");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// `[chat] flood_message_count` lines in a row mute a player; at 0, none
+/// do (mangos's `ChatFlood.MessageCount`).
+#[tokio::test]
+async fn the_chat_flood_mutes_at_the_configs_count_and_never_at_zero() {
+    for (count, muted_at) in [(10, Some(10)), (3, Some(3)), (0, None)] {
+        let mut cfg = harness::test_config();
+        cfg.everyone_gm = false;
+        cfg.chat.flood_message_count = count;
+        let realm = realm_with(cfg);
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let map = realm.maps.get(&realm, MapKey::world(0));
+        // Every line at once: each within a second of the last.
+        let dropped = map
+            .query(move |m| (0..20).position(|_| crate::game::map::chat::flooded(m, ga)))
+            .await
+            .unwrap();
+        assert_eq!(dropped, muted_at, "at {count}");
+    }
+}
+
+/// `[events]`: the Elemental Invasion doesn't begin while off; the Scourge
+/// Invasion comes on at the config's word, and a GM's `.invasion off`
+/// holds while the config stays as it is.
+#[tokio::test]
+async fn the_invasions_follow_the_config() {
+    let mut cfg = harness::test_config();
+    cfg.events.elemental_invasion = false;
+    cfg.events.scourge_invasion = true;
+    let realm = realm_with(cfg);
+    crate::game::elemental::sweep(&realm);
+    assert!(!realm.social.elemental.lock().started);
+    crate::game::invasion::sweep(&realm);
+    assert!(realm.social.invasion.lock().enabled);
+    crate::game::invasion::disable(&realm);
+    crate::game::invasion::sweep(&realm);
+    assert!(!realm.social.invasion.lock().enabled, "the GM's word holds");
 }

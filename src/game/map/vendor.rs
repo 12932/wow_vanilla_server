@@ -40,8 +40,9 @@ pub const NPC_YARDS: f32 = 8.0;
 const MAX_MONEY: u32 = 2_147_483_647;
 /// A buyback slot's timestamp counts from login, thirty hours on.
 const BUYBACK_OFFSET_SECS: u32 = 108_000;
-/// One blow in two hundred wears a point off something worn.
-const HIT_WEAR_CHANCE: f32 = 0.5;
+/// One blow in two hundred wears a point off something worn, by default
+/// (`[players] durability_loss_chance_damage`), in percent.
+pub const HIT_WEAR_CHANCE: f32 = 0.5;
 /// The inventory slots that wear: the equipment.
 const WEAR_SLOTS: u8 = EQUIPMENT_END;
 /// Past the backpack: the bank, and on.
@@ -763,6 +764,7 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
     if attacker == victim {
         return;
     }
+    let chance = map.cfg.players.durability_loss_chance_damage;
     let mut rng = rand::rng();
     for g in [victim, attacker] {
         let (roll, slot) = (
@@ -771,7 +773,7 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
         );
         #[cfg(test)]
         let (roll, slot) = FORCED_WEAR.with(|f| f.get()).unwrap_or((roll, slot));
-        if !guid::is_player(g) || roll >= HIT_WEAR_CHANCE {
+        if !guid::is_player(g) || roll >= chance {
             continue;
         }
         let Some(p) = map.players.get_mut(&g) else {

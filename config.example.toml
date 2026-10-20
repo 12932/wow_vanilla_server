@@ -96,6 +96,32 @@ mail_delay_secs = 3600
 # Default 2. Range 1 to 7, clamped. Needs a restart.
 honor_reset_weekday = 2
 
+# Honorable kills a week needs to be ranked at its end.
+# Default 15. Range 1 to 10000, clamped. Changes at a reload. mangos: MinHonorKills.
+min_honor_kills = 15
+
+# The most players a `/who` lists (the client shows 50 at most).
+# Default 49. Range 1 to 49, clamped. Changes at a reload. mangos: MaxWhoListReturns.
+max_who_list_returns = 49
+
+# Zones' weather changes: rain, snow and storms, by the season.
+# Off, the weather is fine everywhere but where a GM set it for
+# good.
+# Default true. Changes at a reload. mangos: ActivateWeather.
+weather = true
+
+# Seconds between a zone's rolls for a change of weather.
+# Default 600. Range 10 to 86400, clamped. Changes at a reload. mangos: ChangeWeatherInterval.
+weather_change_secs = 600
+
+# The least deposit an auction takes, in copper.
+# Default 0. Range 0 to 2147483647, clamped. Changes at a reload. mangos: Auction.Deposit.Min.
+auction_deposit_min = 0
+
+# The realm's name in the realm list.
+# Default "Location Realm". Needs a restart.
+realm_name = "Location Realm"
+
 # How far players see, in yards. Further costs the server more and
 # the client more.
 [visibility]
@@ -117,8 +143,38 @@ battleground_yards = 400.0
 # Default 400.0. Range 20 to 500, clamped. Changes at a reload.
 flight_yards = 400.0
 
-# Multipliers on what players earn, and the skill-ups' sizes and
-# chances. 1 is 1.12's own.
+# Chat: how far it carries, and the flood control. GMs aren't
+# muted.
+[chat]
+
+# Yards a say carries, players' and creatures'.
+# Default 25.0. Range 1 to 500, clamped. Changes at a reload. mangos: ListenRange.Say.
+say_yards = 25.0
+
+# Yards a yell carries, and a boss's emote.
+# Default 300.0. Range 1 to 1000, clamped. Changes at a reload. mangos: ListenRange.Yell.
+yell_yards = 300.0
+
+# Yards an emote (`/wave`) carries.
+# Default 25.0. Range 1 to 500, clamped. Changes at a reload. mangos: ListenRange.TextEmote.
+text_emote_yards = 25.0
+
+# Lines in a row, each within `flood_message_delay_secs` of the
+# last, that mute a player; 0 never mutes.
+# Default 10. Range 0 to 1000, clamped. Changes at a reload. mangos: ChatFlood.MessageCount.
+flood_message_count = 10
+
+# Seconds within which a line follows the last to count towards
+# a flood.
+# Default 1. Range 1 to 60, clamped. Changes at a reload. mangos: ChatFlood.MessageDelay.
+flood_message_delay_secs = 1
+
+# Seconds a flooding player is muted.
+# Default 10. Range 1 to 86400, clamped. Changes at a reload. mangos: ChatFlood.MuteTime.
+flood_mute_secs = 10
+
+# Multipliers on what players earn, regenerate and pay, and the
+# skill-ups' sizes and chances. 1 is 1.12's own.
 [rates]
 
 # XP from kills.
@@ -232,6 +288,51 @@ skill_chance_green = 25
 # Default 0. Range 0 to 100, clamped. Changes at a reload. mangos: SkillChance.Grey.
 skill_chance_grey = 0
 
+# The least rate a grey creature's kill gives reputation at.
+# Default 0.2. Range 0 to 1, clamped. Changes at a reload. mangos: Rate.Reputation.LowLevel.Kill.
+reputation_low_level_kill = 0.2
+
+# The least rate a quest well below the player gives reputation
+# at: a fifth less for each level past five below, down to this.
+# Default 0.2. Range 0 to 1, clamped. Changes at a reload. mangos: Rate.Reputation.LowLevel.Quest.
+reputation_low_level_quest = 0.2
+
+# Health players regenerate from spirit.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Health.
+health = 1.0
+
+# Mana players regenerate from spirit.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Mana.
+mana = 1.0
+
+# Rage from blows dealt and taken.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Rage.Income.
+rage_income = 1.0
+
+# Rage lost out of combat.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Rage.Loss.
+rage_loss = 1.0
+
+# Energy regenerated.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Energy.
+energy = 1.0
+
+# Damage from falls.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Damage.Fall.
+damage_fall = 1.0
+
+# How long auctions run (the deposit is the chosen time's).
+# Default 1.0. Range 0.01 to 100, clamped. Changes at a reload. mangos: Rate.Auction.Time.
+auction_time = 1.0
+
+# Auctions' deposits.
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Auction.Deposit.
+auction_deposit = 1.0
+
+# The auction house's cut of a sale (never more than the sale).
+# Default 1.0. Range 0 to 100, clamped. Changes at a reload. mangos: Rate.Auction.Cut.
+auction_cut = 1.0
+
 # Creatures: how near they notice players, how far they chase, how
 # they call for help, how long their corpses lie.
 [creatures]
@@ -266,6 +367,16 @@ assistance_delay_ms = 1500
 # Yards a fleeing creature looks for help within.
 # Default 30.0. Range 0 to 100, clamped. Changes at a reload. mangos: CreatureFamilyFleeAssistanceRadius.
 flee_assistance_radius = 30.0
+
+# Milliseconds a creature flees for help, where its script doesn't
+# say (mangos's default is 10000).
+# Default 7000. Range 0 to 60000, clamped. Changes at a reload. mangos: CreatureFamilyFleeDelay.
+flee_delay_ms = 7000
+
+# Seconds a wandering creature stands still once a player talks
+# to it.
+# Default 180. Range 0 to 3600, clamped. Changes at a reload. mangos: InteractionPauseTimer.
+interaction_pause_secs = 180
 
 # Seconds a normal creature's corpse lies (no longer than its
 # respawn).
@@ -468,6 +579,52 @@ always_max_skill_for_level = false
 # Default 18. Range 0 to 8760, clamped. Changes at a reload.
 bones_hours = 18
 
+# Yards from a kill a group's member must be for a share of it:
+# its XP, loot, quest credit, reputation and honor (in a
+# battleground, its honorable kill).
+# Default 74.0. Range 5 to 500, clamped. Changes at a reload. mangos: MaxGroupXPDistance.
+group_reward_yards = 74.0
+
+# The level from which a spirit healer's resurrection brings
+# sickness: a minute at this level, a minute more a level, ten
+# at most. Above the level cap, never.
+# Default 11. Range 1 to 100, clamped. Changes at a reload. mangos: Death.SicknessLevel.
+death_sickness_level = 11
+
+# Primary professions (alchemy, mining, tailoring, ...) a player
+# may learn.
+# Default 2. Range 0 to 10, clamped. Changes at a reload. mangos: MaxPrimaryTradeSkill.
+max_primary_trade_skill = 2
+
+# The chance, in percent, a blow dealt or taken wears a point off
+# a random piece of a player's gear.
+# Default 0.5. Range 0 to 100, clamped. Changes at a reload. mangos: DurabilityLossChance.Damage.
+durability_loss_chance_damage = 0.5
+
+# Water and lava: how long a player has before they come to harm,
+# and lava's burn.
+[environment]
+
+# Seconds of breath under water before drowning.
+# Default 60. Range 1 to 3600, clamped. Changes at a reload. mangos: MirrorTimer.Breath.Max.
+breath_secs = 60
+
+# Seconds in the deep sea before fatigue.
+# Default 60. Range 1 to 3600, clamped. Changes at a reload. mangos: MirrorTimer.Fatigue.Max.
+fatigue_secs = 60
+
+# Seconds touching lava before it burns.
+# Default 1. Range 0 to 60, clamped. Changes at a reload. mangos: MirrorTimer.Environmental.Max.
+lava_secs = 1
+
+# The least fire damage lava does every two seconds.
+# Default 605. Range 0 to 1000000, clamped. Changes at a reload. mangos: EnvironmentalDamage.Min.
+lava_damage_min = 605
+
+# The most (no less than `lava_damage_min`).
+# Default 610. Range 0 to 1000000, clamped. Changes at a reload. mangos: EnvironmentalDamage.Max.
+lava_damage_max = 610
+
 # Quests: which givers show what.
 [quests]
 
@@ -476,6 +633,24 @@ bones_hours = 18
 # for it. -1 shows it at any gap.
 # Default 7. Range -1 to 60, clamped. Changes at a reload. mangos: Quests.HighLevelHideDiff.
 high_level_hide_diff = 7
+
+# Dungeon and raid copies.
+[instances]
+
+# Seconds an empty copy stays up. What it remembers (its dead,
+# who went in) is kept at least five minutes after its last use,
+# for its players to come back to.
+# Default 300. Range 1 to 86400, clamped. Changes at a reload. mangos: Instance.UnloadDelay.
+unload_delay_secs = 300
+
+# The hour of the day, UTC, raids reset at, on their reset days.
+# Default 4. Range 0 to 23, clamped. Changes at a reload. mangos: Instance.ResetTimeHour.
+reset_hour = 4
+
+# Copies an account may go into an hour; one it was in within the
+# hour doesn't count again.
+# Default 5. Range 1 to 1000, clamped. Changes at a reload.
+entries_per_hour = 5
 
 # Battlegrounds' queues and matches.
 [battleground]
@@ -496,6 +671,39 @@ auto_leave_secs = 120
 # Default 120. Range 10 to 600, clamped. Changes at a reload.
 invitation_secs = 120
 
+# A player who leaves a match before its end is a Deserter, kept
+# out of battlegrounds for a while.
+# Default true. Changes at a reload. mangos: Battleground.CastDeserter.
+cast_deserter = true
+
+# World PvP on the continents.
+[outdoor_pvp]
+
+# The Eastern Plaguelands' four towers, their buffs (there and in
+# Stratholme and Scholomance) and the Crown Guard graveyard.
+# Default true. Needs a restart. mangos: OutdoorPvp.EPEnabled.
+eastern_plaguelands = true
+
+# Silithus's silithyst and the Cenarion Favor (there and in
+# Ahn'Qiraj).
+# Default true. Needs a restart. mangos: OutdoorPvp.SIEnabled.
+silithus = true
+
+# World events the server runs of itself.
+[events]
+
+# The Elemental Invasion: rifts in Un'Goro, Silithus, Azshara and
+# Winterspring, their stages and lords, then days of rest. Off,
+# it stops where it is.
+# Default true. Changes at a reload.
+elemental_invasion = true
+
+# The Scourge Invasion's necropolises over the zones it attacks,
+# as `.invasion on` (Thistle Tea's `scourge_invasion`, off). A
+# GM's `.invasion on` or `off` holds until this changes.
+# Default false. Changes at a reload.
+scourge_invasion = false
+
 # The movement check: a player who moves faster than they can is
 # pulled back. GMs are never checked.
 [anticheat]
@@ -511,6 +719,10 @@ speed_tolerance = 1.25
 # Seconds of lag a movement packet may carry.
 # Default 0.5. Range 0 to 5, clamped. Changes at a reload.
 latency_allowance_secs = 0.5
+
+# Yards a move may go past what its speed and time allow.
+# Default 3.0. Range 0 to 100, clamped. Changes at a reload.
+distance_allowance_yards = 3.0
 
 # Who may log in, and who is a GM.
 [accounts]
@@ -577,49 +789,68 @@ orientation = 0.0
 [arena]
 
 # Minutes between scheduled battles; 0 for only those a GM starts.
-# Default 0. Needs a restart.
+# Default 0. Changes at a reload.
 every_minutes = 0
 
 # Seconds of countdown before a battle.
-# Default 30. Needs a restart.
+# Default 30. Changes at a reload.
 countdown_secs = 30
 
 # Seconds into the fight the ring of fire starts closing.
-# Default 120. Needs a restart.
+# Default 120. Changes at a reload.
 ring_after_secs = 120
 
 # Seconds between the ring's steps.
-# Default 20. Range 1 to 3600, clamped. Needs a restart.
+# Default 20. Range 1 to 3600, clamped. Changes at a reload.
 ring_every_secs = 20
 
 # Yards the ring closes by at each step.
-# Default 5.0. Needs a restart.
+# Default 5.0. Changes at a reload.
 ring_step_yards = 5.0
 
 # The ring's smallest radius.
-# Default 6.0. Needs a restart.
+# Default 6.0. Changes at a reload.
 ring_min_yards = 6.0
 
 # The longest a battle runs: then the ring is at its smallest and
 # burns its hardest.
-# Default 20. Needs a restart.
+# Default 20. Changes at a reload.
 max_minutes = 20
 
 # The champion's prize in copper.
-# Default 250000. Needs a restart.
+# Default 250000. Changes at a reload.
 reward_copper = 250000
 
 # The champion's item (Arena Grand Master).
-# Default 19024. Needs a restart.
+# Default 19024. Changes at a reload.
 reward_item = 19024
 
 # The champion's buff (Spirit of Zandalar).
-# Default 24425. Needs a restart.
+# Default 24425. Changes at a reload.
 champion_spell = 24425
 
 # Fighters a battle needs to start.
-# Default 2. Needs a restart.
+# Default 2. Changes at a reload.
 min_fighters = 2
+
+# Seconds a fighter may stand off the pit's floor before they
+# have fled.
+# Default 5. Range 0 to 600, clamped. Changes at a reload.
+off_floor_secs = 5
+
+# Seconds the fallen lie before their ghosts go up to the stands.
+# Default 5. Range 0 to 600, clamped. Changes at a reload.
+lie_secs = 5
+
+# Seconds within which a fighter's kills are a double, triple or
+# more.
+# Default 10. Range 0 to 600, clamped. Changes at a reload.
+multi_kill_secs = 10
+
+# Seconds between the announcer's counts of the fighters left,
+# when no one falls.
+# Default 60. Range 5 to 3600, clamped. Changes at a reload.
+roll_call_secs = 60
 
 # Seconds a player keeps the free-for-all flag after walking out
 # of an arena's area (Gurubashi's pit), so the edge can't be

@@ -618,7 +618,8 @@ pub fn leave(map: &mut Map, g: Guid) {
         m.ended
     };
     send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
-    if !ended {
+    // `[battleground] cast_deserter`, mangos's `Battleground.CastDeserter`.
+    if !ended && map.cfg.bg_cast_deserter {
         crate::game::map::spells::cast_triggered(
             map,
             g,
@@ -675,7 +676,8 @@ pub fn strayed(map: &mut Map, g: Guid) {
         m.ended
     };
     send_frame(&realm, g, &status_frame(0, 0, 0, 0, 0));
-    if !ended {
+    // `[battleground] cast_deserter`, mangos's `Battleground.CastDeserter`.
+    if !ended && map.cfg.bg_cast_deserter {
         crate::game::map::spells::cast_triggered(
             map,
             g,

@@ -93,6 +93,9 @@ pub struct Ledger {
     pub dirty: ahash::AHashSet<u32>,
     /// A week settled by an award's [`Ledger::on`], for the sweep to tell.
     pub week_turned: bool,
+    /// Kills a week needs to be ranked (`[world] min_honor_kills`);
+    /// [`MINIMUM_KILLS`] if unset.
+    pub minimum_kills: Option<u32>,
 }
 
 /// Today, in days since 1970.
@@ -217,7 +220,7 @@ impl Ledger {
                 }
             })
             .collect();
-        let standings = weekly(&candidates);
+        let standings = weekly_with(&candidates, self.minimum_kills.unwrap_or(MINIMUM_KILLS));
         for (guid, s) in standings {
             let Some(e) = self.entries.get_mut(&guid) else {
                 continue;
@@ -491,7 +494,8 @@ const EARNINGS: [f32; 15] = [
     0.0, 400.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 10000.0,
     11000.0, 12000.0, 13000.0,
 ];
-/// Kills a week needs to be ranked.
+/// Kills a week needs to be ranked, by default (`[world]
+/// min_honor_kills`).
 pub const MINIMUM_KILLS: u32 = 15;
 
 /// One character in a week's ranking.
@@ -515,12 +519,17 @@ pub struct Standing {
 /// The week's ranking: each side ranked by contribution, with the rank
 /// points its standing earns; those who didn't take part decay.
 pub fn weekly(candidates: &[Candidate]) -> Vec<(u32, Standing)> {
+    weekly_with(candidates, MINIMUM_KILLS)
+}
+
+/// [`weekly`], with `minimum_kills` a week to be ranked.
+pub fn weekly_with(candidates: &[Candidate], minimum_kills: u32) -> Vec<(u32, Standing)> {
     let mut out = Vec::new();
     for team in [0u8, 1] {
         let mut ranked: Vec<&Candidate> = candidates
             .iter()
             .filter(|c| {
-                c.team == team && c.honorable_kills >= MINIMUM_KILLS && c.contribution > 0.0
+                c.team == team && c.honorable_kills >= minimum_kills && c.contribution > 0.0
             })
             .collect();
         ranked.sort_by(|a, b| {

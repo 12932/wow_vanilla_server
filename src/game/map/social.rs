@@ -23,7 +23,8 @@ use crate::game::social::{auction, channels, friends, guilds, mail, same_side};
 pub const SMSG_WHO: u16 = 0x063;
 /// How often a grouped player's stats go to the members who can't see them.
 pub const STATS_EVERY: Duration = Duration::from_secs(1);
-/// The most a `/who` lists.
+/// The most a `/who` lists, and the default of `[world]
+/// max_who_list_returns`.
 pub const WHO_LIMIT: usize = 49;
 /// Alterac Valley, Warsong Gulch and Arathi Basin.
 const BATTLEGROUND_ZONES: [u32; 3] = [2597, 3277, 3358];
@@ -194,6 +195,7 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     let mut rows = Body::default();
     let everyone = realm.registry.all_online();
     let here = me.map().key;
+    let limit = map.cfg.max_who_list_returns.min(WHO_LIMIT);
     for o in everyone.iter().cloned() {
         if !same_side(&me, &o) || (o.gm && !me.gm) {
             continue;
@@ -247,7 +249,7 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
             continue;
         }
         matched += 1;
-        if matched > WHO_LIMIT {
+        if matched > limit {
             continue;
         }
         listed += 1;
@@ -259,7 +261,7 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
             .u32(o.zone());
     }
     // The count: everyone online past a full list, else those listed.
-    let online = if everyone.len() > WHO_LIMIT {
+    let online = if everyone.len() > limit {
         everyone.len() as u32
     } else {
         listed

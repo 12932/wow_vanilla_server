@@ -1027,6 +1027,7 @@ pub struct RealmConfig {
     pub tile_unload: Duration,
     pub petition_signatures: u32,
     pub mail_delay: Duration,
+    /// How long an empty copy stays up (`[instances] unload_delay_secs`).
     pub instance_unload: Duration,
     /// How long a logout outside an inn or flight takes (tests shorten it).
     pub logout_delay: Duration,
@@ -1054,12 +1055,28 @@ pub struct RealmConfig {
     /// maps' threads (`map/tiles.rs`); tests read them at once, as they
     /// are asked for, so that what a test sees doesn't hang on the disk.
     pub tiles_in_background: bool,
+    /// A match's leaver is a Deserter.
+    pub bg_cast_deserter: bool,
+    /// Honorable kills a week needs to be ranked.
+    pub min_honor_kills: u32,
+    /// The most a `/who` lists.
+    pub max_who_list_returns: usize,
+    /// Whether the zones' weather changes.
+    pub weather: bool,
+    pub weather_change: Duration,
+    /// The least deposit an auction takes, in copper.
+    pub auction_deposit_min: u32,
     pub arena: crate::game::map::arena::ArenaConfig,
+    pub chat: crate::config::ChatConfig,
     pub rates: crate::config::RatesConfig,
     pub creatures: crate::config::CreaturesConfig,
     pub guards: crate::config::GuardsConfig,
     pub players: crate::config::PlayersConfig,
+    pub environment: crate::config::EnvironmentConfig,
     pub quests: crate::config::QuestsConfig,
+    pub instances: crate::config::InstancesConfig,
+    pub outdoor_pvp: crate::config::OutdoorPvpConfig,
+    pub events: crate::config::EventsConfig,
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
 }
@@ -1082,7 +1099,7 @@ impl RealmConfig {
             tile_unload: Duration::from_secs(c.world.tile_unload_secs),
             petition_signatures: c.world.petition_signatures,
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
-            instance_unload: crate::game::instances::UNLOAD_EMPTY_AFTER,
+            instance_unload: Duration::from_secs(c.instances.unload_delay_secs),
             logout_delay: crate::game::map::login::LOGOUT_DELAY,
             bg_min_players: (b.min_players > 0).then_some(b.min_players),
             bg_start_delay: Duration::from_secs(b.start_delay_secs),
@@ -1095,12 +1112,23 @@ impl RealmConfig {
             spell_rolls: true,
             spell_travel: true,
             tiles_in_background: true,
+            bg_cast_deserter: b.cast_deserter,
+            min_honor_kills: c.world.min_honor_kills,
+            max_who_list_returns: c.world.max_who_list_returns,
+            weather: c.world.weather,
+            weather_change: Duration::from_secs(c.world.weather_change_secs),
+            auction_deposit_min: c.world.auction_deposit_min,
             arena: c.arena.clone(),
+            chat: c.chat.clone(),
             rates: c.rates.clone(),
             creatures: c.creatures.clone(),
             guards: c.guards.clone(),
             players: c.players.clone(),
+            environment: c.environment.clone(),
             quests: c.quests.clone(),
+            instances: c.instances.clone(),
+            outdoor_pvp: c.outdoor_pvp.clone(),
+            events: c.events.clone(),
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),
         }
@@ -1110,7 +1138,6 @@ impl RealmConfig {
     /// restart are as they were): what the config doesn't set kept.
     pub fn reloaded(&self, applied: &crate::config::ServerConfig) -> Self {
         Self {
-            instance_unload: self.instance_unload,
             logout_delay: self.logout_delay,
             spell_rolls: self.spell_rolls,
             spell_travel: self.spell_travel,
@@ -1201,7 +1228,11 @@ impl Realm {
     ) -> Arc<Self> {
         let registry = Registry::new();
         let social = social::Social::load(&startup.records);
-        social.honor.lock().set_weekday(config.honor_reset_weekday);
+        {
+            let mut honor = social.honor.lock();
+            honor.set_weekday(config.honor_reset_weekday);
+            honor.minimum_kills = Some(config.min_honor_kills);
+        }
         let max_mail_item = social
             .mail
             .lock()
@@ -1264,6 +1295,7 @@ impl Realm {
         let changes = crate::config::changes(&source, &loaded.config);
         let applied = crate::config::live_part(&source, &loaded.config);
         let next = self.config().reloaded(&applied);
+        self.social.honor.lock().minimum_kills = Some(next.min_honor_kills);
         *self.config.write() = Arc::new(next);
         self.config_generation
             .fetch_add(1, std::sync::atomic::Ordering::Release);
