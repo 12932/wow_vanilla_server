@@ -232,3 +232,54 @@ fn an_auction_commands_result_carries_the_trailer_its_result_wants() {
         higher
     );
 }
+
+/// Whether `c` is told it is queued for Arathi Basin.
+async fn queued_for_arathi(c: &mut Client) {
+    c.wait_frame(
+        "queued",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() >= 17 && u32::from_le_bytes([f[4], f[5], f[6], f[7]]) == 529,
+    )
+    .await;
+}
+
+/// Thistle Tea's battleground_messages_test, "dispatches the build-5875
+/// queue-list payload and preserves group and instance selection": the
+/// 1.12.1 client joins from a list shown with no battlemaster (the
+/// window's, `CMSG_BATTLEFIELD_LIST`) with `CMSG_BATTLEFIELD_JOIN`: the
+/// map, the instance and the group's byte (its `0x4AA00B`). Read by hand,
+/// a leader's join with the byte set queues the group; the map alone queues
+/// its sender alone. Before, wow_messages wanted the map alone and read
+/// nothing the client sent.
+#[tokio::test]
+async fn a_join_from_the_windows_list_queues_as_the_client_asks() {
+    assert!(
+        crate::game::conn::RAW_OPCODES.contains(&0x23E),
+        "read by hand"
+    );
+    let realm = harness::realm_with(crate::game::tests_pvp::arathi());
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Cid", Race::Human, Class::Warrior).await;
+    let (ao, bo) = (
+        realm.registry.online(a.guid).unwrap(),
+        realm.registry.online(b.guid).unwrap(),
+    );
+    assert!(crate::game::social::groups::join_directly(&realm, &ao, &bo));
+    let mut join = 529u32.to_le_bytes().to_vec();
+    join.extend(0u32.to_le_bytes());
+    join.push(1);
+    a.send_raw(crate::game::map::pvp::CMSG_BATTLEFIELD_JOIN, &join)
+        .await;
+    queued_for_arathi(&mut a).await;
+    queued_for_arathi(&mut b).await;
+    c.send_raw(
+        crate::game::map::pvp::CMSG_BATTLEFIELD_JOIN,
+        &529u32.to_le_bytes(),
+    )
+    .await;
+    queued_for_arathi(&mut c).await;
+}

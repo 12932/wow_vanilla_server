@@ -183,6 +183,10 @@ impl Map {
             crate::game::map::tickets::survey(self, guid, body);
             return;
         }
+        if opcode == crate::game::map::pvp::CMSG_BATTLEFIELD_JOIN {
+            crate::game::map::pvp::join_raw(self, guid, body);
+            return;
+        }
         tracing::trace!("raw opcode 0x{opcode:03X} not handled");
     }
 }
