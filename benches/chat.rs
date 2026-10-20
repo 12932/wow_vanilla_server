@@ -5,9 +5,10 @@
 //! of its own.
 //!
 //! ```sh
-//! cargo bench --bench chat                   # everything: 18 cases, about two minutes
-//! cargo bench --bench chat -- delivered      # a group: delivered or said
+//! cargo bench --bench chat                   # everything: 27 cases, about two minutes
+//! cargo bench --bench chat -- delivered      # a group: delivered, said or pushed
 //! cargo bench --bench chat -- --max-time 0.5 # a quick look
+//! WVS_BENCH_WORKERS=4 cargo bench --bench chat  # another count of tokio workers
 //! ```
 //!
 //! A case is rounds: a round says lines until 40,000 deliveries are due,
@@ -17,10 +18,12 @@
 //! done saying (the writers working meanwhile, as they do), and the
 //! writers' leftovers are drained before the next, untimed: its `item/s` is
 //! what a map hands out in a second, the time its update isn't running.
-//! How to read divan's output is in docs/PERFORMANCE.md ("The concurrency
+//! `pushed` is `said` with no writers at all, the queues emptied between
+//! rounds: the fan-out's own cost, without waking anyone. How to read
+//! divan's output is in docs/PERFORMANCE.md ("The concurrency
 //! micro-benchmarks").
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -123,9 +126,18 @@ async fn writer(mut frames: Frames, tally: Arc<Tally>, id: usize) {
     }
 }
 
+/// Whether each member's queue has a writer draining it.
+#[derive(Clone, Copy, PartialEq)]
+enum Writers {
+    /// A writer task each, asleep on its queue: a send wakes it.
+    Awake,
+    /// None: the queues fill, and are emptied between rounds, untimed.
+    None,
+}
+
 /// A realm with `channels` channels of `members` each (built-in ones, as
-/// General and Trade are: no notices at a join), every member online with
-/// a writer, and `speakers` of each channel's members to speak in it.
+/// General and Trade are: no notices at a join), every member online, and
+/// `speakers` of each channel's members to speak in it.
 struct World {
     realm: Arc<Realm>,
     tally: Arc<Tally>,
@@ -139,11 +151,13 @@ struct World {
     joined: u64,
     /// The lines each speaker says in a round.
     lines: usize,
+    /// The queues no writer drains ([`Writers::None`]).
+    queues: RefCell<Vec<Frames>>,
     rt: tokio::runtime::Runtime,
 }
 
 impl World {
-    fn new(channels: usize, members: usize, speakers: usize) -> Self {
+    fn new(channels: usize, members: usize, speakers: usize, writers: Writers) -> Self {
         let rt = runtime();
         let _in = rt.enter();
         let (store, startup) = Store::open(":memory:").expect("an in-memory store");
@@ -157,6 +171,7 @@ impl World {
         let map = realm.maps.get(&realm, MapKey::world(0));
         let tally = Arc::new(Tally::default());
         let mut all_speakers = Vec::new();
+        let mut queues = Vec::new();
         for c in 0..channels {
             let name: Arc<str> = Arc::from(format!("General - Bench {c}"));
             for i in 0..members {
@@ -177,7 +192,10 @@ impl World {
                     .registry
                     .go_online(online.clone())
                     .expect("a new player");
-                rt.spawn(writer(frames, tally.clone(), id));
+                match writers {
+                    Writers::Awake => drop(rt.spawn(writer(frames, tally.clone(), id))),
+                    Writers::None => queues.push(frames),
+                }
                 channels::join(&realm, &online, &name, "");
                 if i < speakers {
                     all_speakers.push((online, name.clone()));
@@ -185,8 +203,10 @@ impl World {
             }
         }
         // Each member's YOU_JOINED.
-        let joined = (channels * members) as u64;
-        wait_until(|| tally.total() >= joined);
+        if writers == Writers::Awake {
+            let joined = (channels * members) as u64;
+            wait_until(|| tally.total() >= joined);
+        }
         let lines = DELIVERIES / (all_speakers.len() * members);
         assert_eq!(lines * all_speakers.len() * members, DELIVERIES);
         drop(_in);
@@ -198,7 +218,15 @@ impl World {
             said: Arc::default(),
             rounds: Cell::new(0),
             lines,
+            queues: RefCell::new(queues),
             rt,
+        }
+    }
+
+    /// The queues no writer drains, emptied.
+    fn empty_queues(&self) {
+        for q in self.queues.borrow_mut().iter_mut() {
+            while q.try_recv().is_some() {}
         }
     }
 
@@ -259,6 +287,18 @@ fn as_said(bencher: Bencher, world: &World) {
         });
 }
 
+/// [`as_said`] with no writer: the queues emptied before each round,
+/// untimed.
+fn as_pushed(bencher: Bencher, world: &World) {
+    bencher
+        .counter(ItemsCount::new(DELIVERIES))
+        .with_inputs(|| world.empty_queues())
+        .bench_local_values(|()| {
+            world.say();
+            world.wait_said();
+        });
+}
+
 /// End to end: a round ends when every delivery is taken.
 #[divan::bench_group(min_time = SECS, max_time = SECS)]
 mod delivered {
@@ -267,14 +307,14 @@ mod delivered {
     /// One channel of `members`, said in by `MAPS` maps at once.
     #[divan::bench(consts = [1, 8], args = [100, 1000, 5000])]
     fn one_channel<const MAPS: usize>(bencher: Bencher, members: usize) {
-        to_the_end(bencher, &World::new(1, members, MAPS));
+        to_the_end(bencher, &World::new(1, members, MAPS, Writers::Awake));
     }
 
     /// Eight channels of `members` each, eight maps each saying lines in
     /// its own: what two channels' chat costs each other.
     #[divan::bench(args = [100, 1000, 5000])]
     fn own_channels(bencher: Bencher, members: usize) {
-        to_the_end(bencher, &World::new(8, members, 1));
+        to_the_end(bencher, &World::new(8, members, 1, Writers::Awake));
     }
 }
 
@@ -286,12 +326,32 @@ mod said {
     /// One channel of `members`, said in by `MAPS` maps at once.
     #[divan::bench(consts = [1, 8], args = [100, 1000, 5000])]
     fn one_channel<const MAPS: usize>(bencher: Bencher, members: usize) {
-        as_said(bencher, &World::new(1, members, MAPS));
+        as_said(bencher, &World::new(1, members, MAPS, Writers::Awake));
     }
 
     /// Eight channels of `members` each, eight maps each in its own.
     #[divan::bench(args = [100, 1000, 5000])]
     fn own_channels(bencher: Bencher, members: usize) {
-        as_said(bencher, &World::new(8, members, 1));
+        as_said(bencher, &World::new(8, members, 1, Writers::Awake));
+    }
+}
+
+/// [`said`] with no writer awake: what the fan-out costs a map itself (the
+/// registry's reads, each queue's budget and push), without the writers'
+/// wakes.
+#[divan::bench_group(min_time = SECS, max_time = SECS, sample_size = 1)]
+mod pushed {
+    use super::*;
+
+    /// One channel of `members`, said in by `MAPS` maps at once.
+    #[divan::bench(consts = [1, 8], args = [100, 1000, 5000])]
+    fn one_channel<const MAPS: usize>(bencher: Bencher, members: usize) {
+        as_pushed(bencher, &World::new(1, members, MAPS, Writers::None));
+    }
+
+    /// Eight channels of `members` each, eight maps each in its own.
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn own_channels(bencher: Bencher, members: usize) {
+        as_pushed(bencher, &World::new(8, members, 1, Writers::None));
     }
 }
