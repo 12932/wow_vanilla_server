@@ -847,16 +847,22 @@ pub fn home_reached(map: &mut Map, g: Guid) {
 fn spawn_movement(map: &Map, g: Guid) -> Option<(u8, f32)> {
     use crate::game::map::creature::{MOVEMENT_IDLE, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT};
     let data = &map.realm.data;
-    let spawn = map.creature(g)?.spawn_guid?;
+    let c = map.creature(g)?;
+    let (spawn, entry) = (c.spawn_guid?, c.entry);
     let s = data
         .creature_spawns
         .get(&map.key.map)?
         .iter()
         .find(|s| s.guid == spawn)?;
     let path = data.waypoints.get(&spawn).is_some_and(|p| !p.is_empty());
+    // Set to walk one with none of its own, its entry's.
+    let entry_path = data
+        .waypoints_by_entry
+        .get(&entry)
+        .is_some_and(|p| !p.is_empty());
     let kind = match s.movement_type {
         k if path && k != crate::game::map::creature_motion::MOVEMENT_CYCLIC => MOVEMENT_WAYPOINT,
-        MOVEMENT_WAYPOINT if !path => MOVEMENT_IDLE,
+        MOVEMENT_WAYPOINT if !path && !entry_path => MOVEMENT_IDLE,
         MOVEMENT_RANDOM if s.wander_distance <= 0.0 => MOVEMENT_IDLE,
         k => k,
     };

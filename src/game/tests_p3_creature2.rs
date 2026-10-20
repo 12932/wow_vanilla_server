@@ -703,6 +703,54 @@ async fn a_formation_is_led_on_by_its_survivors_until_its_leader_is_back() {
     assert_eq!(out.3, None, "none left, none leads");
 }
 
+/// A formation's leader on its entry's path (`creature_movement_template`,
+/// none of its spawn's): dead, a survivor leads the formation on along
+/// that path; and fought and home, it walks the path again.
+#[tokio::test]
+async fn a_leader_on_its_entrys_path_is_followed_on_and_walks_it_again_from_home() {
+    use crate::game::data::scripts::*;
+    let mut d = grouped(&[(293, &[294, 295], GROUP_FORMATION)]);
+    let (x, y, z) = crate::game::tests_p3_combat::START;
+    let path: Vec<_> = (0..2)
+        .map(|i| crate::game::data::Waypoint {
+            point: i,
+            x: x + 2.0 + 10.0 * i as f32,
+            y,
+            z,
+            ..Default::default()
+        })
+        .collect();
+    d.waypoints_by_entry.insert(BRUTE, path.clone());
+    if let Some(s) = d
+        .creature_spawns
+        .get_mut(&0)
+        .and_then(|v| v.iter_mut().find(|s| s.guid == 293))
+    {
+        s.movement_type = 2;
+    }
+    let (_realm, mut a, ga, map) = setup_with(d, Class::Warrior).await;
+    a.sees(of(295)).await;
+    let out = on(&map, move |m| {
+        hardy(m, ga);
+        let walks = |m: &Map, s: u32| m.creature(of(s)).map(|c| c.movement_type);
+        crate::game::map::event_ai::home_reached(m, of(293));
+        let home = walks(m, 293);
+        die(m, ga, 293);
+        let route = m
+            .creature(of(294))
+            .and_then(|c| c.scripted.as_deref())
+            .and_then(|s| s.route.as_ref())
+            .map(|r| r.points.len());
+        (home, m.acting_leaders.get(&293).copied(), route)
+    })
+    .await;
+    assert_eq!(
+        out,
+        (Some(2), Some(of(294)), Some(path.len())),
+        "(on its path from home, the first survivor leads, along the path)"
+    );
+}
+
 const SHEEP: u32 = 3_792;
 
 /// Critters; one spawned 3 yards from Alice.

@@ -500,7 +500,16 @@ pub fn died(map: &mut Map, g: Guid) {
     let Some(members) = data.scripts.groups.get(&key) else {
         return;
     };
-    let path = data.waypoints.get(&key).filter(|p| !p.is_empty());
+    // Its spawn's path, or the entry's it walked for want of one.
+    let path = data
+        .waypoints
+        .get(&key)
+        .or_else(|| {
+            map.creature(g)
+                .filter(|c| c.movement_type == crate::game::map::creature::MOVEMENT_WAYPOINT)
+                .and_then(|c| data.waypoints_by_entry.get(&c.entry))
+        })
+        .filter(|p| !p.is_empty());
     let Some(path) = path.filter(|_| group_flags(map, key) & GROUP_FORMATION != 0) else {
         return;
     };
