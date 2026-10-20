@@ -156,7 +156,7 @@ async fn walkers_keep_out_of_the_sea_and_swimmers_in_it() {
 /// obstructing wall": a flyer from beside Northshire Abbey to a point
 /// through its wall doesn't fly straight there, and any way it takes has
 /// every leg in the clear (wvs's flyer has none here: the navmesh's way
-/// round goes through the doorway, a leg its line of sight clips, so it
+/// round has a leg along the floor that its line of sight clips, so it
 /// stays). Of `world_position_test.exs`'s `grounded_target_position/2`,
 /// "leaves a grounded unit's position alone": a walker's way to a point on
 /// the ground ends at that point.
