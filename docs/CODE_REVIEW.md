@@ -46,6 +46,11 @@ missing world data). None fixed yet; waiting on your choice.
 - **net 5** fixed (`fix/fixnet`): pings are counted in the reader by mangos's rule (more than
   `[network] max_overspeed_pings`, 2, in a row each under 27 s after the last disconnect); a closed queue ends the
   reader and the session at once (with #2).
+- **A session's map handle gone stale**, found by fixmaps, fixed (`fix/stalehandle`): the copy that takes a player
+  handed on by a copy that stopped tells their session, behind all that was handed on (`Control::HandedOn`); a
+  packet for a stopped map waits for that word and goes there, and a session gone by then has the player let go,
+  saved, by that copy. Before, the session kept the stopped copy's handle: the client's next packet closed the
+  connection, and the player went offline unsaved, still in the copy.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
