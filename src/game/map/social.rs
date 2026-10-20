@@ -187,7 +187,14 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     );
     let name = m.player_name.to_lowercase();
     let guild_filter = m.guild_name.to_lowercase();
-    let words: Vec<String> = m.search_strings.iter().map(|s| s.to_lowercase()).collect();
+    // Any word, in the name, the guild or the zone (Thistle Tea's `Who`):
+    // lowered once, not for each player.
+    let words: Vec<String> = m
+        .search_strings
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect();
     let zones: Vec<u32> = m.zones.clone();
     let mut b = Body::default();
     let mut listed = 0u32;
@@ -241,9 +248,6 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
             .get(&o.zone())
             .map(|a| a.name.to_lowercase())
             .unwrap_or_default();
-        // Any word, in the name, the guild or the zone (Thistle Tea's
-        // `Who`).
-        let words: Vec<&String> = words.iter().filter(|w| !w.is_empty()).collect();
         if !words.is_empty()
             && !words.iter().any(|w| {
                 lower.contains(w.as_str())

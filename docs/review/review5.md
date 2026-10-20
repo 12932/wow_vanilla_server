@@ -1160,7 +1160,11 @@ Each finding: severity, kind, where, what and how it shows, the fix, its effort.
   then, take `MSG_QUERY_NEXT_MAIL_TIME` out of `is_query`.
 - **Effort:** easy (the rate) to medium (the index).
 
-#### 6. A `/who` takes the guilds' lock once for each player online (low, speed)
+#### 6. A `/who` takes the guilds' lock once for each player online (low, speed) **Fixed.**
+- **Fixed** with `perf/chat` (e443fa9): a `/who` stops at a full list, so the guilds' lock is taken for at most
+  the 49 listed, or for each player who passes the cheaper filters before it. `fix/lowsb` lowers the search words
+  once, not for each player. A guild's name is still looked up under the lock one player at a time: holding it
+  across the walk instead would keep every map's guild work waiting longer.
 - **Where:** `map/social.rs:173-274`: `guilds.lock().name_of` per player (`:226`); each player's name, guild and zone
   lowercased, and `words` rebuilt per player (`:239`).
 - **How it shows:** `r5_who_costs_grow_with_everyone_online`: 100 `/who` with 3,000 online take 103 ms in a test
