@@ -771,11 +771,11 @@ settings! {
     /// [max minutes]` starts one with everyone alive on the pit's floor.
     pub struct ArenaConfig in "arena" {
         /// Minutes between scheduled battles; 0 for only those a GM starts.
-        every_minutes: u64 = 0, Any, Live, "";
+        every_minutes: u64 = 0, Clamp(0.0, crate::game::map::arena::MAX_MINUTES as f64), Live, "";
         /// Seconds of countdown before a battle.
-        countdown_secs: u64 = 30, Any, Live, "";
+        countdown_secs: u64 = 30, Clamp(0.0, crate::game::map::arena::MAX_SECS as f64), Live, "";
         /// Seconds into the fight the ring of fire starts closing.
-        ring_after_secs: u64 = 120, Any, Live, "";
+        ring_after_secs: u64 = 120, Clamp(0.0, crate::game::map::arena::MAX_SECS as f64), Live, "";
         /// Seconds between the ring's steps.
         ring_every_secs: u64 = 20, Clamp(1.0, 3600.0), Live, "";
         /// Yards the ring closes by at each step.
@@ -784,7 +784,7 @@ settings! {
         ring_min_yards: f32 = 6.0, Any, Live, "";
         /// The longest a battle runs: then the ring is at its smallest and
         /// burns its hardest.
-        max_minutes: u64 = 20, Any, Live, "";
+        max_minutes: u64 = 20, Clamp(0.0, crate::game::map::arena::MAX_MINUTES as f64), Live, "";
         /// The champion's prize in copper.
         reward_copper: u32 = 250_000, Any, Live, "";
         /// The champion's item (Arena Grand Master).

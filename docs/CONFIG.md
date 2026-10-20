@@ -390,13 +390,13 @@ Gurubashi Arena's last man standing: `.arena start [countdown s] [max minutes]` 
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
-| `every_minutes` | Minutes between scheduled battles; 0 for only those a GM starts. | `0` |  | live |  |
-| `countdown_secs` | Seconds of countdown before a battle. | `30` |  | live |  |
-| `ring_after_secs` | Seconds into the fight the ring of fire starts closing. | `120` |  | live |  |
+| `every_minutes` | Minutes between scheduled battles; 0 for only those a GM starts. | `0` | 0 to 10080, clamped | live |  |
+| `countdown_secs` | Seconds of countdown before a battle. | `30` | 0 to 3600, clamped | live |  |
+| `ring_after_secs` | Seconds into the fight the ring of fire starts closing. | `120` | 0 to 3600, clamped | live |  |
 | `ring_every_secs` | Seconds between the ring's steps. | `20` | 1 to 3600, clamped | live |  |
 | `ring_step_yards` | Yards the ring closes by at each step. | `5.0` |  | live |  |
 | `ring_min_yards` | The ring's smallest radius. | `6.0` |  | live |  |
-| `max_minutes` | The longest a battle runs: then the ring is at its smallest and burns its hardest. | `20` |  | live |  |
+| `max_minutes` | The longest a battle runs: then the ring is at its smallest and burns its hardest. | `20` | 0 to 10080, clamped | live |  |
 | `reward_copper` | The champion's prize in copper. | `250000` |  | live |  |
 | `reward_item` | The champion's item (Arena Grand Master). | `19024` |  | live |  |
 | `champion_spell` | The champion's buff (Spirit of Zandalar). | `24425` |  | live |  |

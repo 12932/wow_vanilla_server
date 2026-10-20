@@ -1478,7 +1478,7 @@ Each finding: severity, kind, where, what, how it shows, the fix and its effort.
   changes nothing.
 - **Effort:** easy.
 
-#### 10. `[arena]`'s times are unchecked, and a huge one panics the arena's step every update (low, robustness)
+#### 10. `[arena]`'s times are unchecked, and a huge one panics the arena's step every update (low, robustness) **Fixed.**
 - **Where:** `src/config.rs:628-641` (`every_minutes`, `countdown_secs`, `max_minutes`, `ring_after_secs`, all
   `Any`), `src/game/map/arena.rs:598-603` and `:483`.
 - **What:** `every_minutes * 60` overflows (a panic in debug, a wrap in release), and `now + every` panics on

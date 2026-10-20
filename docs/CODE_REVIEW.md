@@ -82,6 +82,8 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   packet for a stopped map waits for that word and goes there, and a session gone by then has the player let go,
   saved, by that copy. Before, the session kept the stopped copy's handle: the client's next packet closed the
   connection, and the player went offline unsaved, still in the copy.
+- **data 10** fixed (`fix/lowsa`): `[arena]`'s minutes are 0 to a week and its seconds 0 to an hour, clamped, and
+  `.arena start`'s numbers are held to the same; the arena's times are added without a panic (`arena::later`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
