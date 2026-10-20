@@ -4,6 +4,7 @@
 //! and where a summon stands.
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::Vector3d;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::GameData;
@@ -102,4 +103,97 @@ async fn a_creators_wild_summon_is_tapped_for_them_and_gives_no_experience() {
     assert_eq!(still, Some(me), "a stranger's blow takes no tap");
     assert_eq!(from_dummy, 0, "no experience from a no-experience summon");
     assert!(from_plain > 0, "a plain one gives its killer experience");
+}
+
+const AHEAD: u32 = 990_215;
+const AT_PLACE: u32 = 990_216;
+
+/// A summon put at a spot about its summoner stands short of what hides
+/// the spot from them: a wild summon five yards ahead, a totem two yards
+/// out and a pet at its master's side, each behind a wall a yard off,
+/// come this side of it; one a spell puts at a place it names stands
+/// there, wall or no (Thistle Tea's "clips implicit minion positions at
+/// terrain while retaining explicit destinations"; mangos's
+/// `GetClosePoint`, a spot in sight). wvs put each at its spot.
+#[tokio::test]
+async fn a_summons_spot_is_short_of_what_hides_it_and_a_named_place_is_kept() {
+    let mut d = wild_world();
+    d.spells.radii.insert(13, 5.0);
+    let none = SpellEffect::default();
+    let mut ahead = effect(pets::EFFECT_SUMMON_WILD, 0, 0);
+    ahead.misc_value = PLAIN as i32;
+    ahead.radius_index = 13;
+    d.spells
+        .spells
+        .insert(AHEAD, spell(AHEAD, "Ahead", [ahead, none, none]));
+    let mut placed = effect(pets::EFFECT_SUMMON_WILD, 0, 0);
+    placed.misc_value = DUMMY as i32;
+    d.spells
+        .spells
+        .insert(AT_PLACE, spell(AT_PLACE, "At Place", [placed, none, none]));
+    let realm = crate::game::harness::realm_with(d);
+    let (_w, me, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(
+        &map,
+        me,
+        &[
+            AHEAD,
+            AT_PLACE,
+            crate::game::tests_pets::SUMMON_IMP,
+            crate::game::tests_pets::STRENGTH_OF_EARTH_TOTEM,
+        ],
+    );
+    let out = map
+        .query(move |m| {
+            let p = m.players[&me].position();
+            let o = m.players[&me].movement.orientation;
+            // Along and across the warlock's facing.
+            let at = |along: f32, across: f32| Vector3d {
+                x: p.x + along * o.cos() - across * o.sin(),
+                y: p.y + along * o.sin() + across * o.cos(),
+                z: p.z,
+            };
+            let ahead_of = |q: Vector3d| (q.x - p.x) * o.cos() + (q.y - p.y) * o.sin();
+            // A wall a yard ahead and one a yard behind, ten yards wide.
+            m.spells.walls.push((at(1.0, -5.0), at(1.0, 5.0)));
+            m.spells.walls.push((at(-1.0, -5.0), at(-1.0, 5.0)));
+            for s in [
+                AHEAD,
+                crate::game::tests_pets::SUMMON_IMP,
+                crate::game::tests_pets::STRENGTH_OF_EARTH_TOTEM,
+            ] {
+                crate::game::map::spells::cast(m, me, s, Default::default(), None);
+            }
+            // The place the cast names, eight yards ahead, beyond the wall.
+            let beyond = crate::game::map::spells::Targets {
+                dest: Some(at(8.0, 0.0)),
+                ..Default::default()
+            };
+            crate::game::map::spells::cast(m, me, AT_PLACE, beyond, None);
+            let pos = |g: Option<Guid>| g.and_then(|g| m.position_of(g)).map(ahead_of);
+            let owned = &m.players[&me].owned;
+            Some((
+                pos(summoned(m, PLAIN)).expect("ahead"),
+                pos(summoned(m, DUMMY)).expect("at the place"),
+                pos(owned.totems.iter().flatten().next().copied()).expect("the totem"),
+                pos(owned.pet).expect("the imp"),
+            ))
+        })
+        .await
+        .unwrap()
+        .expect("each summoned");
+    let (wild, named, totem, pet) = out;
+    assert!(
+        (0.0..1.0).contains(&wild),
+        "the wild summon this side of the wall ahead: {wild}"
+    );
+    assert!((named - 8.0).abs() < 0.01, "the named place kept: {named}");
+    assert!(
+        (0.0..1.0).contains(&totem),
+        "the totem this side of the wall: {totem}"
+    );
+    assert!(
+        (-1.0..=0.0).contains(&pet),
+        "the pet this side of the wall behind: {pet}"
+    );
 }

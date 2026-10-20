@@ -169,7 +169,15 @@ pub fn summon(
         .duration(s, view.level)
         .filter(|ms| *ms > 0)
         .map(|ms| map.now + Duration::from_millis(u64::from(ms)));
-    let base = at.unwrap_or_else(|| spot(map, s, index, view.position, view.orientation));
+    // A spot about the caster is on the ground there and in its sight; a
+    // place the spell names is taken as it is.
+    let base = match at {
+        Some(at) => at,
+        None => {
+            let to = spot(map, s, index, view.position, view.orientation);
+            clip(map, view.position, to)
+        }
+    };
     let radius = data.spells.radius(s.effects[index].radius_index);
     for i in 0..count {
         // The rest about the first, within the effect's radius.

@@ -1480,7 +1480,7 @@ fn leap_angle(target_a: u32, target_b: u32) -> f32 {
 /// be seen, else the farthest point toward it that can, found by halving
 /// the way ten times as Thistle Tea's `first_collision_position` does, and
 /// half a yard back from what stopped it (its `collision_position`).
-fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
+pub(crate) fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
     let ground = |map: &mut Map, p: Vector3d| {
         let z = map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z + 2.0));
         Vector3d {

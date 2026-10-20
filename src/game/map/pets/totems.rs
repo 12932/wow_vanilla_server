@@ -49,7 +49,12 @@ fn totem_spell(map: &Map, entry: u32, s: &SpellTemplate) -> u32 {
 
 /// Where something summoned at a spot near `owner` stands: `d` yards
 /// before them.
-fn before(map: &Map, owner: Guid, d: f32) -> (Vector3d, f32) {
+fn before(map: &mut Map, owner: Guid, d: f32) -> (Vector3d, f32) {
+    let spot = before_spot(map, owner, d);
+    clip_about(map, owner, spot)
+}
+
+fn before_spot(map: &Map, owner: Guid, d: f32) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))
@@ -77,7 +82,12 @@ fn level_of(map: &Map, g: Guid) -> u8 {
 
 /// Where a totem of `slot` stands: two yards out, each element on its own
 /// side (Thistle Tea's `Totems.position`).
-fn slot_spot(map: &Map, owner: Guid, slot: usize) -> (Vector3d, f32) {
+fn slot_spot(map: &mut Map, owner: Guid, slot: usize) -> (Vector3d, f32) {
+    let spot = slot_spot_about(map, owner, slot);
+    clip_about(map, owner, spot)
+}
+
+fn slot_spot_about(map: &Map, owner: Guid, slot: usize) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))
@@ -101,7 +111,12 @@ fn slot_spot(map: &Map, owner: Guid, slot: usize) -> (Vector3d, f32) {
 }
 
 /// Where a totem of no slot stands: two yards in front of its owner.
-fn front_spot(map: &Map, owner: Guid) -> (Vector3d, f32) {
+fn front_spot(map: &mut Map, owner: Guid) -> (Vector3d, f32) {
+    let spot = front_spot_about(map, owner);
+    clip_about(map, owner, spot)
+}
+
+fn front_spot_about(map: &Map, owner: Guid) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))
@@ -504,6 +519,7 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
             (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU),
         )
     };
+    let (at, o) = clip_about(map, owner, (at, o));
     let now = map.now;
     let duration = map
         .realm

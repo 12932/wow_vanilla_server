@@ -335,6 +335,30 @@ pub fn happiness_damage(map: &Map, g: Guid) -> f32 {
     }
 }
 
+/// Where a summon put at a spot about its summoner, at `from`, stands: on
+/// the ground there, or short of what hides the spot from the summoner;
+/// at the summoner's own height where the ground there is more than five
+/// yards off it (one swimming, or at a ledge). mangos's `GetClosePoint`
+/// (the ground's height, a spot in sight; a totem at its caster's height
+/// past five yards), Thistle Tea's collision-clipped minion spot. A
+/// spot a spell names is taken as it is.
+pub(crate) fn clip(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
+    let at = crate::game::map::spells::first_clear(map, from, to);
+    if (at.z - from.z).abs() > 5.0 {
+        Vector3d { z: from.z, ..at }
+    } else {
+        at
+    }
+}
+
+/// [`clip`] for a spot about `owner`.
+fn clip_about(map: &mut Map, owner: Guid, (to, o): (Vector3d, f32)) -> (Vector3d, f32) {
+    match map.position_of(owner) {
+        Some(from) => (clip(map, from, to), o),
+        None => (to, o),
+    }
+}
+
 pub fn state(map: &Map, g: Guid) -> Option<&PetState> {
     map.creature(g).and_then(|c| c.pet.as_deref())
 }
