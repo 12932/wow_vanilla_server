@@ -1103,6 +1103,8 @@ fn spawned_now(map: &mut Map, g: Guid) {
             ensure_started(map, g);
             fire(map, g, |e| e.kind == EVENT_SPAWNED, None);
         }
+        // A firework guy sends his firework up as he appears.
+        crate::game::fireworks::spawned(map, g);
     }
     // Its summoner hears of it once it is in the world, its own spawned
     // events first (Thistle Tea's `handle_continue({:spawned, _})`).
@@ -1596,6 +1598,10 @@ pub fn feign_tick(map: &mut Map, g: Guid) {
         c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     }
     crate::game::map::combat::kill(map, killer, g);
+    // Dead, and gone at once: no corpse lies (vmangos's core hound's
+    // `Kill_Self`, a kill then `ForcedDespawn`); a spawn comes back on
+    // its time.
+    scripts::despawn(map, g);
 }
 
 fn feign_reset(map: &mut Map, g: Guid, f: Feign, heal: bool) {

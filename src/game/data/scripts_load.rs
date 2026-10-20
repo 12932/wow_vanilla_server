@@ -144,11 +144,14 @@ pub fn load(db: &Connection, data: &mut GameData) {
             },
         )
     }) {
+        s.group_of.insert(leader, leader);
+        let members = s.groups.entry(leader).or_default();
+        // The leader's own row makes the group but isn't a member of it:
+        // its flags aren't the group's (vmangos's `CreatureGroup::AddMember`).
         if m.guid != leader {
             s.group_of.insert(m.guid, leader);
+            members.push(m);
         }
-        s.group_of.insert(leader, leader);
-        s.groups.entry(leader).or_default().push(m);
     }
     for (guid, master, flag) in rows(db, "SELECT * FROM creature_linking", |c| {
         (c.u32("guid"), c.u32("master_guid"), c.u32("flag"))

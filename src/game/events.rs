@@ -458,17 +458,20 @@ fn reconcile(map: &mut Map, g: Guid, s: &crate::game::data::CreatureSpawn, on: &
     ];
     c.fields
         .set_byte(UNIT_FIELD_BYTES_0, 2, f.get_byte(UNIT_FIELD_BYTES_0, 2));
-    for i in 0..3 {
-        c.fields.set_u32(
-            UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i,
-            f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i),
-        );
-    }
-    for i in 0..6 {
-        c.fields.set_u32(
-            UNIT_VIRTUAL_ITEM_INFO + i,
-            f.get_u32(UNIT_VIRTUAL_ITEM_INFO + i),
-        );
+    // Its weapons the looks', its displays and their items' kinds (the
+    // fields after them); but a transform's stay on over them, and theirs
+    // come back as it goes (Thistle Tea's "preserves transform equipment
+    // across event changes").
+    let weapons: [u32; 9] =
+        std::array::from_fn(|i| f.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i as u16));
+    const _: () = assert!(UNIT_VIRTUAL_ITEM_INFO == UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 3);
+    match c.auras.native_weapons.as_mut() {
+        Some(native) => *native = weapons,
+        None => {
+            for (i, v) in (0u16..).zip(weapons) {
+                c.fields.set_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + i, v);
+            }
+        }
     }
     c.event_looks = fresh.event_looks;
     crate::game::map::auras::resized(map, g, own);

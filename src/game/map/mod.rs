@@ -1925,6 +1925,7 @@ impl Map {
         if event_ai::has_events_entry(&self.realm.data, c.entry)
             || self.instance.script.is_some()
             || summoned
+            || crate::game::fireworks::is_guy(c.entry)
         {
             self.ai_spawned.push(guid);
         }

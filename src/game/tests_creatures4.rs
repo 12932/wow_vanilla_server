@@ -534,7 +534,7 @@ async fn a_flyer_killed_in_the_air_falls() {
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     let realm = crate::game::Realm::new(cfg, store, startup, d, None);
     let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
-    let (ground, landed, flags) = map
+    let (bat, ground, at, falling, flags) = map
         .query(|m| {
             let bat = m
                 .creatures
@@ -545,14 +545,31 @@ async fn a_flyer_killed_in_the_air_falls() {
             let ground = m.nav.as_mut().unwrap().ground(-9460.0, 62.0, 80.0);
             crate::game::map::combat::deal_damage(m, bat, bat, 1_000_000);
             let c = m.creature(bat).unwrap();
-            (ground, c.position.z, c.move_flags)
+            let falling = match &c.motion {
+                crate::game::map::creature::Motion::Moving(w) if w.falling => Some(w.duration),
+                _ => None,
+            };
+            (bat, ground, c.position.z, falling, c.move_flags)
         })
         .await
         .unwrap();
     let ground = ground.expect("Goldshire's ground");
+    // Falling from where it died, as long as a fall from there takes.
+    assert!((at - 80.0).abs() < 0.1, "in the air as it dies: {at}");
+    let falls = falling.expect("falling");
+    let expected = crate::game::map::creature_motion::fall_time(80.0 - ground);
+    assert!(
+        (falls.as_secs_f32() - expected).abs() < 0.01,
+        "{falls:?} for {expected}"
+    );
+    assert_eq!(flags & crate::game::map::creature_motion::FLIGHT_FLAGS, 0);
+    tokio::time::sleep(falls + Duration::from_millis(200)).await;
+    let landed = map
+        .query(move |m| m.creature(bat).unwrap().position.z)
+        .await
+        .unwrap();
     assert!(
         (landed - ground).abs() < 0.1,
         "on the ground: {landed} over {ground}"
     );
-    assert_eq!(flags & crate::game::map::creature_motion::FLIGHT_FLAGS, 0);
 }

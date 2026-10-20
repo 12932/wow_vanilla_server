@@ -6,6 +6,7 @@ pub mod data;
 pub mod elemental;
 pub mod events;
 pub mod fields;
+pub mod fireworks;
 pub mod guid;
 #[cfg(test)]
 pub mod harness;
@@ -814,6 +815,12 @@ mod tests_p8_combat_reactive;
 mod tests_p8_combat_share;
 #[cfg(test)]
 mod tests_p8_combat_state;
+#[cfg(test)]
+mod tests_p8_creature;
+#[cfg(test)]
+mod tests_p8_creature2;
+#[cfg(test)]
+mod tests_p8_creature3;
 #[cfg(test)]
 mod tests_p8_loader_combat;
 #[cfg(test)]

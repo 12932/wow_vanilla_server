@@ -86,8 +86,9 @@ pub struct Objects {
     /// Used-up spawns a script brought out for a while (command 9), with
     /// when they were to come back: (object, spawn, when).
     pub brought_out: Vec<(Guid, u32, Instant)>,
-    /// A quest object's spell with a cast time, landing: (when, object,
-    /// spell, user).
+    /// A quest object's spell with a cast time, landing, or a creature's
+    /// on itself a while on (a lucky firework's Lunar Fortune): (when,
+    /// object, spell, user).
     pub pending_spells: Vec<(Instant, Guid, u32, Guid)>,
     pub next_trap_look: Option<Instant>,
     /// A script's lock on an object, over its template's: unlocked

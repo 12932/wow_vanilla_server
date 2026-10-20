@@ -190,6 +190,20 @@ impl Faults {
         }
     }
 
+    /// Whether `what` is armed, taking one of its times, without a panic:
+    /// a query a test makes fail (the navmesh's "no way there").
+    pub fn refuses(&self, what: &str) -> bool {
+        *self.checked.lock().entry(what.to_owned()).or_default() += 1;
+        let mut armed = self.armed.lock();
+        match armed.get_mut(what) {
+            Some(n) if *n > 0 => {
+                *n = n.saturating_sub(u32::from(*n != u32::MAX));
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Whether anything is armed: a check that costs nothing otherwise.
     pub fn any(&self) -> bool {
         !self.armed.lock().is_empty()

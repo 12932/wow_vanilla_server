@@ -237,9 +237,10 @@ fn real_groups_and_event_looks_load() {
     // 4479's formation, led by 4481.
     let leader = s.group_of[&4479];
     assert_eq!(leader, 4481);
+    // The leader's own row is no member (vmangos's `AddMember`).
     let mut members: Vec<u32> = s.groups[&leader].iter().map(|m| m.guid).collect();
     members.sort_unstable();
-    assert_eq!(members, vec![4479, 4480, 4481]);
+    assert_eq!(members, vec![4479, 4480]);
     assert!(
         s.groups[&leader]
             .iter()

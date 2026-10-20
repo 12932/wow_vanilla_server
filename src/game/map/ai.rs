@@ -546,6 +546,8 @@ pub fn update_dead(map: &mut Map) {
     let dead = std::mem::take(&mut map.dead_creatures);
     let mut still = Vec::with_capacity(dead.len());
     for g in dead {
+        // A flyer's corpse falling.
+        crate::game::map::creature_motion::fall_on(map, g);
         let Some(c) = map.creature_mut(g) else {
             continue;
         };
@@ -1984,6 +1986,9 @@ pub fn advance_motion(map: &mut Map, g: Guid) {
     let facing = w.face_target.filter(|_| done);
     let (pos, o) = if done {
         (w.destination(), w.face.unwrap_or(c.orientation))
+    } else if w.falling {
+        // A fall keeps the way it faced.
+        (w.position_at(now).0, c.orientation)
     } else {
         w.position_at(now)
     };
@@ -2040,7 +2045,8 @@ fn stop_moving(map: &mut Map, g: Guid) {
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    if !matches!(c.motion, Motion::Moving(_)) {
+    // Nothing stops a fall.
+    if !matches!(&c.motion, Motion::Moving(w) if !w.falling) {
         return;
     }
     c.motion = Motion::Idle { until: None };

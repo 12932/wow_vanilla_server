@@ -617,6 +617,49 @@ fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius:
     })
 }
 
+/// Where effect `index` of `s` at target 46 is (mangos's
+/// `TARGET_LOCATION_SCRIPT_NEAR_CASTER`): at the nearest creature its
+/// script targets name, else the nearest object, within reach of the
+/// caster; none if it names none there.
+pub(crate) fn script_place(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+) -> Option<Vector3d> {
+    if !map.realm.data.spells.script_targets.contains_key(&s.id) {
+        return None;
+    }
+    let at = map.position_of(caster)?;
+    let radius = map.realm.data.spells.radius(s.effects[index].radius_index);
+    let reach = script_reach(map, s, index, radius);
+    let nearest = |of: &mut dyn Iterator<Item = (Vector3d, u32, Guid)>, kinds: &[u32]| {
+        of.filter(|(p, entry, g)| {
+            dist(*p, at) <= reach && script_target(map, caster, s.id, kinds, *entry, *g)
+        })
+        .map(|(p, ..)| p)
+        .min_by(|a, b| dist(*a, at).total_cmp(&dist(*b, at)))
+    };
+    let around: Vec<Guid> = map.grid.around(at.x, at.y, reach).collect();
+    let creature = nearest(
+        &mut around
+            .iter()
+            .filter_map(|g| map.creature(*g))
+            .map(|c| (c.position, c.entry, c.guid)),
+        &[1, 2],
+    );
+    creature.or_else(|| {
+        nearest(
+            &mut around
+                .iter()
+                .filter(|g| guid::is_game_object(**g))
+                .filter_map(|g| map.gameobject(*g))
+                .map(|o| (o.position, o.entry, o.guid)),
+            &[0],
+        )
+    })
+}
+
 /// How far a script's creature is looked for: the effect's radius, else
 /// the spell's range, else as far as one sees (mangos's
 /// `GetSpellRangeAndRadius` and `CheckScriptTargeting`).
