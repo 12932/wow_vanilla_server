@@ -724,6 +724,14 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   or creature type past 32 matches nothing (mangos's mask), what a service changes on a player between maps is
   forwarded, two event sweeps can't leave a map the older set, a champion whose farewell was lost comes home,
   the member-stats push holds the groups lock briefly. **Left:** world 3 and 4, social 7, 9 and 12 (queued).
+- **Leftovers, entities (`fix/entity`):** each viewer gets their own view of a unit (`map/views.rs`, one block a
+  distinct view, as the tap's): a Hunter's Mark's tracking flag for its hunter alone; creatures' fields by mangos's
+  masks: strangers the public ones, the master the owner's too, an Empathy caster damage and resistances; a corpse
+  sparkles only for those who may open it. A creature put at rest on a walk now stops where the walk has come to,
+  its watchers told (`ai::rest`): 8 places sent no stop (formations, escorts, Eyes of the Beast, script commands 60
+  and 67, the script wander), 3 sent it from the last update's place. (The PvP flag items were already done on
+  master.) Client check passed. **Its calls:** marks per viewer on players too (mangos's intent); strangers lose the
+  whole mangos owner mask (stats, attack power, base health and mana, costs, pet experience).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
