@@ -281,3 +281,61 @@ async fn a_player_let_go_by_a_copy_that_has_gone_leaves_their_channels() {
         "out of his channels"
     );
 }
+
+/// Review 5's maps 2: a panic as one player is taken out of the map at the
+/// shutdown, and another's in their save, cost those two their saves (they
+/// go as last saved), not the map's: the other two are saved, and all four
+/// go offline, so the shutdown doesn't wait its limit. Before, the first
+/// panic unwound the map's whole loop: none of the four were saved, and all
+/// stayed online.
+#[tokio::test]
+async fn one_panic_in_a_maps_shutdown_costs_only_that_players_save() {
+    let realm = realm();
+    let mut clients = Vec::new();
+    let mut guids = Vec::new();
+    for (i, name) in ["Alice", "Bobby", "Carol", "Daisy"].iter().enumerate() {
+        let mut c = Client::connect(&realm, &format!("ACC{i}"));
+        let g = c.enter(name, Race::Human, Class::Warrior).await;
+        guids.push(g);
+        clients.push(c);
+    }
+    join_peon(&realm, &clients[1]).await;
+    let map = map_of(&realm, guids[0]);
+    let gs = guids.clone();
+    let order: Vec<Guid> = on(&map, move |m| {
+        for g in &gs {
+            m.players
+                .get_mut(g)
+                .unwrap()
+                .fields
+                .set_u32(PLAYER_FIELD_COINAGE, 777);
+        }
+        m.players.keys().copied().collect()
+    })
+    .await;
+    // The first in the map's order panics as it is taken out, the second
+    // in its save, once out.
+    let (first, second) = (order[0], order[1]);
+    on(&map, move |m| {
+        m.faults.arm(format!("take {first}"), 1);
+        m.faults.arm(format!("save {second}"), 1);
+    })
+    .await;
+    let started = std::time::Instant::now();
+    realm.shutdown_within(Duration::from_secs(5)).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "no one left online to wait for: {:?}",
+        started.elapsed()
+    );
+    for g in &guids {
+        let saved = money_saved(&realm, *g).await == 777;
+        assert_eq!(saved, *g != first && *g != second, "{g} saved");
+        assert!(realm.registry.online(*g).is_none(), "{g} offline");
+        assert!(
+            realm.social.channels.lock().of(*g).is_empty(),
+            "{g} out of peon"
+        );
+    }
+    drop(clients);
+}

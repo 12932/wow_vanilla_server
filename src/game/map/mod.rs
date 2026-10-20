@@ -1089,12 +1089,13 @@ impl Map {
                 }
                 return true;
             }
+            // Each player saved under a guard of their own: a panic for one
+            // costs only their save. Before, it unwound the loop, and every
+            // player after them went unsaved.
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
                 for g in guids {
-                    if let Some(p) = self.take_player(g) {
-                        self.save_and_go_offline(p);
-                    }
+                    supervise::save_at_shutdown(self, g);
                 }
                 let _ = reply.send(());
                 return true;
@@ -1230,6 +1231,10 @@ impl Map {
     /// Take a player out of the map: every client that knows them forgets
     /// them, and they forget everything.
     pub fn take_player(&mut self, guid: Guid) -> Option<Player> {
+        #[cfg(test)]
+        if self.faults.any() {
+            self.faults.check(&format!("take {guid}"));
+        }
         // Their cast or channel ends, and the creatures they fought forget
         // them (mangos's `RemoveFromWorld`: the cast interrupted, the
         // hostile references deleted), as a death has them forgotten.
@@ -1272,6 +1277,10 @@ impl Map {
 
     /// Store a player's character and take them off the online list.
     pub fn save_and_go_offline(&mut self, mut p: Player) {
+        #[cfg(test)]
+        if self.faults.any() {
+            self.faults.check(&format!("save {}", p.guid));
+        }
         let row = p.to_row(self.now);
         self.realm.store.save(row);
         social::went_offline(&self.realm, p.guid);
