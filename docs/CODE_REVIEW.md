@@ -25,6 +25,9 @@ missing world data). None fixed yet; waiting on your choice.
 - **#19** fixed: records (honor, mail, auctions, guilds, charters, copies, tickets) load field by field as a
   character's state does (`store::parse_record`), one that doesn't read at all is logged at `error` and left in the
   store, and each kind's next id counts every record's id; `.honor points` and `set_rank_points` refuse a NaN.
+- **#21** fixed: before the store is touched the start takes a lock beside it (`characters.sqlite.lock`, `flock`;
+  `store::lock`) and binds the world's port, and refuses to go on (exit 2) if either is taken; a store about to be
+  migrated is copied first (`characters.sqlite.v4.bak`, `VACUUM INTO`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

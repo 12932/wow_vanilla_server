@@ -1411,9 +1411,13 @@ pub fn world_data(dir: Option<&std::path::Path>, characters: usize) -> Result<Ga
     }
 }
 
-/// Run the world server on port 8085 until a shutdown signal, then save
-/// everyone and return the process's exit code: 2 if it can't start.
-pub async fn run(users: crate::auth::UserCache) -> u8 {
+/// Where the world listens.
+pub const WORLD_ADDRESS: &str = "0.0.0.0:8085";
+
+/// Run the world server on `listener` (bound to [`WORLD_ADDRESS`] before
+/// the store was touched) until a shutdown signal, then save everyone and
+/// return the process's exit code: 2 if it can't start.
+pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
     let cfg = crate::config::config();
     let (store, startup) = Store::open(&cfg.world.characters_db).unwrap_or_else(|e| {
         panic!(
@@ -1445,11 +1449,8 @@ pub async fn run(users: crate::auth::UserCache) -> u8 {
     if crate::tracy::on() {
         tokio::spawn(plot_realm(realm.clone()));
     }
-    let listener = TcpListener::bind("0.0.0.0:8085")
-        .await
-        .expect("bind the world listener on 0.0.0.0:8085");
     info!("wow_vanilla_server {}", crate::VERSION);
-    info!("world: listening on 0.0.0.0:8085");
+    info!("world: listening on {WORLD_ADDRESS}");
     let accept = {
         let realm = realm.clone();
         async move {

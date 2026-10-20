@@ -184,7 +184,21 @@ put up, bid on or bought out, cancelled or ended by the sweep, and a guild's cha
 JSON, and a float that was NaN is saved as `null`, which an `f32` won't take back. The whole state then failed to
 parse and went back to its defaults: quests, reputation, pets, talents and the hearthstone's place. A GM's
 `.rested nan` was enough. Now only the field that won't parse goes back to its default.
-(`a_saved_field_that_wont_parse_costs_only_itself`)
+(`a_saved_field_that_wont_parse_costs_only_itself`) A record (an honor entry, a mail, an auction, a guild, a copy,
+a ticket) used to be dropped whole at start-up for one such field, and its id given out again, over it. Now records
+load field by field too (`store::parse_record`); one that doesn't read at all is logged at `error` and left in the
+store, and every record's id counts towards the next. (`an_honor_entry_with_a_nan_keeps_the_rest_at_load`,
+`a_record_that_doesnt_read_keeps_its_id`)
+
+**GUIDs** used to be one past the highest in the tables at each start, so a deleted character's (or a destroyed
+item's) was given again after a restart, with what was still kept under it: honor, raid binds, mail sent back.
+Now the next character and item GUIDs are kept in the store's `counters` with every write.
+(`a_deleted_characters_guid_is_never_given_again`)
+
+**A second server** on the same store used to open it, migrate it and run the realm's sweeps on its own copy of
+the records before it failed to bind the world's port. Now the start takes a lock beside the store
+(`characters.sqlite.lock`) and binds the port before anything touches the store, and stops if either is taken; a
+store about to be migrated is copied first (`characters.sqlite.v4.bak`). (`a_second_server_on_a_store_is_refused_at_its_lock`)
 
 **A hang** (a disk that doesn't answer) stalls every save and read behind it: character screens wait, saves queue
 up. SQLite's busy timeout bounds lock waits at 5 s a statement. Nothing reports a hung store.

@@ -357,3 +357,23 @@ fn a_record_that_doesnt_read_keeps_its_id() {
     let mut instances = crate::game::instances::Instances::load(&records);
     assert_eq!(instances.new_id(), 13);
 }
+
+/// #21: a second server on the same store stops at its lock, before it
+/// opens the store (it migrated it, then ran the realm's sweeps on its own
+/// copy of the records, before it failed to bind); the lock is let go with
+/// the first.
+#[test]
+fn a_second_server_on_a_store_is_refused_at_its_lock() {
+    let t = Temp::new("lock");
+    let first = crate::game::store::lock(&t.db()).expect("the first server's lock");
+    let e = crate::game::store::lock(&t.db()).unwrap_err();
+    assert!(
+        e.contains("another server") && e.contains(&format!("process {}", std::process::id())),
+        "{e}"
+    );
+    drop(first);
+    let _again = crate::game::store::lock(&t.db()).expect("the lock, let go");
+    // A store in memory is no one else's.
+    let _a = crate::game::store::lock(Path::new(":memory:")).unwrap();
+    let _b = crate::game::store::lock(Path::new(":memory:")).unwrap();
+}

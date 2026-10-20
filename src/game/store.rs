@@ -545,6 +545,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        backup_before_migrating(&conn, path.as_ref())?;
         migrate(&conn)?;
         sweep_bones(&conn, crate::game::social::mail::now())?;
         let startup = read_startup(&conn)?;
@@ -711,6 +712,89 @@ impl Store {
     #[cfg(test)]
     pub fn bad_save_for_test(&self) {
         self.send_test(Request::BadSave);
+    }
+}
+
+/// A copy of a store about to be migrated, beside it
+/// (`characters.sqlite.v4.bak`, a version number past it if one is there
+/// already): a migration that goes wrong can be undone by hand.
+fn backup_before_migrating(conn: &Connection, path: &Path) -> rusqlite::Result<()> {
+    let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version == 0 || version >= SCHEMA_VERSION || path == Path::new(":memory:") {
+        return Ok(());
+    }
+    let named = |n: u32| {
+        let mut name = path.as_os_str().to_owned();
+        match n {
+            0 => name.push(format!(".v{version}.bak")),
+            n => name.push(format!(".v{version}.{n}.bak")),
+        }
+        std::path::PathBuf::from(name)
+    };
+    let Some(to) = (0..1000).map(named).find(|p| !p.exists()) else {
+        warn!("the character store has a thousand backups beside it; migrating without one");
+        return Ok(());
+    };
+    info!(
+        "copying the character store at schema version {version} to {} before migrating it",
+        to.display()
+    );
+    conn.execute("VACUUM INTO ?1", params![to.to_string_lossy()])?;
+    Ok(())
+}
+
+/// The store's lock, held for as long as the server runs: one server a
+/// store. A second, started before the first has gone, would migrate the
+/// store under the first and run the realm's sweeps on its own copy of the
+/// records (mail returned and auctions ended twice, copies with players
+/// inside deleted).
+#[derive(Debug)]
+pub struct Lock {
+    _file: Option<std::fs::File>,
+}
+
+/// Take [`Lock`] on the store at `path` (an advisory lock on
+/// `characters.sqlite.lock`, beside it, which the system lets go when the
+/// process ends however it ends); an error if another server holds it.
+pub fn lock(path: &Path) -> Result<Lock, String> {
+    if path == Path::new(":memory:") {
+        return Ok(Lock { _file: None });
+    }
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let at = std::path::PathBuf::from(name);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&at)
+        .map_err(|e| format!("can't open the store's lock {}: {e}", at.display()))?;
+    match file.try_lock() {
+        Ok(()) => {
+            use std::io::Write;
+            let mut f = &file;
+            let _ = f
+                .set_len(0)
+                .and_then(|()| writeln!(f, "{}", std::process::id()));
+            Ok(Lock { _file: Some(file) })
+        }
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let pid = std::fs::read_to_string(&at).unwrap_or_default();
+            let pid = pid.trim();
+            let by = if pid.is_empty() {
+                String::new()
+            } else {
+                format!(" (process {pid})")
+            };
+            Err(format!(
+                "another server{by} is running on the character store {}: stop it first, \
+                 or give this one another [world] characters_db",
+                path.display()
+            ))
+        }
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(format!("can't lock the store's lock {}: {e}", at.display()))
+        }
     }
 }
 
@@ -1490,6 +1574,16 @@ fn save_row(conn: &Connection, row: &CharacterRow) -> rusqlite::Result<()> {
 mod tests {
     use super::*;
 
+    /// A test's store file gone, with the copies made before migrating it
+    /// and SQLite's own files beside it.
+    fn remove_store(path: &Path) {
+        for suffix in ["", "-wal", "-shm", ".v2.bak", ".v3.bak", ".v4.bak"] {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            let _ = std::fs::remove_file(std::path::PathBuf::from(name));
+        }
+    }
+
     fn row(guid: u32, name: &str) -> CharacterRow {
         CharacterRow {
             guid,
@@ -1559,7 +1653,7 @@ mod tests {
     #[tokio::test]
     async fn a_store_before_charges_migrates_and_keeps_them_after() {
         let path = std::env::temp_dir().join(format!("wvs-store-v2-{}", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        remove_store(&path);
         {
             let conn = Connection::open(&path).unwrap();
             for (i, sql) in MIGRATIONS[..2].iter().enumerate() {
@@ -1593,7 +1687,7 @@ mod tests {
         let loaded = store.load(1).await.expect("Alice");
         assert_eq!(loaded.items[0].charges, Some([1, -2, 0, 0, 0]));
         drop(store);
-        let _ = std::fs::remove_file(&path);
+        remove_store(&path);
     }
 
     fn bones(id: u32, expires_at: i64) -> BonesRow {
@@ -1621,7 +1715,7 @@ mod tests {
     #[tokio::test]
     async fn a_store_before_bones_migrates_and_sweeps_the_gone_as_it_opens() {
         let path = std::env::temp_dir().join(format!("wvs-store-v3-{}", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        remove_store(&path);
         {
             let conn = Connection::open(&path).unwrap();
             for (i, sql) in MIGRATIONS[..3].iter().enumerate() {
@@ -1645,6 +1739,19 @@ mod tests {
         assert_eq!(startup.names.len(), 1, "her character kept");
         assert!(startup.bones.is_empty());
         assert_eq!(startup.max_bones_id, 0);
+        // Copied as it was before it was migrated (review 5 #21).
+        {
+            let mut bak = path.as_os_str().to_owned();
+            bak.push(".v3.bak");
+            let bak = Connection::open(std::path::PathBuf::from(bak)).unwrap();
+            let version: u32 = bak
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap();
+            let alice: String = bak
+                .query_row("SELECT name FROM characters", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!((version, alice.as_str()), (3, "Alice"));
+        }
         store.put_bones(bones(5, now + 3600));
         store.put_bones(bones(9, now - 1));
         store.put_bones(bones(6, now + 60));
@@ -1662,7 +1769,7 @@ mod tests {
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
         drop(conn);
-        let _ = std::fs::remove_file(&path);
+        remove_store(&path);
     }
 
     #[test]
