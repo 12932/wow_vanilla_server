@@ -188,13 +188,17 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
     let guild_filter = m.guild_name.to_lowercase();
     let words: Vec<String> = m.search_strings.iter().map(|s| s.to_lowercase()).collect();
     let zones: Vec<u32> = m.zones.clone();
-    let mut matched = 0usize;
     let mut b = Body::default();
     let mut listed = 0u32;
     let mut rows = Body::default();
     let everyone = realm.registry.all_online();
     let here = me.map().key;
     for o in everyone.iter().cloned() {
+        // A full list: the rest would only be looked at (the guilds'
+        // lock taken for each) to be left out.
+        if listed as usize >= WHO_LIMIT {
+            break;
+        }
         if !same_side(&me, &o) || (o.gm && !me.gm) {
             continue;
         }
@@ -244,10 +248,6 @@ pub fn who(map: &Map, g: Guid, m: &CMSG_WHO) {
                     || zone_name.contains(w.as_str())
             })
         {
-            continue;
-        }
-        matched += 1;
-        if matched > WHO_LIMIT {
             continue;
         }
         listed += 1;

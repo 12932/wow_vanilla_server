@@ -14,7 +14,7 @@ use crate::game::Realm;
 use crate::game::conn::encode;
 use crate::game::data::items::Body;
 use crate::game::registry::{Online, Team};
-use crate::game::social::{send_frame, send_to};
+use crate::game::social::{not_ignoring, send_frame, send_frames, send_to};
 
 pub const SMSG_PARTY_MEMBER_STATS: u16 = 0x07E;
 pub const SMSG_PARTY_MEMBER_STATS_FULL: u16 = 0x2F2;
@@ -1068,6 +1068,13 @@ pub fn chat(
     // In a party, raid chat is party chat (as the client sends it).
     let subgroup = gr.slot(me.guid).map(|s| s.subgroup);
     let party_only = matches!(chat_type, SMSG_MESSAGECHAT_ChatType::Party { .. }) && gr.raid;
+    let mut hearers: Vec<Guid> = gr
+        .members
+        .iter()
+        .filter(|m| !party_only || Some(m.subgroup) == subgroup)
+        .map(|m| m.guid)
+        .collect();
+    drop(groups);
     let Some(frame) = encode(&SMSG_MESSAGECHAT {
         chat_type,
         language,
@@ -1076,15 +1083,8 @@ pub fn chat(
     }) else {
         return;
     };
-    let lists = realm.social.lists.lock();
-    for m in &gr.members {
-        if party_only && Some(m.subgroup) != subgroup {
-            continue;
-        }
-        if !lists.ignores(m.guid, me.guid) {
-            send_frame(realm, m.guid, &frame);
-        }
-    }
+    not_ignoring(realm, me.guid, &mut hearers);
+    send_frames(realm, &hearers, &frame);
 }
 
 /// At login: a member back gets the roster, and the others see them

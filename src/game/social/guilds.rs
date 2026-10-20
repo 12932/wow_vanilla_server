@@ -17,7 +17,7 @@ use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::registry::{Online, Team};
-use crate::game::social::{send_frame, send_to};
+use crate::game::social::{not_ignoring, send_frames, send_to};
 use crate::game::store::Records;
 
 pub const KIND_GUILD: &str = "guild";
@@ -984,6 +984,15 @@ pub fn chat(
     if !has(g.rights(me.guid), speak) {
         return;
     }
+    // Under the lock, only who may hear it: each member's rights by their
+    // own rank, not looked up again (a guild of N had N² compares).
+    let mut hearers: Vec<Guid> = g
+        .members
+        .iter()
+        .filter(|m| has(g.ranks.get(m.rank as usize).map_or(0, |r| r.rights), listen))
+        .map(|m| guid::player(m.guid))
+        .collect();
+    drop(guilds);
     let chat_type = if officer {
         SMSG_MESSAGECHAT_ChatType::Officer { sender2: me.guid }
     } else {
@@ -997,13 +1006,8 @@ pub fn chat(
     }) else {
         return;
     };
-    let lists = realm.social.lists.lock();
-    for m in &g.members {
-        let gm = guid::player(m.guid);
-        if has(g.rights(gm), listen) && !lists.ignores(gm, me.guid) {
-            send_frame(realm, gm, &frame);
-        }
-    }
+    not_ignoring(realm, me.guid, &mut hearers);
+    send_frames(realm, &hearers, &frame);
 }
 
 /// `MSG_SAVE_GUILD_EMBLEM`: the leader buys the guild an emblem at a
