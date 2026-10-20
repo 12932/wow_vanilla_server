@@ -537,7 +537,7 @@ pub fn melee_roll(
     let Some(mut r) = combat::roll_for(map, caster, target, hand) else {
         return (Hit::Miss, false);
     };
-    r.crit += m.flat[mods::OP_CRITICAL_CHANCE] as f32 + crit_versus(map, caster, target);
+    r.crit += m.flat[mods::OP_CRITICAL_CHANCE] as f32;
     r.can_crit = !s.attr(2, sd::ATTR_EX2_CANT_CRIT);
     if s.attr(0, 0x20_0000) {
         r.avoidance_disabled = true;
@@ -600,11 +600,13 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
     if !physical(s) && frozen(map, target) {
         c += shatter(map, caster, s);
     }
-    c += crit_versus(map, caster, target);
     chance(map, c)
 }
 
-/// More crit against a creature type (Monster Slaying, Humanoid Slaying).
+/// What a crit's bonus gains against the target's creature type, in
+/// percent (Monster Slaying, Humanoid Slaying: aura 169 is the crit's
+/// damage, not its chance, as vmangos's `SpellCriticalDamageBonus`, mangos's
+/// `GetCritMultiplier` and Thistle Tea's `TargetAttackPower` have it).
 pub fn crit_versus(map: &Map, caster: Guid, target: Guid) -> f32 {
     // Its type's bit: a player's a humanoid's, or a beast's in a beast's
     // form (`combat::creature_type_mask`).
@@ -1007,12 +1009,15 @@ pub fn damage(
     }
     if l.crit {
         let pct = l.mods.pct[mods::OP_CRIT_DAMAGE_BONUS] as f32 / 100.0;
+        // Against the target's type, the bonus is more (a white blow's too,
+        // `combat::crit_multiplier`).
+        let versus = crit_versus(map, caster, target);
         let bonus = if physical(s) {
             let melee =
                 auras::auras(map, caster).map_or(0, |a| a.sum(AURA_MOD_CRIT_DAMAGE_BONUS_MELEE));
-            d * (1.0 + pct) * (100 + melee) as f32 / 100.0
+            d * (1.0 + pct) * (100.0 + melee as f32 + versus) / 100.0
         } else {
-            d * 0.5 * (1.0 + pct)
+            d * 0.5 * (1.0 + pct) * (100.0 + versus) / 100.0
         };
         d += bonus;
     }
