@@ -645,6 +645,12 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   two maps in one channel may reach members in different orders (one map's stay in order); channel notices stay
   under the channel's lock, in order. Numbers in `docs/PERFORMANCE.md`. **Also fixed:** the reputation test's race
   (the map's update ending a fight's war between two queries).
+- **Review 5's fixes, social (`fix/fixsocial`):** #3: a mail's subject is cut to the client's 64 letters and its
+  body to 8,000 bytes, and the mail list stops at 32,766 bytes (mangos's `HandleGetMailList`), so no frame
+  outgrows its size field; #14: a post holds the mail's lock until its save is sent, so a refund taken as it is
+  written comes back no more; #15: mail is indexed by receiver (the next-mail-time query over 100,000 mails, 1,000
+  times, 1.5 s → 1 ms); a meeting stone's queue is left at a logout. **Its calls:** mails cut, not refused (a
+  client's box takes 500 letters, an addon may send more).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
