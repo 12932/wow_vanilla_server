@@ -152,11 +152,13 @@ pub fn refresh(map: &mut Map, object: Guid) {
         }
         let (r2, keep2) = sight2(map, p);
         let d2 = dist2(crate::game::map::cinematic::view_point(p), pos);
-        let knows = p.known.contains(&object);
-        let sees = death::can_see(map, g, object);
-        if !knows && d2 <= r2 && sees {
-            introduce(map, g, object);
-        } else if knows && (d2 > keep2 || !sees) {
+        // Whether they may see it is asked only where it decides: not of
+        // one out of their sight, nor of one past their margin.
+        if !p.known.contains(&object) {
+            if d2 <= r2 && death::can_see(map, g, object) {
+                introduce(map, g, object);
+            }
+        } else if d2 > keep2 || !death::can_see(map, g, object) {
             part(map, g, object);
         }
     }
@@ -184,27 +186,37 @@ pub fn refresh(map: &mut Map, object: Guid) {
     let (r2, keep2) = sight2(map, me);
     let own = sight(map, me) + MARGIN;
     let (pos, nearby) = if dist2(view, pos) > 0.01 || own > keep {
-        (view, map.grid.around(view.x, view.y, own).collect())
+        // The cells the disc touches, not its square's corners (a third of
+        // a flier's window): past `own`, nothing is introduced, and all
+        // that is known is parted below.
+        (view, map.grid.within(view.x, view.y, own).collect())
     } else {
         (pos, nearby)
     };
-    for &g in &nearby {
-        if g == object {
-            continue;
-        }
-        let Some(other) = map.position_of(g) else {
-            continue;
-        };
+    // What the player knows, and what has come into their sight: the rest
+    // of the window, unknown and out of sight, has nothing to tell them.
+    // The player is looked up once for it all, not once for each.
+    let looks: Vec<Guid> = nearby
+        .iter()
+        .copied()
+        .filter(|&g| {
+            g != object
+                && map
+                    .position_of(g)
+                    .is_some_and(|other| me.known.contains(&g) || dist2(other, pos) <= r2)
+        })
+        .collect();
+    for g in looks {
         if guid::is_player(g) && map.players.get(&g).is_some_and(|o| o.awaiting_worldport) {
             continue;
         }
+        // Not known, it is in sight: the filter let it through for that.
         let knows = map
             .players
             .get(&object)
             .is_some_and(|p| p.known.contains(&g));
-        let d2 = dist2(other, pos);
         let sees = death::can_see(map, object, g);
-        if !knows && d2 <= r2 && sees {
+        if !knows && sees {
             introduce(map, object, g);
         } else if knows && !sees {
             part(map, object, g);
