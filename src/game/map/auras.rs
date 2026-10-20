@@ -2917,10 +2917,11 @@ pub fn update(map: &mut Map) {
         let ticks: Vec<(Holder, Aura)> = match auras(map, g) {
             Some(a) => ticks
                 .into_iter()
-                .filter(|(h, _)| {
+                .filter(|(h, x)| {
                     a.holders
                         .iter()
                         .any(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+                        && crate::game::map::pets::pulses(map, g, x.next_tick)
                 })
                 .collect(),
             None => Vec::new(),
