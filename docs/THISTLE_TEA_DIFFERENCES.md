@@ -63,10 +63,17 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   Well Fed; Blood Siphon and Blood Funnel are a heal and a hit, not funnels.
 - **Guards, as mangos-classic calls them:** a civilian calls one guard each time it takes a victim, with no posts,
   charges or cooldowns, no call on sight and no rousing of a guard nearby (Thistle Tea's `GuardCall` ports vmangos's
-  `GuardMgr`). Each town's alarm escalates (Avoidance, then two elite a call, then Jaina for Stormwind): wvs's own.
-- **The Stormwind Elite Guard** (101756) is wvs's own: the Alterac Valley warmaster's fight, a charge at healers,
-  two at Stormwind's alarm of 50 and four with Jaina. The warmasters' second Whirlwind now waits its 2 s, and their
-  scripts stop when they evade, as Thistle Tea has them.
+  `GuardMgr`). Each town's alarm escalates (Avoidance, then two elite a call, then a capital's Elite Guards and its
+  champion): wvs's own.
+- **The capitals' Elite Guards** (101756 to 101761: Stormwind's, Ironforge's, Darnassus's Sentinel, Orgrimmar's
+  Grunt, the Undercity's Deathguard, Thunder Bluff's Bluffwatcher) are wvs's own: the Alterac Valley warmaster's
+  fight on each city's guard, a charge at healers, two at a defended capital's alarm of 50 and four with its
+  champion. The warmasters' second Whirlwind now waits its 2 s, and their scripts stop when they evade, as Thistle
+  Tea has them.
+- **The capitals' champions** are wvs's own: Jaina leaves Theramore for Stormwind, Ironforge or Darnassus (her
+  Teleport there to the Stockade's door, the Mystic Ward, the Temple of the Moon), and Rexxar (with Misha) leaves
+  Desolace for Orgrimmar, the Undercity or Thunder Bluff, running in from out of sight and off again; one of each in
+  the world. Thistle Tea has no script of Rexxar: he walks his road in Desolace.
 - **`.gear`** replaces what is worn, teaches the skills its items need and leaves its target at full health and
   mana; Thistle Tea's `.debug random equipment` fills only empty slots.
 - **`.character spells`** teaches what the class's trainers would, rank by rank, prerequisites met, talent ranks only

@@ -9,10 +9,12 @@
 //! Each town keeps an alarm: the guards called there lately, halved for
 //! each `[guards] alarm_half_life_secs` without a call. As it rises the
 //! guards come with Avoidance (aura 160, as spell 23198 has it), a call
-//! brings two of a capital's elite, Stormwind's (`[guards] jaina_city`)
-//! rising through `elite_from` brings two Stormwind Elite Guards
-//! ([`crate::game::map::elites`]), and at its top Jaina Proudmoore comes
-//! from Theramore ([`crate::game::jaina`]).
+//! brings two of a capital's elite, and in a defended capital
+//! (`[guards] jaina_cities`, `rexxar_cities`; `cities.rs`) rising through
+//! `elite_from` brings two of its Elite Guards
+//! ([`crate::game::map::elites`]), and at its top its champion comes:
+//! Jaina Proudmoore from Theramore to the Alliance's, Rexxar from Desolace
+//! to the Horde's ([`crate::game::champions`]).
 
 use std::time::{Duration, Instant};
 
@@ -204,13 +206,16 @@ impl Alarm {
     }
 }
 
-/// What a map keeps of its towns' guards, and of Jaina where she is.
+/// What a map keeps of its towns' guards, and of the champions where they
+/// are.
 #[derive(Debug, Default)]
 pub struct Guards {
     /// Each town's alarm, by its area (the map and copy are the map's).
     pub alarms: AHashMap<u32, Alarm>,
     /// Jaina's comings and goings through this map.
-    pub jaina: crate::game::jaina::Local,
+    pub jaina: crate::game::champions::Local,
+    /// Rexxar's.
+    pub rexxar: crate::game::champions::Local,
 }
 
 /// The settings that escalate a call.
@@ -279,7 +284,7 @@ pub fn attack_started(map: &mut Map, caller: Guid, victim: Guid) {
 fn town_at(map: &mut Map, g: Guid) -> Option<u32> {
     let c = map.creature(g)?;
     let (at, known) = (c.position, c.zone_area);
-    let (zone, area) = crate::game::map::world::zone_and_area(map, at).or(known)?;
+    let (zone, area) = crate::game::cities::zone_and_area(map, at).or(known)?;
     town(area, zone)
 }
 
@@ -333,22 +338,29 @@ fn call(map: &mut Map, caller: Guid, victim: Guid) {
             last_call: now,
         },
     );
-    // Rising through `elite_from` in Jaina's city: its Elite Guards, once
-    // for the crossing (they aren't counted in the alarm).
-    let elites = if cfg.jaina_city != 0
-        && town == cfg.jaina_city
-        && before < cfg.elite_from
-        && after >= cfg.elite_from
-    {
-        crate::game::map::elites::crossed(map, caller, victim, avoidance, cfg.elite_count)
-    } else {
-        0
+    // Rising through `elite_from` in a defended city: its Elite Guards,
+    // once for the crossing (they aren't counted in the alarm).
+    let city = crate::game::cities::defended(&cfg, town);
+    let elites = match city {
+        Some(c) if before < cfg.elite_from && after >= cfg.elite_from => {
+            crate::game::map::elites::crossed(
+                map,
+                caller,
+                victim,
+                avoidance,
+                cfg.elite_count,
+                c.elite.entry,
+            )
+        }
+        _ => 0,
     };
     escalated(map, town, cooled_from, before, after, &esc, &cfg, elites);
-    if cfg.jaina_city != 0 && town == cfg.jaina_city && after >= cfg.jaina_from {
+    if let Some(c) = city
+        && after >= c.champion.settings(&cfg).from
+    {
         let at = map.creature(caller).map(|c| c.position);
         if let Some(at) = at {
-            crate::game::jaina::call(map, town, at, victim);
+            crate::game::champions::call(map, c.champion, town, at, victim);
         }
     }
 }
@@ -372,21 +384,21 @@ fn escalated(
         .area(town)
         .map_or_else(|| town.to_string(), |a| format!("{} ({town})", a.name));
     let crossed = |t: u32| before < t && after >= t;
+    let city = crate::game::cities::defended(cfg, town);
+    let champion = city.map(|c| (c.champion.name(), c.champion.settings(cfg).from));
     // Cooled since the last call below a threshold it had passed.
     if cooled_from > before {
-        let fell: Vec<&str> = [
+        let mut fell: Vec<&str> = [
             (esc.avoidance_from, "Avoidance"),
             (esc.royal_from, "the elite"),
-            (cfg.elite_from, "Elite Guards"),
-            (cfg.jaina_from, "Jaina"),
         ]
         .into_iter()
-        .filter(|(t, what)| {
-            let city_only = matches!(*what, "Jaina" | "Elite Guards");
-            cooled_from >= *t && before < *t && (!city_only || cfg.jaina_city == town)
-        })
+        .chain(city.map(|c| (cfg.elite_from, c.elite.name)))
+        .chain(champion.map(|(name, from)| (from, name)))
+        .filter(|(t, _)| cooled_from >= *t && before < *t)
         .map(|(_, what)| what)
         .collect();
+        fell.dedup();
         if !fell.is_empty() {
             info!(
                 "{}: {name}'s alarm cooled from {cooled_from} to {before} guards: no more {}",
@@ -408,15 +420,19 @@ fn escalated(
             map.key
         );
     }
-    if elites > 0 {
+    if let Some(c) = city
+        && elites > 0
+    {
         info!(
-            "{}: {name}'s alarm at {after} guards: {elites} Stormwind Elite Guards come",
-            map.key
+            "{}: {name}'s alarm at {after} guards: {elites} {}s come",
+            map.key, c.elite.name
         );
     }
-    if cfg.jaina_city == town && crossed(cfg.jaina_from) {
+    if let Some((champion, from)) = champion
+        && crossed(from)
+    {
         info!(
-            "{}: {name}'s alarm at {after} guards: Jaina Proudmoore is called",
+            "{}: {name}'s alarm at {after} guards: {champion} is called",
             map.key
         );
     }

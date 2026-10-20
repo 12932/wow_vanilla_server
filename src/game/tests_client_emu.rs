@@ -316,6 +316,75 @@ async fn the_elite_guards_packets_pass_the_client() {
     run_checker(&check_py, &wow_exe, &capture);
 }
 
+/// The other capitals' Elite Guards (`cities.rs`), new to the world and
+/// made in code, and Rexxar and Misha as they come to a city (copies of
+/// their spawns, running): their creates and runs, on the real data, pass
+/// the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_capitals_elite_guards_and_rexxars_packets_pass_the_client() {
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let dir = harness::real_data("db");
+    if !dir.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(&dir));
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "A", "Alice").await;
+    a.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let made = map
+        .query(move |m| {
+            let at = m.players[&ga].position();
+            let mut entries: Vec<u32> = crate::game::cities::CITIES
+                .iter()
+                .skip(1)
+                .map(|c| c.elite.entry)
+                .collect();
+            entries.extend([
+                crate::game::champions::REXXAR,
+                crate::game::champions::MISHA,
+            ]);
+            let mut made = Vec::new();
+            for (i, entry) in entries.into_iter().enumerate() {
+                let near = wow_world_messages::vanilla::Vector3d {
+                    x: at.x + 4.0 + 2.0 * i as f32,
+                    ..at
+                };
+                let g = crate::game::map::scripts::summon(m, ga, entry, near, 0.0, None)
+                    .unwrap_or_else(|| panic!("{entry}"));
+                if let Some(s) = crate::game::map::event_ai::scripted_mut(m, g) {
+                    s.passive = true;
+                }
+                made.push(g);
+            }
+            // Rexxar runs, quick, as he comes and goes.
+            let rexxar = made[made.len() - 2];
+            crate::game::champions::set_run(m, rexxar, 2.0);
+            let to = wow_world_messages::vanilla::Vector3d {
+                y: at.y + 20.0,
+                ..at
+            };
+            crate::game::map::scripts::move_to(m, rexxar, to, true);
+            made
+        })
+        .await
+        .unwrap();
+    for g in &made {
+        a.sees(*g).await;
+    }
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "their creates were captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}
+
 const PROWLER: u32 = 306;
 const HOLD: u32 = 995_101;
 

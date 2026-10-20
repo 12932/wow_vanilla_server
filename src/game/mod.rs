@@ -1,8 +1,10 @@
 //! The world server: sessions, maps, and what they share.
 
 pub mod battlegrounds;
+pub mod champions;
 pub mod cheer_sites;
 pub mod cheer_speakers;
+pub mod cities;
 pub mod conn;
 pub mod data;
 pub mod elemental;
@@ -62,6 +64,8 @@ mod tests_bugs6;
 mod tests_bugs7;
 #[cfg(test)]
 mod tests_charges;
+#[cfg(test)]
+mod tests_cities;
 #[cfg(test)]
 mod tests_client_emu;
 #[cfg(test)]

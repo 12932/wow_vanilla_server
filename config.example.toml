@@ -292,8 +292,10 @@ corpse_decay_world_boss = 3600
 # creature that calls the guards takes a victim. A town's alarm
 # counts the guards called there lately and cools when the calls
 # stop; as it rises, the guards grow harder to fight, a capital sends
-# its elite two at a time, Jaina's city its Elite Guards, and Jaina
-# Proudmoore comes to her city with more of them.
+# its elite two at a time, then its Elite Guards, and at the top its
+# champion comes with more of them: Jaina Proudmoore to Stormwind,
+# Ironforge and Darnassus, Rexxar to Orgrimmar, the Undercity and
+# Thunder Bluff.
 [guards]
 
 # Seconds a called guard stays once out of combat (mangos-classic's
@@ -336,33 +338,39 @@ avoidance_max_pct = 50
 # Default 40. Range 1 to 100000, clamped. Changes at a reload.
 royal_from = 40
 
-# Guards in the alarm of Jaina's city whose crossing brings
-# `elite_count` Stormwind Elite Guards near the call that crossed
-# it, against its attacker: once each time the alarm rises through
+# Guards in the alarm of a defended city (one in `jaina_cities` or
+# `rexxar_cities`) whose crossing brings `elite_count` of the
+# city's Elite Guards (Stormwind's, Ironforge's, Darnassus's
+# Sentinels, Orgrimmar's Grunts, the Undercity's Deathguards,
+# Thunder Bluff's Bluffwatchers) near the call that crossed it,
+# against its attacker: once each time the alarm rises through
 # it, not at each call.
 # Default 50. Range 1 to 100000, clamped. Changes at a reload.
 elite_from = 50
 
-# Stormwind Elite Guards the crossing of `elite_from` brings.
+# Elite Guards the crossing of `elite_from` brings.
 # Default 2. Range 0 to 20, clamped. Changes at a reload.
 elite_count = 2
 
-# Guards in the alarm of Jaina's city from which she comes, if she
-# is alive and at home in Theramore.
+# The cities Jaina defends, by area: 1519 Stormwind City, 1537
+# Ironforge, 1657 Darnassus. Their alarms bring their Elite Guards
+# and her; empty, she never leaves Theramore. She is one: called
+# by one while she is out, a city waits, and its next call after
+# she is home brings her.
+# Default [1519, 1537, 1657]. Changes at a reload.
+jaina_cities = [1519, 1537, 1657]
+
+# Guards in the alarm of one of Jaina's cities from which she
+# comes, if she is alive and at home in Theramore.
 # Default 60. Range 1 to 100000, clamped. Changes at a reload.
 jaina_from = 60
-
-# The area of the city Jaina comes to: 1519, Stormwind City; 0,
-# she never leaves Theramore.
-# Default 1519. Changes at a reload.
-jaina_city = 1519
 
 # Seconds Jaina stays once she has no one left to fight and is
 # out of combat, before she goes home.
 # Default 60. Range 5 to 86400, clamped. Changes at a reload.
 jaina_stays_secs = 60
 
-# Stormwind Elite Guards who come with Jaina, around her, walk to
+# The city's Elite Guards who come with Jaina, around her, walk to
 # her side fighting what they meet, guard her, and leave with her.
 # Default 4. Range 0 to 20, clamped. Changes at a reload.
 jaina_elites = 4
@@ -372,9 +380,52 @@ jaina_elites = 4
 jaina_elites_yards = 40.0
 
 # Seconds Jaina takes to come back to Theramore once she has died
-# in her city (her spawn's own time, a day).
+# in a city (her spawn's own time, a day).
 # Default 86400. Range 5 to 2592000, clamped. Changes at a reload.
 jaina_respawn_secs = 86400
+
+# The cities Rexxar defends, by area: 1637 Orgrimmar, 1497 the
+# Undercity, 1638 Thunder Bluff. Their alarms bring their Elite
+# Guards and him, with Misha; empty, he never leaves Desolace. One
+# Rexxar, as one Jaina.
+# Default [1637, 1497, 1638]. Changes at a reload.
+rexxar_cities = [1637, 1497, 1638]
+
+# Guards in the alarm of one of Rexxar's cities from which he
+# comes, if he is alive and at home in Desolace.
+# Default 60. Range 1 to 100000, clamped. Changes at a reload.
+rexxar_from = 60
+
+# Seconds Rexxar stays once he has no one left to fight and is out
+# of combat, before he goes.
+# Default 60. Range 5 to 86400, clamped. Changes at a reload.
+rexxar_stays_secs = 60
+
+# The city's Elite Guards who run in with Rexxar, behind him,
+# guard him, and run off with him.
+# Default 4. Range 0 to 20, clamped. Changes at a reload.
+rexxar_elites = 4
+
+# Yards from the fight Rexxar comes into the city, out of sight
+# (past the 100 yards a player sees and its 10 more), to run in;
+# nearer where no walk from there reaches the fight.
+# Default 110.0. Range 10 to 300, clamped. Changes at a reload.
+rexxar_arrive_yards = 110.0
+
+# Yards Rexxar runs off before he is gone, as he leaves a city
+# and as he leaves Desolace for one.
+# Default 40.0. Range 5 to 100, clamped. Changes at a reload.
+rexxar_run_yards = 40.0
+
+# Rexxar's run speed as he comes and goes, as a multiple of his
+# own (his template's, 8 yards a second).
+# Default 2.0. Range 1 to 5, clamped. Changes at a reload.
+rexxar_run_speed = 2.0
+
+# Seconds Rexxar takes to come back to Desolace once he has died
+# in a city (a day, as Jaina's).
+# Default 86400. Range 5 to 2592000, clamped. Changes at a reload.
+rexxar_respawn_secs = 86400
 
 # New characters, the level cap, the realm's type, and what is left
 # of the dead.

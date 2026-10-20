@@ -198,7 +198,7 @@ Creatures: how near they notice players, how far they chase, how they call for h
 
 ### `[guards]`
 
-Town guards, as mangos-classic calls them: a guard each time a creature that calls the guards takes a victim. A town's alarm counts the guards called there lately and cools when the calls stop; as it rises, the guards grow harder to fight, a capital sends its elite two at a time, Jaina's city its Elite Guards, and Jaina Proudmoore comes to her city with more of them.
+Town guards, as mangos-classic calls them: a guard each time a creature that calls the guards takes a victim. A town's alarm counts the guards called there lately and cools when the calls stop; as it rises, the guards grow harder to fight, a capital sends its elite two at a time, then its Elite Guards, and at the top its champion comes with more of them: Jaina Proudmoore to Stormwind, Ironforge and Darnassus, Rexxar to Orgrimmar, the Undercity and Thunder Bluff.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
@@ -210,14 +210,24 @@ Town guards, as mangos-classic calls them: a guard each time a creature that cal
 | `avoidance_step_guards` | Guards in the alarm per step of Avoidance. | `10` | 1 to 100000, clamped | live |  |
 | `avoidance_max_pct` | The most Avoidance a guard comes with, in percent. | `50` | 0 to 100, clamped | live |  |
 | `royal_from` | Guards in the alarm from which a call brings two of the town's elite (Stormwind's Royal Guard, Orgrimmar's Kor'kron, Undercity's Royal Dreadguard, Thunder Bluff's Honor Guard), or two of its guards where it has none. | `40` | 1 to 100000, clamped | live |  |
-| `elite_from` | Guards in the alarm of Jaina's city whose crossing brings `elite_count` Stormwind Elite Guards near the call that crossed it, against its attacker: once each time the alarm rises through it, not at each call. | `50` | 1 to 100000, clamped | live |  |
-| `elite_count` | Stormwind Elite Guards the crossing of `elite_from` brings. | `2` | 0 to 20, clamped | live |  |
-| `jaina_from` | Guards in the alarm of Jaina's city from which she comes, if she is alive and at home in Theramore. | `60` | 1 to 100000, clamped | live |  |
-| `jaina_city` | The area of the city Jaina comes to: 1519, Stormwind City; 0, she never leaves Theramore. | `1519` |  | live |  |
+| `elite_from` | Guards in the alarm of a defended city (one in `jaina_cities` or `rexxar_cities`) whose crossing brings `elite_count` of the city's Elite Guards (Stormwind's, Ironforge's, Darnassus's Sentinels, Orgrimmar's Grunts, the Undercity's Deathguards, Thunder Bluff's Bluffwatchers) near the call that crossed it, against its attacker: once each time the alarm rises through it, not at each call. | `50` | 1 to 100000, clamped | live |  |
+| `elite_count` | Elite Guards the crossing of `elite_from` brings. | `2` | 0 to 20, clamped | live |  |
+| `jaina_cities` | The cities Jaina defends, by area: 1519 Stormwind City, 1537 Ironforge, 1657 Darnassus. Their alarms bring their Elite Guards and her; empty, she never leaves Theramore. She is one: called by one while she is out, a city waits, and its next call after she is home brings her. | `[1519, 1537, 1657]` |  | live |  |
+| `jaina_from` | Guards in the alarm of one of Jaina's cities from which she comes, if she is alive and at home in Theramore. | `60` | 1 to 100000, clamped | live |  |
 | `jaina_stays_secs` | Seconds Jaina stays once she has no one left to fight and is out of combat, before she goes home. | `60` | 5 to 86400, clamped | live |  |
-| `jaina_elites` | Stormwind Elite Guards who come with Jaina, around her, walk to her side fighting what they meet, guard her, and leave with her. | `4` | 0 to 20, clamped | live |  |
+| `jaina_elites` | The city's Elite Guards who come with Jaina, around her, walk to her side fighting what they meet, guard her, and leave with her. | `4` | 0 to 20, clamped | live |  |
 | `jaina_elites_yards` | Yards from Jaina her Elite Guards come. | `40.0` | 5 to 100, clamped | live |  |
-| `jaina_respawn_secs` | Seconds Jaina takes to come back to Theramore once she has died in her city (her spawn's own time, a day). | `86400` | 5 to 2592000, clamped | live |  |
+| `jaina_respawn_secs` | Seconds Jaina takes to come back to Theramore once she has died in a city (her spawn's own time, a day). | `86400` | 5 to 2592000, clamped | live |  |
+| `rexxar_cities` | The cities Rexxar defends, by area: 1637 Orgrimmar, 1497 the Undercity, 1638 Thunder Bluff. Their alarms bring their Elite Guards and him, with Misha; empty, he never leaves Desolace. One Rexxar, as one Jaina. | `[1637, 1497, 1638]` |  | live |  |
+| `rexxar_from` | Guards in the alarm of one of Rexxar's cities from which he comes, if he is alive and at home in Desolace. | `60` | 1 to 100000, clamped | live |  |
+| `rexxar_stays_secs` | Seconds Rexxar stays once he has no one left to fight and is out of combat, before he goes. | `60` | 5 to 86400, clamped | live |  |
+| `rexxar_elites` | The city's Elite Guards who run in with Rexxar, behind him, guard him, and run off with him. | `4` | 0 to 20, clamped | live |  |
+| `rexxar_arrive_yards` | Yards from the fight Rexxar comes into the city, out of sight (past the 100 yards a player sees and its 10 more), to run in; nearer where no walk from there reaches the fight. | `110.0` | 10 to 300, clamped | live |  |
+| `rexxar_run_yards` | Yards Rexxar runs off before he is gone, as he leaves a city and as he leaves Desolace for one. | `40.0` | 5 to 100, clamped | live |  |
+| `rexxar_run_speed` | Rexxar's run speed as he comes and goes, as a multiple of his own (his template's, 8 yards a second). | `2.0` | 1 to 5, clamped | live |  |
+| `rexxar_respawn_secs` | Seconds Rexxar takes to come back to Desolace once he has died in a city (a day, as Jaina's). | `86400` | 5 to 2592000, clamped | live |  |
+
+The capitals, their Elite Guards and their champions' teleport places are data in `src/game/cities.rs`: an area in `jaina_cities` that isn't one of her three, or in `rexxar_cities` one of his, is ignored. `jaina_city` (one area, Stormwind's) was replaced by `jaina_cities`: a config that still sets it is refused as an unknown key.
 
 ### `[players]`
 

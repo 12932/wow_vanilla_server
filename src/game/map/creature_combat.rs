@@ -1198,7 +1198,7 @@ pub fn update(map: &mut Map) {
     }
     {
         let _z = crate::zone!("guards and Jaina");
-        crate::game::jaina::update(map);
+        crate::game::champions::update(map);
     }
     {
         let _z = crate::zone!("assistance");

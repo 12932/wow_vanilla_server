@@ -1,25 +1,31 @@
-//! The Stormwind Elite Guard (the user's idea, 2026-10-19): a Stormwind
-//! Royal Guard (1756) in looks and side, of level 62 and elite, with the
-//! Tower Point Warmaster's (14776) toughness and damage and its fight
-//! (vmangos's `npc_WarMaster`, as Thistle Tea ports it for Alterac Valley),
-//! but for its Charge, which goes for a healer; and a sword in each hand,
-//! swinging both as a creature with a weapon in its off hand does
-//! (`combat::dual_wields`). It is defined here and added to the world's
-//! data after it loads ([`install`]): the database has no row of it.
+//! The capitals' Elite Guards (the user's idea, 2026-10-19, for Stormwind;
+//! 2026-10-20, for every capital): each city's guard in looks and side
+//! (`cities.rs`: Stormwind's Royal Guard, an Ironforge Guard, a Darnassus
+//! Sentinel, a Kor'kron Elite, a Deathguard Elite, a Bluffwatcher), of
+//! level 62 and elite, with the Tower Point Warmaster's (14776) toughness
+//! and damage and its fight (vmangos's `npc_WarMaster`, as Thistle Tea
+//! ports it for Alterac Valley), but for its Charge, which goes for a
+//! healer; and weapons of its own, a weapon in each hand swung as a
+//! creature with one in its off hand swings (`combat::dual_wields`). They
+//! are defined here and added to the world's data after it loads
+//! ([`install`]): the database has no row of them.
 //!
-//! It comes to Jaina's city (`[guards] jaina_city`, Stormwind) two ways:
+//! They come to a defended city (`[guards] jaina_cities`, `rexxar_cities`)
+//! two ways:
 //!
 //! - **On the alarm:** as the city's alarm rises through `[guards]
-//!   elite_from` (50, between the Royal Guards' 40 and Jaina's 60),
+//!   elite_from` (50, between the elite's 40 and the champion's 60),
 //!   `elite_count` (2) come near the civilian whose call took it there,
 //!   against its attacker, once for the crossing ([`crossed`]). They come,
 //!   fight and go as the guards do (`map/guards.rs`): gone five minutes
 //!   out of combat or at death, wandering about where they came.
-//! - **With Jaina:** as she arrives, `jaina_elites` (4) come about
-//!   `jaina_elites_yards` (40) around her, each at a point a walk from her
-//!   reaches, and walk to her side, taking on any enemy they see on the
-//!   way; there they guard her, joining her fights ([`with_jaina`],
-//!   [`guard`]). They leave with her, with the same flash; if she dies (or
+//! - **With its champion:** as Jaina arrives, `jaina_elites` (4) come
+//!   about `jaina_elites_yards` (40) around her, each at a point a walk
+//!   from her reaches, and walk to her side, taking on any enemy they see
+//!   on the way; Rexxar's `rexxar_elites` (4) come around him out of sight
+//!   and run in behind him, with Misha. There they guard the champion,
+//!   joining their fights ([`with_champion`], [`guard`]). They leave with
+//!   them, with Jaina's flash or at Rexxar's run; if the champion dies (or
 //!   is gone some other way) they stay as guards do ([`released`]).
 
 use std::f32::consts::{PI, TAU};
@@ -30,6 +36,8 @@ use tracing::info;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
+use crate::game::champions::Champion;
+use crate::game::cities::Elite;
 use crate::game::data::{CreatureTemplate, GameData};
 use crate::game::fields::*;
 use crate::game::map::Map;
@@ -37,11 +45,12 @@ use crate::game::map::battleground::av_scripts::{self, Builder, ChargeAt};
 use crate::game::map::combat::{self, dist};
 use crate::game::map::player::PLAYER_FLAGS_GM;
 
-/// Its entry: past vmangos's last (18199), and named by none of its
-/// tables.
+/// The Stormwind Elite Guard's entry: past vmangos's last (18199), and
+/// named by none of its tables (the others' are in `cities.rs`).
 pub const ELITE_GUARD: u32 = 101_756;
 pub const NAME: &str = "Stormwind Elite Guard";
-/// Whose looks and side it has, and whose toughness and fight.
+/// Whose looks and side it has, and whose toughness and fight is every
+/// Elite Guard's.
 pub const ROYAL_GUARD: u32 = 1756;
 pub const WARMASTER: u32 = 14776;
 pub const LEVEL: u8 = 62;
@@ -53,17 +62,18 @@ const HEALTH_MULTIPLIER: f32 = 20.0;
 const DAMAGE_MULTIPLIER: f32 = 13.5;
 const ATTACK_TIME: u32 = 2000;
 const WARRIOR: u8 = 1;
-/// Ids for its events and scripts, clear of Thistle Tea's import (90M)
+/// Ids for their events and scripts, clear of Thistle Tea's import (90M)
 /// and the valley's (91M).
 const BASE: u32 = 92_000_000;
-/// Its swords (the user's: two one-handed swords, cool but clean): in
+/// The Stormwind one's swords (the user's: two one-handed swords, cool but clean): in
 /// its main hand the Alliance's PvP blade, the Grand Marshal's
 /// Longsword's look that Stormwind's infantry carry (display 34128), and
 /// in its off hand the Grand Marshal's Swiftblade, the same blade in its
 /// violet steel (display 36066).
 pub const MAIN_HAND: u32 = 21573;
 pub const OFF_HAND: u32 = 23456;
-/// Its equipment's entry, its own (vmangos's equipment has none of it).
+/// Its equipment's entry, its own (vmangos's equipment has none of it):
+/// each Elite Guard's is its entry.
 pub const EQUIPMENT: u32 = ELITE_GUARD;
 
 /// Charge's reach (spell 22911's range, 95).
@@ -73,21 +83,26 @@ pub const CHARGE_MAX: f32 = 25.0;
 pub const HEALERS: [u8; 4] = [2, 5, 7, 11];
 /// How lately a heal makes a healer the one charged.
 pub const HEALED_WITHIN: Duration = Duration::from_secs(5);
-/// How far from Jaina her Elite Guards keep, around her.
+/// How far from a champion their Elite Guards keep, around them.
 pub const BY_JAINA: f32 = 4.0;
 /// Angles tried for a point a walk reaches (the guards' 100).
 const TRIES: usize = 100;
 
-/// The Elite Guard's template: the Royal Guard's, at level 62, elite, with
-/// the warmaster's multipliers, swing and class, its own two swords, and
-/// no spells of the Royal Guard's (its fight is the warmaster's). None
-/// without the Royal Guard.
+/// The Stormwind Elite Guard's template ([`template_of`]).
 pub fn template(data: &GameData) -> Option<CreatureTemplate> {
-    let royal = data.creature_template(ROYAL_GUARD)?;
+    template_of(data, &crate::game::cities::CITIES[0].elite)
+}
+
+/// A city's Elite Guard's template: its city guard's (`elite.looks`), at
+/// level 62, elite, with the warmaster's multipliers, swing and class, its
+/// own weapons, and no spells of the guard's (its fight is the
+/// warmaster's). None without the guard.
+pub fn template_of(data: &GameData, elite: &Elite) -> Option<CreatureTemplate> {
+    let looks = data.creature_template(elite.looks)?;
     let warmaster = data.creature_template(WARMASTER);
     let mut t = CreatureTemplate {
-        entry: ELITE_GUARD,
-        name: NAME.into(),
+        entry: elite.entry,
+        name: elite.name.into(),
         sub_name: String::new(),
         level_min: LEVEL,
         level_max: LEVEL,
@@ -96,12 +111,12 @@ pub fn template(data: &GameData) -> Option<CreatureTemplate> {
         damage_multiplier: warmaster.map_or(DAMAGE_MULTIPLIER, |w| w.damage_multiplier),
         base_attack_time: warmaster.map_or(ATTACK_TIME, |w| w.base_attack_time),
         unit_class: warmaster.map_or(WARRIOR, |w| w.unit_class),
-        equipment_id: EQUIPMENT,
+        equipment_id: elite.entry,
         spell_list_id: 0,
         gossip_menu_id: 0,
         ai_name: "EventAI".into(),
         script_name: String::new(),
-        ..royal.clone()
+        ..looks.clone()
     };
     let health = data
         .class_level_stats
@@ -114,23 +129,30 @@ pub fn template(data: &GameData) -> Option<CreatureTemplate> {
     Some(t)
 }
 
-/// Add the Elite Guard to the world's data: its template, its swords,
-/// and its fight as EventAI.
+/// Add the cities' Elite Guards to the world's data: their templates,
+/// their weapons, and their fight as EventAI (Stormwind's first, its ids
+/// as they were).
 pub fn install(data: &mut GameData) {
-    let Some(t) = template(data) else {
-        return;
-    };
-    data.creature_templates.insert(ELITE_GUARD, t);
-    data.creature_equipment
-        .insert(EQUIPMENT, [MAIN_HAND, OFF_HAND, 0]);
-    data.scripts.ai_events.remove(&ELITE_GUARD);
+    let mut made = Vec::new();
+    for city in crate::game::cities::CITIES {
+        let Some(t) = template_of(data, &city.elite) else {
+            continue;
+        };
+        data.creature_templates.insert(city.elite.entry, t);
+        data.creature_equipment
+            .insert(city.elite.entry, city.elite.weapons);
+        data.scripts.ai_events.remove(&city.elite.entry);
+        made.push(city.elite.entry);
+    }
     let mut b = Builder::new(&mut data.scripts, BASE);
-    av_scripts::warmaster(
-        &mut b,
-        ELITE_GUARD,
-        ChargeAt::Picked(crate::game::map::scripts::T_ELITE_CHARGE),
-        None,
-    );
+    for entry in made {
+        av_scripts::warmaster(
+            &mut b,
+            entry,
+            ChargeAt::Picked(crate::game::map::scripts::T_ELITE_CHARGE),
+            None,
+        );
+    }
 }
 
 /// Whom an Elite Guard charges (the user's twist on the warmaster's): a
@@ -190,7 +212,10 @@ pub fn charge_target(map: &Map, g: Guid) -> Option<Guid> {
 /// brought level with the most on its list, so that another takes it back
 /// only by passing it, as any must pass a victim.
 pub fn charged(map: &mut Map, g: Guid, target: Guid) {
-    let Some(c) = map.creature(g).filter(|c| c.entry == ELITE_GUARD) else {
+    let Some(c) = map
+        .creature(g)
+        .filter(|c| crate::game::cities::is_elite(c.entry))
+    else {
         return;
     };
     let top = c.threat.iter().map(|(_, t)| *t).fold(0.0f32, f32::max);
@@ -204,13 +229,20 @@ pub fn charged(map: &mut Map, g: Guid, target: Guid) {
     }
 }
 
-/// The alarm of Jaina's city rose through `elite_from` on `caller`'s call
-/// against `victim`: `count` Elite Guards come as its guards come, with
-/// the call's Avoidance. How many came.
-pub fn crossed(map: &mut Map, caller: Guid, victim: Guid, avoidance: u32, count: u32) -> u32 {
+/// A defended city's alarm rose through `elite_from` on `caller`'s call
+/// against `victim`: `count` of its Elite Guards (`entry`) come as its
+/// guards come, with the call's Avoidance. How many came.
+pub fn crossed(
+    map: &mut Map,
+    caller: Guid,
+    victim: Guid,
+    avoidance: u32,
+    count: u32,
+    entry: u32,
+) -> u32 {
     let mut came = 0;
     for _ in 0..count {
-        if crate::game::map::guards::summon(map, caller, ELITE_GUARD, victim, avoidance).is_some() {
+        if crate::game::map::guards::summon(map, caller, entry, victim, avoidance).is_some() {
             came += 1;
         }
     }
@@ -249,29 +281,42 @@ pub fn around(map: &mut Map, at: Vector3d, yards: f32) -> Option<Vector3d> {
     None
 }
 
-/// Jaina arrived in her city as `jaina`: her Elite Guards come around
-/// her, each at a point a walk from her reaches, facing her, and walk to
+/// How far around Rexxar, where he comes in, his Elite Guards come.
+pub const WITH_REXXAR: f32 = 5.0;
+
+/// `who` arrived in `city` as `g`: the city's Elite Guards come with them.
+/// Around Jaina, `jaina_elites` of them about `jaina_elites_yards` from
+/// her, each at a point a walk from her reaches, facing her, to walk to
 /// their places by her (a quarter of a circle apart, for four), taking on
-/// any enemy they see on the way. They come with the city's Avoidance, as
-/// its guards would, and go as its guards do.
-pub fn with_jaina(map: &mut Map, jaina: Guid) {
+/// any enemy they see on the way; around Rexxar, `rexxar_elites` of them
+/// a few yards from him out of sight, to run in behind him. They come with
+/// the city's Avoidance, as its guards would, and go as its guards do.
+pub fn with_champion(map: &mut Map, who: Champion, g: Guid, city: u32) -> Vec<Guid> {
     let cfg = map.cfg.guards.clone();
-    let Some(at) = map.creature(jaina).map(|c| c.position) else {
-        return;
+    let Some(entry) = crate::game::cities::city(city).map(|c| c.elite.entry) else {
+        return Vec::new();
+    };
+    let Some(at) = map.creature(g).map(|c| c.position) else {
+        return Vec::new();
     };
     let avoidance = crate::game::map::guards::Escalation::of(&cfg)
-        .avoidance(crate::game::map::guards::alarm(map, cfg.jaina_city));
-    let n = cfg.jaina_elites;
+        .avoidance(crate::game::map::guards::alarm(map, city));
+    let n = who.settings(&cfg).elites;
+    let yards = if who.runs() {
+        WITH_REXXAR
+    } else {
+        cfg.jaina_elites_yards
+    };
     let mut came = Vec::new();
     for i in 0..n {
-        let Some(spot) = around(map, at, cfg.jaina_elites_yards) else {
+        let Some(spot) = around(map, at, yards) else {
             continue;
         };
         let facing = (at.y - spot.y).atan2(at.x - spot.x);
         let Some(e) = crate::game::map::scripts::summon(
             map,
-            jaina,
-            ELITE_GUARD,
+            g,
+            entry,
             spot,
             facing,
             Some((
@@ -281,56 +326,96 @@ pub fn with_jaina(map: &mut Map, jaina: Guid) {
         ) else {
             continue;
         };
-        // Its place by her: off her facing, the four about her.
+        // Its place by them: off their facing, the four about them.
         let angle = PI / n as f32 + i as f32 * TAU / n as f32;
-        if let Some(s) = crate::game::map::event_ai::scripted_mut(map, e) {
-            s.follow = Some((jaina, BY_JAINA, angle));
-            s.run = true;
-        }
-        // Its place by her is where a fight's end takes it back.
-        crate::game::map::creature_groups::join_with(
-            map,
-            e,
-            jaina,
-            BY_JAINA,
-            angle,
-            crate::game::data::scripts::GROUP_FORMATION,
-        );
+        keep_by(map, e, g, angle);
         crate::game::map::guards::shield(map, e, avoidance);
         came.push(e);
     }
     if !came.is_empty() {
         info!(
-            "{}: {} Stormwind Elite Guards come with Jaina Proudmoore, {:.0} yards around her",
+            "{}: {} {}s come with {}, {yards:.0} yards around",
             map.key,
             came.len(),
-            cfg.jaina_elites_yards
+            map.realm
+                .data
+                .creature_template(entry)
+                .map_or("Elite Guard", |t| t.name.as_str()),
+            who.name(),
         );
     }
-    map.guards.jaina.elites = came;
+    came
 }
 
-/// Jaina's Elite Guards, alive.
-fn hers(map: &mut Map) -> Vec<Guid> {
-    let mut elites = std::mem::take(&mut map.guards.jaina.elites);
-    elites.retain(|e| map.creature(*e).is_some_and(|c| c.alive()));
-    map.guards.jaina.elites = elites.clone();
-    elites
+/// `e` keeps by `leader` at `angle` off its facing: it follows, and its
+/// place by it is where a fight's end takes it back.
+fn keep_by(map: &mut Map, e: Guid, leader: Guid, angle: f32) {
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, e) {
+        s.follow = Some((leader, BY_JAINA, angle));
+        s.run = true;
+    }
+    crate::game::map::creature_groups::join_with(
+        map,
+        e,
+        leader,
+        BY_JAINA,
+        angle,
+        crate::game::data::scripts::GROUP_FORMATION,
+    );
 }
 
-/// Each look at Jaina in her city: her Elite Guards free to fight join her
-/// fight.
-pub fn guard(map: &mut Map, jaina: Guid) {
-    let elites = hers(map);
+/// Rexxar's companion (Misha, `entry`) comes with him as `leader`, at his
+/// left, facing as he does, to go as his Elite Guards go.
+pub fn companion(
+    map: &mut Map,
+    leader: Guid,
+    entry: u32,
+    at: Vector3d,
+    facing: f32,
+) -> Option<Guid> {
+    let side = facing + PI / 2.0;
+    let spot = Vector3d {
+        x: at.x + 2.0 * side.cos(),
+        y: at.y + 2.0 * side.sin(),
+        z: at.z,
+    };
+    let despawn = map.cfg.guards.despawn_secs;
+    let g = crate::game::map::scripts::summon(
+        map,
+        leader,
+        entry,
+        spot,
+        facing,
+        Some((
+            Duration::from_secs(despawn),
+            crate::game::map::guards::TIMED_OOC_OR_DEAD,
+        )),
+    )?;
+    keep_by(map, g, leader, PI / 2.0);
+    Some(g)
+}
+
+/// Who came with `who`, alive.
+pub fn company(map: &mut Map, who: Champion) -> Vec<Guid> {
+    let mut company = std::mem::take(&mut who.local(map).company);
+    company.retain(|e| map.creature(*e).is_some_and(|c| c.alive()));
+    who.local(map).company = company.clone();
+    company
+}
+
+/// Each look at `who` in a city as `g`: their company free to fight joins
+/// their fight.
+pub fn guard(map: &mut Map, who: Champion, g: Guid) {
+    let company = company(map, who);
     let foe = map
-        .creature(jaina)
+        .creature(g)
         .filter(|c| c.alive() && c.combat.attacking)
         .map(|c| c.combat.victim)
         .filter(|v| map.unit_view(*v).is_some_and(|u| u.alive));
     let Some(foe) = foe else {
         return;
     };
-    for e in elites {
+    for e in company {
         let free = map
             .creature(e)
             .is_some_and(|c| !c.combat.attacking && !c.evading);
@@ -341,40 +426,48 @@ pub fn guard(map: &mut Map, jaina: Guid) {
 }
 
 /// Jaina says farewell to her city: her Elite Guards flash as she does.
-pub fn leaving_with_jaina(map: &mut Map) {
-    for e in hers(map) {
-        crate::game::map::spells::cast_triggered(map, e, crate::game::jaina::TELEPORT_VISUAL, None);
+pub fn flash_with(map: &mut Map, who: Champion) {
+    for e in company(map, who) {
+        crate::game::map::spells::cast_triggered(
+            map,
+            e,
+            crate::game::champions::TELEPORT_VISUAL,
+            None,
+        );
     }
 }
 
-/// Jaina is gone home: her Elite Guards are gone with her.
-pub fn gone_with_jaina(map: &mut Map) {
-    let elites = hers(map);
-    map.guards.jaina.elites.clear();
-    if elites.is_empty() {
+/// `who` is gone home: their company is gone with them.
+pub fn gone_with(map: &mut Map, who: Champion) {
+    let company = company(map, who);
+    who.local(map).company.clear();
+    if company.is_empty() {
         return;
     }
-    for e in &elites {
+    for e in &company {
         crate::game::map::creature_groups::leave(map, *e);
         crate::game::map::scripts::remove_for_good(map, *e);
     }
     info!(
-        "{}: {} Stormwind Elite Guards leave with Jaina Proudmoore",
+        "{}: {} who came with {} leave with them",
         map.key,
-        elites.len()
+        company.len(),
+        who.name()
     );
 }
 
-/// Jaina died in her city (or is gone some other way): her Elite Guards
-/// stay as guards do, wandering about where they stand, gone five minutes
-/// out of combat or at their deaths.
-pub fn released(map: &mut Map) {
-    let elites = hers(map);
-    map.guards.jaina.elites.clear();
+/// `who` died in a city (or is gone some other way): their company stays
+/// as guards do, wandering about where they stand, gone five minutes out
+/// of combat or at their deaths, at their own run.
+pub fn released(map: &mut Map, who: Champion) {
+    let company = company(map, who);
+    who.local(map).company.clear();
     let wander = map.cfg.guards.wander_yards;
     let now = map.now;
-    for e in &elites {
+    for e in &company {
         crate::game::map::creature_groups::leave(map, *e);
+        crate::game::champions::set_run(map, *e, 1.0);
+        map.keep_awake(*e, false);
         if let Some(s) = crate::game::map::event_ai::scripted_mut(map, *e) {
             s.follow = None;
         }
@@ -390,11 +483,12 @@ pub fn released(map: &mut Map) {
             }
         }
     }
-    if !elites.is_empty() {
+    if !company.is_empty() {
         info!(
-            "{}: Jaina Proudmoore's {} Stormwind Elite Guards stay as guards",
+            "{}: {}'s {} who came stay as guards",
             map.key,
-            elites.len()
+            who.name(),
+            company.len()
         );
     }
 }
