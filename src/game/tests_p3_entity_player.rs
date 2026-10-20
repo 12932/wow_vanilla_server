@@ -106,6 +106,19 @@ async fn rest_logged_out_is_earned_by_where_one_left() {
     // The connection drops: it was a logout then, away from rest.
     let before = wall_now();
     a.disconnect();
+    // Gone before the next connection: a reconnect while they are still in
+    // the world takes them over (one session an account, #35), with no
+    // logout to look at.
+    for _ in 0..200 {
+        if realm.registry.online(ga).is_none() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        realm.registry.online(ga).is_none(),
+        "the drop logs them out"
+    );
     let realm2 = realm.clone();
     let mut b = Client::connect(&realm2, "A");
     b.send(CMSG_CHAR_ENUM {}).await;

@@ -677,6 +677,18 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   dying list as a panic unwinds, and an extra swing's flag is reset; #9: spells nest 32 deep at most on a thread
   (a self-triggering spell no longer aborts the server). **Its calls:** a frame too big refused, not split;
   guardians and creature-owned pets keep no threat list either (mangos keeps one, wvs never read it).
+- **Review 5's fixes, data and the store (`fix/fixdata`):** #6 (high): **a start with world data missing or broken
+  refuses** ("run `git lfs pull`") rather than running an empty world that wiped the skills of whoever logged in (an
+  empty world is still allowed with no data and no characters); #10: saves the store can't write (a full disk, I/O,
+  read-only) are kept, the newest of each, and written once it can (100,000 at most; logins refused meanwhile, GMs
+  told); #11: the next character and item GUIDs are kept in the store (`counters`, migration 5), so a deleted
+  character's GUID, honor, tickets and binds go to no one; #19: records read field by field, one that doesn't read
+  left in the store with its id kept; #20: the start-up navmesh question waits 30 s, then starts (a "no" or no answer
+  remembered in `data/setup-declined.txt`); #21: a second server on the same store stops at its lock
+  (`characters.sqlite.lock`) and its port before touching it. **Migration 5 backs the store up first**
+  (`characters.sqlite.v4.bak`). **Its calls:** the 30 s a constant; saves still kept at a shutdown are lost, logged.
+  Merging with fixnet: a test reconnected so fast it took its player over (one session an account) where it looked
+  for a logout; it waits for the logout now.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
