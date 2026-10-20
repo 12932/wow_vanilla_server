@@ -84,6 +84,8 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
   connection, and the player went offline unsaved, still in the copy.
 - **data 10** fixed (`fix/lowsa`): `[arena]`'s minutes are 0 to a week and its seconds 0 to an hour, clamped, and
   `.arena start`'s numbers are held to the same; the arena's times are added without a panic (`arena::later`).
+- **data 9** fixed (`fix/lowsa`): a reload (SIGHUP, `.reload config`) that finds the file missing or empty, where the
+  running settings aren't the defaults, is an error that changes nothing (`game::reload_from`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

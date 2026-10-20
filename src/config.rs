@@ -926,6 +926,13 @@ pub fn load(path: &Path) -> Result<ServerConfig, String> {
 
 /// [`load`], the warnings returned rather than logged.
 pub fn load_full(path: &Path) -> Result<Loaded, String> {
+    load_noting_blank(path).map(|(loaded, _)| loaded)
+}
+
+/// [`load_full`], and whether the file was missing or empty: at a reload
+/// that is more likely a file gone, or one an editor has truncated to
+/// write, than one meant to be the defaults.
+pub fn load_noting_blank(path: &Path) -> Result<(Loaded, bool), String> {
     let origin = path.display().to_string();
     let text = match std::fs::read_to_string(path) {
         Ok(s) => {
@@ -942,7 +949,7 @@ pub fn load_full(path: &Path) -> Result<Loaded, String> {
     };
     let mut loaded = resolve(&text, &origin, &env_overrides()?)?;
     loaded.config.world.default_dirs();
-    Ok(loaded)
+    Ok((loaded, text.trim().is_empty()))
 }
 
 /// The process's `WVS__` variables.

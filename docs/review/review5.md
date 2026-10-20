@@ -1466,7 +1466,7 @@ Each finding: severity, kind, where, what, how it shows, the fix and its effort.
   reader job that panics (a guard that sends on drop); check the continents by name at start-up.
 - **Effort:** easy.
 
-#### 9. A reload that finds no config file puts every live key back to its default (low, robustness)
+#### 9. A reload that finds no config file puts every live key back to its default (low, robustness) **Fixed.**
 - **Where:** `src/config.rs:768-771` (`load_full`: not found is the defaults), `src/game/mod.rs:1158-1166`
   (`reload_from_disk`), `:1262` (`Realm::reload`).
 - **What:** at start a missing file means the defaults, which is right. At a reload it means the file has gone, or

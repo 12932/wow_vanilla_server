@@ -61,7 +61,8 @@ cargo run --bin wow_vanilla_server -- --print-config --defaults > config.example
 
 `.reload config` (GM level 3) and SIGHUP (on Unix) read `config.toml` and the environment again, off the maps'
 threads. The environment is the process's own, as it started: a variable can't be changed from outside a running
-process. A config that doesn't load is reported and changes nothing. Otherwise:
+process. A config that doesn't load is reported and changes nothing. So is a file missing or empty while the running
+settings aren't the defaults: at a reload that is a file gone, or one an editor has truncated to write it. Otherwise:
 
 - **What changes live:** every key marked *live* below takes its new value. These are the rates, distances, timers,
   the MOTD, new characters' settings, the quest givers' grey "!", chat, the instances', battleground, events, arena,

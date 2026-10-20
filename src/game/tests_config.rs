@@ -188,6 +188,49 @@ async fn a_reload_changes_a_live_rate_and_leaves_what_needs_a_restart() {
     );
 }
 
+/// rev5-data 9: a reload that finds the file gone, or empty (an editor
+/// truncating it to write), changes nothing when the running settings
+/// aren't the defaults; where they are, it is a reload of nothing.
+#[tokio::test]
+async fn a_reload_that_finds_no_file_keeps_the_running_settings() {
+    let dir = std::env::temp_dir().join(format!("wvs-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_file(&path);
+    let running = crate::config::load_full(&path).unwrap().config;
+    let mut cfg = RealmConfig::from_config(&running);
+    cfg.everyone_gm = true;
+    let realm = realm_with(cfg);
+    realm.set_source(running);
+    let reload = || crate::game::reload_from(realm.clone(), path.clone());
+
+    std::fs::write(&path, "[rates]\nxp_kill = 2.0\n").unwrap();
+    let report = reload().await.unwrap();
+    assert_eq!(report.applied, vec!["[rates] xp_kill".to_owned()]);
+
+    std::fs::remove_file(&path).unwrap();
+    let e = reload().await.unwrap_err();
+    assert!(e.contains("missing or empty"), "{e}");
+    assert_eq!(realm.config().rates.xp_kill, 2.0, "kept");
+
+    std::fs::write(&path, "").unwrap();
+    assert!(reload().await.is_err(), "an empty file the same");
+    std::fs::write(&path, "\n  \n").unwrap();
+    assert!(reload().await.is_err(), "and one of blanks");
+    assert_eq!(realm.config().rates.xp_kill, 2.0, "kept");
+
+    // Back to the defaults by the file, and then its going is nothing.
+    std::fs::write(&path, "[rates]\nxp_kill = 1.0\n").unwrap();
+    assert_eq!(reload().await.unwrap().applied.len(), 1);
+    std::fs::remove_file(&path).unwrap();
+    let report = reload().await.unwrap();
+    assert!(
+        report.applied.is_empty() && report.restart.is_empty(),
+        "{report:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A corpse lies `[creatures] corpse_decay_normal`; a respawn takes
 /// `[rates] respawn_time` of its spawn's time.
 #[tokio::test]
