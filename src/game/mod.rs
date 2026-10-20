@@ -935,6 +935,8 @@ mod tests_p9_creatures;
 #[cfg(test)]
 mod tests_p9_creatures_pets;
 #[cfg(test)]
+mod tests_p9_creatures_real;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
