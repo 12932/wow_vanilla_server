@@ -167,6 +167,16 @@ pub fn leave(map: &mut Map, g: Guid) {
     }
 }
 
+/// `g` leaves the map for good: out of the group a script put it in, and
+/// a group a script made it lead disbanded, every member free, as its
+/// leader's leave does ([`leave`]), where they were left pointing at it
+/// (in its group, a member of none here, and the next to join them with
+/// it). A database group keeps to its spawns, which come back.
+pub fn gone(map: &mut Map, g: Guid) {
+    map.script_groups.remove(&g);
+    map.script_groups.retain(|_, (l, _, _, _)| *l != g);
+}
+
 /// The member leading the formation of `leader`'s spawn meanwhile, if one
 /// is, leads it no more and stands.
 fn stop_acting(map: &mut Map, leader: u32) {
