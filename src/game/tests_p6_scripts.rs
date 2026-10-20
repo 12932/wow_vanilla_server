@@ -689,10 +689,31 @@ async fn lady_jaina_fights_with_fire_frost_and_her_elementals() {
         "her spell waits on her cast"
     );
     // Her elementals, only while none are near.
+    // A fifth of the time; else a teleport of her victim, which, this far
+    // from her tower, drops it from her threat: each try has her fight
+    // again with it beside her, or with her fight let go her specials
+    // stopped, and on a busy machine she let go before her fifth came.
     let mut called = false;
-    for _ in 0..40 {
+    for _ in 0..60 {
         c.clear();
-        map.query(move |m| ready(m, jaina, 496803)).await;
+        map.query(move |m| {
+            let at = m.position_of(jaina).unwrap();
+            if crate::game::map::combat::dist(m.position_of(d).unwrap(), at) > 5.0 {
+                crate::game::map::scripts::place(m, d, off(at, 3.0, 0.0), 0.0);
+            }
+            if threat(m, jaina, d) <= 0.0 {
+                crate::game::map::ai::attacked(m, jaina, d);
+            }
+            if let Some(cr) = m.creature_mut(jaina) {
+                for (u, t) in cr.threat.iter_mut() {
+                    if *u == d {
+                        *t = 100.0;
+                    }
+                }
+            }
+            ready(m, jaina, 496803);
+        })
+        .await;
         let (spell, _) = cast_among(&mut c, jaina, SPECIALS, Duration::from_secs(2))
             .await
             .unwrap_or_default();
@@ -1557,11 +1578,16 @@ async fn slim_calls_a_friend_once_and_gives_up_only_on_the_run() {
         None,
         "no boast, not on the run"
     );
+    // Hale again after: left at a fifth, he gave up on his own at his next
+    // look once on the run, his friend's line said and the friend gone
+    // before the test asked, whenever the test ran slow.
     let kept = map
         .query(move |m| {
             set_pct(m, slim, 15);
             due(m, slim, 496201);
-            faction(m, slim)
+            let kept = faction(m, slim);
+            set_pct(m, slim, 100);
+            kept
         })
         .await
         .unwrap();
