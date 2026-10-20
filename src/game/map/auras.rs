@@ -3270,6 +3270,14 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     map, target, h,
                 ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
+            // A reagent-less aura's trigger pays its own reagents, and
+            // without them doesn't go.
+            let data = map.realm.data.clone();
+            if let Some(by) = data.spells.get(h.spell)
+                && !crate::game::map::spells::trigger_reagents(map, h.caster, by, a.trigger)
+            {
+                return;
+            }
             crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
             // A spell aimed at a unit the client picks goes at the unit the
             // aura is on, or a channel's at the channel's target. Anything

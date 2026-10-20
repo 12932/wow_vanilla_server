@@ -308,3 +308,146 @@ async fn a_class_scripts_proc_on_a_dead_or_missing_victim_comes_to_nothing() {
         }
     }
 }
+
+const WILL_DRAIN_FESTIVE_MUG: u32 = 25864;
+const FILLED_FESTIVE_MUG: u32 = 21171;
+const EMPTY_FESTIVE_MUG: u32 = 21174;
+/// Will Drain Festive Mug, made up with a reagent of its own.
+const WILL_DRAIN_PAID: u32 = 995_864;
+
+/// A periodic trigger's spell pays its own reagents only when the aura's
+/// spell has none, as mangos's `IgnoreItemRequirements` and Thistle Tea's
+/// `pays_reagents?` have it: Will Drain Festive Mug's drain takes the
+/// Filled Festive Mug it empties, and without one nothing is drained. Under
+/// an aura spell with a reagent of its own, the drain is free.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_periodic_triggers_spell_pays_its_reagents_when_its_aura_spell_has_none() {
+    use super::tests_p3_spells_kit::{have_data, player, ready, realm_plus, tick_now};
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        let mut paid = d.spells.get(WILL_DRAIN_FESTIVE_MUG).unwrap().clone();
+        paid.id = WILL_DRAIN_PAID;
+        paid.reagents[0] = (20406, 1);
+        d.spells.spells.insert(WILL_DRAIN_PAID, paid);
+    });
+    let (_c, g, map) = player(&realm, "P8AR", "Drinker", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            // A GM pays no reagents.
+            m.players.get_mut(&g).unwrap().gm = false;
+            let mugs = |m: &Map| {
+                let p = &m.players[&g];
+                (
+                    p.carried_count_of(FILLED_FESTIVE_MUG),
+                    p.carried_count_of(EMPTY_FESTIVE_MUG),
+                )
+            };
+            let mut seen = Vec::new();
+            for aura in [WILL_DRAIN_FESTIVE_MUG, WILL_DRAIN_PAID] {
+                crate::game::map::inventory::add_item(m, g, FILLED_FESTIVE_MUG, 1, false)
+                    .expect("room");
+                let s = m.realm.data.spells.get(aura).unwrap().clone();
+                auras::apply(m, g, g, &s, 0, 0);
+                tick_now(m, g, aura);
+                seen.push(mugs(m));
+                // Drained dry, a tick more: nothing to drain.
+                if aura == WILL_DRAIN_FESTIVE_MUG {
+                    tick_now(m, g, aura);
+                    seen.push(mugs(m));
+                }
+                auras::remove_spell(m, g, aura, None);
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out[0],
+        (0, 1),
+        "the drain takes the filled mug for an empty one"
+    );
+    assert_eq!(out[1], (0, 1), "with no filled mug, nothing is drained");
+    assert_eq!(
+        out[2],
+        (1, 2),
+        "under an aura spell with a reagent, the drain is free"
+    );
+}
+
+/// A channel of a periodic trigger every 4 s for 10 s, a mage's; what it
+/// triggers; and a one-charge modifier taking 2 s off its period.
+const CHANNEL: u32 = 995_100;
+const CHANNEL_TRIGGER: u32 = 995_101;
+const QUICKER: u32 = 995_050;
+
+/// A channel's trigger keeps the schedule its cast's modifiers gave it
+/// after their charge is spent, as Thistle Tea's `Casting.start` and
+/// mangos's `Aura` (its period taken with `SPELLMOD_ACTIVATION_TIME` as the
+/// holder is made) have it: the one-charge modifier goes with the cast,
+/// and the channel's trigger goes every 2 s, not 4.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_channels_trigger_keeps_its_modified_schedule_after_the_charge_is_spent() {
+    use super::tests_p3_spells_kit::{
+        at, cast_fresh, has, have_data, holder, made_up, pass, player, ready, realm_plus,
+    };
+    if !have_data() {
+        return;
+    }
+    let realm = realm_plus(|d| {
+        let mut channel = made_up(CHANNEL, 6, auras::AURA_PERIODIC_TRIGGER_SPELL, 0, 0);
+        channel.attributes[1] = 0x4;
+        channel.family_name = 3;
+        channel.family_flags = 1;
+        channel.duration_index = 1;
+        channel.casting_time_index = 1;
+        channel.effects[0].amplitude = 4000;
+        channel.effects[0].trigger_spell = CHANNEL_TRIGGER;
+        d.spells.spells.insert(CHANNEL, channel);
+        let mut trigger = made_up(CHANNEL_TRIGGER, 6, auras::AURA_DUMMY, 0, 1);
+        trigger.duration_index = 1;
+        d.spells.spells.insert(CHANNEL_TRIGGER, trigger);
+        let mut quicker = made_up(QUICKER, 6, auras::AURA_ADD_FLAT_MODIFIER, 19, -2000);
+        quicker.family_name = 3;
+        quicker.effects[0].item_type = 1;
+        quicker.duration_index = 5;
+        d.spells.spells.insert(QUICKER, quicker);
+    });
+    let (_c, g, map) = player(&realm, "P8AC", "Channeler", Race::Human, Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[CHANNEL]);
+            let s = m.realm.data.spells.get(QUICKER).unwrap().clone();
+            auras::apply(m, g, g, &s, 0, -2000);
+            if let Some(a) = auras::auras_mut(m, g) {
+                for h in a.holders.iter_mut().filter(|h| h.spell == QUICKER) {
+                    h.charges = 1;
+                }
+            }
+            let began = cast_fresh(m, g, CHANNEL, at(g));
+            let spent = !has(m, g, QUICKER);
+            let period = holder(m, g, CHANNEL).and_then(|h| h.effects[0].period);
+            let mut ticks = Vec::new();
+            for _ in 0..4 {
+                pass(m, 1000);
+                ticks.push(has(m, g, CHANNEL_TRIGGER));
+                auras::remove_spell(m, g, CHANNEL_TRIGGER, None);
+            }
+            (began, spent, period, ticks)
+        })
+        .await
+        .unwrap();
+    let (began, spent, period, ticks) = out;
+    assert!(began, "the channel begins");
+    assert!(spent, "the modifier's charge goes with the cast");
+    assert_eq!(period, Some(Duration::from_secs(2)), "its period is 2 s");
+    assert_eq!(
+        ticks,
+        [false, true, false, true],
+        "and its trigger goes every 2 s"
+    );
+}
