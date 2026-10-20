@@ -13,7 +13,7 @@ use wow_world_messages::vanilla::{
 use crate::game::conn::{Outbound, encode};
 use crate::game::map::{Map, gm};
 
-/// How far a say, an emote and a yell carry.
+/// How far a say, an emote and a yell carry, by default (`[chat]`).
 pub const SAY_YARDS: f32 = 25.0;
 pub const YELL_YARDS: f32 = 300.0;
 pub const TEXT_EMOTE_YARDS: f32 = 25.0;
@@ -176,21 +176,21 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
     }
     let (radius, chat_type) = match &m.chat_type {
         CMSG_MESSAGECHAT_ChatType::Say => (
-            SAY_YARDS,
+            map.cfg.chat.say_yards,
             SMSG_MESSAGECHAT_ChatType::Say {
                 chat_credit: guid,
                 speech_bubble_credit: guid,
             },
         ),
         CMSG_MESSAGECHAT_ChatType::Yell => (
-            YELL_YARDS,
+            map.cfg.chat.yell_yards,
             SMSG_MESSAGECHAT_ChatType::Yell {
                 chat_credit: guid,
                 speech_bubble_credit: guid,
             },
         ),
         CMSG_MESSAGECHAT_ChatType::Emote => (
-            SAY_YARDS,
+            map.cfg.chat.text_emote_yards,
             SMSG_MESSAGECHAT_ChatType::Emote { sender2: guid },
         ),
         _ => return Some(m),
@@ -344,7 +344,7 @@ pub fn text_emote(map: &mut Map, guid: Guid, m: CMSG_TEXT_EMOTE) {
     }) else {
         return;
     };
-    for g in map.players_near(pos, TEXT_EMOTE_YARDS) {
+    for g in map.players_near(pos, map.cfg.chat.text_emote_yards) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send_frame(frame.clone());
         }
@@ -395,7 +395,7 @@ pub fn target_name(map: &Map, target: Guid) -> String {
 }
 
 /// mangos's chat flood control: ten lines each within a second of the last
-/// mute the speaker for ten seconds.
+/// mute the speaker for ten seconds, by default (`[chat] flood_*`).
 pub const FLOOD_LINES: u32 = 10;
 pub const FLOOD_GAP: std::time::Duration = std::time::Duration::from_secs(1);
 pub const FLOOD_MUTE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -403,6 +403,12 @@ pub const FLOOD_MUTE: std::time::Duration = std::time::Duration::from_secs(10);
 /// Whether a player's line is to be dropped: muted, or flooding now.
 pub fn flooded(map: &mut Map, guid: Guid) -> bool {
     let now = map.now;
+    let chat = &map.cfg.chat;
+    let (lines, gap, mute) = (
+        chat.flood_message_count,
+        std::time::Duration::from_secs(chat.flood_message_delay_secs),
+        std::time::Duration::from_secs(chat.flood_mute_secs),
+    );
     let Some(p) = map.players.get_mut(&guid) else {
         return true;
     };
@@ -413,14 +419,16 @@ pub fn flooded(map: &mut Map, guid: Guid) -> bool {
         send_system(&p.outbound, "You are muted for flooding the chat.");
         return true;
     }
-    let close = p
-        .chat_last
-        .is_some_and(|t| now.duration_since(t) < FLOOD_GAP);
+    // None at all: no flood control (mangos's `ChatFlood.MessageCount` 0).
+    if lines == 0 {
+        return false;
+    }
+    let close = p.chat_last.is_some_and(|t| now.duration_since(t) < gap);
     p.chat_burst = if close { p.chat_burst + 1 } else { 0 };
     p.chat_last = Some(now);
-    if p.chat_burst >= FLOOD_LINES {
+    if p.chat_burst >= lines {
         p.chat_burst = 0;
-        p.muted_until = Some(now + FLOOD_MUTE);
+        p.muted_until = Some(now + mute);
         send_system(&p.outbound, "You are muted for flooding the chat.");
         return true;
     }

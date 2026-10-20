@@ -713,11 +713,6 @@ pub const CHAT_BOSS_WHISPER: u32 = 5;
 pub const CHAT_ZONE_YELL: u32 = 6;
 pub const CHAT_ZONE_EMOTE: u32 = 7;
 
-/// How far a creature's say and its yell carry (Thistle Tea's
-/// `@listen_range_say` and `@listen_range_yell`).
-const SAY_YARDS: f32 = 25.0;
-const YELL_YARDS: f32 = 300.0;
-
 /// A script's emote, as Thistle Tea resolves one by `Emotes.dbc`: one the
 /// unit stays in (or 0, none) becomes its emote state; any other plays
 /// once.
@@ -793,11 +788,14 @@ fn speaker_zone(map: &mut Map, speaker: Guid) -> Option<u32> {
 /// Who hears a creature's line of `chat_type`, as Thistle Tea's
 /// `MonsterTalk` reaches them: a whisper its target alone; a zone yell
 /// everyone in the speaker's zone (or, that unknown, as far as a yell); a
-/// yell or boss emote 300 yards; the rest 25.
+/// yell or boss emote as far as a player's yell (`[chat] yell_yards`, 300
+/// yards, Thistle Tea's `@listen_range_yell`); the rest as far as a say
+/// (`say_yards`, 25).
 fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid, zone: Option<u32>) -> Vec<Guid> {
     let Some(at) = map.position_of(speaker) else {
         return Vec::new();
     };
+    let (say_yards, yell_yards) = (map.cfg.chat.say_yards, map.cfg.chat.yell_yards);
     let within = |yards: f32| {
         map.players
             .values()
@@ -814,10 +812,10 @@ fn hearers(map: &Map, speaker: Guid, chat_type: u32, target: Guid, zone: Option<
                 .filter(|p| p.zone == z)
                 .map(|p| p.guid)
                 .collect(),
-            None => within(YELL_YARDS),
+            None => within(yell_yards),
         },
-        CHAT_YELL | CHAT_BOSS_EMOTE => within(YELL_YARDS),
-        _ => within(SAY_YARDS),
+        CHAT_YELL | CHAT_BOSS_EMOTE => within(yell_yards),
+        _ => within(say_yards),
     }
 }
 

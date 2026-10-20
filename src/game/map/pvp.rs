@@ -26,8 +26,6 @@ pub const MSG_INSPECT_HONOR_STATS: u16 = 0x2D6;
 pub const PVP_LINGER: Duration = Duration::from_secs(300);
 /// Damage older than this doesn't share a kill.
 pub const DAMAGE_MEMORY: Duration = Duration::from_secs(60);
-/// Players this near a kill share its honor.
-pub const SHARE_YARDS: f32 = 74.0;
 
 pub const PLAYER_FLAGS_PVP_DESIRED: u32 = 0x200;
 /// Contested: guards of one's own side may attack.
@@ -728,7 +726,9 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
         map.players.get(&g).is_some_and(|p| {
             p.death == Death::Alive
                 && p.team != victim_team
-                && (g == killer || crate::game::map::combat::dist(p.position(), at) <= SHARE_YARDS)
+                && (g == killer
+                    || crate::game::map::combat::dist(p.position(), at)
+                        <= map.cfg.players.group_reward_yards)
         })
     };
     if total == 0 {

@@ -18,9 +18,10 @@ use crate::game::map::auras::{AURA_MOD_WATER_BREATHING, AURA_WATER_BREATHING};
 use crate::game::map::death::Death;
 use crate::game::map::terrain::{Liquid, SPELL_NAXX_SLIME};
 
+/// The breath and fatigue timers, by default (`[environment]`).
 pub const BREATH: Duration = Duration::from_secs(60);
 pub const FATIGUE: Duration = Duration::from_secs(60);
-/// How long lava is touched before it burns.
+/// How long lava is touched before it burns, by default.
 pub const LAVA_GRACE: Duration = Duration::from_secs(1);
 const PULSE: Duration = Duration::from_secs(2);
 /// How often a player's liquid is looked at.
@@ -203,6 +204,7 @@ pub fn update(map: &mut Map) {
         .map(|p| p.guid)
         .collect();
     let started = map.started;
+    let breath = Duration::from_secs(map.cfg.environment.breath_secs);
     for g in due {
         let Some(p) = map.players.get_mut(&g) else {
             continue;
@@ -238,7 +240,7 @@ pub fn update(map: &mut Map) {
             Duration::ZERO
         } else {
             let factor = p.auras.product(AURA_MOD_WATER_BREATHING);
-            Duration::try_from_secs_f32(BREATH.as_secs_f32() * factor).unwrap_or(BREATH)
+            Duration::try_from_secs_f32(breath.as_secs_f32() * factor).unwrap_or(breath)
         };
         let liquid = liquid_at(map, at);
         liquid_spell(map, g, liquid.filter(|_| alive).and_then(|l| l.spell(at.z)));
@@ -399,12 +401,13 @@ pub fn breathe(
 /// The fatigue timer, in the deep sea; filling in other liquid. A ghost
 /// worn out goes to its graveyard.
 pub fn fatigue(map: &mut Map, g: Guid, deep: bool, now: Instant) {
+    let full = Duration::from_secs(map.cfg.environment.fatigue_secs);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
     let before = p.misc.fatigue;
     let timer = match before {
-        None if deep => Some(Mirror::new(FATIGUE, now)),
+        None if deep => Some(Mirror::new(full, now)),
         None => None,
         Some(mut m) => {
             m.advance(now);
@@ -444,9 +447,15 @@ pub fn fatigue(map: &mut Map, g: Guid, deep: bool, now: Instant) {
 }
 
 /// Lava: a second's grace touching it, then 605 to 610 fire every two
-/// seconds; the grace comes back ten times as fast out of it. `touching`
-/// is `None` out of any liquid.
+/// seconds (`[environment] lava_secs` and `lava_damage_*`); the grace comes
+/// back ten times as fast out of it. `touching` is `None` out of any
+/// liquid.
 pub fn lava(map: &mut Map, g: Guid, touching: Option<bool>, now: Instant) {
+    let env = &map.cfg.environment;
+    let (grace, burn) = (
+        Duration::from_secs(env.lava_secs),
+        env.lava_damage_min..=env.lava_damage_max.max(env.lava_damage_min),
+    );
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -455,7 +464,7 @@ pub fn lava(map: &mut Map, g: Guid, touching: Option<bool>, now: Instant) {
         return;
     };
     let timer = match p.misc.lava {
-        None if touching => Some(Mirror::new(LAVA_GRACE, now)),
+        None if touching => Some(Mirror::new(grace, now)),
         None => None,
         Some(mut m) => {
             m.advance(now);
@@ -472,7 +481,7 @@ pub fn lava(map: &mut Map, g: Guid, touching: Option<bool>, now: Instant) {
         if let Some(m) = p.misc.lava.as_mut() {
             m.next_damage = Some(now + PULSE);
         }
-        let amount = 604 + rand::rng().random_range(1..=6);
+        let amount = rand::rng().random_range(burn);
         damage(map, g, EnvironmentalDamageType::Lava, amount);
         if let Some(p) = map.players.get_mut(&g)
             && p.death != Death::Alive

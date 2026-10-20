@@ -34,6 +34,12 @@ fn resurrection_sickness_lasts_a_minute_a_level_past_ten() {
     assert_eq!(resurrection_sickness_ms(19), Some(540_000));
     assert_eq!(resurrection_sickness_ms(20), Some(600_000));
     assert_eq!(resurrection_sickness_ms(60), Some(600_000));
+    // From another level (`[players] death_sickness_level`), as mangos's
+    // `Death.SicknessLevel` moves it; above the cap, never.
+    assert_eq!(death::resurrection_sickness_from(14, 15), None);
+    assert_eq!(death::resurrection_sickness_from(15, 15), Some(60_000));
+    assert_eq!(death::resurrection_sickness_from(24, 15), Some(600_000));
+    assert_eq!(death::resurrection_sickness_from(60, 61), None);
 }
 
 fn data() -> GameData {

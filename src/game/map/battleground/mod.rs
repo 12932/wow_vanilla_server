@@ -39,8 +39,6 @@ pub const SPELL_DESERTER: u32 = 26013;
 /// Waiting to Resurrect: a ghost in the match, for the next wave.
 pub const SPELL_WAITING_TO_RESURRECT: u32 = 2584;
 pub const RESURRECT_EVERY: Duration = Duration::from_secs(30);
-/// How near a kill a side's players must be to share its honorable kill.
-pub const KILL_SHARE_YARDS: f32 = 74.0;
 
 /// Battlegrounds, by `battleground_template` id.
 pub const BG_AV: u32 = 1;
@@ -783,9 +781,9 @@ pub fn defeated(map: &mut Map, g: Guid, killer: Guid, count_death: bool) {
         {
             s.killing_blows += 1;
         }
-        let near = |at: Vector3d| {
-            pos.is_some_and(|p| crate::game::map::combat::dist(p, at) <= KILL_SHARE_YARDS)
-        };
+        let reach = map.cfg.players.group_reward_yards;
+        let near =
+            |at: Vector3d| pos.is_some_and(|p| crate::game::map::combat::dist(p, at) <= reach);
         let credited: Vec<Guid> = map
             .players
             .values()

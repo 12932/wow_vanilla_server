@@ -50,7 +50,8 @@ const SAMPLE: f32 = 3.0;
 /// How far above or below a creature that doesn't fly notices a player.
 const VERTICAL_RANGE: f32 = 3.0;
 const DEFAULT_RADIUS: f32 = 0.389;
-/// How long talk keeps a creature still.
+/// How long talk keeps a creature still, by default (`[creatures]
+/// interaction_pause_secs`).
 pub const TALK_PAUSE: Duration = Duration::from_secs(180);
 /// How long a frightened critter keeps away.
 pub const ESCAPE: Duration = Duration::from_secs(30);
@@ -788,14 +789,15 @@ pub fn talk_pause(map: &mut Map, g: Guid) {
         crate::game::map::ai::advance_motion(map, g);
     }
     let spline_id = map.next_spline_id;
+    let pause = Duration::from_secs(map.cfg.creatures.interaction_pause_secs);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
     // It only ever waits longer (vmangos's `AddPauseTime`): a longer wait
     // already set stands.
     let until = match c.motion {
-        Motion::Idle { until: Some(t) } if t > now + TALK_PAUSE => t,
-        _ => now + TALK_PAUSE,
+        Motion::Idle { until: Some(t) } if t > now + pause => t,
+        _ => now + pause,
     };
     c.motion = Motion::Idle { until: Some(until) };
     let at = c.position;

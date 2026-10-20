@@ -46,8 +46,6 @@ const AURA_MOD_REPUTATION_GAIN: u32 = 156;
 /// `SPELL_AURA_MOD_FACTION_REPUTATION_GAIN`: a kill's gain with one
 /// faction (its misc value).
 const AURA_MOD_FACTION_REPUTATION_GAIN: u32 = 190;
-/// How near a corpse a group member must be for the kill's reputation.
-const GROUP_YARDS: f32 = 74.0;
 
 /// A player's standing with one faction: the offset from their base.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -246,23 +244,38 @@ fn standing_frame(changes: &[(u32, i32)]) -> Arc<[u8]> {
 /// The rate a gain is made at for the content's level: a kill of a grey
 /// creature gives a fifth, a quest well below the player less.
 pub fn level_rate(kill: bool, value: i32, player_level: u32, content_level: u32) -> f32 {
+    level_rate_with(kill, value, player_level, content_level, (0.2, 0.2))
+}
+
+/// [`level_rate`], a grey kill at `least.0` and a quest no lower than
+/// `least.1` (`[rates] reputation_low_level_kill` and `_quest`, mangos's
+/// `Rate.Reputation.LowLevel.*`).
+pub fn level_rate_with(
+    kill: bool,
+    value: i32,
+    player_level: u32,
+    content_level: u32,
+    least: (f32, f32),
+) -> f32 {
     if value <= 0 {
         return 1.0;
     }
     if kill {
         if content_level <= crate::game::map::combat::gray_level(player_level) {
-            0.2
+            least.0
         } else {
             1.0
         }
     } else {
-        match player_level.saturating_sub(content_level + 5) {
+        let rate: f32 = match player_level.saturating_sub(content_level + 5) {
             0 => 1.0,
             1 => 0.8,
             2 => 0.6,
             3 => 0.4,
-            _ => 0.2,
-        }
+            4 => 0.2,
+            _ => 0.0,
+        };
+        rate.max(least.1)
     }
 }
 
@@ -413,6 +426,10 @@ pub fn dither(v: f32, roll: f32) -> i32 {
 pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
     let data = map.realm.data.clone();
     let server_rate = map.cfg.rates.reputation_gain;
+    let least = (
+        map.cfg.rates.reputation_low_level_kill,
+        map.cfg.rates.reputation_low_level_quest,
+    );
     let Some(c) = map.creature(creature) else {
         return;
     };
@@ -426,7 +443,9 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
         let Some(p) = map.players.get(&m) else {
             continue;
         };
-        if m != tapper && crate::game::map::combat::dist(p.position(), at) > GROUP_YARDS {
+        if m != tapper
+            && crate::game::map::combat::dist(p.position(), at) > map.cfg.players.group_reward_yards
+        {
             continue;
         }
         let team = match p.team {
@@ -440,7 +459,7 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
                 p,
                 &data,
                 r.value,
-                level_rate(true, r.value, plevel, level),
+                level_rate_with(true, r.value, plevel, level, least),
                 r.faction,
                 Source::Kill,
                 server_rate,
@@ -486,6 +505,10 @@ pub fn spell_reward(map: &mut Map, g: Guid, faction: u32, value: i32) {
 pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest) {
     let data = map.realm.data.clone();
     let server_rate = map.cfg.rates.reputation_gain;
+    let least = (
+        map.cfg.rates.reputation_low_level_kill,
+        map.cfg.rates.reputation_low_level_quest,
+    );
     let Some(p) = map.players.get(&g) else {
         return;
     };
@@ -498,7 +521,7 @@ pub fn quest_rewarded(map: &mut Map, g: Guid, q: &crate::game::data::npc::Quest)
         .enumerate()
         .filter(|(_, (f, v))| *f != 0 && *v != 0)
         .map(|(i, (f, v))| {
-            let rate = level_rate(false, *v, plevel, level);
+            let rate = level_rate_with(false, *v, plevel, level, least);
             (
                 *f,
                 gain(p, &data, *v, rate, *f, Source::Quest, server_rate),
@@ -852,5 +875,13 @@ mod tests {
         assert_eq!(level_rate(false, 250, 20, 15), 1.0);
         assert_eq!(level_rate(false, 250, 22, 15), 0.6);
         assert_eq!(level_rate(false, 250, 60, 15), 0.2);
+        // Other floors: a grey kill at its own, a quest's steps down to
+        // its.
+        assert_eq!(level_rate_with(true, 25, 30, 10, (0.5, 0.2)), 0.5);
+        assert_eq!(level_rate_with(true, 25, 30, 30, (0.0, 0.2)), 1.0);
+        assert_eq!(level_rate_with(false, 250, 23, 15, (0.2, 0.5)), 0.5);
+        assert_eq!(level_rate_with(false, 250, 22, 15, (0.2, 0.5)), 0.6);
+        assert_eq!(level_rate_with(false, 250, 60, 15, (0.2, 0.0)), 0.0);
+        assert_eq!(level_rate_with(false, 250, 24, 15, (0.2, 0.0)), 0.2);
     }
 }

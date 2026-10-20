@@ -78,6 +78,7 @@ pub fn regen(map: &mut Map) {
         .map(|(&g, _)| g)
         .filter(|&g| crate::game::map::creature_combat::polymorphed(map, g))
         .collect();
+    let cfg = map.cfg.clone();
     for p in map.players.values_mut() {
         if p.regen_at > now {
             continue;
@@ -87,11 +88,19 @@ pub fn regen(map: &mut Map) {
             continue;
         }
         let polymorphed = sheep.contains(&p.guid);
-        regen_player(p, now, polymorphed);
+        regen_player(p, now, polymorphed, &cfg.rates);
     }
 }
 
-fn regen_player(p: &mut Player, now: Instant, polymorphed: bool) {
+/// A player's tick, at `rates`' `health`, `mana`, `rage_loss` and
+/// `energy` (mangos's `Rate.Health`, `Rate.Mana`, `Rate.Rage.Loss` and
+/// `Rate.Energy`).
+fn regen_player(
+    p: &mut Player,
+    now: Instant,
+    polymorphed: bool,
+    rates: &crate::config::RatesConfig,
+) {
     use crate::game::map::auras::*;
     let in_combat = p.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT);
     let class = p.row.class;
@@ -113,6 +122,7 @@ fn regen_player(p: &mut Player, now: Instant, polymorphed: bool) {
             max as f32 / 10.0
         } else {
             health_regen(class, spirit)
+                * rates.health
                 * if in_combat {
                     a.sum(AURA_MOD_REGEN_DURING_COMBAT) as f32 / 100.0
                 } else {
@@ -165,7 +175,7 @@ fn regen_player(p: &mut Player, now: Instant, polymorphed: bool) {
         let mut add = if stopped {
             0.0
         } else {
-            mana_regen(class, spirit) * share
+            mana_regen(class, spirit) * share * rates.mana
         };
         add *= a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 0);
         add += per_five(AURA_MOD_POWER_REGEN, Some(0));
@@ -179,14 +189,15 @@ fn regen_player(p: &mut Player, now: Instant, polymorphed: bool) {
     // `Player::RegenerateAll` and `Player::Regenerate`).
     let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
     if !in_combat && !stopped && rage > 0 {
-        let decay = (20.0 * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 1)) as u32;
+        let decay =
+            (20.0 * rates.rage_loss * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 1)) as u32;
         p.fields
             .set_u32(UNIT_FIELD_POWER1 + 1, rage.saturating_sub(decay));
     }
     let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 3);
     let energy = p.fields.get_u32(UNIT_FIELD_POWER1 + 3);
     if max > 0 && energy < max {
-        let add = 20.0 * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 3);
+        let add = 20.0 * rates.energy * a.product_misc(AURA_MOD_POWER_REGEN_PERCENT, 3);
         p.fields
             .set_u32(UNIT_FIELD_POWER1 + 3, (energy + add as u32).min(max));
     }

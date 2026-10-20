@@ -614,13 +614,21 @@ pub fn spirit_healer_activate(map: &mut Map, g: Guid, healer: Guid) {
 /// How long resurrection sickness lasts at `level`: a minute a level from
 /// eleven, ten at most.
 pub fn resurrection_sickness_ms(level: u32) -> Option<u32> {
-    (level >= 11).then(|| ((level - 10) * 60_000).min(600_000))
+    resurrection_sickness_from(level, 11)
+}
+
+/// [`resurrection_sickness_ms`], from level `start` (`[players]
+/// death_sickness_level`, mangos's `Death.SicknessLevel`) rather than
+/// eleven.
+pub fn resurrection_sickness_from(level: u32, start: u32) -> Option<u32> {
+    let start = start.max(1);
+    (level >= start).then(|| ((level - start + 1).saturating_mul(60_000)).min(600_000))
 }
 
 /// A spirit healer's price: resurrection sickness.
 fn resurrection_sickness(map: &mut Map, g: Guid) {
     let level = map.players.get(&g).map_or(1, |p| u32::from(p.level()));
-    let Some(ms) = resurrection_sickness_ms(level) else {
+    let Some(ms) = resurrection_sickness_from(level, map.cfg.players.death_sickness_level) else {
         return;
     };
     let data = map.realm.data.clone();

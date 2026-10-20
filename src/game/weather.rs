@@ -3,6 +3,7 @@
 //! weather, or light weather that gets better, turns to rain, snow or a
 //! storm by the season's chances, or stays fair; other weather gets better
 //! or worse by a third, or changes all at once. Those in the zone are told.
+//! `[world] weather` and `weather_change_secs` turn it off and space it.
 
 use std::time::Duration;
 
@@ -13,6 +14,8 @@ use wow_world_messages::vanilla::*;
 use crate::game::Realm;
 use crate::game::registry::Online;
 
+/// How often a zone's weather may change, by default (`[world]
+/// weather_change_secs`).
 pub const CHANGE_EVERY: Duration = Duration::from_secs(600);
 
 /// A third of the way: a step better or worse.
@@ -154,15 +157,12 @@ fn packet(w: Weather) -> SMSG_WEATHER {
 /// 3 storm; held a change period, or for good. Those in the zone see it.
 pub fn set(realm: &Realm, zone: u32, kind: u8, grade: f32, permanent: bool) {
     let now = crate::game::social::mail::now();
+    let every = realm.config().weather_change.as_secs() as i64;
     let (kind, grade) = normalize((kind, grade.clamp(0.0, 1.0)));
     let w = Weather {
         kind,
         grade,
-        next: if permanent {
-            i64::MAX
-        } else {
-            now + CHANGE_EVERY.as_secs() as i64
-        },
+        next: if permanent { i64::MAX } else { now + every },
     };
     realm.social.weather.lock().insert(zone, w);
     for o in realm.registry.all_online() {
@@ -191,10 +191,15 @@ pub fn tell(realm: &Realm, o: &Online, zone: u32) {
     o.outbound.send(&packet(w));
 }
 
-/// Zones due a change roll for it; those in them hear of changes.
+/// Zones due a change roll for it; those in them hear of changes. With the
+/// weather off, what was rolled clears, and what a GM set for good stays.
 pub fn sweep(realm: &Realm) {
     use chrono::Datelike;
     let now = crate::game::social::mail::now();
+    let (on, every) = {
+        let cfg = realm.config();
+        (cfg.weather, cfg.weather_change.as_secs() as i64)
+    };
     let s = season(chrono::Local::now().ordinal0());
     let mut rng = rand::rng();
     let mut changed: Vec<(u32, Weather)> = Vec::new();
@@ -202,6 +207,13 @@ pub fn sweep(realm: &Realm) {
         let mut all = realm.social.weather.lock();
         for (zone, chances) in &realm.data.weather {
             let w: &mut Weather = all.entry(*zone).or_default();
+            if !on {
+                if w.next != i64::MAX && (w.kind, w.grade) != (0, 0.0) {
+                    *w = Weather::default();
+                    changed.push((*zone, *w));
+                }
+                continue;
+            }
             if w.next > now {
                 continue;
             }
@@ -213,7 +225,7 @@ pub fn sweep(realm: &Realm) {
                 grade: rng.random_range(0.0..1.0),
             };
             let (kind, grade) = advance(w.kind, w.grade, chances[s], rolls);
-            w.next = now + CHANGE_EVERY.as_secs() as i64;
+            w.next = now + every;
             if (kind, grade) != (w.kind, w.grade) {
                 w.kind = kind;
                 w.grade = grade;

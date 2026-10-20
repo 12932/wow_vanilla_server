@@ -2456,6 +2456,8 @@ fn expire_windows(map: &mut Map, g: Guid) {
 
 /// Rage for a blow dealt or taken, for a unit whose power is rage.
 pub fn gain_rage(map: &mut Map, g: Guid, damage: u32, taken: bool) {
+    // `[rates] rage_income`, mangos's `Rate.Rage.Income`.
+    let rate = map.cfg.rates.rage_income;
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -2467,7 +2469,7 @@ pub fn gain_rage(map: &mut Map, g: Guid, damage: u32, taken: bool) {
     } else {
         1.0
     };
-    let gain = rage_scaled(damage, u32::from(p.level()), taken, by);
+    let gain = crate::config::scaled(rage_scaled(damage, u32::from(p.level()), taken, by), rate);
     let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1 + 1).max(1000);
     let rage = p.fields.get_u32(UNIT_FIELD_POWER1 + 1);
     p.fields
@@ -3305,7 +3307,8 @@ fn kill_procs(map: &Map, killer: Guid, victim: Guid) -> bool {
     rewarding && vl > gray_level(kl)
 }
 
-/// How near a corpse a member must be for a share of the kill.
+/// How near a corpse a member must be for a share of the kill, by
+/// default (`[players] group_reward_yards`).
 pub const GROUP_REWARD_YARDS: f32 = 74.0;
 
 /// Thistle Tea's `Experience.group_rate`: three, four and five share more;
@@ -3375,7 +3378,7 @@ fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
         .into_iter()
         .filter_map(|g| {
             let p = map.players.get(&g)?;
-            (dist(p.position(), at) <= GROUP_REWARD_YARDS || g == tapper)
+            (dist(p.position(), at) <= map.cfg.players.group_reward_yards || g == tapper)
                 .then(|| (g, u32::from(p.level()), p.death))
         })
         .collect();

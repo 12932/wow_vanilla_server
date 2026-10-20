@@ -27,7 +27,7 @@ use crate::game::data::{GameData, ItemTemplate, LootEntry};
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
-use crate::game::map::combat::{GROUP_REWARD_YARDS, dist};
+use crate::game::map::combat::dist;
 use crate::game::map::inventory;
 use crate::game::map::player::Player;
 
@@ -431,7 +431,7 @@ fn tapped_for(
             && map
                 .players
                 .get(g)
-                .is_some_and(|p| dist(p.position(), at) <= GROUP_REWARD_YARDS)
+                .is_some_and(|p| dist(p.position(), at) <= map.cfg.players.group_reward_yards)
     }));
     near
 }
@@ -858,7 +858,7 @@ fn award(
         map.players.get(&winner).map(|p| p.position()),
         position_of(map, object),
     ) {
-        (Some(a), Some(b)) => dist(a, b) <= GROUP_REWARD_YARDS,
+        (Some(a), Some(b)) => dist(a, b) <= map.cfg.players.group_reward_yards,
         _ => false,
     };
     if near {
@@ -1280,7 +1280,7 @@ pub fn master_give(map: &mut Map, giver: Guid, object: Guid, slot: u8, to: Guid)
         .get(&giver)
         .is_some_and(|p| p.looting == Some(object));
     let near = match (map.players.get(&to), position_of(map, object)) {
-        (Some(p), Some(at)) => dist(p.position(), at) <= GROUP_REWARD_YARDS,
+        (Some(p), Some(at)) => dist(p.position(), at) <= map.cfg.players.group_reward_yards,
         _ => false,
     };
     // What doesn't fit stays the master's to give (mangos's

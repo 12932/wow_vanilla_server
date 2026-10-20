@@ -62,14 +62,6 @@ const BOOTY_RUN_TEXT: u32 = 9730;
 /// The ring's visible burn.
 pub const SPELL_RING_BURN: u32 = 20019;
 const TICK: Duration = Duration::from_secs(1);
-/// How long a fighter may stand off the floor before they've fled.
-const OFF_THE_FLOOR: Duration = Duration::from_secs(5);
-/// How long the fallen lie before their ghost goes up to the stands.
-const LIE_FOR: Duration = Duration::from_secs(5);
-/// Kills this close together are a multi-kill.
-const MULTI_KILL: Duration = Duration::from_secs(10);
-/// How often the announcer counts the fighters left, between kills.
-const ROLL_CALL: Duration = Duration::from_secs(60);
 pub const KIND_ARENA: &str = "arena";
 
 /// `[arena]` in the config.
@@ -482,7 +474,7 @@ pub fn start(map: &mut Map, countdown_secs: u64, max_minutes: u64) -> Result<usi
         next_shrink: None,
         cap_at: now + countdown + Duration::from_secs(max_minutes.max(1) * 60),
         announced: countdown_secs + 1,
-        roll_call_at: now + countdown + ROLL_CALL,
+        roll_call_at: now + countdown + Duration::from_secs(map.cfg.arena.roll_call_secs),
         started_unix: now_unix(),
     });
     map.arena.raising = false;
@@ -635,7 +627,7 @@ fn countdown(map: &mut Map) {
     b.phase = Phase::Fight { since: now };
     let config = map.cfg.arena.clone();
     b.next_shrink = Some(now + Duration::from_secs(config.ring_after_secs));
-    b.roll_call_at = now + ROLL_CALL;
+    b.roll_call_at = now + Duration::from_secs(map.cfg.arena.roll_call_secs);
     // Everyone starts whole.
     let ids: Vec<Guid> = b
         .fighters
@@ -698,8 +690,9 @@ fn keep_off_the_floor(map: &mut Map) {
                 .iter()
                 .filter(|f| {
                     !f.alive
-                        && f.dead_since
-                            .is_some_and(|t| now.duration_since(t) >= LIE_FOR)
+                        && f.dead_since.is_some_and(|t| {
+                            now.duration_since(t) >= Duration::from_secs(map.cfg.arena.lie_secs)
+                        })
                 })
                 .map(|f| f.guid)
                 .collect()
@@ -740,12 +733,13 @@ fn check_fighters(map: &mut Map) {
             Some(_) => off.push((g, !on_floor(map, g))),
         }
     }
+    let off_floor = Duration::from_secs(map.cfg.arena.off_floor_secs);
     if let Some(b) = map.arena.battle.as_mut() {
         for (g, away) in off {
             if let Some(f) = b.fighter_mut(g) {
                 if !away {
                     f.off_floor_since = None;
-                } else if f.off_floor_since.get_or_insert(now).elapsed_since(now) >= OFF_THE_FLOOR {
+                } else if f.off_floor_since.get_or_insert(now).elapsed_since(now) >= off_floor {
                     fled.push(g);
                 }
             }
@@ -848,13 +842,14 @@ fn ring(map: &mut Map) {
 /// The announcer counts the fighters now and then.
 fn roll_call(map: &mut Map) {
     let now = map.now;
+    let every = Duration::from_secs(map.cfg.arena.roll_call_secs);
     let Some(b) = map.arena.battle.as_mut() else {
         return;
     };
     if now < b.roll_call_at {
         return;
     }
-    b.roll_call_at = now + ROLL_CALL;
+    b.roll_call_at = now + every;
     let (alive, t) = (b.alive, b.elapsed(now).as_secs());
     if alive > 3 {
         shout(
@@ -922,6 +917,7 @@ pub fn damaged(map: &mut Map, attacker: Guid, victim: Guid, damage: u32) {
 /// A fighter is out: counted, called, and maybe the battle is over.
 fn fall(map: &mut Map, g: Guid, by: Option<Guid>, how: Fall) {
     let now = map.now;
+    let multi_kill = Duration::from_secs(map.cfg.arena.multi_kill_secs);
     let Some(b) = map.arena.battle.as_mut() else {
         return;
     };
@@ -958,7 +954,7 @@ fn fall(map: &mut Map, g: Guid, by: Option<Guid>, how: Fall) {
         kf.kills += 1;
         kf.multi = if kf
             .last_kill
-            .is_some_and(|at| now.duration_since(at) <= MULTI_KILL)
+            .is_some_and(|at| now.duration_since(at) <= multi_kill)
         {
             kf.multi + 1
         } else {

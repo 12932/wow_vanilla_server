@@ -317,17 +317,18 @@ pub struct Shared {
 }
 
 /// World PvP for the continents, and its buffs in the dungeons that share
-/// them.
-pub fn for_map(key: MapKey) -> Option<Outdoor> {
+/// them; none where `[outdoor_pvp]` turns it off (mangos's
+/// `OutdoorPvp.EPEnabled` and `SIEnabled`), and so no buffs from it.
+pub fn for_map(key: MapKey, on: &crate::config::OutdoorPvpConfig) -> Option<Outdoor> {
     match key {
         MapKey {
             map: 0,
             instance: 0,
-        } => Some(Outdoor::default()),
+        } => on.eastern_plaguelands.then(Outdoor::default),
         MapKey {
             map: 1,
             instance: 0,
-        } => Some(Outdoor {
+        } => on.silithus.then(|| Outdoor {
             silithus: Some(Silithus::default()),
             ..Default::default()
         }),
