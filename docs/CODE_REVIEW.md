@@ -95,6 +95,11 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
 - **net 8** fixed (`fix/lowsa`): a packet (and a raw one) carries its session, and the map drops one from a session
   that no longer has the player (`Map::from_their_session`), as it drops a stale `Disconnect`. #12's one session
   an account had already closed the path (the new session starts once the old has gone); this no longer leans on it.
+- **maps 5** fixed (`fix/lowsa`): a login into a dungeon, raid or battleground goes online with a handle to no map
+  (`MapHandle::detached`) until its copy is chosen, and starts that map only; before, it started the map's open-world
+  copy first, which ran, empty and populated, for good.
+- **maps 8** fixed (`fix/lowsa`): one who logged out aboard a boat or zeppelin that has crossed to its other map
+  since logs in on that map, on its deck (`transports::aboard_at_login`, as mangos's `LoadFromDB`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

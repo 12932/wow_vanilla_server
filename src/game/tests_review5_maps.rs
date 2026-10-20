@@ -1,8 +1,9 @@
 //! Review 5's findings on the map actors and their lifecycle (rev5-maps in
 //! docs/review/review5.md), each shown through the protocol: a copy stopped
 //! with a player on the way in, a panic in a map's shutdown, a restart's
-//! sweep of dungeon copies, a teleport in a logout's countdown, and those
-//! let go with a map leaving the social world.
+//! sweep of dungeon copies, a teleport in a logout's countdown, those let
+//! go with a map leaving the social world, and a login into a copy
+//! starting no other.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -398,6 +399,37 @@ async fn a_dungeon_copy_outlasts_a_restart_whatever_its_last_kill() {
     a.login(g).await;
     assert_eq!(map_of(&realm, g).key, key, "Alice is back in her copy");
     let _ = std::fs::remove_dir_all(db.parent().unwrap());
+}
+
+async fn relog(c: &mut Client) {
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+    let g = c.guid;
+    c.login(g).await;
+}
+
+/// Review 5's maps 5: a login back into a dungeon copy goes straight to
+/// it: the map's open-world copy (instance 0), which no one goes to and
+/// which never stops, isn't started on the way. Before, the login started
+/// it before it knew where the player went.
+#[tokio::test]
+async fn a_login_into_a_copy_starts_no_world_copy_of_its_map() {
+    let realm = realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    go(&realm, &mut a, DUNGEON).await;
+    let key = map_of(&realm, g).key;
+    assert_ne!(key.instance, 0);
+    let world = MapKey::world(DUNGEON);
+    let running = |realm: &Realm, k: MapKey| realm.maps.all().iter().any(|h| h.key == k);
+    assert!(!running(&realm, world), "not by the teleport");
+    relog(&mut a).await;
+    assert_eq!(map_of(&realm, g).key, key, "back in her copy");
+    assert!(!running(&realm, world), "nor by the login");
 }
 
 type LogoutState = (bool, bool, bool);

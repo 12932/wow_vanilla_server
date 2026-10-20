@@ -899,8 +899,24 @@ impl Session {
         if let Some(t) = tutorials {
             row.state.tutorials = t;
         }
+        // Aboard a ship that has crossed since: on its other map.
+        crate::game::transports::aboard_at_login(&self.realm, &mut row);
         let key = MapKey::world(row.map);
-        let map = self.realm.maps.get(&self.realm, key);
+        // Logged out in a dungeon, raid or battleground: which copy is
+        // chosen once they are online (the copies count them by account),
+        // so no map is started until then; the open-world copy of such a
+        // map is no one's, and would run, empty, for good.
+        let battleground = crate::game::battlegrounds::bg_of_map(row.map).is_some();
+        let copied = battleground
+            || matches!(
+                crate::game::instances::instance_type(&self.realm, row.map),
+                1 | 2
+            );
+        let map = if copied {
+            MapHandle::detached(key)
+        } else {
+            self.realm.maps.get(&self.realm, key)
+        };
         let gm_level = self.gm_level();
         let online = Arc::new(Online::new(
             name,
@@ -912,34 +928,29 @@ impl Session {
         if self.realm.registry.go_online(online.clone()).is_err() {
             return Entered::Raced;
         }
-        // Logged out in a dungeon or raid: back into their copy, or, if it
-        // won't have them, home. In a battleground: back into the match
-        // that kept their place, or home.
+        // Back into their copy, or, if it won't have them, home. In a
+        // battleground: back into the match that kept their place, or home.
         let mut map = map;
-        let battleground = crate::game::battlegrounds::bg_of_map(row.map).is_some();
-        if battleground
-            || matches!(
-                crate::game::instances::instance_type(&self.realm, row.map),
-                1 | 2
-            )
-        {
+        if copied {
             let back = if battleground {
                 crate::game::battlegrounds::rejoin(&self.realm, g, row.map).ok_or(())
             } else {
                 crate::game::instances::resume(&self.realm, g, online.gm, row.map).ok_or(())
             };
-            match back {
-                Ok(k) => map = self.realm.maps.get(&self.realm, k),
+            let to = match back {
+                Ok(k) => k,
                 Err(()) => {
                     if let Some(b) = row.state.bind {
                         row.map = b.map;
                         row.x = b.x;
                         row.y = b.y;
                         row.z = b.z;
-                        map = self.realm.maps.get(&self.realm, MapKey::world(b.map));
                     }
+                    MapKey::world(row.map)
                 }
-            }
+            };
+            map = self.realm.maps.get(&self.realm, to);
+            online.set_map(map.clone());
         }
         if !map.send(MapEvent::Arrive(Box::new(Arrival {
             kind: ArrivalKind::Login(Box::new(row)),

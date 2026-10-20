@@ -419,7 +419,7 @@ asserts the bug, so it passes while the bug is there.
   `logout_at` alone and let the new map complete it.
 - **Effort:** easy.
 
-#### 5. Logging into a copy starts that map's world copy, which never stops
+#### 5. Logging into a copy starts that map's world copy, which never stops **Fixed.**
 - **Severity:** low. **Kind:** speed (CPU and memory for nothing).
 - **Where:** `src/game/session.rs:692-700` (`enter`).
 - **What:** `enter` calls `maps.get(MapKey::world(row.map))` before it knows where the player is going, and builds
@@ -498,7 +498,7 @@ asserts the bug, so it passes while the bug is there.
   with separate counters for creatures and game objects, as mangos has.
 - **Effort:** easy.
 
-#### 8. Logging in aboard a ship that has crossed to the other continent leaves the player at sea
+#### 8. Logging in aboard a ship that has crossed to the other continent leaves the player at sea **Fixed.**
 - **Severity:** low. **Kind:** robustness.
 - **Where:** `src/game/transports.rs:575-589` (`place_aboard`).
 - **What:** `if pose.map != p.row.map { return; }`. The transport state has already been taken (`take()`), and it is

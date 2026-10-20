@@ -197,6 +197,13 @@ impl std::fmt::Debug for MapHandle {
 }
 
 impl MapHandle {
+    /// A handle to no map, closed: for one online before their map is
+    /// chosen, which takes nothing sent meanwhile (as a map gone).
+    pub fn detached(key: MapKey) -> Self {
+        let (tx, _) = mpsc::unbounded_channel();
+        Self { key, tx }
+    }
+
     pub fn send(&self, event: MapEvent) -> bool {
         self.tx.send(event).is_ok()
     }

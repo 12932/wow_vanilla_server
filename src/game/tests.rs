@@ -4459,6 +4459,82 @@ pub(crate) mod transports {
             .await;
     }
 
+    /// Review 5's maps 8: one who logged out on the Booty Bay boat's deck
+    /// at Booty Bay, logging in while it is docked at Ratchet, comes in on
+    /// Kalimdor, on its deck there, as mangos's `LoadFromDB` loads a
+    /// passenger onto the transport's map. Before, she came back on the
+    /// Eastern Kingdoms where she had logged out, the boat gone.
+    #[tokio::test]
+    #[ignore = "extended"]
+    async fn a_login_aboard_the_boat_on_its_other_map_is_on_its_deck_there() {
+        let dir = harness::real_data("db");
+        let realm = harness::realm_with(harness::load_real(&dir));
+        let route = crate::game::transports::route_of(&realm, BOOTY_BAY_BOAT).expect("its route");
+        let boat = route.guid;
+        let stop = |map| {
+            route
+                .frames
+                .iter()
+                .find(|f| f.stop && f.map == map)
+                .cloned()
+                .expect("a stop")
+        };
+        let (booty_bay, ratchet) = (stop(0), stop(1));
+        skip_to(&route, booty_bay.arrive_ms + 1000);
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        assert!(a.sees_within(boat, Duration::from_secs(20)).await);
+        let pose = route.pose_at(crate::game::uptime_ms());
+        assert_eq!((pose.map, pose.moving), (0, false), "at Booty Bay");
+        let deck = Vector3d {
+            x: 2.0,
+            y: -1.0,
+            z: 6.0,
+        };
+        let (world, o) = crate::game::transports::passenger_world(deck, 0.0, &pose);
+        a.send(MSG_MOVE_HEARTBEAT_Client {
+            info: MovementInfo {
+                flags: MovementInfo_MovementFlags::empty().set_on_transport(
+                    MovementInfo_MovementFlags_OnTransport {
+                        transport: TransportInfo {
+                            guid: boat,
+                            position: deck,
+                            orientation: 0.0,
+                        },
+                    },
+                ),
+                timestamp: 0,
+                position: world,
+                orientation: o,
+                fall_time: 0,
+            },
+        })
+        .await;
+        let eastern = realm.registry.online(ga).unwrap().map();
+        crate::game::tests_p3_entity_objects::until(&eastern, "Alice aboard", move |m| {
+            m.players
+                .get(&ga)
+                .is_some_and(|p| p.movement.flags.get_on_transport().is_some())
+        })
+        .await;
+        a.send(CMSG_LOGOUT_REQUEST {}).await;
+        a.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+        })
+        .await;
+        // Docked at Ratchet, on Kalimdor.
+        skip_to(&route, ratchet.arrive_ms + 1000);
+        let pose = route.pose_at(crate::game::uptime_ms());
+        assert_eq!(pose.map, 1);
+        a.clear();
+        a.login(ga).await;
+        let map = realm.registry.online(ga).unwrap().map();
+        assert_eq!(map.key, crate::game::map::MapKey::world(1), "on Kalimdor");
+        let at = map.query(move |m| m.players[&ga].position()).await.unwrap();
+        let d = ((at.x - pose.position.x).powi(2) + (at.y - pose.position.y).powi(2)).sqrt();
+        assert!(d < 40.0, "on its deck: {at:?}, the boat at {pose:?}");
+    }
+
     /// In an update packet, `player`'s create, aboard: whether `transport`'s
     /// create came before it, and the place on deck.
     pub(crate) fn aboard_in(
