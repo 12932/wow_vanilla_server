@@ -972,12 +972,11 @@ pub fn plant(map: &mut Map, caster: Guid, entry: u32) {
         return;
     };
     let side = usize::from(!matches!(entry, 178724..=178726));
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         t,
         &crate::game::data::GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry,
             map: map.key.map,
             x: at.x,
@@ -1183,12 +1182,11 @@ fn spawn_buff(map: &mut Map, slot: usize) {
     let Some(t) = data.gameobject_templates.get(&entry) else {
         return;
     };
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         t,
         &crate::game::data::GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry,
             map: map.key.map,
             x: at.0,

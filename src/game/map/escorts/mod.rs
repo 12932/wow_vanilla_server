@@ -973,10 +973,9 @@ fn max_distance(kind: &Kind) -> f32 {
 /// A creature of `entry` at `pos`, for a while: it doesn't respawn.
 fn summon(map: &mut Map, entry: u32, pos: Vector3d, o: f32) -> Option<Guid> {
     let data = map.realm.data.clone();
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.creature_counter();
     let spawn = CreatureSpawn {
-        guid: counter | 0x80_0000,
+        guid: counter,
         entries: vec![entry],
         map: map.key.map,
         x: pos.x,

@@ -314,6 +314,11 @@ const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A teleport within the map shorter than this, in yards, keeps the
 /// player's fight ([`Map::near_teleport`], mangos's `NearTeleportTo`).
 pub const NEAR_TELEPORT_KEEPS_COMBAT: f32 = 100.0;
+/// The mark in the counter of a creature or object the map makes itself,
+/// above the data's spawns' (`Map::creature_counter`).
+pub const OWN_MARK: u32 = 0x80_0000;
+/// A pet's, guardian's or totem's mark.
+pub const PET_MARK: u32 = 0xA0_0000;
 
 /// The first of `g`'s beats of period `every` after `now`, counted from
 /// `start` (the map's). Each object keeps to a phase of its own in the
@@ -457,7 +462,15 @@ pub struct Map {
     pub stats: MapStats,
     pub started: Instant,
     pub now: Instant,
+    /// The next counters of the creatures and game objects the map makes
+    /// itself (summons, pets, a script's objects): take them through
+    /// [`Map::creature_counter`], [`Map::pet_counter`] and
+    /// [`Map::object_counter`].
     pub next_creature_counter: u32,
+    pub next_object_counter: u32,
+    /// The counters of those on the map now, creatures' and objects' apart
+    /// (`true` for an object), so none is given twice.
+    own_counters: ahash::AHashSet<(bool, u32)>,
     pub next_spline_id: u32,
     /// When grouped players' stats next go out.
     pub member_stats_at: Instant,
@@ -1012,6 +1025,8 @@ impl Map {
             started: now,
             now,
             next_creature_counter: 1,
+            next_object_counter: 1,
+            own_counters: ahash::AHashSet::new(),
             next_spline_id: 1,
             member_stats_at: Instant::now(),
             empty_since: None,
@@ -2085,9 +2100,63 @@ impl Map {
         self.gameobjects.get_mut(k)
     }
 
+    /// The counter for a new creature of the map's own (a summon, a guard
+    /// called, a GM's spawn): marked `0x80_0000`, and none a creature on
+    /// the map has. As mangos gives each map its own counters over the 24
+    /// bits a GUID with an entry holds, but where mangos stops the server
+    /// when they run out, this one comes round, past those in use.
+    pub fn creature_counter(&mut self) -> u32 {
+        self.own_counter(false, OWN_MARK)
+    }
+
+    /// [`Map::creature_counter`] for a pet, guardian or totem: marked
+    /// `0xA0_0000`, from the creatures' count.
+    pub fn pet_counter(&mut self) -> u32 {
+        self.own_counter(false, PET_MARK)
+    }
+
+    /// [`Map::creature_counter`] for a game object of the map's own (a
+    /// bobber, a trap, a flag), from a count of the objects' own.
+    pub fn object_counter(&mut self) -> u32 {
+        self.own_counter(true, OWN_MARK)
+    }
+
+    fn own_counter(&mut self, object: bool, mark: u32) -> u32 {
+        // The bits below the mark's lowest are the count's.
+        let span = mark.isolate_lowest_one() - 1;
+        for _ in 0..=span {
+            let next = if object {
+                &mut self.next_object_counter
+            } else {
+                &mut self.next_creature_counter
+            };
+            let n = (*next).clamp(1, OWN_MARK - 1);
+            *next = if n >= OWN_MARK - 1 { 1 } else { n + 1 };
+            let counter = ((n - 1) % span + 1) | mark;
+            if !self.own_counters.contains(&(object, counter)) {
+                return counter;
+            }
+        }
+        tracing::error!(
+            "{}: all {span} counters of the map's own {} are in use; one is given twice",
+            self.key,
+            if object { "objects" } else { "creatures" }
+        );
+        1 | mark
+    }
+
+    /// `g`'s counter, when it is one of the map's own ([`Map::own_counter`]).
+    fn own_counter_of(g: Guid) -> Option<u32> {
+        let counter = (g.guid() & u64::from(crate::game::guid::ENTRY_COUNTER_MAX)) as u32;
+        (counter & OWN_MARK != 0).then_some(counter)
+    }
+
     pub fn add_creature(&mut self, c: Creature) -> Guid {
         let guid = c.guid;
         let cell = c.cell;
+        if let Some(n) = Self::own_counter_of(guid) {
+            self.own_counters.insert((false, n));
+        }
         if let Some(s) = c.spawn_guid {
             self.by_spawn.insert(s, guid);
         }
@@ -2126,6 +2195,9 @@ impl Map {
         let cell = g.cell;
         let at = g.position;
         let entry = g.entry;
+        if let Some(n) = Self::own_counter_of(guid) {
+            self.own_counters.insert((true, n));
+        }
         let key = self.gameobjects.insert(g);
         self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
@@ -2139,6 +2211,9 @@ impl Map {
     pub fn remove_gameobject(&mut self, guid: Guid) -> Option<GameObject> {
         crate::game::cheer_speakers::removed(self, guid);
         let key = self.gameobject_by_guid.remove(&guid)?;
+        if let Some(n) = Self::own_counter_of(guid) {
+            self.own_counters.remove(&(true, n));
+        }
         let mut g = self.gameobjects.try_remove(key)?;
         // A script's lock goes with it: one back again starts as its
         // template has it.
@@ -2170,6 +2245,9 @@ impl Map {
     /// A creature out of the map, telling no one.
     fn take_creature(&mut self, guid: Guid) -> Option<Creature> {
         let key = self.creature_by_guid.remove(&guid)?;
+        if let Some(n) = Self::own_counter_of(guid) {
+            self.own_counters.remove(&(false, n));
+        }
         let mut c = self.creatures.try_remove(key)?;
         if let Some(s) = c.spawn_guid
             && self.by_spawn.get(&s) == Some(&guid)

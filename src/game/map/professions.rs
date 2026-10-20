@@ -1022,12 +1022,11 @@ fn cast_line(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize) {
     // The zone and area are the water's (Thistle Tea's, mangos's).
     let (zone, area) = crate::game::map::world::zone_and_area(map, at).unwrap_or((zone, area));
     let mut rng = rand::rng();
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let mut go = GameObject::from_spawn(
         &t,
         &GameObjectSpawn {
-            guid: counter | 0x80_0000,
+            guid: counter,
             entry,
             map: map.key.map,
             x: at.x,

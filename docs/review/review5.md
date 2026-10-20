@@ -471,7 +471,7 @@ asserts the bug, so it passes while the bug is there.
   every path.
 - **Effort:** easy.
 
-#### 7. Summoned GUIDs repeat after 2^23 summons on a map
+#### 7. Summoned GUIDs repeat after 2^23 summons on a map **Fixed.**
 - **Severity:** low. **Kind:** reliability (two objects under one GUID).
 - **Where:**
   - `src/game/map/scripts.rs:1081-1084` and `src/game/map/pets/summon.rs:56`, among the 21 sites that take

@@ -174,15 +174,8 @@ pub fn summon(
     for i in 0..count {
         // The rest about the first, within the effect's radius.
         let at = if i > 0 { about(base, radius) } else { base };
-        let counter = map.next_creature_counter;
-        map.next_creature_counter += 1;
-        let mut c = Creature::new(
-            guid::unit(entry, counter | 0x80_0000),
-            t,
-            level,
-            at,
-            view.orientation,
-        );
+        let counter = map.creature_counter();
+        let mut c = Creature::new(guid::unit(entry, counter), t, level, at, view.orientation);
         summon::creature_stats(&data, &mut c, t, level);
         // Its template's weapons, as mangos's `InitEntry` gives every
         // creature.

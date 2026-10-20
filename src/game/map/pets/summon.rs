@@ -53,8 +53,7 @@ pub fn spawn(
     let now = map.now;
     let data = map.realm.data.clone();
     let t = template(&data, entry);
-    let counter = map.next_creature_counter | 0xA0_0000;
-    map.next_creature_counter += 1;
+    let counter = map.pet_counter();
     let g = if kind.controlled() {
         guid::make(HighGuid::Pet, entry, counter)
     } else {

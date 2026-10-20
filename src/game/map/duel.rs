@@ -126,10 +126,9 @@ pub fn challenge(map: &mut Map, caster: Guid, target: Guid) {
             name: "Duel Flag".into(),
             ..Default::default()
         });
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.object_counter();
     let spawn = GameObjectSpawn {
-        guid: counter | 0x80_0000,
+        guid: counter,
         entry: FLAG_ENTRY,
         map: map.key.map,
         x: at.x,

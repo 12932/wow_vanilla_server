@@ -344,14 +344,13 @@ fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         .unwrap_or(0);
     let p = map.players.get(&guid)?;
     let (at, orientation) = (p.position(), p.movement.orientation);
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.creature_counter();
     // A known entry is built as a world spawn of it is, with its weapons,
     // stats, flags and auras (built bare, Drek'Thar held nothing). It
     // doesn't respawn.
     let data = map.realm.data.clone();
     let spawn = crate::game::data::CreatureSpawn {
-        guid: counter | 0x80_0000,
+        guid: counter,
         entries: vec![entry],
         map: map.key.map,
         x: at.x,
@@ -378,13 +377,7 @@ fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
         health_max: 100,
         ..Default::default()
     };
-    let mut c = Creature::new(
-        guid::unit(entry, counter | 0x80_0000),
-        &template,
-        1,
-        at,
-        orientation,
-    );
+    let mut c = Creature::new(guid::unit(entry, counter), &template, 1, at, orientation);
     c.fit_model(&data, Some(&template));
     let g = map.add_creature(c);
     Some(format!("Spawned {} ({g}).", template.name))

@@ -313,10 +313,9 @@ fn call_invader(map: &mut Map, entry: u32, at: Vector3d) -> Option<Guid> {
     {
         pos.z = z;
     }
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
+    let counter = map.creature_counter();
     let spawn = crate::game::data::CreatureSpawn {
-        guid: counter | 0x80_0000,
+        guid: counter,
         entries: vec![entry],
         map: map.key.map,
         x: pos.x,

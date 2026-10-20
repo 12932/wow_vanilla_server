@@ -1076,15 +1076,8 @@ pub fn summon(
         template.level_min
     }
     .max(1);
-    let counter = map.next_creature_counter;
-    map.next_creature_counter += 1;
-    let mut c = Creature::new(
-        guid::unit(entry, counter | 0x80_0000),
-        template,
-        level,
-        at,
-        orientation,
-    );
+    let counter = map.creature_counter();
+    let mut c = Creature::new(guid::unit(entry, counter), template, level, at, orientation);
     c.fit_model(&data, Some(template));
     template_stats(&data, &mut c, template, level);
     c.hostile_to_players =
@@ -2399,12 +2392,11 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 or(step.z, here.z),
                 or(step.o, facing),
             );
-            let counter = map.next_creature_counter;
-            map.next_creature_counter += 1;
+            let counter = map.object_counter();
             let mut go = crate::game::map::gameobject::GameObject::from_spawn(
                 t,
                 &crate::game::data::GameObjectSpawn {
-                    guid: counter | 0x80_0000,
+                    guid: counter,
                     entry: d1,
                     map: map.key.map,
                     x,

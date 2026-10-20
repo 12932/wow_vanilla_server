@@ -210,10 +210,9 @@ pub async fn open_bank(map: &crate::game::map::MapHandle, g: Guid) -> Guid {
             x: p.position().x + 1.0,
             ..p.position()
         };
-        let counter = m.next_creature_counter;
-        m.next_creature_counter += 1;
+        let counter = m.creature_counter();
         let c = crate::game::map::creature::Creature::new(
-            crate::game::guid::unit(template.entry, counter | 0x80_0000),
+            crate::game::guid::unit(template.entry, counter),
             &template,
             30,
             at,

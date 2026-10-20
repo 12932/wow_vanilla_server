@@ -89,6 +89,9 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
 - **data 8** fixed (`fix/lowsa`): a navmesh whose header lists tiles that aren't there warns at its open with the
   count; a navmesh or terrain tile whose read panics is answered as missing (`tiles::read_into`), where it stayed
   loading until the map restarted; the start warns of a continent with no navmesh when another map has one.
+- **maps 7** fixed (`fix/lowsa`): what a map makes itself takes its counter through `Map::creature_counter`,
+  `pet_counter` or `object_counter`: creatures and game objects counted apart, as mangos's, and a counter come
+  round skips those on the map still (`Map::own_counters`, kept by `add_*` and the removals).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
