@@ -358,7 +358,7 @@ fn take_money(map: &mut Map, g: Guid) {
 }
 
 /// The window closes: an emptied item is used up.
-fn release(map: &mut Map, g: Guid, target: Guid) {
+pub(crate) fn release(map: &mut Map, g: Guid, target: Guid) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };

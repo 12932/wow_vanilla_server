@@ -2771,7 +2771,14 @@ pub fn update(map: &mut Map) {
         // The target must still be here; a player's still alive, a foe, in
         // range and in front as the cast ends, or it fails before it costs.
         let m = mods::for_spell(map, g, s);
-        if let Some(code) = checks::at_finish(map, g, s, &casting.targets, &m) {
+        // And its profession's: the lock, node or lockbox still there, in
+        // reach, nobody else's and not beyond the skill, its tools and
+        // focus by (mangos's `CheckCast(false)` at `Spell::cast`, Thistle
+        // Tea's launch recheck), failed before it costs or spends a charge.
+        let at_finish = checks::at_finish(map, g, s, &casting.targets, &m).or_else(|| {
+            crate::game::map::professions::check(map, g, s, &casting.targets, casting.item)
+        });
+        if let Some(code) = at_finish {
             if code == checks::fail::BAD_TARGETS {
                 if let Some(p) = map.players.get(&g) {
                     p.outbound.send(&SMSG_SPELL_FAILURE {

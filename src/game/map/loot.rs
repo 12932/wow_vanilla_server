@@ -1118,6 +1118,17 @@ pub fn open(map: &mut Map, player: Guid, target: Guid) {
 
 /// Open `target`'s loot window for `player`, distance aside.
 pub fn show(map: &mut Map, player: Guid, target: Guid) {
+    // A window open on something else shuts first, as the client is told
+    // (Thistle Tea's `Looting.open`, its item loot settled before a
+    // node's): its loot isn't left with this player among its lookers.
+    if let Some(open) = map
+        .players
+        .get(&player)
+        .and_then(|p| p.looting)
+        .filter(|t| *t != target)
+    {
+        close(map, player, open);
+    }
     let data = map.realm.data.clone();
     let wanted = crate::game::map::quests::wanted(map, player);
     let met = loot_ref(map, target)
@@ -1304,6 +1315,19 @@ fn position_of(map: &Map, g: Guid) -> Option<wow_world_messages::vanilla::Vector
 
 /// `CMSG_LOOT_RELEASE`: the window closes. An emptied corpse is no longer
 /// lootable; an emptied node is gathered.
+/// Shut `player`'s window on `target`, an item's or another's, as
+/// `CMSG_LOOT_RELEASE` does.
+pub fn close(map: &mut Map, player: Guid, target: Guid) {
+    if guid::high(target) == Some(guid::HighGuid::Item) {
+        crate::game::map::items_misc::release(map, player, target);
+        // A disenchant's leftovers go with its window (mangos's release of
+        // an item's loot).
+        map.loot_state.item_loot.remove(&target);
+    } else {
+        release(map, player, target);
+    }
+}
+
 pub fn release(map: &mut Map, player: Guid, target: Guid) {
     if let Some(p) = map.players.get_mut(&player) {
         p.looting = None;

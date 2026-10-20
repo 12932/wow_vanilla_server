@@ -441,7 +441,12 @@ pub fn check(
             // first, as vmangos's `EffectOpenLock` has it: a key cast at a
             // door is the target item too.
             EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM if t.object.is_some() => {
-                let o = t.object.and_then(|g| map.gameobject(g))?;
+                // One not in this world (gone, or in another copy) isn't
+                // a target (Thistle Tea's `bad_targets`, mangos's target
+                // not found).
+                let Some(o) = t.object.and_then(|g| map.gameobject(g)) else {
+                    return Some(FAIL_BAD_TARGETS);
+                };
                 if dist(p.position(), o.position) > LOCK_YARDS {
                     return Some(FAIL_OUT_OF_RANGE);
                 }
@@ -760,10 +765,11 @@ fn opened(map: &mut Map, caster: Guid, object: Guid) {
         return;
     };
     match kind {
+        // As a door used by hand: open, its trap sprung, and shut again
+        // after its time (mangos's `SendLoot`, `UseDoorOrButton`; Thistle
+        // Tea's open-lock completion routed through ordinary door use).
         GO_DOOR | GO_BUTTON => {
-            if let Some(o) = map.gameobject_mut(object) {
-                o.fields.set_u32(GAMEOBJECT_STATE, 0);
-            }
+            crate::game::map::objects::door_used(map, caster, object);
             crate::game::map::scripts::object_used(map, caster, object);
         }
         // A battleground's banner or beacon.

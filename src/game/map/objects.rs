@@ -845,6 +845,13 @@ pub fn reset(map: &mut Map, object: Guid) {
 
 /// A door or button used: its linked trap springs on the user, and it
 /// opens (or shuts) until its time to go back; not again while it is.
+/// A door or button opened by its lock: as one used by hand ([`door`]).
+pub(crate) fn door_used(map: &mut Map, user: Guid, object: Guid) {
+    if let Some(t) = template(map, object) {
+        door(map, user, object, &t);
+    }
+}
+
 fn door(map: &mut Map, user: Guid, object: Guid, t: &GameObjectTemplate) {
     if map.objects.closes.iter().any(|(_, o, _)| *o == object) {
         return;
