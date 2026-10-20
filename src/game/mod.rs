@@ -935,6 +935,8 @@ mod tests_p9_spells_cast;
 #[cfg(test)]
 mod tests_p9_spells_effects;
 #[cfg(test)]
+mod tests_p9_spells_world;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;
