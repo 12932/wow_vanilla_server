@@ -937,6 +937,8 @@ mod tests_p9_spells_contact;
 #[cfg(test)]
 mod tests_p9_spells_effects;
 #[cfg(test)]
+mod tests_p9_spells_real;
+#[cfg(test)]
 mod tests_p9_spells_world;
 #[cfg(test)]
 mod tests_parity_combat;
