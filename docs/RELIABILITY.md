@@ -147,7 +147,11 @@ so the session ends and disconnects the player, saved. A panic in the writer dro
 client sees the connection close, and the reader then ends at EOF, which ends the session the same way.
 
 **A hang.** The reader has an idle timeout (`client_idle_timeout_secs`). A writer stuck on a client that doesn't
-read is bounded by the next item.
+read (its TCP window shut, its acknowledgements still coming) gives up once a write has taken nothing for the same
+timeout, and at once when the queue is closed (over budget, or taken over by another login): the writer, the reader
+and the session all wait on the close beside their own work, so the socket, the frames taken and those queued go
+with it. (`a_writer_on_a_client_that_doesnt_read_ends_at_its_close`, `a_write_that_takes_nothing_ends_the_writer`,
+`a_closed_connection_ends_its_reader_and_its_session`)
 
 **Overload.** A client whose outbound queue is over its byte budget (`outbound_channel_bytes`) is disconnected
 rather than sent a partial world. A client that sends 32 bad packets within 10 s is disconnected.

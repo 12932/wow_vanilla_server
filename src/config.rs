@@ -183,6 +183,10 @@ settings! {
         /// walking into a crowd asks after everyone in it at once. One that
         /// floods them is disconnected.
         max_queries_per_sec: u32 = 1000, Clamp(10.0, 1_000_000.0), Restart, "";
+        /// Pings a client may send in a row each less than 27 seconds after
+        /// the last (the client pings every 30) before it is disconnected;
+        /// 0 never disconnects.
+        max_overspeed_pings: u32 = 2, Clamp(0.0, 1000.0), Restart, "MaxOverspeedPings";
     }
 }
 

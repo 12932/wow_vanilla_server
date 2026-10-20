@@ -121,6 +121,10 @@ pub struct Registry {
     by_name: RwLock<AHashMap<String, Guid>>,
     online: RwLock<AHashMap<Guid, Arc<Online>>>,
     by_account: RwLock<AHashMap<Arc<str>, Guid>>,
+    /// Each account's world session (its control channel), on the
+    /// character screen or in the world: one an account, as mangos's
+    /// `World::m_sessions` keeps them.
+    sessions: Mutex<AHashMap<Arc<str>, mpsc::UnboundedSender<Control>>>,
 }
 
 fn key(name: &str) -> String {
@@ -221,6 +225,38 @@ impl Registry {
     pub fn online_by_name(&self, name: &str) -> Option<Arc<Online>> {
         let guid = self.guid_by_name(name)?;
         self.online(guid)
+    }
+
+    /// `session` is the account's session from now: the one it had before,
+    /// if any, to be let go.
+    pub fn claim_session(
+        &self,
+        account: &Arc<str>,
+        session: &mpsc::UnboundedSender<Control>,
+    ) -> Option<mpsc::UnboundedSender<Control>> {
+        self.sessions
+            .lock()
+            .insert(account.clone(), session.clone())
+            .filter(|old| !old.same_channel(session))
+    }
+
+    /// The account's session goes, if it is still `session`: true if it
+    /// was.
+    pub fn release_session(&self, account: &str, session: &mpsc::UnboundedSender<Control>) -> bool {
+        let mut sessions = self.sessions.lock();
+        if sessions
+            .get(account)
+            .is_some_and(|s| s.same_channel(session))
+        {
+            sessions.remove(account);
+            return true;
+        }
+        false
+    }
+
+    /// The account's session, on the character screen or in the world.
+    pub fn session_for_account(&self, account: &str) -> Option<mpsc::UnboundedSender<Control>> {
+        self.sessions.lock().get(account).cloned()
     }
 
     pub fn online_for_account(&self, account: &str) -> Option<Arc<Online>> {

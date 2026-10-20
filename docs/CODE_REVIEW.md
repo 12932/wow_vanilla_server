@@ -35,6 +35,17 @@ missing world data). None fixed yet; waiting on your choice.
   map, and a cancel there undoes it.
 - Maps 6 fixed: every way out of the world (let go with a map, a lost map, a reaped ghost, a panic's fallback) leaves
   the channels, battleground queues, friends, guild and group, through one `went_offline`.
+- **#2** fixed (`fix/fixnet`): a close wakes the writer out of its write (a `Notify` in the queue), and a write that
+  takes nothing for `client_idle_timeout_secs` ends it; the reader and the session end at the close too.
+- **#13** fixed (`fix/fixnet`): the account name is put in capitals (`auth::account_name`) at the logon and reconnect
+  challenges and the world handshake, before the proof, the ban or the key cache use it; the store's rows kept under
+  another case are the account's at the next start.
+- **#12** fixed (`fix/fixnet`): one session an account (`Registry::claim_session`, as mangos's `AddSession_`): a new
+  one replaces the old and starts once it has gone, a player in the world left for it to take over; `.ban` kicks the
+  account's session wherever it is, and a login refuses a banned account.
+- **net 5** fixed (`fix/fixnet`): pings are counted in the reader by mangos's rule (more than
+  `[network] max_overspeed_pings`, 2, in a row each under 27 s after the last disconnect); a closed queue ends the
+  reader and the session at once (with #2).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

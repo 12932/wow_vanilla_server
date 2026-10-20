@@ -81,10 +81,18 @@ fn ban(map: &Map, args: &[&str]) -> String {
     if !accounts.ban(name, until, &reason) {
         return format!("No account {name}.");
     }
-    if let Some(o) = map.realm.registry.online_for_account(&name.to_uppercase()) {
+    // The account's session, on the character screen or in the world (as
+    // mangos's ban kicks the account's session), and a player of it its
+    // session left in the world.
+    let account = crate::auth::account_name(name);
+    let registry = &map.realm.registry;
+    if let Some(s) = registry.session_for_account(&account) {
+        let _ = s.send(crate::game::session::Control::Kick);
+    }
+    if let Some(o) = registry.online_for_account(&account) {
         let _ = o.session.send(crate::game::session::Control::Kick);
     }
-    format!("{} is banned.", name.to_uppercase())
+    format!("{account} is banned.")
 }
 
 fn unban(args: &[&str]) -> String {
