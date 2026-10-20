@@ -185,6 +185,48 @@ async fn a_chain_heal_jumps_to_the_most_hurt_and_back_to_its_caster() {
     );
 }
 
+/// A heal's chain jumps 12.5 yards between friends (your call of
+/// 2026-10-20, past mangos's 10): a friend 12 yards off is reached, one 13
+/// yards off isn't.
+#[tokio::test]
+async fn a_chain_heal_jumps_twelve_and_a_half_yards() {
+    for (yards, reached) in [(12.0, true), (13.0, false)] {
+        let realm = fast_realm(chains);
+        let (_c, shaman, map) = human(&realm, "P3CK", "Healer", Class::Mage).await;
+        let (_d, friend, _) = human(&realm, "P3CL", "Friendone", Class::Warrior).await;
+        let (_e, far, _) = human(&realm, "P3CM", "Friendtwo", Class::Warrior).await;
+        let healed = map
+            .query(move |m| {
+                ready(m, shaman, 60, &[]);
+                let at_me = m.players[&shaman].position();
+                let place = |m: &mut Map, g: Guid, dx: f32| {
+                    if let Some(p) = m.players.get_mut(&g) {
+                        p.movement.position = Vector3d {
+                            x: at_me.x + dx,
+                            ..at_me
+                        };
+                    }
+                };
+                // The friend 3 yards off, the far one beyond them; the
+                // caster unhurt, so the chain can't come back to them.
+                place(m, friend, 3.0);
+                place(m, far, 3.0 + yards);
+                for g in [shaman, friend, far] {
+                    if let Some(f) = m.unit_fields_mut(g) {
+                        f.set_u32(UNIT_FIELD_MAXHEALTH, 10_000);
+                    }
+                    set_health(m, g, if g == shaman { 10_000 } else { 100 });
+                }
+                fresh(m, shaman);
+                spells::cast(m, shaman, HEAL, at(friend), None);
+                health(m, far) > 100
+            })
+            .await
+            .unwrap();
+        assert_eq!(healed, reached, "a friend {yards} yards on");
+    }
+}
+
 const MEND: u32 = 990_910;
 const QUIET_MEND: u32 = 990_911;
 const LOUD_MEND: u32 = 990_912;

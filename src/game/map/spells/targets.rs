@@ -13,8 +13,11 @@ use crate::game::map::combat::{self, dist};
 use super::Targets;
 use super::mods::{self, Mods};
 
-/// How far a chain jumps.
+/// How far a chain jumps (mangos's `CHAIN_SPELL_JUMP_RADIUS`).
 pub const CHAIN_JUMP_YARDS: f32 = 10.0;
+/// How far a heal's chain jumps between friends (Chain Heal): further than
+/// mangos's 10, your call of 2026-10-20.
+pub const HEAL_CHAIN_JUMP_YARDS: f32 = 12.5;
 
 /// An effect's implicit target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -533,7 +536,12 @@ fn chain(
         let Some(at) = map.position_of(last) else {
             break;
         };
-        let next = units_around(map, at, CHAIN_JUMP_YARDS, |g| {
+        let jump = if heal {
+            HEAL_CHAIN_JUMP_YARDS
+        } else {
+            CHAIN_JUMP_YARDS
+        };
+        let next = units_around(map, at, jump, |g| {
             !out.contains(&g)
                 && alive(map, g)
                 && super::checks::unit_type_allowed(map, s, g)

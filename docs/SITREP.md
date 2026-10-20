@@ -588,6 +588,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 3. and 4. Peon's healers target whom they heal and cancel half the time when the target dies; shamans' Chain Heal
    (peon `feat/heals`, running).
 5. and 6. Officer Jaxon's and Thomas Miller's patrols and held items; corpses sliding (`fix/bugs1020`, running).
+- **Chain Heal jumps 12.5 yards** between friends (your call): wvs's heal chains reach 12.5, harmful chains 10
+   (mangos's); peon's shamans aim by the same 12.5.
 7. **Done (`feat/arenagrace`):** walking out of an arena's area keeps free-for-all for 20 seconds (`[arena]
    ffa_grace_secs`, live); back in within it carries on; death or a far teleport ends it; a Blink out keeps it.
    **My calls:** everyone gets it (not only those recently in PvP, AzerothCore's rule); only walking out starts it
