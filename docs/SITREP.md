@@ -660,6 +660,14 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   its stop go to the character screen, not into the restarted copy; a reset refused for someone on their way says
   "zoning" (mangos). **Found:** a session can keep sending to a stopped copy's old handle (the player then goes
   offline unsaved); queued for after `fixnet`.
+- **Review 5's fixes, network (`fix/fixnet`):** #2 (high): a close now ends a writer stuck on a client that doesn't
+  read, and a write that moves nothing for `client_idle_timeout_secs` (120) ends it; #12: **one session an account**
+  (mangos's `AddSession_`): a new one replaces the old, which ends first (a player it left in the world is taken
+  over as before, #35); `.ban` reaches the account's session wherever it is, and a banned login is refused; #13:
+  account names in capitals at every handshake (old rows in another case merged at start-up); pings counted as
+  mangos's `HandlePing` does, more than `[network] max_overspeed_pings` (2) under 27 s apart disconnecting (peon
+  and the real client ping every 30 s). **Its calls:** an old connection is cut as soon as the new one is through
+  the handshake (mangos); GMs aren't exempt from the ping rule (the reader doesn't know the GM level).
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
