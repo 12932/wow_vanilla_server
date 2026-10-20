@@ -553,6 +553,12 @@ pub enum Visibility {
     /// A player's group's members: what anyone sees, and the quest log's
     /// ids (mangos's `UF_FLAG_GROUP_ONLY`).
     Group,
+    /// A creature's master (its charmer, else its owner): what anyone
+    /// sees, and its owner-only fields (mangos's `UF_FLAG_OWNER_ONLY`).
+    Master,
+    /// Whoever's Empathy (Beast Lore) is on a creature: what anyone sees,
+    /// and its damage and resistances (mangos's `UF_FLAG_SPECIAL_INFO`).
+    Empathy,
     /// Anyone else.
     Public,
 }
@@ -562,11 +568,67 @@ impl Visibility {
     /// for all of them.
     fn mask(self, type_id: TypeId) -> Option<&'static Mask> {
         match (self, type_id) {
-            (Visibility::Public, TypeId::Player) => Some(player_public_mask()),
+            (Visibility::Owner, _) => None,
             (Visibility::Group, TypeId::Player) => Some(player_group_mask()),
+            (_, TypeId::Player) => Some(player_public_mask()),
+            (Visibility::Master, TypeId::Unit) => Some(unit_mask(1)),
+            (Visibility::Empathy, TypeId::Unit) => Some(unit_mask(2)),
+            (_, TypeId::Unit) => Some(unit_mask(0)),
             _ => None,
         }
     }
+}
+
+/// A creature's fields its master sees and others don't, as ranges (mangos-classic's
+/// `UF_FLAG_OWNER_ONLY` unit fields): its damage, a pet's experience and
+/// training points, its stats, resistances, base health and mana, attack
+/// power, ranged damage and power costs.
+pub const UNIT_MASTER_ONLY: &[(u16, u16)] = &[
+    (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_BYTES_1),
+    (UNIT_FIELD_PETEXPERIENCE, UNIT_DYNAMIC_FLAGS),
+    (UNIT_TRAINING_POINTS, UNIT_FIELD_BYTES_2),
+    (
+        UNIT_FIELD_ATTACK_POWER,
+        UNIT_FIELD_POWER_COST_MULTIPLIER + 7,
+    ),
+];
+
+/// A creature's fields whoever's Empathy is on it sees (mangos-classic's
+/// `UF_FLAG_SPECIAL_INFO`): its damage and resistances.
+pub const UNIT_SPECIAL_INFO: &[(u16, u16)] = &[
+    (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_BYTES_1),
+    (UNIT_FIELD_RESISTANCES, UNIT_FIELD_RESISTANCES + 7),
+];
+
+/// The fields of a creature anyone sees (mangos-classic's `UF_FLAG_PUBLIC`
+/// and `UF_FLAG_DYNAMIC` unit fields), for `audience` 0; its master's
+/// (1) and an Empathy's (2) with theirs: not its ranged attack time,
+/// which is its own (`UF_FLAG_PRIVATE`), for anyone.
+fn unit_mask(audience: usize) -> &'static Mask {
+    static MASKS: [std::sync::OnceLock<Mask>; 3] = [const { std::sync::OnceLock::new() }; 3];
+    let extra: &[(u16, u16)] = match audience {
+        1 => UNIT_MASTER_ONLY,
+        2 => UNIT_SPECIAL_INFO,
+        _ => &[],
+    };
+    MASKS[audience.min(2)].get_or_init(|| {
+        let mut m = Mask::new(UNIT_END);
+        let mut set_range = |from: u16, to: u16| {
+            for i in from..to {
+                m.set(i);
+            }
+        };
+        set_range(OBJECT_FIELD_GUID, OBJECT_FIELD_SCALE_X + 1);
+        set_range(UNIT_FIELD_CHARM, UNIT_FIELD_RANGEDATTACKTIME);
+        set_range(UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_MINDAMAGE);
+        set_range(UNIT_FIELD_BYTES_1, UNIT_FIELD_PETEXPERIENCE);
+        set_range(UNIT_DYNAMIC_FLAGS, UNIT_TRAINING_POINTS);
+        set_range(UNIT_FIELD_BYTES_2, UNIT_FIELD_BYTES_2 + 1);
+        for &(from, to) in extra {
+            set_range(from, to);
+        }
+        m
+    })
 }
 
 /// Whether `f` has a changed field only a player's group sees (and the

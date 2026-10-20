@@ -312,6 +312,9 @@ pub struct Creature {
     pub tap_group: Option<u32>,
     /// The tap as its observers were last told it (`map::tap`).
     pub tap_told: Option<Guid>,
+    /// Who saw it otherwise than a stranger as its observers were last
+    /// told (`map::views`).
+    pub views_told: crate::game::map::views::Viewers,
     pub evading: bool,
     /// Where the victim was when the chase last pathed.
     pub chase_target_at: Option<Vector3d>,
@@ -456,6 +459,7 @@ impl Creature {
             tapped_by: None,
             tap_group: None,
             tap_told: None,
+            views_told: Default::default(),
             evading: false,
             chase_target_at: None,
             aggro_check_at: Instant::now(),

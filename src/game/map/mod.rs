@@ -95,6 +95,7 @@ pub mod trade;
 pub mod trade_spells;
 pub mod trinkets;
 pub mod vendor;
+pub mod views;
 pub mod visibility;
 pub mod world;
 pub mod world_states;
@@ -1857,27 +1858,18 @@ impl Map {
                 batches.entry(p.guid).or_default().push(&block);
             }
             if !p.observers.is_empty() {
-                let public = update::values_block(p.guid, &p.fields, Visibility::Public);
                 // A quest log slot's id changed: the group's members get it
                 // too, in a block of their own (mangos's
-                // `UF_FLAG_GROUP_ONLY`).
-                let group = crate::game::fields::group_only_dirty(&p.fields)
-                    .then(|| update::values_block(p.guid, &p.fields, Visibility::Group))
-                    .flatten();
-                let mates = match group {
-                    Some(_) => realm.social.groups.lock().others(p.guid),
-                    None => Vec::new(),
+                // `UF_FLAG_GROUP_ONLY`); a Hunter's Mark shows to its
+                // hunter alone (`views`).
+                let mates = if crate::game::fields::group_only_dirty(&p.fields) {
+                    realm.social.groups.lock().others(p.guid)
+                } else {
+                    Vec::new()
                 };
-                for o in &p.observers {
-                    let block = if mates.contains(o) {
-                        group.as_ref()
-                    } else {
-                        public.as_ref()
-                    };
-                    if let Some(block) = block {
-                        batches.entry(*o).or_default().push(block);
-                    }
-                }
+                p.views_told = views::tell_player(batches, p, &mates);
+            } else {
+                p.views_told = views::Viewers::of_player(p);
             }
             p.fields.clear_dirty();
         }
@@ -1910,28 +1902,19 @@ impl Map {
             self.key
         );
         drop(z);
-        // Every creature, for its dirty flag.
+        // Every creature, for its dirty flag: each observer's own view of
+        // its tap, marks, owner-only fields and Empathy (`views`).
         let z = crate::zone!("values: creatures");
         for (_, c) in self.creatures.iter_mut() {
             let tap_changed = c.tapped_by != c.tap_told;
             if !c.fields.is_dirty() && !tap_changed {
                 continue;
             }
-            let flags_sent = c
-                .fields
-                .dirty()
-                .get(crate::game::fields::UNIT_DYNAMIC_FLAGS);
-            // Its tap seen anew (taken or gone), or its flags sent again
-            // to those outside it: each observer's own block.
-            if !c.observers.is_empty() && (tap_changed || (flags_sent && c.tapped_by.is_some())) {
-                tap::tell(realm, batches, c, tap_changed);
-            } else if !c.observers.is_empty()
-                && let Some(block) = update::values_block(c.guid, &c.fields, Visibility::Public)
-            {
-                for o in &c.observers {
-                    batches.entry(*o).or_default().push(&block);
-                }
-            }
+            c.views_told = if c.observers.is_empty() {
+                views::Viewers::of_creature(c)
+            } else {
+                views::tell_creature(realm, batches, c, tap_changed)
+            };
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
@@ -1958,13 +1941,10 @@ impl Map {
         let now = self.now;
         let block: Arc<[u8]> = if guid::is_player(object) {
             let p = self.players.get(&object)?;
-            Arc::from(update::create_block(
-                &p.create_for_others(now),
-                Visibility::Public,
-            ))
+            Arc::from(views::stranger_create(p.create_for_others(now)))
         } else if guid::is_unit(object) {
             let c = self.creature(object)?;
-            Arc::from(update::create_block(&c.create(now), Visibility::Public))
+            Arc::from(views::stranger_create(c.create(now)))
         } else if guid::is_game_object(object) {
             let g = self.gameobject(object)?;
             Arc::from(update::create_block(&g.create(), Visibility::Public))
