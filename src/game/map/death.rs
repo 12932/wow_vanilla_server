@@ -180,6 +180,16 @@ pub fn kill(map: &mut Map, g: Guid) {
     // The dead lie where they fell until they release or rise: rooted,
     // as mangos's `KillPlayer` roots them (`SendMoveRoot`).
     crate::game::map::movement::root_to(&p.outbound, g, true);
+    // A run ends where it fell: the body steered no more, and those who
+    // see it told it stopped, so their clients don't run it on along the
+    // ground (mangos's `SetDeathState` and `StopMoving`, a stop spline to
+    // the set; Thistle Tea's death's `MovementStopped`). One the server
+    // drove is stopped as its control ends, below.
+    let steered = crate::game::map::movement::steered(&p.movement.flags);
+    p.movement.flags = crate::game::map::movement::unsteered(p.movement.flags);
+    // (A passenger's stop would be on the deck, which this one isn't.)
+    let stops = steered && p.driven.is_none() && p.movement.flags.get_on_transport().is_none();
+    let at = p.position();
     crate::game::map::corpses::died(p, crate::game::map::corpses::unix_ms());
     p.fields.set_u32(UNIT_FIELD_HEALTH, 0);
     p.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
@@ -187,6 +197,13 @@ pub fn kill(map: &mut Map, g: Guid) {
     // the emote state and the posture).
     p.fields.set_u32(UNIT_NPC_EMOTESTATE, 0);
     p.set_stand_state(0);
+    if stops {
+        let spline_id = map.next_spline_id;
+        map.next_spline_id = map.next_spline_id.wrapping_add(1);
+        let frame = crate::game::map::ai::stop_packet(g, at, spline_id);
+        map.send_to_observers(g, &frame, false);
+    }
+    crate::game::map::player_motion::control(map, g);
     // A logout's countdown goes on (mangos's session logs the dead out
     // too); cancelled, it leaves them lying rooted.
     crate::game::map::misc::capture_self_res(map, g);

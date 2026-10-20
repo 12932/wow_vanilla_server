@@ -264,3 +264,172 @@ async fn every_real_spawn_walks_its_path_and_holds_its_weapons() {
         &empty[..empty.len().min(20)]
     );
 }
+
+/// A movement of `flags` at `at`, facing east.
+fn going(flags: MovementInfo_MovementFlags, at: Vector3d) -> MovementInfo {
+    MovementInfo {
+        flags,
+        timestamp: 0,
+        position: at,
+        orientation: 0.0,
+        fall_time: 0,
+    }
+}
+
+fn start() -> Vector3d {
+    Vector3d {
+        x: START.0,
+        y: START.1,
+        z: START.2,
+    }
+}
+
+/// Where `g` is told it stopped.
+fn stop_of(g: Guid) -> impl FnMut(&ServerOpcodeMessage) -> Option<Vector3d> {
+    move |m| match m {
+        ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv)
+            if mv.guid == g && matches!(mv.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::Stop) =>
+        {
+            Some(mv.spline_point)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the movement of `g` in a create says it runs forward.
+fn created_running(m: &ServerOpcodeMessage, g: Guid) -> Option<bool> {
+    let objects = match m {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+        ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+        _ => return None,
+    };
+    objects.iter().find_map(|o| match &o.update_type {
+        Object_UpdateType::CreateObject {
+            guid3, movement2, ..
+        }
+        | Object_UpdateType::CreateObject2 {
+            guid3, movement2, ..
+        } if *guid3 == g => match movement2.update_flag.get_living()? {
+            MovementBlock_UpdateFlag_Living::Living { flags, .. } => Some(flags.get_forward()),
+            MovementBlock_UpdateFlag_Living::HasPosition { .. } => None,
+        },
+        _ => None,
+    })
+}
+
+/// The city raid's sliding corpses: Bea watches a creature on its run and
+/// Alice running forward, and both die. The creature is stopped where its
+/// run has come to (mangos's `MoveSplineInit::Stop` computes the spline's
+/// position), not where the map's last update left it; Alice is stopped
+/// at all, where she fell (mangos's `SetDeathState` and `StopMoving`, a
+/// stop spline to those who see her; Thistle Tea's `MovementStopped`).
+/// What her client says of its run after is told on with the run's flags
+/// gone, and Cid, coming after, is told of her body standing: no client
+/// runs a corpse on along the ground. Bea's capture, for the client check.
+async fn deaths_on_the_run() -> (Client, Client) {
+    let (realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bea", Race::Human, Class::Warrior).await;
+    b.heartbeat(START.0, START.1, START.2).await;
+    let runner = guid::unit(ARMED, 904);
+    b.sees(runner).await;
+    b.sees(ga).await;
+    a.send(MSG_MOVE_START_FORWARD_Client {
+        info: going(MovementInfo_MovementFlags::new_forward(), start()),
+    })
+    .await;
+    b.wait_for("Alice's run", |m| match m {
+        ServerOpcodeMessage::MSG_MOVE_START_FORWARD(s) if s.guid == ga => Some(()),
+        _ => None,
+    })
+    .await;
+    b.clear();
+    // The creature sets off east; a third of a second on, between two of
+    // the map's updates, both die.
+    let along = map
+        .query(move |m| {
+            let from = m.creature(runner).unwrap().position;
+            let to = Vector3d {
+                x: from.x + 30.0,
+                ..from
+            };
+            crate::game::map::scripts::move_to(m, runner, to, true);
+            m.now += Duration::from_millis(300);
+            let along = match &m.creature(runner).unwrap().motion {
+                crate::game::map::creature::Motion::Moving(w) => w.position_at(m.now).0,
+                _ => panic!("the creature runs"),
+            };
+            crate::game::map::combat::kill(m, runner, ga);
+            crate::game::map::combat::kill(m, ga, runner);
+            (from, along)
+        })
+        .await
+        .unwrap();
+    let (from, along) = along;
+    assert!(
+        crate::game::map::combat::dist(from, along) > 1.0,
+        "it ran some way: {from:?} to {along:?}"
+    );
+    let at = b.wait_for("the creature's stop", stop_of(runner)).await;
+    assert!(
+        crate::game::map::combat::dist(at, along) < 0.1,
+        "stopped where it had come to, {along:?}, not {at:?}"
+    );
+    let at = b.wait_for("Alice's stop", stop_of(ga)).await;
+    assert!(
+        crate::game::map::combat::dist(at, start()) < 0.1,
+        "stopped where she fell: {at:?}"
+    );
+    // Her client, not yet told, runs on a little.
+    let on = Vector3d {
+        x: START.0 + 0.3,
+        ..start()
+    };
+    a.send(MSG_MOVE_HEARTBEAT_Client {
+        info: going(MovementInfo_MovementFlags::new_forward(), on),
+    })
+    .await;
+    let told = b
+        .wait_for("her heartbeat", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(s) if s.guid == ga => Some(s.info),
+            _ => None,
+        })
+        .await;
+    assert!(
+        !told.flags.get_forward(),
+        "told on without the run: {told:?}"
+    );
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Cid", Race::Human, Class::Warrior).await;
+    c.heartbeat(START.0, START.1, START.2).await;
+    let running = c.wait_for("Alice's body", |m| created_running(m, ga)).await;
+    assert!(!running, "her body is created standing");
+    (a, b)
+}
+
+#[tokio::test]
+async fn a_watcher_sees_a_creature_and_a_player_stop_where_they_die_on_the_run() {
+    deaths_on_the_run().await;
+}
+
+/// What [`deaths_on_the_run`] sent Bea (the creature's and Alice's stops,
+/// her body's values) passes the 1.12 client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn deaths_on_the_run_pass_the_client() {
+    use crate::game::tests_client_emu::{capture, checker, run_checker};
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (mut a, mut b) = deaths_on_the_run().await;
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        a.captured();
+        b.captured();
+    }
+    let (capture, counts) = capture(vec![&mut a, &mut b]);
+    assert!(
+        counts.get(&0x0DD).copied().unwrap_or(0) >= 2,
+        "the stops were captured: {counts:?}"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}

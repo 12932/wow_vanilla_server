@@ -233,7 +233,20 @@ async fn a_root_ack_settles_its_order_and_moves_only_a_player_the_client_moves()
         })
         .await;
     b.clear();
-    a.send(root(counter)).await;
+    // Her client says she is two yards on from where she fell (her fear
+    // left her anywhere about the start, at times by `there`).
+    a.send(CMSG_FORCE_MOVE_ROOT_ACK {
+        guid: ga,
+        movement_counter: counter,
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::new_root(),
+            ..at(Vector3d {
+                x: fell.x + 2.0,
+                ..fell
+            })
+        },
+    })
+    .await;
     handled(&mut a).await;
     assert!(pending(&map, ga).await.iter().all(|(c, _)| *c != counter));
     assert_eq!(position(&map, ga).await, fell, "the corpse stays");

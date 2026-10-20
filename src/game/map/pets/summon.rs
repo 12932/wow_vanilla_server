@@ -872,6 +872,8 @@ pub fn die(map: &mut Map, g: Guid) {
     guardian_gone(map, g);
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::combat::leave_combat(map, g);
+    // Stopped where its run has come to now.
+    crate::game::map::ai::advance_motion(map, g);
     let spline = map.next_spline_id;
     let Some(c) = map.creature_mut(g) else {
         return;
