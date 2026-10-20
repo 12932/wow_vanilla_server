@@ -112,6 +112,15 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     crate::game::map::ai::advance_motion(map, g);
+    // A guardian's, a companion's or a creature's pet's own events (its
+    // EventAI), before its pet AI's step; one of them may have taken it.
+    crate::game::map::event_ai::owned_tick(map, g);
+    if !map
+        .creature(g)
+        .is_some_and(|c| c.alive() && c.pet.is_some())
+    {
+        return;
+    }
     match kind {
         Kind::Totem => totems::step(map, g, now),
         Kind::Possessed => {
@@ -148,7 +157,16 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             regen(map, g, now);
             act(map, g, now);
         }
-        Kind::Critter => follow(map, g, now),
+        // A companion follows, but where a script told it to stay (Thistle
+        // Tea's mini-pet tree, its command state).
+        Kind::Critter => {
+            let stay = state(map, g).and_then(|s| (s.command == COMMAND_STAY).then_some(s.stay_at));
+            match stay {
+                Some(Some(at)) => go_to(map, g, at, now),
+                Some(None) => {}
+                None => follow(map, g, now),
+            }
+        }
         _ => {
             regen(map, g, now);
             if kind == Kind::Hunter {
