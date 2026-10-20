@@ -507,3 +507,112 @@ async fn a_logout_carried_through_a_teleport_completes_on_the_new_map() {
         .unwrap();
     assert_eq!(row.map, 1, "saved on the new map");
 }
+
+/// The handle `g`'s session routes their packets to, once it has heard
+/// everything sent it before.
+async fn route_of(realm: &Realm, g: Guid) -> Option<MapHandle> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let online = realm.registry.online(g).expect("online");
+    assert!(
+        online
+            .session
+            .send(crate::game::session::Control::Probe(tx))
+            .is_ok()
+    );
+    rx.await.expect("the session answers")
+}
+
+/// Bob, with 12,345 coins he hasn't saved, is sent by his own session to a
+/// copy whose stop is ahead of his arrival in its queue (an unload or a
+/// reset decided as his session sent him its way): the session holds the
+/// copy's handle when the copy stops, and hands him on to the copy started
+/// again. The key, and the handle the session held. On a runtime with
+/// threads to spare: the busy copy holds one.
+async fn handed_on_by_a_copy_that_stopped(realm: &Arc<Realm>, g: Guid) -> (MapKey, MapHandle) {
+    let key = MapKey {
+        map: DUNGEON,
+        instance: 7,
+    };
+    let copy = realm.maps.get(realm, key);
+    // The copy is busy (a long update, a burst of events), its stop queued.
+    let (free, busy) = std::sync::mpsc::channel::<()>();
+    copy.call(move |_| {
+        let _ = busy.recv_timeout(Duration::from_secs(5));
+    });
+    assert!(copy.send(crate::game::map::MapEvent::Stop));
+    on(&map_of(realm, g), move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .fields
+            .set_u32(PLAYER_FIELD_COINAGE, 12345);
+        m.teleport(g, key, Vector3d::default(), 0.0);
+    })
+    .await;
+    // His session has passed him on: his arrival is behind the stop.
+    let held = route_of(realm, g).await.expect("in the world");
+    assert!(held.same(&copy), "the session routes to the copy");
+    // Forgotten, as a stop has it: the copy started again is a new actor.
+    realm.maps.stop(key);
+    let _ = free.send(());
+    until("the copy stopped", || copy.is_closed()).await;
+    (key, copy)
+}
+
+/// Found by fixmaps: a copy that stops with a player on their way in, sent
+/// by their own session, hands them on to the copy started again, which
+/// tells their session: their packets go there, and they are saved as they
+/// log out. Before, the session kept the stopped copy's handle: the
+/// client's next packet (its worldport acknowledgement) found it gone, the
+/// connection was closed, and the player went offline unsaved, still in
+/// the copy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_handed_on_to_a_copy_started_again_plays_on_there() {
+    let realm = realm();
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let (key, stale) = handed_on_by_a_copy_that_stopped(&realm, gb).await;
+    b.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    b.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    b.sees(gb).await;
+    let now = map_of(&realm, gb);
+    assert_eq!(now.key, key, "Bob is in the copy");
+    assert!(
+        !now.is_closed() && !now.same(&stale),
+        "the copy started again"
+    );
+    let route = route_of(&realm, gb).await.expect("in the world");
+    assert!(route.same(&now), "his session routes there");
+    // He plays on: what he sends next reaches the copy too.
+    join_peon(&realm, &b).await;
+    b.send(CMSG_LOGOUT_REQUEST {}).await;
+    b.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    until("Bob offline", || realm.registry.online(gb).is_none()).await;
+    assert_eq!(money_saved(&realm, gb).await, 12345, "saved");
+}
+
+/// Found by fixmaps: the client of a player handed on so goes as they are
+/// handed on: they are saved in the copy started again, and leave it.
+/// Before, the session's disconnect went to the copy that had stopped, and
+/// they went offline unsaved, still in the copy started again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_handed_on_whose_client_goes_is_saved_there() {
+    let realm = realm();
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let (key, _) = handed_on_by_a_copy_that_stopped(&realm, gb).await;
+    b.disconnect();
+    until("Bob offline", || realm.registry.online(gb).is_none()).await;
+    assert_eq!(money_saved(&realm, gb).await, 12345, "saved");
+    let copy = realm.maps.get(&realm, key);
+    assert!(
+        !on(&copy, move |m| m.players.contains_key(&gb)).await,
+        "out of the copy"
+    );
+}

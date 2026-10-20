@@ -31,6 +31,10 @@ use crate::game::store::{AT_LOGIN_FIRST, BAG_PLAYER, CharacterRow, CreateError, 
 pub enum Control {
     /// The player is bound for another map: pass them on, and route there.
     Transfer { player: Box<Player>, to: MapKey },
+    /// The copy the player was passed on to stopped before they arrived,
+    /// and handed them on to the copy started in its place, which has them
+    /// now (`map::hand_on`): route there.
+    HandedOn { guid: Guid, map: MapHandle },
     /// The player has logged out: back to the character screen.
     LoggedOut,
     /// Disconnect the client.
@@ -47,6 +51,10 @@ pub enum Control {
     /// Panic in the session's task, as a bug there would.
     #[cfg(test)]
     Panic,
+    /// Answer the handle the session routes the player's packets to, once
+    /// it has heard all sent before: a test's look at it.
+    #[cfg(test)]
+    Probe(tokio::sync::oneshot::Sender<Option<MapHandle>>),
 }
 
 enum State {
@@ -83,12 +91,14 @@ impl Drop for Session {
         }
         // A player handed over and not yet passed on goes on to their
         // map, to be saved there; at shutdown too, as a map asked for then
-        // saves whoever comes. The queue closed first: one handed over as
-        // the session goes is passed on by `transfer` itself, not lost
-        // with it.
+        // saves whoever comes. One handed on by a copy that stopped leaves
+        // the copy that has them. The queue closed first: one handed over
+        // as the session goes is passed on by `transfer` itself, and one
+        // handed on is let go by the map that has them (`Map::handed_on`),
+        // not lost with it.
         self.control_rx.close();
         while let Ok(ctl) = self.control_rx.try_recv() {
-            if let Control::Transfer { .. } = ctl {
+            if let Control::Transfer { .. } | Control::HandedOn { .. } = ctl {
                 self.control(ctl);
             }
         }
@@ -322,18 +332,23 @@ impl Session {
         let msg = match msg {
             crate::game::conn::Inbound::Msg(m) => m,
             crate::game::conn::Inbound::Raw(opcode, body) => {
-                if let State::InWorld { guid, map } = &self.state {
+                if let State::InWorld { guid, .. } = &self.state {
                     let g = *guid;
-                    map.call(move |m| m.handle_raw(g, opcode, &body));
+                    let call = MapEvent::Call(Box::new(move |m: &mut crate::game::map::Map| {
+                        m.handle_raw(g, opcode, &body)
+                    }));
+                    if !self.send_to_map(call).await {
+                        self.outbound.close();
+                    }
                 } else if opcode == crate::game::map::account_data::CMSG_UPDATE_ACCOUNT_DATA {
                     self.screen_account_data(&body);
                 }
                 return;
             }
         };
-        if let State::InWorld { guid, map } = &self.state {
-            if !map.send(MapEvent::Packet(*guid, msg)) {
-                warn!("{}'s map is gone; disconnecting", self.account);
+        if let State::InWorld { guid, .. } = &self.state {
+            let packet = MapEvent::Packet(*guid, msg);
+            if !self.send_to_map(packet).await {
                 self.outbound.close();
             }
             return;
@@ -345,6 +360,79 @@ impl Session {
             ClientOpcodeMessage::CMSG_PLAYER_LOGIN(c) => self.login(c.guid).await,
             other => debug!("{} on the character screen: {other}", self.account),
         }
+    }
+
+    /// Send `event` to the player's map. A map whose actor has stopped
+    /// either had them on their way in, and handed them on to the copy
+    /// started in its place, which tells the session (`map::hand_on`), or
+    /// took them out as it stopped, and told it so: the session waits for
+    /// that word (whatever it is, in its order) and sends `event` where the
+    /// player is then. False to disconnect: the player went with their map,
+    /// no word came, or the word was to go. Before, the session kept a
+    /// stopped copy's handle: the client's next packet found it gone, the
+    /// connection was closed, and the player went offline unsaved, still in
+    /// the copy started again.
+    async fn send_to_map(&mut self, event: MapEvent) -> bool {
+        let mut event = event;
+        let deadline = tokio::time::Instant::now() + HANDED_ON_WAIT;
+        let outbound = self.outbound.clone();
+        loop {
+            // Out of the world meanwhile: what the client sent was for it.
+            let State::InWorld { map, .. } = &self.state else {
+                return true;
+            };
+            match map.try_send(event) {
+                Ok(()) => return true,
+                Err(back) => event = back,
+            }
+            // What the map said before it stopped comes first: the player
+            // passed on to another, or out of the world.
+            if let Ok(ctl) = self.control_rx.try_recv() {
+                if !self.control(ctl) {
+                    return false;
+                }
+                continue;
+            }
+            let State::InWorld { guid, map } = &self.state else {
+                return true;
+            };
+            if self.lost_with(*guid, map) {
+                warn!("{}'s map is gone; disconnecting", self.account);
+                return false;
+            }
+            debug!("{} has stopped; waiting to hear where {guid} is", map.key);
+            let ctl = tokio::select! {
+                ctl = self.control_rx.recv() => ctl,
+                () = outbound.closed() => None,
+                () = tokio::time::sleep_until(deadline) => {
+                    warn!(
+                        "{}'s map is gone, and none has them after {HANDED_ON_WAIT:?}; disconnecting",
+                        self.account
+                    );
+                    None
+                }
+            };
+            let Some(ctl) = ctl else {
+                return false;
+            };
+            if !self.control(ctl) {
+                return false;
+            }
+        }
+    }
+
+    /// Whether the player went with `map`, a map whose actor has gone: it
+    /// is the last they arrived in, and their online entry is this
+    /// session's still. One on their way into it when it stopped was handed
+    /// on, with all sent after them, to the copy started again, which tells
+    /// the session, or, the session gone, lets them go, saved
+    /// (`Map::handed_on`). One it took out as it stopped, or let go, is
+    /// offline already.
+    fn lost_with(&self, guid: Guid, map: &MapHandle) -> bool {
+        self.realm
+            .registry
+            .online(guid)
+            .is_some_and(|o| o.session.same_channel(&self.control) && o.map().same(map))
     }
 
     /// False to disconnect.
@@ -368,6 +456,14 @@ impl Session {
                 };
                 true
             }
+            Control::HandedOn { guid, map } => {
+                if let State::InWorld { guid: g, map: held } = &mut self.state
+                    && *g == guid
+                {
+                    *held = map;
+                }
+                true
+            }
             Control::LoggedOut => {
                 self.state = State::Screen;
                 self.outbound.send(&SMSG_LOGOUT_COMPLETE {});
@@ -389,6 +485,14 @@ impl Session {
             }
             #[cfg(test)]
             Control::Panic => panic!("the session's test panic"),
+            #[cfg(test)]
+            Control::Probe(answer) => {
+                let _ = answer.send(match &self.state {
+                    State::InWorld { map, .. } => Some(map.clone()),
+                    _ => None,
+                });
+                true
+            }
         }
     }
 
@@ -397,9 +501,14 @@ impl Session {
     fn disconnect(&mut self) {
         match std::mem::replace(&mut self.state, State::Screen) {
             State::InWorld { guid, map } => {
-                if !map.send(MapEvent::Disconnect(guid, self.control.clone())) {
-                    // Their map is gone, and them with it: off the online
-                    // list, so the account can come back.
+                // Their map is gone, and them with it: off the online
+                // list, so the account can come back. One handed on by a
+                // copy that stopped is let go by the copy that has them, as
+                // it finds the session gone (`Map::handed_on`). Before, they
+                // went offline here, unsaved, still in that copy.
+                if !map.send(MapEvent::Disconnect(guid, self.control.clone()))
+                    && self.lost_with(guid, &map)
+                {
                     warn!(
                         "{}'s map has gone; {guid} is lost since their last save",
                         self.account
@@ -847,6 +956,10 @@ impl Session {
 const LOGIN_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// [`LOGIN_WAIT`], for a character whose session has gone.
 const GHOST_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+/// How long a packet for a map that has stopped waits to hear which map
+/// has the player now ([`Session::send_to_map`]): a fresh copy's start and the
+/// arrival ahead of it. None in that time: the map died with them.
+const HANDED_ON_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What [`Session::enter`] came to.
 enum Entered {

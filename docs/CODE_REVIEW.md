@@ -77,6 +77,11 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
 - **#10** fixed: saves the store can't write (full disk, I/O, read-only, busy) are kept in order, superseded ones
   dropped, and written ahead of the next or every 5 s; reads see a kept row; logins wait meanwhile, the GMs are told
   (`social::store_watch`), and the log says so once a minute.
+- **A session's map handle gone stale**, found by fixmaps, fixed (`fix/stalehandle`): the copy that takes a player
+  handed on by a copy that stopped tells their session, behind all that was handed on (`Control::HandedOn`); a
+  packet for a stopped map waits for that word and goes there, and a session gone by then has the player let go,
+  saved, by that copy. Before, the session kept the stopped copy's handle: the client's next packet closed the
+  connection, and the player went offline unsaved, still in the copy.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
