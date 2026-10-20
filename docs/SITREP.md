@@ -564,6 +564,13 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   summon, 8h). **My calls:** the Ghost Magnet, fireworks and speakers follow vmangos (mangos-classic's magnet is one
   spectre every 15 s); an owned trap springs on a flagged enemy though its owner isn't flagged (mangos); items held in
   an open pickpocket window are lost at the creature's death (mangos).
+- **8k, auras, round 8:** every spell with `SPELL_ATTR_EX_PREVENTS_ANIM` (stuns, Polymorph, Sap, Sleep, Dazed, Feign
+  Death: 103) blocks emotes and postures (mangos; a dazed player can't `/sit`); a periodic trigger's spell pays its
+  own reagents; **a player's flat physical damage done goes in the hands' damage fields under their percentages**
+  (mangos's `HandleModDamageDone`: normalized abilities such as Mortal Strike and Backstab had lost the hands'
+  percentages and Hunter's Mark); for a second after Vanish no one detects the rogue (mangos sets the timer;
+  Thistle Tea reads it); a ground channel pushed back cuts its areas short. **My calls:** the off hand gets half the
+  flat bonus (mangos; Thistle Tea all of it); a ground area's caster is read as it hits (mangos), not at the cast.
 
 ## Answered
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
