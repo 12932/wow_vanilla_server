@@ -251,6 +251,13 @@ impl Instances {
         self.on_the_way.entry(key).or_default().push((g, now));
     }
 
+    /// Whether anyone let into `key` is on their way there now.
+    fn anyone_coming(&self, key: MapKey, now: i64) -> bool {
+        self.on_the_way
+            .get(&key)
+            .is_some_and(|way| way.iter().any(|(_, at)| *at + ON_THE_WAY_SECS > now))
+    }
+
     /// Those on their way into `key` now, but `g`.
     fn coming(&mut self, key: MapKey, g: Guid, now: i64) -> Vec<Guid> {
         let Some(way) = self.on_the_way.get_mut(&key) else {
@@ -381,7 +388,11 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     // A new copy's id is spent only once it is let in.
     let id = selected.unwrap_or(inst.next_id + 1);
     let key = MapKey { map, instance: id };
-    if !gm {
+    if gm {
+        // Let in past every limit, but on their way all the same, so the
+        // copy isn't reset under them.
+        inst.heading(g, key, now);
+    } else {
         admit_locked(&mut inst, realm, g, &account, key, now)?;
     }
     if selected.is_none() {
@@ -412,6 +423,7 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
 /// room, and their account has not been into five others this hour.
 fn admit_copy(realm: &Realm, g: Guid, gm: bool, key: MapKey) -> Result<(), Refused> {
     if gm {
+        realm.social.instances.lock().heading(g, key, now());
         return Ok(());
     }
     let account = account_of(realm, g);
@@ -471,6 +483,30 @@ pub fn arrived(realm: &Realm, key: MapKey, g: Guid) {
             inst.on_the_way.remove(&key);
         }
     }
+}
+
+/// Why the copy `key` can't go now: someone in it, or someone let in and
+/// on their way (mangos's "zoning"), whose online entry names the map they
+/// left until the copy has them ([`arrived`]). Asked under the copies'
+/// lock, under which every way in is let in, so none is let in before the
+/// caller acts on the answer. Before, a reset and a raid's reset looked
+/// at the online list alone, and stopped a copy with a player's arrival in
+/// its queue.
+fn in_use(
+    inst: &Instances,
+    realm: &Realm,
+    key: MapKey,
+    now: i64,
+) -> Option<InstanceResetFailedReason> {
+    if inst.anyone_coming(key, now) {
+        return Some(InstanceResetFailedReason::Zoning);
+    }
+    realm
+        .registry
+        .all_online()
+        .iter()
+        .any(|o| o.map().key == key)
+        .then_some(InstanceResetFailedReason::General)
 }
 
 /// `g` goes into copy `key`: it is the one of its map they last went into,
@@ -883,25 +919,29 @@ pub fn reset(map: &Map, g: Guid) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let online = realm.registry.all_online();
+    let now = now();
     for (m, id) in mine {
         let key = MapKey {
             map: m,
             instance: id,
         };
-        let occupied = online.iter().any(|o| o.map().key == key);
         let map_enum = crate::game::map::movement::map_enum(m);
-        if occupied {
+        // Asked and reset under one lock: none is let in between.
+        let refused = {
+            let mut inst = realm.social.instances.lock();
+            let refused = in_use(&inst, realm, key, now);
+            if refused.is_none() {
+                inst.owned.remove(&(owner, m));
+                inst.saves.remove(&id);
+            }
+            refused
+        };
+        if let Some(reason) = refused {
             p.outbound.send(&SMSG_INSTANCE_RESET_FAILED {
-                reason: InstanceResetFailedReason::General,
+                reason,
                 map: map_enum,
             });
             continue;
-        }
-        {
-            let mut inst = realm.social.instances.lock();
-            inst.owned.remove(&(owner, m));
-            inst.saves.remove(&id);
         }
         realm.store.delete_record(KIND_INSTANCE, u64::from(id));
         realm.maps.stop(key);
@@ -953,23 +993,35 @@ pub fn sweep(realm: &Realm) {
     expire(realm, &due);
     let unload =
         (realm.config().instance_unload.as_secs() as i64).max(UNLOAD_EMPTY_AFTER.as_secs() as i64);
-    let online = realm.registry.all_online();
+    // Asked and removed under one lock, those on their way in counting as
+    // inside: none is let in between.
     let stale: Vec<u32> = {
-        let inst = realm.social.instances.lock();
-        inst.saves
+        let mut inst = realm.social.instances.lock();
+        let online = realm.registry.all_online();
+        let stale: Vec<u32> = inst
+            .saves
             .values()
             .filter(|s| !inst.raids.contains_key(&s.id))
             .filter(|s| s.touched_at + unload < now)
             .filter(|s| !online.iter().any(|o| o.map().key.instance == s.id))
+            .filter(|s| {
+                !inst.anyone_coming(
+                    MapKey {
+                        map: s.map,
+                        instance: s.id,
+                    },
+                    now,
+                )
+            })
             .map(|s| s.id)
-            .collect()
+            .collect();
+        for id in &stale {
+            inst.saves.remove(id);
+            inst.owned.retain(|_, i| i != id);
+        }
+        stale
     };
     for id in stale {
-        {
-            let mut inst = realm.social.instances.lock();
-            inst.saves.remove(&id);
-            inst.owned.retain(|_, i| *i != id);
-        }
         realm.store.delete_record(KIND_INSTANCE, u64::from(id));
     }
 }
@@ -997,7 +1049,7 @@ fn expire(realm: &Realm, ids: &[u32]) {
     if ids.is_empty() {
         return;
     }
-    let online = realm.registry.all_online();
+    let now = now();
     let mut told = Vec::new();
     for id in ids {
         let Some(r) = realm.social.instances.lock().raids.remove(id) else {
@@ -1009,11 +1061,13 @@ fn expire(realm: &Realm, ids: &[u32]) {
             map: r.map,
             instance: r.id,
         };
-        let occupied = online.iter().any(|o| o.map().key == key);
-        let record = {
+        // Asked and decided under one lock: one on their way in counts as
+        // inside, so the copy waits for them to leave.
+        let (occupied, record) = {
             let mut inst = realm.social.instances.lock();
+            let occupied = in_use(&inst, realm, key, now).is_some();
             inst.owned.retain(|_, i| *i != r.id);
-            if occupied {
+            let record = if occupied {
                 inst.saves.get_mut(&r.id).map(|s| {
                     s.expired = true;
                     s.clone()
@@ -1021,7 +1075,8 @@ fn expire(realm: &Realm, ids: &[u32]) {
             } else {
                 inst.saves.remove(&r.id);
                 None
-            }
+            };
+            (occupied, record)
         };
         match record {
             Some(s) => realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s),
@@ -1035,7 +1090,9 @@ fn expire(realm: &Realm, ids: &[u32]) {
     }
     told.sort_unstable();
     told.dedup();
-    for o in online
+    for o in realm
+        .registry
+        .all_online()
         .iter()
         .filter(|o| told.contains(&guid::counter(o.guid)))
     {

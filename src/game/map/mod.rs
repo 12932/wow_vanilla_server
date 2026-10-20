@@ -1064,7 +1064,26 @@ impl Map {
                 let _z = crate::zone!("call");
                 f(self)
             }
-            MapEvent::Stop => return true,
+            // A copy stopped from outside (a reset) with players still in
+            // it: one whose arrival was in its queue, ahead of the stop,
+            // that the reset didn't see. They don't go with it: each is
+            // saved and goes back to the character screen, as at a map's
+            // restart (`supervise::restart`). Before, the actor ended with
+            // them inside, unsaved and still online.
+            MapEvent::Stop => {
+                let guids: Vec<Guid> = self.players.keys().copied().collect();
+                if !guids.is_empty() {
+                    warn!(
+                        "{} stopped with {} players in it; saved and back to the character screen",
+                        self.key,
+                        guids.len()
+                    );
+                }
+                for g in guids {
+                    supervise::send_to_screen(self, g);
+                }
+                return true;
+            }
             MapEvent::Shutdown(reply) => {
                 let guids: Vec<Guid> = self.players.keys().copied().collect();
                 for g in guids {

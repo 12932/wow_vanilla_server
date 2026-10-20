@@ -187,7 +187,7 @@ pub fn packet_panicked(map: &mut Map, g: Guid) {
 /// Save a player and send them to the character screen; if that panics
 /// (the state that panicked may be theirs), they go unsaved rather than
 /// stay.
-fn send_to_screen(map: &mut Map, g: Guid) {
+pub fn send_to_screen(map: &mut Map, g: Guid) {
     if catch(|| crate::game::map::login::complete_logout(map, g)).is_ok() {
         return;
     }

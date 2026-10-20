@@ -955,6 +955,8 @@ mod tests_review3;
 #[cfg(test)]
 mod tests_review4;
 #[cfg(test)]
+mod tests_review5_maps;
+#[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
 mod tests_rules;
