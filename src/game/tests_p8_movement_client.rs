@@ -2,8 +2,7 @@
 //! (`tools/client_check/attacker_state.py`).
 //!
 //! `SMSG_ATTACKERSTATEUPDATE`'s hit info is a set of flags (a main-hand miss
-//! is 0x12, a crushing blow 0x8002), which wow_messages reads as one value
-//! and so can't read: the harness's client skips such a blow. The client's
+//! is 0x12, a crushing blow 0x8002), as wow_messages reads it. The client's
 //! parser branches on the debug flag (0x1) alone, so these are read alike;
 //! this checks that each blow wvs sends is read exactly, and that a blow's
 //! damage lines stay within the five the client holds.

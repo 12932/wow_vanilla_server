@@ -20,7 +20,6 @@ use wow_world_messages::vanilla::{
 };
 
 use crate::game::conn::encode;
-use crate::game::data::items::Body;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
@@ -590,9 +589,10 @@ pub fn rage_scaled(damage: u32, level: u32, taken: bool, by: f32) -> u32 {
     (damage as f32 / c * if taken { 2.5 } else { 7.5 } * by * 10.0) as u32
 }
 
-/// `SMSG_ATTACKERSTATEUPDATE`, encoded by hand: its hit info is a set of
-/// flags, which wow_messages reads as one value. `damage` is what got
-/// through, after absorbs and resists; `school` its school's index.
+/// `SMSG_ATTACKERSTATEUPDATE`: its hit info a set of flags, one damage
+/// line. `damage` is what got through, after absorbs and resists; `school`
+/// its school's index. `hit_info` never has the debug flag (0x1), whose
+/// trailer the client would then read.
 #[allow(clippy::too_many_arguments)]
 pub fn attacker_state_full(
     attacker: Guid,
@@ -605,22 +605,27 @@ pub fn attacker_state_full(
     resisted: u32,
     school: u32,
 ) -> Arc<[u8]> {
-    let mut b = Body::default();
-    b.u32(hit_info);
-    crate::game::update::write_packed_guid(&mut b.0, attacker);
-    crate::game::update::write_packed_guid(&mut b.0, victim);
-    b.u32(damage)
-        .u8(1)
-        .u32(school)
-        .f32(damage as f32)
-        .u32(damage)
-        .u32(absorbed)
-        .u32(resisted)
-        .u32(victim_state)
-        .u32(if absorbed > 0 { u32::MAX } else { 0 })
-        .u32(0)
-        .u32(blocked);
-    b.frame(SMSG_ATTACKERSTATEUPDATE)
+    use wow_world_messages::vanilla::{
+        DamageInfo, SMSG_ATTACKERSTATEUPDATE, SMSG_ATTACKERSTATEUPDATE_HitInfo,
+    };
+    encode(&SMSG_ATTACKERSTATEUPDATE {
+        hit_info: SMSG_ATTACKERSTATEUPDATE_HitInfo::new(hit_info, None),
+        attacker,
+        target: victim,
+        total_damage: damage,
+        damages: vec![DamageInfo {
+            spell_school_mask: school,
+            damage_float: damage as f32,
+            damage_uint: damage,
+            absorb: absorbed,
+            resist: resisted,
+        }],
+        damage_state: victim_state,
+        unknown1: if absorbed > 0 { u32::MAX } else { 0 },
+        spell_id: 0,
+        blocked_amount: blocked,
+    })
+    .expect("a blow encodes")
 }
 
 pub fn attacker_state(

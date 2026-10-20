@@ -455,9 +455,8 @@ impl From<ClientOpcodeMessage> for Inbound {
 /// 32-bit reputation index where wow_messages reads a faction,
 /// wow_messages's decompression of `CMSG_UPDATE_ACCOUNT_DATA` fails, it
 /// wants ten answers in `CMSG_GMSURVEY_SUBMIT` where the client stops
-/// at a zero question, and it reads `CMSG_BATTLEFIELD_JOIN` as the map
-/// alone where the client sends the instance and the group's byte too.
-pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318, 0x20B, 0x32A, 0x23E];
+/// at a zero question.
+pub const RAW_OPCODES: &[u32] = &[0x125, 0x317, 0x318, 0x20B, 0x32A];
 
 /// A started connection: its outbound queue, and the packets it reads.
 pub struct Connection {

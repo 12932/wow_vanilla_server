@@ -158,8 +158,8 @@ whose owner has logged out, told to a newcomer. `a_ghost_rising_before_a_strange
 create-then-values shape on its own: a living stranger loses sight of a player's ghost and is told of her afresh
 when she rises, her create and a values block for her in one packet. `tests_p8_movement_client::a_melee_blow_of_every_kind_passes_the_client`
 runs a blow of each outcome both ways, and the flag combinations a fight can't make on its own (an off hand's, resisted,
-absorbed), through the melee parse; wow_messages reads the hit info as one value, so the harness's client can't read
-most of them (it logs them `unparsed`).
+absorbed), through the melee parse; the harness's client reads each too, its hit info a set of flags as the fork has
+it.
 
 ## What the tests' realm changes
 
