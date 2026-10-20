@@ -143,34 +143,34 @@ pub fn write_packed_guid(out: &mut Vec<u8>, guid: Guid) {
     out[mask_at] = mask;
 }
 
-/// `SplineFlags::FLYING`: the client draws the path smooth (Catmull-Rom).
-const SPLINE_FLYING: u32 = 0x0000_0200;
+/// `SplineFlags::RUN_MODE`: the unit runs along the path, not walks.
+const SPLINE_RUN_MODE: u32 = 0x0000_0100;
 
 /// A create's spline points as mangos-classic sends them, its spline's
-/// whole array (`MoveSpline::getPath`, `SplineBase::InitLinear` and
-/// `InitCatmullRom`): a linear path with its last point again; a smooth one
-/// with a point before its first (the first less the step to the second)
-/// and its last again. The 1.12 client counts a create's segments as its
-/// points less three (`0x454770`, `lea esi, [eax - 3]`), and a create whose
-/// spline had fewer points crashed it, copying a count of -1 (`0x6194DD`).
-pub fn create_spline_points(flags: u32, path: &[Vector3d]) -> Vec<Vector3d> {
+/// whole array (`MoveSpline::getPath`, `SplineBase::InitCatmullRom`, which
+/// mangos uses for a linear path too, "client's internal structure
+/// limitation"): a point before the first (the first less the step to the
+/// second), the path, and its last again. The 1.12 client has one spline,
+/// a smooth one (vtable `0x7FFD84`), whose first and last points are only
+/// there to shape it: it counts the segments as the points less three
+/// (`0x454770`, `lea esi, [eax - 3]`), and lays out a move it reads the
+/// same way (`0x601B72`: a point behind the start, the path, its last
+/// again). Without the point before, the client took the path's first
+/// point for it and dropped its first segment (a walk of two points had
+/// none); with fewer than three points, it crashed, copying a count of -1
+/// (`0x6194DD`).
+pub fn create_spline_points(path: &[Vector3d]) -> Vec<Vector3d> {
     let (Some(&first), Some(&last)) = (path.first(), path.last()) else {
         return Vec::new();
     };
-    let mut out = Vec::with_capacity(path.len() + 3);
-    if flags & SPLINE_FLYING != 0 {
-        let second = path.get(1).copied().unwrap_or(first);
-        out.push(Vector3d {
-            x: first.x * 2.0 - second.x,
-            y: first.y * 2.0 - second.y,
-            z: first.z * 2.0 - second.z,
-        });
-    }
+    let second = path.get(1).copied().unwrap_or(first);
+    let mut out = Vec::with_capacity(path.len() + 2);
+    out.push(Vector3d {
+        x: first.x * 2.0 - second.x,
+        y: first.y * 2.0 - second.y,
+        z: first.z * 2.0 - second.z,
+    });
     out.extend_from_slice(path);
-    if path.len() == 1 {
-        // A path of one point is the point twice, as mangos asks for two.
-        out.push(last);
-    }
     out.push(last);
     out
 }
@@ -227,8 +227,21 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                     | MOVEFLAG_JUMPING
                     | MOVEFLAG_SPLINE_ELEVATION
                     | MOVEFLAG_SPLINE_ENABLED);
-            if spline.is_some() {
-                move_flags |= MOVEFLAG_SPLINE_ENABLED;
+            // On a spline, going forward along it, walking unless it runs,
+            // as mangos's `MoveSplineInit::Launch` sets a mover's flags
+            // (and the client's own move, `0x7C6AE0`, its own). The client
+            // moves a unit it is told of only if the create has it going
+            // somewhere (`0x618940`: forward, back, sideways, turning,
+            // pitching or jumping, 0x20FF); with no more than the spline,
+            // it left the unit where the create put it: a gryphon frozen
+            // in the air, a creature standing mid-walk.
+            if let Some(s) = spline {
+                move_flags |= MOVEFLAG_SPLINE_ENABLED | MOVEFLAG_FORWARD;
+                if s.flags & SPLINE_RUN_MODE != 0 {
+                    move_flags &= !MOVEFLAG_WALK_MODE;
+                } else {
+                    move_flags |= MOVEFLAG_WALK_MODE;
+                }
             }
             if transport.is_some() {
                 move_flags |= MOVEFLAG_ON_TRANSPORT;
@@ -263,7 +276,7 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                 out.extend_from_slice(&spline.time_passed.to_le_bytes());
                 out.extend_from_slice(&spline.duration.to_le_bytes());
                 out.extend_from_slice(&spline.id.to_le_bytes());
-                let points = create_spline_points(spline.flags, &spline.nodes);
+                let points = create_spline_points(&spline.nodes);
                 out.extend_from_slice(&(points.len() as u32).to_le_bytes());
                 for n in &points {
                     write_vector(out, *n);
@@ -589,7 +602,9 @@ mod tests {
     use crate::game::fields::*;
     use crate::game::guid;
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-    use wow_world_messages::vanilla::{Object_UpdateType, UpdateMask};
+    use wow_world_messages::vanilla::{
+        MovementBlock_MovementFlags, MovementBlock_UpdateFlag_Living, Object_UpdateType, UpdateMask,
+    };
 
     fn parse(frame: &[u8]) -> ServerOpcodeMessage {
         ServerOpcodeMessage::read_unencrypted(frame).expect("wow_messages parses the packet")
@@ -611,30 +626,27 @@ mod tests {
     /// The crash of 2026-10-18: a gorilla walking a two-point path came into
     /// view, and the 1.12 client, counting the create's segments as its
     /// points less three, copied a count of -1. A create's spline carries
-    /// mangos's whole array: a linear path with its last point again, a
-    /// smooth one with a point before its first too, so never fewer than
-    /// three.
+    /// mangos's whole array, a walk's as a flight's: a point before the
+    /// first, the path, its last again, so never fewer than three, and each
+    /// of the path's segments the client's (a walk's first was dropped,
+    /// the client taking its first point for the one before).
     #[test]
-    fn a_create_spline_never_has_fewer_points_than_the_client_counts_from() {
+    fn a_create_spline_is_laid_out_as_the_client_reads_it() {
         let (a, b, c) = (v(1.0, 2.0, 3.0), v(4.0, 6.0, 3.0), v(9.0, 9.0, 9.0));
-        assert_eq!(create_spline_points(0, &[a, b]), vec![a, b, b]);
-        assert_eq!(
-            create_spline_points(SPLINE_FLYING, &[a, b]),
-            vec![v(-2.0, -2.0, 3.0), a, b, b]
-        );
-        assert_eq!(create_spline_points(0, &[a, b, c]), vec![a, b, c, c]);
-        assert_eq!(create_spline_points(0, &[a]), vec![a, a, a]);
-        assert!(create_spline_points(0, &[]).is_empty());
-        for flags in [0, SPLINE_FLYING, 0x100, 0x100 | SPLINE_FLYING] {
-            for n in 1..8 {
-                let path: Vec<Vector3d> = (0..n).map(|i| v(i as f32, 0.0, 0.0)).collect();
-                assert!(
-                    create_spline_points(flags, &path).len() >= 3,
-                    "{flags:#x} {n}"
-                );
-            }
+        let before = v(-2.0, -2.0, 3.0);
+        assert_eq!(create_spline_points(&[a, b]), vec![before, a, b, b]);
+        assert_eq!(create_spline_points(&[a, b, c]), vec![before, a, b, c, c]);
+        assert_eq!(create_spline_points(&[a]), vec![a, a, a]);
+        assert!(create_spline_points(&[]).is_empty());
+        for n in 1..8 {
+            let path: Vec<Vector3d> = (0..n).map(|i| v(i as f32, 0.0, 0.0)).collect();
+            let points = create_spline_points(&path);
+            assert!(points.len() >= 3, "{n}");
+            // The client's segments, the points less three: the path's.
+            assert_eq!(points.len() - 3, n.max(1) - 1, "{n}");
+            assert_eq!(points[1..=n], path[..], "{n}");
         }
-        // As the block carries it: the gorilla's three points.
+        // As the block carries it: the gorilla's four points.
         let g = guid::unit(1557, 2521);
         let fields = unit_fields(g);
         let spline = SplineState {
@@ -676,7 +688,81 @@ mod tests {
             .expect("the spline's times and id")
             + header.len();
         let count = u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
+    }
+
+    /// A unit's create, with its movement flags `flags` and a spline of
+    /// `spline` flags if given, as wow_messages reads its movement flags.
+    fn movement_flags_of(flags: u32, spline: Option<u32>) -> MovementBlock_MovementFlags {
+        let g = guid::unit(299, 7);
+        let fields = unit_fields(g);
+        let (from, to) = (v(1.0, 2.0, 3.0), v(31.0, 2.0, 3.0));
+        let block = create_block(
+            &Create {
+                guid: g,
+                type_id: TypeId::Unit,
+                placement: Placement::Living {
+                    flags,
+                    timestamp: 0,
+                    position: from,
+                    orientation: 0.0,
+                    pitch: 0.0,
+                    fall_time: 0,
+                    speeds: Speeds::default(),
+                    spline: spline.map(|flags| SplineState {
+                        flags,
+                        time_passed: 100,
+                        duration: 4000,
+                        id: 9,
+                        nodes: vec![from, to],
+                        final_node: to,
+                    }),
+                    transport: None,
+                },
+                fields: &fields,
+                is_self: false,
+                melee_target: None,
+            },
+            Visibility::Public,
+        );
+        let mut batch = Batch::new();
+        batch.push(&block);
+        let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) = parse(&batch.finish()[0]) else {
+            panic!("not an update object");
+        };
+        let Object_UpdateType::CreateObject2 { movement2, .. } = &m.objects[0].update_type else {
+            panic!("not a create");
+        };
+        match movement2.update_flag.get_living() {
+            Some(MovementBlock_UpdateFlag_Living::Living { flags, .. }) => flags.clone(),
+            _ => panic!("not a living block"),
+        }
+    }
+
+    /// The frozen gryphons of 2026-10-20: a create of a unit on a spline
+    /// has it going forward along it, walking unless the spline runs, as
+    /// mangos's `MoveSplineInit::Launch` sets a mover's flags; the 1.12
+    /// client moves a unit it is told of only if it is going somewhere
+    /// (`0x618940`), and left one with the spline alone where the create
+    /// put it. Its own flags are kept (a flyer's); one on no spline is as
+    /// its flags say.
+    #[test]
+    fn a_create_on_a_spline_goes_forward_along_it() {
+        let flight = movement_flags_of(0, Some(0x300));
+        assert!(flight.get_spline_enabled().is_some(), "on the spline");
+        assert!(flight.get_forward(), "going forward");
+        assert!(!flight.get_walk_mode(), "running");
+        let walk = movement_flags_of(0x0180_0000, Some(0));
+        assert!(walk.get_spline_enabled().is_some() && walk.get_forward());
+        assert!(walk.get_walk_mode(), "walking");
+        assert!(
+            walk.get_can_fly() && walk.get_flying(),
+            "a flyer's own flags kept"
+        );
+        let ran = movement_flags_of(MOVEFLAG_WALK_MODE, Some(0x100));
+        assert!(!ran.get_walk_mode(), "a run is no walk");
+        let standing = movement_flags_of(0, None);
+        assert!(standing.get_spline_enabled().is_none() && !standing.get_forward());
     }
 
     #[test]

@@ -105,9 +105,12 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
 - **What is stubbed.** The allocator and the clock; the object manager (finding, making and forgetting objects is
   modelled in Python); and the renderer and world — a create's post-init, and the main pass that re-applies each
   block to the renderer. The checks drive the *parse*: the create pass (which reads every block), the movement
-  reader and its spline, and the spline copy into a unit, which is where the `0x6194DD` crash was.
+  reader and its spline, and the spline copy into a unit, which is where the `0x6194DD` crash was; and, for a
+  unit created on a spline, the client's own decision whether to move it along it (`0x618940`: only one going
+  somewhere, 0x20FF, is put among the movers; a create with the spline alone left a flier frozen in the air).
 - **The checks** (`check.py` routes a frame by opcode): `SMSG_UPDATE_OBJECT` and `SMSG_COMPRESSED_UPDATE_OBJECT`
-  (the whole create pass, plus each create's movement run through the unit copy, `movement.py`);
+  (the whole create pass, plus each create's movement run through the unit copy and the movers' decision,
+  `movement.py`);
   `SMSG_MONSTER_MOVE` / `..._TRANSPORT` (`monster_move.py`, the spline reader a flyer's hand-built move goes
   through); `SMSG_SPELLLOGMISS` (`spell_log_miss.py`, the handler `0x5E7E00`, which must read the packet
   exactly: a target is its GUID and a byte, two floats more when the packet's own byte is set); and `SMSG_ATTACKERSTATEUPDATE` (`attacker_state.py`, the
@@ -117,7 +120,7 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
   call 0x5AB650`, so the opcode's `B9` and its four bytes find it), driving it from a `Client`, and stubbing what it
   reaches outside the parse.
 - **Its limits.** It drives parsing, not the renderer or the world, so it catches faults, over-reads, absurd counts
-  and the spline copy, not a field wrongly applied. It does not model a fully initialised object, so a self-player
+  and the spline copy, and whether a unit on a spline is moved along it, not a field wrongly applied. It does not model a fully initialised object, so a self-player
   create's private field groups are read short of the packet's end; an under-read is therefore a note, not a
   failure (each packet is its own buffer, so trailing bytes are harmless). The main-pass per-type apply is not run,
   nor is the field-group flush (`0x4667A0`) — the client's copy of a values block's changed field groups from the

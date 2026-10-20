@@ -1,7 +1,10 @@
 //! Round 8's player: flights a spell or a script sends a player on, and
 //! their end.
 
+use std::time::Duration;
+
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use crate::game::data::GameData;
@@ -211,16 +214,17 @@ async fn debug_taxi_teaches_every_discoverable_node_and_keeps_them() {
     assert_eq!(on(&map, known).await, [true, true, false, false], "kept");
 }
 
-/// A flier's create, as another reads it: where it puts them, and its
-/// spline (whether it runs and flies, its time passed, its duration and its
-/// last point), if it has one.
-type Spline = (bool, bool, u32, u32, Vector3d);
+/// A flier's create, as another reads it: where it puts them, whether it
+/// has them going forward and walking (the client moves a unit on a spline
+/// only going somewhere), and its spline, if it has one.
+struct Seen {
+    at: Vector3d,
+    forward: bool,
+    walking: bool,
+    spline: Option<MovementBlock_MovementFlags_SplineEnabled>,
+}
 
-fn flier_in(
-    m: &wow_world_messages::vanilla::opcodes::ServerOpcodeMessage,
-    flier: Guid,
-) -> Option<(Vector3d, Option<Spline>)> {
-    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+fn flier_in(m: &ServerOpcodeMessage, flier: Guid) -> Option<Seen> {
     let objects = match m {
         ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
         ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
@@ -237,18 +241,12 @@ fn flier_in(
                 flags,
                 living_position,
                 ..
-            } => Some((
-                *living_position,
-                flags.get_spline_enabled().map(|s| {
-                    (
-                        s.spline_flags.get_run_mode(),
-                        s.spline_flags.get_flying(),
-                        s.time_passed,
-                        s.duration,
-                        s.final_node,
-                    )
-                }),
-            )),
+            } => Some(Seen {
+                at: *living_position,
+                forward: flags.get_forward(),
+                walking: flags.get_walk_mode(),
+                spline: flags.get_spline_enabled().cloned(),
+            }),
             MovementBlock_UpdateFlag_Living::HasPosition { .. } => None,
         },
         _ => None,
@@ -257,18 +255,21 @@ fn flier_in(
 
 /// mangos's taxi flight in a create: one who comes into view of a player
 /// on a flight is told of them where the flight has taken them, with its
-/// path as a flying spline and its time passed, so their client flies them
-/// on. The flight's `SMSG_MONSTER_MOVE` goes only to those who see it take
-/// off; without this, a newcomer saw a mounted player standing still.
+/// path as a flying spline and its time passed, going forward along it at
+/// a run, so their client flies them on. The flight's `SMSG_MONSTER_MOVE`
+/// goes only to those who see it take off; without the spline, a newcomer
+/// saw a mounted player standing still; without going forward, frozen in
+/// the air (the 1.12 client moves a unit on a spline only if its create
+/// has it going somewhere, `0x618940`).
 #[tokio::test]
 async fn one_who_comes_into_view_of_a_flier_sees_them_fly_on() {
     let (realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
-    let duration = on(&map, move |m| {
+    let (duration, id) = on(&map, move |m| {
         npc::fly_path(m, ga, PATH);
         m.players[&ga]
             .flight
             .as_ref()
-            .map(|f| f.walk.duration.as_millis() as u32)
+            .map(|f| (f.walk.duration.as_millis() as u32, f.walk.spline_id))
     })
     .await
     .expect("flying");
@@ -277,21 +278,32 @@ async fn one_who_comes_into_view_of_a_flier_sees_them_fly_on() {
     let mut b = crate::game::harness::Client::connect(&realm, "B");
     b.enter("Bob", Race::Human, Class::Warrior).await;
     b.heartbeat(START.0, START.1, START.2).await;
-    let (at, spline) = b.wait_for("Alice's create", |m| flier_in(m, ga)).await;
-    let (run, flying, passed, total, last) = spline.expect("her flight's spline in her create");
-    assert!(run && flying, "flying, at a run");
-    assert_eq!(total, duration);
+    let seen = b.wait_for("Alice's create", |m| flier_in(m, ga)).await;
+    let s = seen.spline.expect("her flight's spline in her create");
     assert!(
-        passed > 0 && passed < total,
-        "partway: {passed} of {total} ms"
+        s.spline_flags.get_run_mode() && s.spline_flags.get_flying(),
+        "flying, at a run"
     );
     assert!(
-        (last.x - (START.0 + 150.0)).abs() < 0.01,
-        "to its end: {last:?}"
+        seen.forward && !seen.walking,
+        "going forward along it, running, so the client moves her"
+    );
+    assert_eq!((s.duration, s.id), (duration, id), "the flight she took");
+    assert!(
+        s.time_passed > 0 && s.time_passed < s.duration,
+        "partway: {} of {} ms",
+        s.time_passed,
+        s.duration
     );
     assert!(
-        at.x >= START.0 && (at.y - START.1).abs() < 0.01,
-        "on her way: {at:?}"
+        (s.final_node.x - (START.0 + 150.0)).abs() < 0.01,
+        "to its end: {:?}",
+        s.final_node
+    );
+    assert!(
+        seen.at.x >= START.0 && (seen.at.y - START.1).abs() < 0.01,
+        "on her way: {:?}",
+        seen.at
     );
     // Her own create has none: her client flies by her flight's move.
     let own = on(&map, move |m| {
@@ -305,6 +317,273 @@ async fn one_who_comes_into_view_of_a_flier_sees_them_fly_on() {
     })
     .await;
     assert!(!own, "no spline in her own create");
+}
+
+/// A flight master for the routes below.
+const MASTER: u32 = 3710;
+/// The routes' nodes, from the start, and their paths.
+const ROUTE_NODE: u32 = 60;
+const ROUTE_PATH: u32 = 610;
+/// Each hop's length on the ground, and the height flown at.
+const HOP: f32 = 160.0;
+const UP: f32 = 30.0;
+
+/// Where a route's node `i` is: from the start, a right angle at each
+/// node, east, north, east and so on.
+fn node_at(i: u32) -> (f32, f32) {
+    let (mut x, mut y) = (START.0, START.1);
+    for k in 0..i {
+        if k % 2 == 0 {
+            x += HOP;
+        } else {
+            y += HOP;
+        }
+    }
+    (x, y)
+}
+
+/// [`world`], with a flight master and a route of `hops` hops from the
+/// start, each of `per_hop` points `UP` yards up, joined at their nodes
+/// (`taxi_path_transitions`: the whole of one, the next from its second),
+/// so the route passes each node and turns there.
+fn route_world(hops: u32, per_hop: usize) -> GameData {
+    let mut d = world();
+    let mut master = crate::game::tests_p3_combat::template(MASTER, 7);
+    master.npc_flags = npc::NPC_FLAG_FLIGHTMASTER;
+    master.faction = crate::game::tests_p3_combat::HUMANS;
+    d.creature_templates.insert(MASTER, master);
+    for i in 0..=hops {
+        let (x, y) = node_at(i);
+        d.npc.taxi_nodes.insert(
+            ROUTE_NODE + i,
+            TaxiNode {
+                id: ROUTE_NODE + i,
+                map: 0,
+                x,
+                y,
+                z: START.2,
+                name: format!("Route {i}"),
+                mounts: [0, 0],
+            },
+        );
+    }
+    for i in 0..hops {
+        let path = ROUTE_PATH + i;
+        d.npc
+            .taxi_paths
+            .insert((ROUTE_NODE + i, ROUTE_NODE + i + 1), (path, 1));
+        let ((x0, y0), (x1, y1)) = (node_at(i), node_at(i + 1));
+        let points = (0..per_hop)
+            .map(|k| {
+                let t = k as f32 / (per_hop - 1) as f32;
+                TaxiPathNode {
+                    map: 0,
+                    x: x0 + (x1 - x0) * t,
+                    y: y0 + (y1 - y0) * t,
+                    z: START.2 + UP,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        d.npc.taxi_path_nodes.insert(path, points);
+        if i > 0 {
+            d.npc
+                .taxi_transitions
+                .insert((path - 1, path), (per_hop - 1, 1));
+        }
+    }
+    d
+}
+
+/// Where `walk` has its flier `yards` along it.
+fn along(walk: &crate::game::map::creature::Walk, yards: f32) -> Vector3d {
+    walk.position_at(walk.started + Duration::from_secs_f32(yards / walk.speed))
+        .0
+}
+
+/// What `frame` tells its client of `g` that could stop them on their
+/// way: a create, a movement block or a forget of them, or a movement
+/// packet (a relayed move, a monster move, a spline's change) naming them.
+/// Their fields' changes are no such thing.
+fn stopping(frame: &[u8], g: Guid) -> Vec<String> {
+    if frame.len() < 4 {
+        return Vec::new();
+    }
+    let opcode = u16::from_le_bytes([frame[2], frame[3]]);
+    let objects = match ServerOpcodeMessage::read_unencrypted(frame) {
+        Ok(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u)) => u.objects,
+        Ok(ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u)) => u.objects,
+        _ => {
+            let mut packed = Vec::new();
+            crate::game::update::write_packed_guid(&mut packed, g);
+            let movement = matches!(opcode, 0x0B5..=0x0EE | 0x2AE | 0x2FE..=0x310);
+            return if movement && frame[4..].starts_with(&packed) {
+                vec![format!("opcode {opcode:#05x}")]
+            } else {
+                Vec::new()
+            };
+        }
+    };
+    objects
+        .iter()
+        .filter_map(|o| match &o.update_type {
+            Object_UpdateType::Movement { guid2, .. } if *guid2 == g => {
+                Some("a movement block".to_owned())
+            }
+            Object_UpdateType::CreateObject { guid3, .. }
+            | Object_UpdateType::CreateObject2 { guid3, .. }
+                if *guid3 == g =>
+            {
+                Some("a create".to_owned())
+            }
+            Object_UpdateType::OutOfRangeObjects { guids } if guids.contains(&g) => {
+                Some("a forget".to_owned())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Alice flies a route of `hops` hops of `per_hop` points from the start,
+/// paid at a flight master; `yards` along it, Bob, who was far off, walks
+/// into view of her. Her create tells his client the whole flight she took,
+/// going forward along it: its id, its duration, its path from her
+/// take-off to the route's end (laid out as the client reads it), its time
+/// passed where she is now; and for a second after (a heartbeat from her
+/// client among it, as a client on a taxi may send), he is told nothing of
+/// her that would stop her on her way. A flight is one walk however many
+/// hops it has (`activate_route` stitches them), its move told to everyone
+/// who sees her take off; there is no next leg for a newcomer to miss.
+async fn seen_mid_flight(hops: u32, per_hop: usize, yards: f32) -> Vec<u8> {
+    let (realm, a, ga, map) = setup_with(route_world(hops, per_hop), Class::Warrior).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    // Far off: he doesn't see her take off.
+    b.heartbeat(START.0 - 700.0, START.1 - 700.0, START.2).await;
+    let deadline = tokio::time::Instant::now() + crate::game::harness::WAIT;
+    while on(&map, move |m| m.players[&gb].known.contains(&ga)).await {
+        assert!(tokio::time::Instant::now() < deadline, "Bob never left");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    b.clear();
+    let walk = on(&map, move |m| {
+        let master = crate::game::tests_p3_combat::spawn(m, ga, MASTER, 20, 2.0);
+        let p = m.players.get_mut(&ga).unwrap();
+        p.row.state.taxi_mask = vec![u32::MAX; 4];
+        p.set_money(10_000);
+        let route: Vec<u32> = (0..=hops).map(|i| ROUTE_NODE + i).collect();
+        npc::activate_route(m, ga, master, &route);
+        m.players[&ga].flight.as_ref().map(|f| f.walk.clone())
+    })
+    .await
+    .expect("flying");
+    let (x, y) = node_at(hops);
+    let end = walk.destination();
+    assert!(
+        (end.x - x).abs() < 0.01 && (end.y - y).abs() < 0.01,
+        "one walk, to the route's end: {end:?}"
+    );
+    // Her flight `yards` on, at once: its start that much earlier.
+    let by = Duration::from_secs_f32(yards / walk.speed);
+    let walk = on(&map, move |m| {
+        let f = m.players.get_mut(&ga).unwrap().flight.as_mut().unwrap();
+        f.walk.started = f.walk.started.checked_sub(by).expect("a clock that far");
+        f.walk.clone()
+    })
+    .await;
+    crate::game::harness::an_update(&map).await;
+    // Bob walks up to where she is headed, fifty yards on.
+    let spot = along(&walk, yards + 50.0);
+    b.heartbeat(spot.x + 10.0, spot.y - 10.0, START.2).await;
+    let seen = b.wait_for("Alice's create", |m| flier_in(m, ga)).await;
+    let s = seen.spline.expect("her flight in her create");
+    assert!(
+        s.spline_flags.get_run_mode() && s.spline_flags.get_flying(),
+        "flying, at a run"
+    );
+    assert!(seen.forward && !seen.walking, "going forward, running");
+    assert_eq!(s.id, walk.spline_id, "the move she took off with");
+    assert_eq!(s.duration, walk.duration.as_millis() as u32, "its duration");
+    let flown = by.as_millis() as u32;
+    assert!(
+        s.time_passed >= flown && s.time_passed < s.duration,
+        "{} of {} ms flown, at least {flown}",
+        s.time_passed,
+        s.duration
+    );
+    assert_eq!(s.nodes.len(), walk.points.len() + 2, "the whole path");
+    assert_eq!(s.nodes[1..=walk.points.len()], walk.points[..]);
+    assert_eq!(s.final_node, end, "to the route's end");
+    let there = walk
+        .position_at(walk.started + Duration::from_millis(u64::from(s.time_passed)))
+        .0;
+    assert!(
+        crate::game::map::combat::dist(seen.at, there) < 0.5,
+        "where the spline has her: {:?}, not {there:?}",
+        seen.at
+    );
+    // What follows, for a second: nothing that would stop her.
+    let frames = b.captured();
+    let mark = frames
+        .iter()
+        .rposition(|f| {
+            ServerOpcodeMessage::read_unencrypted(&f[..]).is_ok_and(|m| flier_in(&m, ga).is_some())
+        })
+        .expect("the create's frame")
+        + 1;
+    let now = on(&map, move |m| m.players[&ga].position()).await;
+    a.heartbeat(now.x, now.y, now.z).await;
+    let from = on(&map, |m| m.stats.updates).await;
+    while on(&map, |m| m.stats.updates).await < from + 20 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let still = on(&map, move |m| m.players[&ga].flight.is_some()).await;
+    assert!(still, "on her way");
+    let told: Vec<String> = b.captured()[mark..]
+        .iter()
+        .flat_map(|f| stopping(f, ga))
+        .collect();
+    assert!(told.is_empty(), "nothing to stop her: {told:?}");
+    frames[mark - 1].to_vec()
+}
+
+/// [`seen_mid_flight`]: just after she takes off.
+#[tokio::test]
+async fn a_flier_seen_just_after_take_off_flies_on() {
+    seen_mid_flight(2, 5, UP + 20.0).await;
+}
+
+/// [`seen_mid_flight`]: just into her route's second leg.
+#[tokio::test]
+async fn a_flier_seen_at_the_start_of_a_leg_flies_on() {
+    seen_mid_flight(3, 5, UP + HOP + 10.0).await;
+}
+
+/// [`seen_mid_flight`]: halfway along a leg.
+#[tokio::test]
+async fn a_flier_seen_mid_leg_flies_on() {
+    seen_mid_flight(3, 5, UP + 1.5 * HOP).await;
+}
+
+/// [`seen_mid_flight`]: at the node between two legs, where she turns.
+#[tokio::test]
+async fn a_flier_seen_at_the_turn_between_two_legs_flies_on() {
+    seen_mid_flight(3, 5, UP + 2.0 * HOP).await;
+}
+
+/// [`seen_mid_flight`]: on a long route of eight legs and 314 points (1.12's
+/// longest has 317), at the turn into the sixth: its create one frame,
+/// compressed, well inside a frame's size, not refused for it.
+#[tokio::test]
+async fn a_flier_seen_on_a_long_route_flies_on() {
+    let frame = seen_mid_flight(8, 40, UP + 5.0 * HOP).await;
+    let opcode = u16::from_le_bytes([frame[2], frame[3]]);
+    assert_eq!(
+        opcode,
+        crate::game::update::SMSG_COMPRESSED_UPDATE_OBJECT,
+        "compressed"
+    );
+    assert!(frame.len() - 4 <= crate::game::update::MAX_FRAME_BODY);
 }
 
 /// Thistle Tea's dev_commands_test ".start ... rejects combat and taxi
