@@ -2328,14 +2328,22 @@ impl Map {
 
     /// A creature leaves the map for good; its summoner hears of it, if it
     /// hasn't already (its corpse gone), as Thistle Tea's summons tell
-    /// theirs as their process ends.
+    /// theirs as their process ends: while it is still here, so that the
+    /// event's conditions on it read it as it was (vmangos's
+    /// `SummonedCreatureDespawn` before the summon leaves the world).
     pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {
-        let c = self.take_creature(guid)?;
-        if !c.despawned
-            && let Some(s) = c.scripted.as_deref().and_then(|s| s.summoner)
-        {
-            event_ai::summoned_despawned(self, s, guid, c.entry);
+        let heard = self
+            .creature(guid)
+            .filter(|c| !c.despawned)
+            .and_then(|c| Some((c.scripted.as_deref()?.summoner?, c.entry)));
+        if let Some((s, entry)) = heard {
+            // Told once: what the event does can't tell it again.
+            if let Some(c) = self.creature_mut(guid) {
+                c.despawned = true;
+            }
+            event_ai::summoned_despawned(self, s, guid, entry);
         }
+        let c = self.take_creature(guid)?;
         crate::game::omen::left(self, guid, c.entry);
         Some(c)
     }

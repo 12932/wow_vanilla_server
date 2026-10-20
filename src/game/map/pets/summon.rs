@@ -143,7 +143,13 @@ pub fn apply_level(data: &GameData, c: &mut Creature, level: u8) {
             c.fields.set_u32(UNIT_FIELD_STAT0 + i as u16, *v);
         }
         c.fields.set_u32(UNIT_FIELD_MAXHEALTH, l.health.max(1));
-        c.fields.set_u32(UNIT_FIELD_RESISTANCES, l.armor);
+        // A demon's row of no armor keeps the armor it has (mangos-zero's
+        // `InitStatsForLevel`: `if (pInfo->armor > 0)` for a summoned
+        // pet; Thistle Tea's zero armor keeps its template's); a hunter's
+        // pet takes its row's as it is.
+        if hunter || l.armor > 0 {
+            c.fields.set_u32(UNIT_FIELD_RESISTANCES, l.armor);
+        }
         if l.mana > 0 && !hunter {
             c.fields.set_u32(UNIT_FIELD_MAXPOWER1, l.mana);
         }
@@ -542,6 +548,20 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         apply_passive(map, g, spell);
     }
     inherit::sync(map, g);
+    // A new pet comes at its full health and power, with what its passives
+    // and its master give it (mangos-zero's `EffectSummonPet` fills them
+    // after `InitPetCreateSpells`; Thistle Tea's after the pet's
+    // passives): one called back keeps what it had.
+    if let Some(c) = map.creature_mut(g) {
+        if r.health == 0 {
+            let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, max);
+        }
+        if r.power == 0 {
+            let max = c.fields.get_u32(UNIT_FIELD_MAXPOWER1 + power_index);
+            c.fields.set_u32(UNIT_FIELD_POWER1 + power_index, max);
+        }
+    }
     Some(g)
 }
 
