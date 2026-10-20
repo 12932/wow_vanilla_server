@@ -584,8 +584,25 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
   group byte. wvs works around the last two by hand.
 
 ## Your list of 2026-10-20
-1. Jaina for Ironforge (to the Mystic Ward) and Darnassus; their elite guards (`feat/cities`, running).
-2. The Horde's city protection, Rexxar their champion (`feat/cities`, running).
+1. **Done (`feat/cities`): Jaina for Stormwind, Ironforge and Darnassus.** The capitals are data (`cities.rs`), one
+   champion flow for both sides (`champions.rs`). Her Teleport in Ironforge goes to the Mystic Ward's upper floor
+   (-4598, -925, 524.7), in Darnassus to the Temple of the Moon's lower hall (9625, 2525, 1331.6). An Elite Guard
+   for each: the Ironforge Elite Guard (an Ironforge Guard's look, double axe and Stormhammer), the Darnassus Elite
+   Sentinel (a Sentinel's, a glaive in each hand). Ironforge read as Dun Morogh on the navmesh (the city is inside
+   the mountain), so its civilians called no guards; a box round its interior fixes that for guards and champions
+   (players' zone there is still Dun Morogh, queued).
+2. **Done (`feat/cities`): the Horde's city protection.** Orgrimmar, the Undercity and Thunder Bluff already had
+   mangos's guards per victim; now the alarm, an Elite Guard each (Orgrimmar Elite Grunt, Undercity Elite
+   Deathguard, Thunder Bluff Elite Bluffwatcher) and **Rexxar**, one in the world: he says a line in Desolace, runs
+   40 yards with Misha and is gone; he appears about 110 yards from the fight out of view, on the navmesh, and runs
+   in with Misha and four Elite Guards; he fights with his template's spells (Thrash, Knock Away, Sundering Cleave,
+   Puncture, Frenzy below 30%); leaving, "I must go.", a 40-yard run at raised speed, and gone. **My reading:** your
+   "when summoned he says I must go" as his leaving (Jaina's flash home's counterpart). **My calls:** a city called
+   while its champion is out goes unanswered, and its next call after they're home brings them; a champion's
+   elites are the city's; Rexxar's respawn a day, a setting of its own. **Settings:** `jaina_city` is now
+   `jaina_cities = [1519, 1537, 1657]` (a config with the old key is refused: yours didn't set it), and
+   `rexxar_cities`, `rexxar_from`, `rexxar_stays_secs`, `rexxar_elites`, `rexxar_arrive_yards`, `rexxar_run_yards`.
+   **For peon:** its raid knows only Stormwind's guards and Jaina; queued.
 3. and 4. Peon's healers target whom they heal and cancel half the time when the target dies; shamans' Chain Heal
    (peon `feat/heals`, running).
 5. **Done (`fix/bugs1020`): patrols and held items.** Officer Jaxon (14423) and Thomas Miller (3518) are movement
