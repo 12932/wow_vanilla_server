@@ -66,71 +66,79 @@ const GO_FLAG_LOCKED: u32 = 0x2;
 const GO_FLAG_NO_INTERACT: u32 = 0x10;
 
 pub(crate) fn operate(map: &mut Map, entry: u32, act: Act) {
-    let objects: Vec<(Guid, Option<u32>)> = map
+    let objects: Vec<Guid> = map
         .gameobjects
         .iter()
         .filter(|(_, o)| o.entry == entry)
-        .map(|(_, o)| (o.guid, o.spawn_guid))
+        .map(|(_, o)| o.guid)
         .collect();
-    for (g, spawn) in objects {
-        let default = spawn
-            .and_then(|s| {
-                map.realm
-                    .data
-                    .gameobject_spawns
-                    .get(&map.key.map)
-                    .and_then(|v| v.iter().find(|x| x.guid == s))
-                    .map(|x| u32::from(x.state))
-            })
-            .unwrap_or(1);
-        // A new state: a use's close still to come doesn't undo it.
-        if !matches!(act, Act::Inert | Act::Active) {
-            crate::game::map::objects::forget_close(map, g);
+    for g in objects {
+        operate_one(map, g, act);
+    }
+}
+
+/// [`operate`] on object `g` alone.
+pub(crate) fn operate_one(map: &mut Map, g: Guid, act: Act) {
+    let Some(spawn) = map.gameobject(g).map(|o| o.spawn_guid) else {
+        return;
+    };
+    let default = spawn
+        .and_then(|s| {
+            map.realm
+                .data
+                .gameobject_spawns
+                .get(&map.key.map)
+                .and_then(|v| v.iter().find(|x| x.guid == s))
+                .map(|x| u32::from(x.state))
+        })
+        .unwrap_or(1);
+    // A new state: a use's close still to come doesn't undo it.
+    if !matches!(act, Act::Inert | Act::Active) {
+        crate::game::map::objects::forget_close(map, g);
+    }
+    let Some(o) = map.gameobject_mut(g) else {
+        return;
+    };
+    let f = &mut o.fields;
+    let flags = f.get_u32(GAMEOBJECT_FLAGS);
+    let state = f.get_u32(GAMEOBJECT_STATE);
+    let in_use = |on: bool| {
+        if on {
+            flags | GO_FLAG_IN_USE
+        } else {
+            flags & !GO_FLAG_IN_USE
         }
-        let Some(o) = map.gameobject_mut(g) else {
-            continue;
-        };
-        let f = &mut o.fields;
-        let flags = f.get_u32(GAMEOBJECT_FLAGS);
-        let state = f.get_u32(GAMEOBJECT_STATE);
-        let in_use = |on: bool| {
-            if on {
-                flags | GO_FLAG_IN_USE
-            } else {
-                flags & !GO_FLAG_IN_USE
-            }
-        };
-        match act {
-            Act::Open => {
-                if state == 1 {
-                    f.set_u32(GAMEOBJECT_STATE, 0);
-                }
-                f.set_u32(GAMEOBJECT_FLAGS, in_use(true));
-            }
-            Act::Close => {
-                if state == 0 {
-                    f.set_u32(GAMEOBJECT_STATE, 1);
-                }
-                f.set_u32(GAMEOBJECT_FLAGS, in_use(false));
-            }
-            Act::Destroy => {
-                f.set_u32(GAMEOBJECT_STATE, 2);
-                f.set_u32(GAMEOBJECT_FLAGS, in_use(true));
-            }
-            Act::Reset => {
-                f.set_u32(GAMEOBJECT_STATE, default);
-                f.set_u32(GAMEOBJECT_FLAGS, in_use(false));
-            }
-            Act::Inert => f.set_u32(GAMEOBJECT_FLAGS, flags | GO_FLAG_NO_INTERACT),
-            Act::Active => f.set_u32(GAMEOBJECT_FLAGS, flags & !GO_FLAG_NO_INTERACT),
-            Act::Lock => {
-                f.set_u32(GAMEOBJECT_STATE, default);
-                f.set_u32(GAMEOBJECT_FLAGS, in_use(false) | GO_FLAG_LOCKED);
-            }
-            Act::Unlock => {
+    };
+    match act {
+        Act::Open => {
+            if state == 1 {
                 f.set_u32(GAMEOBJECT_STATE, 0);
-                f.set_u32(GAMEOBJECT_FLAGS, in_use(true) & !GO_FLAG_LOCKED);
             }
+            f.set_u32(GAMEOBJECT_FLAGS, in_use(true));
+        }
+        Act::Close => {
+            if state == 0 {
+                f.set_u32(GAMEOBJECT_STATE, 1);
+            }
+            f.set_u32(GAMEOBJECT_FLAGS, in_use(false));
+        }
+        Act::Destroy => {
+            f.set_u32(GAMEOBJECT_STATE, 2);
+            f.set_u32(GAMEOBJECT_FLAGS, in_use(true));
+        }
+        Act::Reset => {
+            f.set_u32(GAMEOBJECT_STATE, default);
+            f.set_u32(GAMEOBJECT_FLAGS, in_use(false));
+        }
+        Act::Inert => f.set_u32(GAMEOBJECT_FLAGS, flags | GO_FLAG_NO_INTERACT),
+        Act::Active => f.set_u32(GAMEOBJECT_FLAGS, flags & !GO_FLAG_NO_INTERACT),
+        Act::Lock => {
+            f.set_u32(GAMEOBJECT_STATE, default);
+            f.set_u32(GAMEOBJECT_FLAGS, in_use(false) | GO_FLAG_LOCKED);
+        }
+        Act::Unlock => {
+            f.set_u32(GAMEOBJECT_STATE, 0);
+            f.set_u32(GAMEOBJECT_FLAGS, in_use(true) & !GO_FLAG_LOCKED);
         }
     }
 }

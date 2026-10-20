@@ -2303,6 +2303,7 @@ impl Map {
         self.visibility_dirty.insert(guid);
         self.hold_near(guid, at);
         crate::game::cheer_speakers::added(self, guid, entry);
+        instance_script::object_added(self, guid);
         guid
     }
 

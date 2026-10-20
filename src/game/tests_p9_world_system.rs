@@ -1,10 +1,10 @@
 //! Round 9's world tests of Thistle Tea's systems, ported from
 //! `test/game/world/system/`: a battleground event's respawns stopped
-//! with its living left, the Baron's run's lines, a map event won by a
-//! goal creature by its swapped-in source, what reads a map event seeing
-//! it change at once, the object-fit condition by an object's spawn
-//! alone, a distance unknown without both ends, and spawns back as
-//! themselves.
+//! with its living left, the Baron's run's lines, a door that comes back
+//! after its rule flipped, a map event won by a goal creature by its
+//! swapped-in source, what reads a map event seeing it change at once,
+//! the object-fit condition by an object's spawn alone, a distance
+//! unknown without both ends, and spawns back as themselves.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -160,9 +160,14 @@ const GAUNTLET_GATE: u32 = 175_357;
 /// The run's lines and spells: at its start, and with ten minutes left.
 const RUN_LINES: [u32; 2] = [11_812, 11_813];
 const RUN_SPELLS: [u32; 2] = [27_861, 27_863];
+/// The first and second ziggurats' doors (opened with fields 1 and 2
+/// done), and their spawns.
+const ZIGGURAT_DOORS: [u32; 2] = [175_380, 175_379];
+const DOOR_SPAWNS: [u32; 2] = [98_110, 98_111];
 
 /// Stratholme, its script the template's: the Baron beside where Alice
-/// comes in, and his run's lines and spells.
+/// comes in, his run's lines and spells, and the first two ziggurats'
+/// doors, shut.
 fn stratholme() -> GameData {
     let mut d = GameData::empty();
     d.maps.insert(
@@ -215,6 +220,18 @@ fn stratholme() -> GameData {
             ..Default::default()
         };
         d.spells.spells.insert(id, s);
+    }
+    for (k, (entry, spawn)) in ZIGGURAT_DOORS.into_iter().zip(DOOR_SPAWNS).enumerate() {
+        d.gameobject_templates.insert(entry, object_template(entry));
+        d.gameobject_spawns
+            .entry(STRATHOLME)
+            .or_default()
+            .push(object_spawn(
+                spawn,
+                entry,
+                STRATHOLME,
+                (AT.0 - 5.0 - k as f32, AT.1, AT.2),
+            ));
     }
     d
 }
@@ -301,6 +318,39 @@ async fn the_barons_run_has_him_speak_at_its_start_and_ten_minutes_before_its_en
     })
     .await;
     assert_eq!(won, (DONE, 1), "won; only the reward to come");
+}
+
+/// Thistle Tea's `InstanceTest` "reconciles a spawned game object from
+/// current script data": the first ziggurat's door, out of the copy (a
+/// script took it away for ten seconds) while its boss's field is set
+/// done, comes back open; the second's, its field not done, comes back as
+/// it spawned, shut (mangos's `instance_stratholme::OnObjectCreate`,
+/// which opens a ziggurat's door made once its boss is dead).
+#[tokio::test]
+async fn a_door_back_after_its_rule_flipped_stands_as_the_rule_has_it() {
+    let (_realm, _a, _g, map) = in_stratholme().await;
+    let states = on(&map, |m| {
+        for spawn in DOOR_SPAWNS {
+            assert!(execute(
+                m,
+                &step(81, [spawn, 10, 0, 0]),
+                Guid::zero(),
+                Guid::zero()
+            ));
+        }
+        set_data(m, 1, DONE, 0);
+        let gone = DOOR_SPAWNS.map(|s| object_of_spawn(m, s).is_none());
+        m.now += Duration::from_secs(10);
+        objects::update(m);
+        let states = DOOR_SPAWNS.map(|s| {
+            object_of_spawn(m, s)
+                .and_then(|g| m.gameobject(g))
+                .map(|o| o.fields.get_u32(GAMEOBJECT_STATE))
+        });
+        (gone, states)
+    })
+    .await;
+    assert_eq!(states, ([true; 2], [Some(0), Some(1)]), "open; shut");
 }
 
 // Map events and conditions.
