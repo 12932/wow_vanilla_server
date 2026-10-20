@@ -146,6 +146,9 @@ pub struct CreatureAddon {
     pub display_id: u32,
     /// The mount it rides: -1 its template's, 0 none.
     pub mount_display_id: i32,
+    /// The weapons it holds (`creature_equip_template`'s entry): -1 its
+    /// template's, 0 none, as vmangos's `LoadCreatureAddon` and Thistle
+    /// Tea read it.
     pub equipment_id: i32,
     pub stand_state: u8,
     pub sheath_state: u8,

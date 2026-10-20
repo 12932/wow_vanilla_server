@@ -1180,8 +1180,7 @@ fn default_equipment(data: &crate::game::data::GameData, c: &Creature) -> [u32; 
         .creature_template(c.entry)
         .map_or(0, |t| t.equipment_id);
     let equipment = match c.spawn_guid.and_then(|s| data.creature_addons.get(&s)) {
-        Some(a) if a.equipment_id > 0 => a.equipment_id as u32,
-        Some(a) if a.equipment_id < 0 => 0,
+        Some(a) if a.equipment_id >= 0 => a.equipment_id as u32,
         _ => template,
     };
     data.creature_equipment

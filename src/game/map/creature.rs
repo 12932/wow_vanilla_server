@@ -616,10 +616,9 @@ impl Creature {
                 c.fields
                     .set_u32(UNIT_FIELD_MOUNTDISPLAYID, addon.mount_display_id as u32);
             }
-            if addon.equipment_id > 0 {
+            // Its own weapons, none, or (-1) its template's.
+            if addon.equipment_id >= 0 {
                 equipment = addon.equipment_id as u32;
-            } else if addon.equipment_id < 0 {
-                equipment = 0;
             }
             c.fields.set_byte(UNIT_FIELD_BYTES_1, 0, addon.stand_state);
             c.fields.set_byte(UNIT_FIELD_BYTES_2, 0, addon.sheath_state);
@@ -639,13 +638,24 @@ impl Creature {
         }
         // A spawn with a path of its own walks it, whatever its movement
         // type says (bar going round in the air), from the point nearest
-        // its spawn, as Thistle Tea builds its route.
+        // its spawn, as Thistle Tea builds its route. One set to walk a
+        // path with none of its own walks its entry's
+        // (`creature_movement_template`, mangos's `GetDefaultPath`).
         match data.waypoints.get(&spawn.guid).filter(|p| !p.is_empty()) {
             Some(path) if c.movement_type != crate::game::map::creature_motion::MOVEMENT_CYCLIC => {
                 c.movement_type = MOVEMENT_WAYPOINT;
                 c.waypoint = nearest_waypoint(path, position);
             }
-            None if c.movement_type == MOVEMENT_WAYPOINT => c.movement_type = MOVEMENT_IDLE,
+            None if c.movement_type == MOVEMENT_WAYPOINT => {
+                match data
+                    .waypoints_by_entry
+                    .get(&c.entry)
+                    .filter(|p| !p.is_empty())
+                {
+                    Some(path) => c.waypoint = nearest_waypoint(path, position),
+                    None => c.movement_type = MOVEMENT_IDLE,
+                }
+            }
             _ => {}
         }
         if c.movement_type == MOVEMENT_RANDOM && c.wander_distance <= 0.0 {
