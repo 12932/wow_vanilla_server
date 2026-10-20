@@ -935,6 +935,8 @@ mod tests_p9_core_power;
 #[cfg(test)]
 mod tests_p9_core_terrain;
 #[cfg(test)]
+mod tests_p9_core_trade;
+#[cfg(test)]
 mod tests_parity_combat;
 #[cfg(test)]
 mod tests_parity_misc;

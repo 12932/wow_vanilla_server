@@ -367,7 +367,13 @@ pub fn update(map: &mut Map) {
     let secs = elapsed.as_secs() as u32;
     let mut gone: Vec<(Guid, Guid)> = Vec::new();
     for p in map.players.values_mut() {
-        for item in p.items.iter_mut() {
+        // A sold item waiting to be bought back keeps its time (mangos's
+        // `RemoveItem` takes it off the clock, its store puts it back).
+        for item in p
+            .items
+            .iter_mut()
+            .filter(|i| !crate::game::map::enchant::in_buyback(i))
+        {
             let left = item.fields.get_u32(ITEM_FIELD_DURATION);
             if left == 0 {
                 continue;

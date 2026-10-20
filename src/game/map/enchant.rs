@@ -377,7 +377,10 @@ pub fn update(map: &mut Map) {
     let ms = elapsed.as_millis() as u32;
     let mut expired = Vec::new();
     for p in map.players.values_mut() {
-        for item in p.items.iter_mut() {
+        // What a vendor holds for buying back keeps its time till it is
+        // bought back (mangos's `RemoveItem` takes its enchantments'
+        // durations off the clock, its store puts them back).
+        for item in p.items.iter_mut().filter(|i| !in_buyback(i)) {
             let e = get(item, TEMP_SLOT);
             if e.id == 0 || e.duration_ms == 0 {
                 continue;
@@ -393,6 +396,12 @@ pub fn update(map: &mut Map) {
     for (player, item) in expired {
         clear(map, player, item, TEMP_SLOT);
     }
+}
+
+/// Whether `item` is in a vendor's buyback, sold.
+pub fn in_buyback(item: &Item) -> bool {
+    use crate::game::map::inventory::{BUYBACK_END, BUYBACK_START};
+    item.bag == BAG_PLAYER && (BUYBACK_START..BUYBACK_END).contains(&item.slot)
 }
 
 /// The chance, in percent, of an item's chance-on-hit spell: its procs a
