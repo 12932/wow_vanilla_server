@@ -14,6 +14,28 @@ use crate::game::guid;
 use crate::game::harness::{self, Client};
 use crate::game::map::MapKey;
 use crate::game::social::mail::{self, DAY, Mail};
+use crate::game::store::{Records, Store};
+
+/// A realm on a store in a file of its own, to be opened again.
+fn realm_at(db: &std::path::Path) -> Arc<Realm> {
+    let (store, startup) = Store::open(db).expect("the store opens");
+    Realm::new(
+        harness::test_config(),
+        store,
+        startup,
+        crate::game::data::GameData::empty(),
+        None,
+    )
+}
+
+async fn money_of(realm: &Arc<Realm>, g: Guid) -> u32 {
+    realm
+        .maps
+        .get(realm, MapKey::world(0))
+        .query(move |m| m.players.get(&g).map_or(0, |p| p.money()))
+        .await
+        .expect("the map answers")
+}
 
 async fn set_money(realm: &Arc<Realm>, g: Guid, money: u32) {
     realm
@@ -174,6 +196,67 @@ async fn a_full_mailbox_lists_what_fits_the_clients_cap() {
         "as many as fit: {}",
         mails.len()
     );
+}
+
+/// rev5-social 3 (review 5's #14): `post_in` put a mail where every map
+/// could take from it and let the mail's lock go before its record was
+/// sent, so a take in between was written first and the post's older
+/// record over it: after a restart Bob had the 5,000 and the mail still
+/// held them. The poster now holds the lock until its save is sent; Bob's
+/// take, on his own map at once, waits for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refund_taken_as_its_post_is_written_is_had_once_after_a_restart() {
+    let dir = std::env::temp_dir().join(format!("wvs-r5-post-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("characters.sqlite");
+    let realm = realm_at(&db);
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let map0 = realm.maps.get(&realm, MapKey::world(0));
+    let now = mail::now();
+    // `bid`'s steps on the outbidder's map: Bob's refund posted, then (the
+    // notices, the bidder's row) the save that carries its record.
+    let (id, take) = {
+        let mut records = Records::new();
+        let mut mails = realm.social.mail.lock();
+        let id = mail::post_in(
+            &realm,
+            &mut mails,
+            Mail {
+                kind: mail::AUCTION,
+                sender: 7,
+                receiver: guid::counter(gb),
+                subject: "1:0:0".into(),
+                money: 5000,
+                deliver_at: now,
+                expires_at: now + 30 * DAY,
+                ..Default::default()
+            },
+            &mut records,
+        );
+        // Bob, on his own map, takes it at once (a bot can guess the id:
+        // they are handed out in turn).
+        let take = tokio::spawn({
+            let map0 = map0.clone();
+            async move { map0.query(move |m| mail::take_money(m, gb, id)).await }
+        });
+        // Time for his map to come to the take.
+        std::thread::sleep(Duration::from_millis(50));
+        realm.store.save_together(Vec::new(), records);
+        (id, take)
+    };
+    take.await.unwrap().expect("the map answers");
+    assert_eq!(money_of(&realm, gb).await, 5000);
+    realm.shutdown().await;
+    drop(b);
+    let (store, startup) = Store::open(&db).unwrap();
+    let mails = mail::Mails::load(&startup.records);
+    let rows = store.characters("B").await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let kept = mails.mails.get(&id).map_or(0, |m| m.money);
+    let bob = rows.iter().find(|r| r.name == "Bob").map_or(0, |r| r.money);
+    assert_eq!((bob, kept), (5000, 0), "the refund is had once");
 }
 
 /// rev5-social 4: a player queued alone at a meeting stone who logged out

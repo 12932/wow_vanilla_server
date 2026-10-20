@@ -19,6 +19,9 @@ missing world data). None fixed yet; waiting on your choice.
   stops at the client's 32,766 bytes, as mangos's `HandleGetMailList` does (`social/mail.rs`).
 - rev5-social 4 fixed: a logout leaves a meeting stone's queue (mangos's `LogoutPlayer`), and the sweep drops
   anyone offline first (`map/meeting_stones.rs`).
+- #14 fixed: `mail::post_in` takes the mail already locked, and every poster (a mail sent, cash on delivery paid,
+  a bid, a cancel, the auction sweep, a deleted seller) holds the lock until its save is sent, so a take can't be
+  written before the post (`social/mail.rs`, `social/auction.rs`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

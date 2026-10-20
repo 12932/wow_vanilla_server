@@ -169,15 +169,22 @@ fn save(realm: &Realm, m: &Mail) {
 /// Post a mail; the receiver hears of it if it's due and they're online.
 pub fn post(realm: &Realm, m: Mail) -> u32 {
     let mut records = Records::new();
-    let id = post_in(realm, m, &mut records);
+    let mut mails = realm.social.mail.lock();
+    let id = post_in(realm, &mut mails, m, &mut records);
     realm.store.save_together(Vec::new(), records);
+    drop(mails);
     id
 }
 
 /// Post a mail whose record is saved with `records`: with what it holds
 /// taken from a character, or with the auction it settles.
-pub fn post_in(realm: &Realm, mut m: Mail, records: &mut Records) -> u32 {
-    let mut mails = realm.social.mail.lock();
+///
+/// The caller holds the mail's lock (`mails`) until `records` is sent to
+/// the store. Any map can take from the mail once it is in `mails`, and a
+/// take sends its save under the lock: let go first, a refund taken
+/// before its post was written was written over by the post, and came
+/// back after a restart.
+pub fn post_in(realm: &Realm, mails: &mut Mails, mut m: Mail, records: &mut Records) -> u32 {
     if m.id == 0 {
         m.id = mails.next_id();
     }
@@ -189,7 +196,6 @@ pub fn post_in(realm: &Realm, mut m: Mail, records: &mut Records) -> u32 {
         mails.pending.push(id);
     }
     mails.mails.insert(id, m);
-    drop(mails);
     if due {
         send_to(realm, receiver, &SMSG_RECEIVED_MAIL { unknown1: 0 });
     }
@@ -430,8 +436,10 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         0
     };
     let mut records = Records::new();
+    let mut mails = realm.social.mail.lock();
     let id = post_in(
         &realm,
+        &mut mails,
         Mail {
             kind: NORMAL,
             sender: guid::counter(g),
@@ -450,8 +458,9 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         &mut records,
     );
     // The mail and the sender's bags and money in one transaction
-    // (mangos's `HandleSendMail`).
+    // (mangos's `HandleSendMail`), under the mail's lock.
     map.save_together(&[g], records);
+    drop(mails);
     result(
         map,
         g,
@@ -549,6 +558,7 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
         return;
     }
     let mut records = Records::new();
+    let mut mails = realm.social.mail.lock();
     if cod > 0 {
         if let Some(p) = map.players.get_mut(&g) {
             p.set_money(money - cod);
@@ -556,6 +566,7 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
         let now = now();
         post_in(
             &realm,
+            &mut mails,
             Mail {
                 kind: NORMAL,
                 sender: guid::counter(g),
@@ -571,8 +582,7 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
         );
     }
     // The mail without its item, the payment and the taker in one
-    // transaction (mangos's `HandleMailTakeItem`).
-    let mut mails = realm.social.mail.lock();
+    // transaction (mangos's `HandleMailTakeItem`), under the mail's lock.
     if let Some(m) = own_mail(&mut mails, g, id) {
         m.item = None;
         m.cod = 0;
