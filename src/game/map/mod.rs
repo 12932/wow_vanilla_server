@@ -194,10 +194,12 @@ impl MapHandle {
         self.tx.send(event).is_ok()
     }
 
-    /// [`MapHandle::send`], giving back what an actor that has gone
-    /// didn't take.
-    fn try_send(&self, event: MapEvent) -> Result<(), MapEvent> {
-        self.tx.send(event).map_err(|e| e.0)
+    /// An arrival sent, or given back if the actor has gone.
+    fn try_arrive(&self, arrival: Box<Arrival>) -> Result<(), Box<Arrival>> {
+        match self.tx.send(MapEvent::Arrive(arrival)) {
+            Err(mpsc::error::SendError(MapEvent::Arrive(a))) => Err(a),
+            _ => Ok(()),
+        }
     }
 
     /// Whether the actor has gone: what is sent is lost.
@@ -851,11 +853,11 @@ async fn finish(map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
 /// stopped was dropped with the send, unsaved, still online and in no map.
 pub fn deliver(realm: &Arc<Realm>, map: MapHandle, arrival: Box<Arrival>) -> Option<MapHandle> {
     let mut map = map;
-    let mut event = MapEvent::Arrive(arrival);
+    let mut arrival = arrival;
     for _ in 0..4 {
-        match map.try_send(event) {
+        match map.try_arrive(arrival) {
             Ok(()) => return Some(map),
-            Err(back) => event = back,
+            Err(back) => arrival = back,
         }
         if !realm.maps.is_closed() && crate::game::instances::expired(realm, map.key) {
             break;
@@ -866,7 +868,7 @@ pub fn deliver(realm: &Arc<Realm>, map: MapHandle, arrival: Box<Arrival>) -> Opt
         );
         map = realm.maps.get(realm, map.key);
     }
-    let_go(realm, map.key, event);
+    let_go(realm, map.key, MapEvent::Arrive(arrival));
     None
 }
 

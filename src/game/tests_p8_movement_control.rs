@@ -41,7 +41,7 @@ async fn a_control_comes_back_with_its_aura_at_login() {
     map.query(move |m| motion::apply(m, wolf, ga, CONFUSE))
         .await
         .unwrap();
-    assert_eq!(a.wait_for("control taken", |m| control(m, ga)).await, false);
+    assert!(!a.wait_for("control taken", |m| control(m, ga)).await);
     // Gone (a disconnect saves her), and back.
     let account = a.account.clone();
     a.disconnect();
@@ -55,9 +55,8 @@ async fn a_control_comes_back_with_its_aura_at_login() {
     realm.store.flush().await;
     let mut a = Client::connect(&realm, &account);
     a.login(ga).await;
-    assert_eq!(
-        a.wait_for("control taken again", |m| control(m, ga)).await,
-        false,
+    assert!(
+        !a.wait_for("control taken again", |m| control(m, ga)).await,
         "her client has no control"
     );
     let (mode, at) = map
