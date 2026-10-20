@@ -776,6 +776,16 @@ showed a difference. Phase 2 takes what is left.
   penetration read at each tick). **For phase 2:** the creature stat model (creatures and pets take nothing from
   stat changes), weapon spells' attack power against a type, meeting stones and group changes, pets' 10% regen
   rule, quest-only loot sparkling for one who doesn't need it.
+- **9world:** an object area (targets 51, 52) works every object its script names; an engineer's trinket's summon
+  is cast from its item; a Blink under water keeps its depth (mangos's front leap); a dungeon with no navmesh or
+  terrain is in its only zone; a duel's start and end work out what each duelist sees (an owner's stealthed trap
+  hidden from the opponent); a script's door coming into its copy takes its rule's state (mangos's
+  `OnObjectCreate`). Four rows where wvs is mangos's are `wrong-for-1.12` (Blizzard's debuff slot, aura 177 for
+  any spell, a route to a point in the air, the Orb of Deception's scale); one accepted under your #65. **For
+  phase 2:** a periodic trigger's spell (Hellfire) procs ordinary auras (mangos refuses); which area heals spend
+  Ascendance's charge.
+- **Phase 1 done:** 406 rows: about 330 covered or settled, 23 small fixes merged with them, the rest phase 2's.
+  The matrix at the phase's end in the table below.
 
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.

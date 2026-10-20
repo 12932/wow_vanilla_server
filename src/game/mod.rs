@@ -995,11 +995,11 @@ mod tests_p9_world_nav;
 #[cfg(test)]
 mod tests_p9_world_sight;
 #[cfg(test)]
+mod tests_p9_world_spells;
+#[cfg(test)]
 mod tests_p9_world_spells2;
 #[cfg(test)]
 mod tests_p9_world_spells3;
-#[cfg(test)]
-mod tests_p9_world_spells;
 #[cfg(test)]
 mod tests_p9_world_system;
 #[cfg(test)]

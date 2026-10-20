@@ -145,7 +145,7 @@ fn blizzard_takes_a_slot_and_every_charm_of_many_charms() {
         return;
     };
     for id in [10, 16_914] {
-        assert!(auras::visible(d.spells.get(id).unwrap(), false), "{id}");
+        assert!(auras::visible(d.spells.get(id).unwrap()), "{id}");
     }
     assert_ne!(d.spells.get(10).unwrap().attributes[1] & 0x1000_0000, 0);
     for id in [26_740, 28_225, 28_410] {
