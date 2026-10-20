@@ -482,6 +482,14 @@ impl Creature {
         .with_base()
     }
 
+    /// Its strength to spirit, its class's at its level: what its auras
+    /// raise, and its health, mana, armor and attack power with them.
+    pub fn set_class_stats(&mut self, stats: &crate::game::data::ClassLevelStats) {
+        for (i, v) in stats.stats().iter().enumerate() {
+            self.fields.set_u32(UNIT_FIELD_STAT0 + i as u16, *v);
+        }
+    }
+
     /// Its values as they now are become its base, and its posture its
     /// rest.
     pub fn with_base(mut self) -> Self {
@@ -601,6 +609,15 @@ impl Creature {
                 .set_f32(UNIT_FIELD_MAXDAMAGE, (base * (1.0 + variance)).max(1.0));
             c.fields
                 .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
+            // Its ranged damage and attack power the same way (Thistle
+            // Tea's mob builder), for a weapon spell it shoots.
+            let ranged = stats.ranged_damage * mult;
+            c.fields
+                .set_f32(UNIT_FIELD_MINRANGEDDAMAGE, ranged * (1.0 - variance));
+            c.fields
+                .set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, ranged * (1.0 + variance));
+            c.fields
+                .set_u32(UNIT_FIELD_RANGED_ATTACK_POWER, stats.ranged_attack_power);
             let armor_mult = if template.armor_multiplier > 0.0 {
                 template.armor_multiplier
             } else {
@@ -610,6 +627,7 @@ impl Creature {
                 UNIT_FIELD_RESISTANCES,
                 (stats.armor as f32 * armor_mult) as u32,
             );
+            c.set_class_stats(stats);
         }
         c.hostile_to_players =
             crate::game::map::ai::hostile_to_players(data, template.faction, template.civilian);

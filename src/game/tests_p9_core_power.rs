@@ -694,14 +694,16 @@ async fn haste_shortens_a_cast_and_not_the_channel_after_it() {
 
 /// Thistle Tea's "does not invent base stats for creatures": a creature's
 /// stats are its own; a percentage of every stat gives it none it hasn't,
-/// nor health.
+/// nor health. (Its own strength, its base's, the percentages double
+/// twice.)
 #[tokio::test]
 async fn a_creature_is_given_no_stats_it_has_not() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
     let r = map
         .query(move |m| {
             let c = spawn(m, ga, BRUTE, 20, 3.0);
-            m.unit_fields_mut(c).unwrap().set_u32(UNIT_FIELD_STAT0, 50);
+            m.creature_mut(c).unwrap().base.stats[0] = 50;
+            derive::unit(m, c);
             let before = m.unit_fields(c).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
             aura_of(m, c, 97_990, AURA_MOD_PERCENT_STAT, -1, 100);
             aura_of(m, c, 97_991, AURA_MOD_TOTAL_STAT_PERCENTAGE, -1, 100);
@@ -716,6 +718,6 @@ async fn a_creature_is_given_no_stats_it_has_not() {
         })
         .await
         .unwrap();
-    assert_eq!((r.0, r.1), (50, 0), "its strength as it was, no stamina");
+    assert_eq!((r.0, r.1), (200, 0), "its own strength by both, no stamina");
     assert_eq!(r.2, r.3, "nor health");
 }

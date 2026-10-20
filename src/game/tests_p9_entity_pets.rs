@@ -139,8 +139,9 @@ async fn a_demons_level_row_of_no_armor_leaves_it_its_own() {
         })
         .await
         .unwrap();
-    // The imp's class's 20 at level 1; the row's 50 at 2.
-    assert_eq!((unarmored, armored), (20, 50));
+    // The imp's class's 20 at level 1; the row's 50 at 2; each with its
+    // agility's 20, a point each.
+    assert_eq!((unarmored, armored), (40, 70));
 }
 
 /// A summoned pet is created once for its owner: its create through

@@ -127,6 +127,7 @@ pub(super) fn creature_stats(data: &GameData, c: &mut Creature, t: &CreatureTemp
     c.fields
         .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
     c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
+    c.set_class_stats(stats);
 }
 
 /// A pet's stats for its level: a hunter's pet from the generic hunter
@@ -147,12 +148,20 @@ pub fn apply_level(data: &GameData, c: &mut Creature, level: u8) {
         // `InitStatsForLevel`: `if (pInfo->armor > 0)` for a summoned
         // pet; Thistle Tea's zero armor keeps its template's); a hunter's
         // pet takes its row's as it is.
-        if hunter || l.armor > 0 {
-            c.fields.set_u32(UNIT_FIELD_RESISTANCES, l.armor);
-        }
-        if l.mana > 0 && !hunter {
-            c.fields.set_u32(UNIT_FIELD_MAXPOWER1, l.mana);
-        }
+        // What is kept is its base's, not what its auras and agility
+        // make of it, which the base below would take in twice.
+        let armor = if hunter || l.armor > 0 {
+            l.armor
+        } else {
+            c.base.resistances[0].max(0) as u32
+        };
+        c.fields.set_u32(UNIT_FIELD_RESISTANCES, armor);
+        let mana = if l.mana > 0 && !hunter {
+            l.mana
+        } else {
+            c.base.max_mana
+        };
+        c.fields.set_u32(UNIT_FIELD_MAXPOWER1, mana);
         let strength = l.stats[0];
         c.fields
             .set_u32(UNIT_FIELD_ATTACK_POWER, (strength * 2).saturating_sub(20));
