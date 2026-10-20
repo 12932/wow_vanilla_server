@@ -578,10 +578,15 @@ fn data() -> GameData {
 
 async fn setup(class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
     let realm = harness::realm_with(data());
+    // The map's first update before she comes: its creatures' spawned
+    // events (yells) go then, to no one. Were she in first (the map takes
+    // its first event or its first update as either comes), they could
+    // reach her after the setup's clear, among a test's own yells.
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    harness::an_update(&map).await;
     let mut a = Client::connect(&realm, "A");
     let me = a.enter("Alice", Race::Human, class).await;
     a.heartbeat(START.0, START.1, START.2).await;
-    let map = realm.maps.get(&realm, MapKey::world(0));
     a.sees(unit(EMOTER, 17)).await;
     // The heartbeat is in before a test reads where the player is.
     while map

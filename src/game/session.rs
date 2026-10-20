@@ -295,11 +295,18 @@ impl Session {
                 let guid = player.guid;
                 let map = self.realm.maps.get(&self.realm, to);
                 let online = player.online.clone();
-                map.send(MapEvent::Arrive(Box::new(Arrival {
+                let arrival = Box::new(Arrival {
                     kind: ArrivalKind::Transfer(player),
                     online,
-                })));
-                self.state = State::InWorld { guid, map };
+                });
+                // The map that took them, which may not be the one asked
+                // for (a copy that stopped as they were sent, started
+                // again): their packets go there. Let go instead, they are
+                // saved and the session is told to end.
+                self.state = match crate::game::map::deliver(&self.realm, map, arrival) {
+                    Some(map) => State::InWorld { guid, map },
+                    None => State::Screen,
+                };
                 true
             }
             Control::LoggedOut => {
@@ -778,11 +785,13 @@ pub fn transfer(
     let online = player.online.clone();
     // Their own session's disconnect, whatever session passed them on.
     let from = online.session.clone();
-    map.send(MapEvent::Arrive(Box::new(Arrival {
+    let arrival = Box::new(Arrival {
         kind: ArrivalKind::Transfer(player),
         online,
-    })));
-    map.send(MapEvent::Disconnect(guid, from));
+    });
+    if let Some(map) = crate::game::map::deliver(realm, map, arrival) {
+        map.send(MapEvent::Disconnect(guid, from));
+    }
 }
 
 /// An online entry whose session has gone (a ghost): its player, if their

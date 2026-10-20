@@ -979,16 +979,10 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
     } else if let Control::Confusion { anchor } = mode {
         // Confusion: a walk to a point of the navmesh within four yards of
         // where it began, no further than eight yards, or a pause.
-        use crate::game::map::player_motion::{CONFUSION_PATH, CONFUSION_RADIUS};
         let point = crate::game::map::player_motion::confusion_point(map, anchor, &mut rng);
-        match point.and_then(|to| {
-            crate::game::map::player_motion::control_path(map, pos, to, CONFUSION_PATH).filter(
-                |p| {
-                    p.iter()
-                        .all(|x| dist(*x, anchor) <= CONFUSION_RADIUS + 0.01)
-                },
-            )
-        }) {
+        match point
+            .and_then(|to| crate::game::map::player_motion::confusion_route(map, anchor, pos, to))
+        {
             Some(path) => Ok((path, false, between(&mut rng, 500, 1500))),
             None => Err(between(&mut rng, 500, 1500)),
         }

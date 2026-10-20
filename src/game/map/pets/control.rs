@@ -305,8 +305,12 @@ fn feedback(map: &Map, player: Guid, f: PetFeedback) {
     }
 }
 
-/// The pet casts `spell` at `target` (its victim, or itself if helpful).
-fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>) {
+/// The pet casts `spell` at what its master's bar named: a unit (else its
+/// victim, or itself if helpful), and a place on the ground for one that
+/// wants it, a possessed caster's area spell (mangos's
+/// `HandlePetCastSpellOpcode` reads the whole `SpellCastTargets`).
+fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets) {
+    let target = asked.unit;
     let data = map.realm.data.clone();
     let knows = match map.players.get(&pet) {
         Some(v) => v.spells.contains(&spell),
@@ -332,12 +336,13 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, target: Option<Guid>
         feedback(map, player, PetFeedback::CantAttackTarget);
         return;
     }
-    if !helpful && unit.is_none() {
+    if !helpful && unit.is_none() && asked.dest.is_none() {
         feedback(map, player, PetFeedback::NothingToAttack);
         return;
     }
     let targets = Targets {
         unit,
+        dest: asked.dest,
         ..Default::default()
     };
     // A cast that can't be made is told to its master, as Thistle Tea's
@@ -455,7 +460,16 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
             if !alive {
                 return feedback(map, player, PetFeedback::PetDead);
             }
-            cast(map, player, pet, action, Some(target));
+            cast(
+                map,
+                player,
+                pet,
+                action,
+                Targets {
+                    unit: Some(target),
+                    ..Default::default()
+                },
+            );
         }
         _ => {}
     }
@@ -646,10 +660,6 @@ fn abandon(map: &mut Map, player: Guid, pet: Guid) {
     }
 }
 
-fn targets_unit(t: &SpellCastTargets) -> Option<Guid> {
-    t.target_flags.get_unit().map(|u| u.unit_target)
-}
-
 /// The pet and stable opcodes; anything else is handed back.
 pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
     match msg {
@@ -664,7 +674,13 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_PET_SPELL_AUTOCAST(m) => autocast(map, g, m.guid, m.id, m.autocast_enabled),
         C::CMSG_PET_CAST_SPELL(m) => {
             if commands(map, g, m.guid) {
-                cast(map, g, m.guid, m.id, targets_unit(&m.targets));
+                cast(
+                    map,
+                    g,
+                    m.guid,
+                    m.id,
+                    crate::game::map::spells::targets_of(&m.targets),
+                );
             }
         }
         C::CMSG_PET_RENAME(m) => rename(map, g, m.pet, &m.name),

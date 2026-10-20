@@ -109,8 +109,10 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
 - **The checks** (`check.py` routes a frame by opcode): `SMSG_UPDATE_OBJECT` and `SMSG_COMPRESSED_UPDATE_OBJECT`
   (the whole create pass, plus each create's movement run through the unit copy, `movement.py`);
   `SMSG_MONSTER_MOVE` / `..._TRANSPORT` (`monster_move.py`, the spline reader a flyer's hand-built move goes
-  through); and `SMSG_SPELLLOGMISS` (`spell_log_miss.py`, the handler `0x5E7E00`, which must read the packet
-  exactly: a target is its GUID and a byte, two floats more when the packet's own byte is set). Adding a check for another handler means finding its address (the registration table at `0x465140` /
+  through); `SMSG_SPELLLOGMISS` (`spell_log_miss.py`, the handler `0x5E7E00`, which must read the packet
+  exactly: a target is its GUID and a byte, two floats more when the packet's own byte is set); and `SMSG_ATTACKERSTATEUPDATE` (`attacker_state.py`, the
+  melee handler `0x6255B0` up to the end of its parse, `0x625C60`: it must read the blow exactly, its hit info a set of
+  flags of which only 0x1 changes the layout, and hold at most five damage lines). Adding a check for another handler means finding its address (the registration table at `0x465140` /
   `0x6035C0`, or `tools/client_check` notes; each handler is registered as `mov edx, handler; mov ecx, opcode;
   call 0x5AB650`, so the opcode's `B9` and its four bytes find it), driving it from a `Client`, and stubbing what it
   reaches outside the parse.
@@ -154,7 +156,10 @@ own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than pa
 `a_corpse_and_its_bones_pass_the_client` does the same for a corpse, the bones it turns to at a reclaim, and bones
 whose owner has logged out, told to a newcomer. `a_ghost_rising_before_a_stranger_passes_the_client` drives the
 create-then-values shape on its own: a living stranger loses sight of a player's ghost and is told of her afresh
-when she rises, her create and a values block for her in one packet.
+when she rises, her create and a values block for her in one packet. `tests_p8_movement_client::a_melee_blow_of_every_kind_passes_the_client`
+runs a blow of each outcome both ways, and the flag combinations a fight can't make on its own (an off hand's, resisted,
+absorbed), through the melee parse; wow_messages reads the hit info as one value, so the harness's client can't read
+most of them (it logs them `unparsed`).
 
 ## What the tests' realm changes
 
