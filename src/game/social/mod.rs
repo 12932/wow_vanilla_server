@@ -144,11 +144,31 @@ pub fn start_timers(realm: &Arc<Realm>) {
     });
 }
 
+/// The GMs online told when the character store stops writing, and when
+/// it writes again (it keeps what it couldn't write, and logins wait).
+pub fn store_watch(realm: &Realm) {
+    let Some(failing) = realm.store.news() else {
+        return;
+    };
+    let text = if failing {
+        "The character store can't write: saves are kept to be written when it can, and logins \
+         wait meanwhile. See the server's log."
+    } else {
+        "The character store writes again: what it kept is written."
+    };
+    for o in realm.registry.all_online() {
+        if o.gm {
+            crate::game::map::chat::send_system(&o.outbound, text);
+        }
+    }
+}
+
 /// A sweep: its name for the log, and what it does.
 type Sweep = (&'static str, fn(&Realm));
 
 /// Everything time drives outside the maps.
-const SWEEPS: [Sweep; 10] = [
+const SWEEPS: [Sweep; 11] = [
+    ("the store watch", store_watch),
     ("the auction sweep", auction::sweep),
     ("the mail sweep", mail::sweep),
     ("the instance sweep", crate::game::instances::sweep),

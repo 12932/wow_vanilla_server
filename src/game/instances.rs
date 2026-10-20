@@ -135,17 +135,24 @@ impl Instances {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut i = Self::default();
         let now = now();
-        for (kind, _, data) in records {
+        use crate::game::store::parse_record;
+        for (kind, id, data) in records {
+            let id = *id as u32;
             match kind.as_str() {
                 KIND_RAID => {
-                    if let Ok(save) = serde_json::from_str::<RaidSave>(data) {
-                        i.next_id = i.next_id.max(save.id);
+                    // Every id counts, read or not (`Mails::load`).
+                    i.next_id = i.next_id.max(id);
+                    if let Some(mut save) = parse_record::<RaidSave>(KIND_RAID, id.into(), data) {
+                        save.id = id;
                         i.raids.insert(save.id, save);
                     }
                 }
                 KIND_INSTANCE => {
-                    if let Ok(mut save) = serde_json::from_str::<InstanceSave>(data) {
-                        i.next_id = i.next_id.max(save.id);
+                    i.next_id = i.next_id.max(id);
+                    if let Some(mut save) =
+                        parse_record::<InstanceSave>(KIND_INSTANCE, id.into(), data)
+                    {
+                        save.id = id;
                         // Groups don't outlive a restart, and their ids come
                         // again: a group's copy is left without an owner, for
                         // its old leader's next group to take up.
@@ -957,6 +964,25 @@ pub fn reset(map: &Map, g: Guid) {
         realm.store.delete_record(KIND_INSTANCE, u64::from(id));
         realm.maps.stop(key);
         p.outbound.send(&SMSG_INSTANCE_RESET { map: map_enum });
+    }
+}
+
+/// A character deleted: their raid binds go, as mangos's `DeleteFromDB`
+/// deletes their `character_instance` rows.
+pub fn character_deleted(realm: &Realm, me: u32) {
+    let changed: Vec<RaidSave> = {
+        let mut inst = realm.social.instances.lock();
+        inst.raids
+            .values_mut()
+            .filter(|r| r.players.contains(&me))
+            .map(|r| {
+                r.players.retain(|p| *p != me);
+                r.clone()
+            })
+            .collect()
+    };
+    for r in changed {
+        realm.store.put_record(KIND_RAID, u64::from(r.id), &r);
     }
 }
 

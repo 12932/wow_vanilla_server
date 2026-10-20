@@ -12,12 +12,12 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox **Fixed.** |
 | 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue **Fixed.** |
 | 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live **Fixed.** |
-| 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
+| 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in **Fixed.** |
 | 7 | medium | maps | One panic in a map's shutdown loses the saves of every player on it **Fixed.** |
 | 8 | medium | combat | A panic inside a death leaves its victim unkillable at no health **Fixed.** |
 | 9 | medium | combat | Triggered spells recurse without a bound (a spell that triggers itself aborts the server) **Fixed.** |
-| 10 | medium | data | A store that can't write loses every save while the realm plays on |
-| 11 | medium | data, social | A deleted character's GUID, honor, tickets and raid binds go to the next character made after a restart |
+| 10 | medium | data | A store that can't write loses every save while the realm plays on **Fixed.** |
+| 11 | medium | data, social | A deleted character's GUID, honor, tickets and raid binds go to the next character made after a restart **Fixed.** |
 | 12 | medium | net | An account can have any number of world sessions; a ban doesn't reach one on the character screen **Fixed.** |
 | 13 | medium | net | Account names keep the case typed: a lowercase login is another account in the world **Fixed.** |
 | 14 | medium | social | A refund taken before its post is written comes back after a restart **Fixed.** |
@@ -25,9 +25,9 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 16 | medium | world | A possessed unit's position isn't validated (a NaN relayed to observers, saved) **Fixed.** |
 | 17 | medium | maps | After a restart, dungeon copies are swept at once, by the time of their last kill **Fixed.** |
 | 18 | medium | maps | A teleport during a logout's countdown leaves the player stunned **Fixed.** |
-| 19 | medium | data | A record that doesn't parse is dropped at start-up and its id given out again |
-| 20 | medium | data | On a terminal, a start without the navmesh waits for an answer and never starts unattended |
-| 21 | medium | data | A second server on the same store migrates it and runs its sweeps before it fails to bind |
+| 19 | medium | data | A record that doesn't parse is dropped at start-up and its id given out again **Fixed.** |
+| 20 | medium | data | On a terminal, a start without the navmesh waits for an answer and never starts unattended **Fixed.** |
+| 21 | medium | data | A second server on the same store migrates it and runs its sweeps before it fails to bind **Fixed.** |
 
 The rest (about 35, low or speed) are in each area's section below, with the "checked and sound" lists.
 

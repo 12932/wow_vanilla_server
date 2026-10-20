@@ -959,6 +959,8 @@ mod tests_review3;
 #[cfg(test)]
 mod tests_review4;
 #[cfg(test)]
+mod tests_review5_data;
+#[cfg(test)]
 mod tests_review5_maps;
 #[cfg(test)]
 mod tests_review5_social;
@@ -1218,8 +1220,10 @@ pub struct Realm {
     pub registry: Registry,
     pub maps: Maps,
     pub social: social::Social,
-    pub next_character: AtomicU32,
-    pub next_item: AtomicU32,
+    /// The next character and item GUIDs: kept by the store with its
+    /// writes, so none is given twice (`Store::keep_counters`).
+    pub next_character: Arc<AtomicU32>,
+    pub next_item: Arc<AtomicU32>,
     /// Bones ids, and the kept bones of maps yet to start.
     pub bones: map::bones::Kept,
     /// The auth server's sessions, for the world handshake.
@@ -1257,6 +1261,9 @@ impl Realm {
                 level: n.level.into(),
             });
         }
+        let next_character = Arc::new(AtomicU32::new(startup.max_character_guid + 1));
+        let next_item = Arc::new(AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1));
+        store.keep_counters(next_character.clone(), next_item.clone());
         let realm = Arc::new(Self {
             config: parking_lot::RwLock::new(Arc::new(config)),
             config_generation: std::sync::atomic::AtomicU64::new(0),
@@ -1266,8 +1273,8 @@ impl Realm {
             registry,
             maps: Maps::default(),
             social,
-            next_character: AtomicU32::new(startup.max_character_guid + 1),
-            next_item: AtomicU32::new(startup.max_item_guid.max(max_mail_item) + 1),
+            next_character,
+            next_item,
             bones: map::bones::Kept::load(startup.bones, startup.max_bones_id),
             users,
         });
@@ -1381,9 +1388,44 @@ impl Realm {
     }
 }
 
-/// Run the world server on port 8085 until a shutdown signal, then save
-/// everyone and return.
-pub async fn run(users: crate::auth::UserCache) {
+/// The world's data for a start over a store with `characters`, or why
+/// the server mustn't start on it. Data looked for (`[world] data_dir`, or
+/// `data/db` there) must load whole; with none looked for, the empty world
+/// is only for a store with no characters (a bare checkout). A character
+/// who logs in on a world without its data is saved without what the data
+/// gives them, their skills first, for good.
+pub fn world_data(dir: Option<&std::path::Path>, characters: usize) -> Result<GameData, String> {
+    match dir {
+        Some(dir) => data::load::load_checked(dir).map_err(|e| {
+            format!(
+                "the world's data won't load: {e}. Not starting: a character who logged in \
+                 would be saved without their skills. Fix it, or point [world] data_dir at \
+                 the data"
+            )
+        }),
+        None if characters > 0 => Err(format!(
+            "no world data (no {} and no [world] data_dir), and the store has {characters} \
+             characters. Not starting: a character who logged in would be saved without \
+             their skills. Put vmangos.sqlite and dbc.sqlite in {0}, or set [world] data_dir",
+            crate::config::DEFAULT_DATA_DIR
+        )),
+        None => {
+            warn!(
+                "no world data: the world is empty. Put vmangos.sqlite and dbc.sqlite in {}, or set [world] data_dir",
+                crate::config::DEFAULT_DATA_DIR
+            );
+            Ok(GameData::empty())
+        }
+    }
+}
+
+/// Where the world listens.
+pub const WORLD_ADDRESS: &str = "0.0.0.0:8085";
+
+/// Run the world server on `listener` (bound to [`WORLD_ADDRESS`] before
+/// the store was touched) until a shutdown signal, then save everyone and
+/// return the process's exit code: 2 if it can't start.
+pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
     let cfg = crate::config::config();
     let (store, startup) = Store::open(&cfg.world.characters_db).unwrap_or_else(|e| {
         panic!(
@@ -1391,14 +1433,11 @@ pub async fn run(users: crate::auth::UserCache) {
             cfg.world.characters_db.display()
         )
     });
-    let data = match &cfg.world.data_dir {
-        Some(dir) => data::load::load(dir),
-        None => {
-            warn!(
-                "no world data: the world is empty. Put vmangos.sqlite and dbc.sqlite in {}, or set [world] data_dir",
-                crate::config::DEFAULT_DATA_DIR
-            );
-            GameData::empty()
+    let data = match world_data(cfg.world.data_dir.as_deref(), startup.names.len()) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::error!("{e}");
+            return 2;
         }
     };
     let realm = Realm::new(
@@ -1418,11 +1457,8 @@ pub async fn run(users: crate::auth::UserCache) {
     if crate::tracy::on() {
         tokio::spawn(plot_realm(realm.clone()));
     }
-    let listener = TcpListener::bind("0.0.0.0:8085")
-        .await
-        .expect("bind the world listener on 0.0.0.0:8085");
     info!("wow_vanilla_server {}", crate::VERSION);
-    info!("world: listening on 0.0.0.0:8085");
+    info!("world: listening on {WORLD_ADDRESS}");
     let accept = {
         let realm = realm.clone();
         async move {
@@ -1455,6 +1491,7 @@ pub async fn run(users: crate::auth::UserCache) {
     info!("shutting down: saving everyone");
     realm.shutdown().await;
     info!("saved; exiting");
+    0
 }
 
 /// Tracy's plots of the realm, once a second while Tracy is on: who is

@@ -58,8 +58,9 @@ save_interval_secs = 300
 characters_db = "characters.sqlite"
 
 # The directory with `vmangos.sqlite` and `dbc.sqlite`, as Thistle
-# Tea exports them; `data/db` if unset and there. Without it the
-# world is empty.
+# Tea exports them; `data/db` if unset and there. The server won't
+# start on data that is missing or doesn't load; without any, the
+# world is empty, and only for a store with no characters.
 # Default unset. Needs a restart. mangos: DataDir.
 #data_dir =
 

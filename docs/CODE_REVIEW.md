@@ -60,6 +60,24 @@ missing world data). Being fixed (your go, 2026-10-20): each fix's line below.
 - #9 fixed: spells go off at most 32 inside one another on a thread (`spells::execute`, a depth kept by a guard as
   procs' `Deeper`); the one past it isn't cast, logged at `debug`. 1.12's deepest chain, 20, lands whole.
 
+- **#6** fixed: the start refuses data that was looked for and doesn't load (missing, an LFS pointer, unreadable, no
+  creatures, spells, areas or skill lines), and no data at all over a store with characters (`game::world_data`); a
+  skill the data gives no slot is saved as it was loaded (`skills::saved`).
+- **#11** fixed: the next character and item GUIDs are kept in the store with every write (migration 5,
+  `counters`; `Store::keep_counters`), so none is handed out twice; a deleted character's honor entry and raid binds
+  go with them, as mangos's `DeleteFromDB`.
+- **#19** fixed: records (honor, mail, auctions, guilds, charters, copies, tickets) load field by field as a
+  character's state does (`store::parse_record`), one that doesn't read at all is logged at `error` and left in the
+  store, and each kind's next id counts every record's id; `.honor points` and `set_rank_points` refuse a NaN.
+- **#21** fixed: before the store is touched the start takes a lock beside it (`characters.sqlite.lock`, `flock`;
+  `store::lock`) and binds the world's port, and refuses to go on (exit 2) if either is taken; a store about to be
+  migrated is copied first (`characters.sqlite.v4.bak`, `VACUUM INTO`).
+- **#20** fixed: the start's offer to build the navmesh waits 30 s for a typed answer (`ui::confirm_within`), then
+  starts as it is; a "no" or no answer is remembered (`data/setup-declined.txt`) and only the hint is logged after.
+- **#10** fixed: saves the store can't write (full disk, I/O, read-only, busy) are kept in order, superseded ones
+  dropped, and written ahead of the next or every 5 s; reads see a kept row; logins wait meanwhile, the GMs are told
+  (`social::store_watch`), and the log says so once a minute.
+
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**
   - **saves apart:** a trade, mail sent or taken, an auction, a charter or emblem bought were each saved on both

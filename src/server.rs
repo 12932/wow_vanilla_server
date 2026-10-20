@@ -75,6 +75,27 @@ async fn async_main(start: Start) -> u8 {
     }
     crate::config::install(cfg);
     let cfg = crate::config::config();
+    // Before anything touches the store: one server a store, and the
+    // world's port ours. A second server (the next process started before
+    // the last has gone) stops here, not after it has migrated the store
+    // and swept the realm's records on its own copy of them.
+    let _lock = match crate::game::store::lock(&cfg.world.characters_db) {
+        Ok(lock) => lock,
+        Err(e) => {
+            tracing::error!("{e}");
+            return 2;
+        }
+    };
+    let world = match tokio::net::TcpListener::bind(crate::game::WORLD_ADDRESS).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!(
+                "can't listen for the world on {}: {e}",
+                crate::game::WORLD_ADDRESS
+            );
+            return 2;
+        }
+    };
     match crate::accounts::Accounts::open(
         &cfg.world.characters_db,
         cfg.accounts.creation,
@@ -100,9 +121,9 @@ async fn async_main(start: Start) -> u8 {
         ))
     };
     // The world returns once it has saved everyone after a shutdown signal.
-    crate::game::run(users).await;
+    let code = crate::game::run(users, world).await;
     auth_server.abort();
-    0
+    code
 }
 
 /// The log's filter: `RUST_LOG` if it is set and reads, else `default`.

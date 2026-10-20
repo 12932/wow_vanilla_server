@@ -414,20 +414,42 @@ pub fn startup(missing: Missing, dirs: &Dirs, terminal: bool) -> Startup {
     }
 }
 
+/// How long the start's question waits for an answer before the server
+/// starts as it is: a server started again by a script, in tmux or screen,
+/// has no one to answer it.
+pub const STARTUP_QUESTION_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The note that the start's question was declined (or not answered), so
+/// it isn't asked again: beside the navmesh's directory (`data/`).
+pub fn declined_note(dirs: &Dirs) -> PathBuf {
+    dirs.nav.with_file_name("setup-declined.txt")
+}
+
 /// At the server's start: if the navmesh or the terrain is missing, offer
 /// the setup when someone is at a terminal, else log how to make them.
 /// Whether to start the server.
 pub fn at_startup(world: &mut crate::config::WorldConfig) -> bool {
-    at_startup_with(world, terminal(), &Rustigator)
+    at_startup_with(world, terminal(), &Rustigator, &mut |question| {
+        ui::confirm_within(question, true, STARTUP_QUESTION_WAIT)
+    })
 }
 
+/// [`at_startup`], asking with `ask`. A "no", or no answer within
+/// [`STARTUP_QUESTION_WAIT`], is remembered ([`declined_note`]): the start
+/// asks no more, and logs how to build what is missing instead.
 pub fn at_startup_with(
     world: &mut crate::config::WorldConfig,
     terminal: bool,
     builder: &dyn Builder,
+    ask: &mut dyn FnMut(&str) -> ui::Answer,
 ) -> bool {
     let dirs = Dirs::of(world);
-    let question = match startup(Missing::of(&dirs, builder), &dirs, terminal) {
+    let note = declined_note(&dirs);
+    let question = match startup(
+        Missing::of(&dirs, builder),
+        &dirs,
+        terminal && !note.exists(),
+    ) {
         Startup::Ready => return true,
         Startup::Hint(hint) => {
             tracing::warn!("{hint}");
@@ -438,10 +460,28 @@ pub fn at_startup_with(
             question
         }
     };
-    if ui::confirm(&question, true) != Some(true) {
-        say(
-            "Starting as it is: `cargo run --release --bin wvs-setup` builds what is missing later.",
-        );
+    let answer = ask(&question);
+    if answer != ui::Answer::Yes {
+        let why = if answer == ui::Answer::Unanswered {
+            "No answer: starting"
+        } else {
+            "Starting"
+        };
+        say(format!(
+            "{why} as it is: `cargo run --release --bin wvs-setup` builds what is missing later. \
+             Not asked again while {} is there.",
+            note.display()
+        ));
+        if let Some(dir) = note.parent().filter(|d| !d.as_os_str().is_empty()) {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(
+            &note,
+            "The server's start doesn't offer to build the navmesh and the terrain while this file \
+             is here: it was declined, or not answered. Build them with `cargo run --release --bin \
+             wvs-setup` (or `wvs-setup`), or delete this file to be asked again.\n",
+        )
+        .inspect_err(|e| tracing::debug!("{}: {e}", note.display()));
         return true;
     }
     let start = match run(&Options::default(), &dirs, builder) {
@@ -523,9 +563,59 @@ mod tests {
             ..Default::default()
         };
         let started = Instant::now();
-        assert!(at_startup_with(&mut world, false, &Fake::default()));
+        assert!(at_startup_with(
+            &mut world,
+            false,
+            &Fake::default(),
+            &mut |q| panic!("asked {q}")
+        ));
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(!t.0.join("nav").exists() && !t.0.join("terrain").exists());
+    }
+
+    /// Review 5 #20: at a terminal with no one there, the start waited for
+    /// an answer for good. It starts as it is once the question goes
+    /// unanswered, and a "no" or no answer isn't asked again.
+    #[test]
+    fn start_up_at_a_terminal_starts_unanswered_and_asks_once() {
+        let t = Temp::new("startup-unanswered");
+        let mut world = crate::config::WorldConfig {
+            nav_dir: Some(t.0.join("nav")),
+            terrain_dir: Some(t.0.join("terrain")),
+            ..Default::default()
+        };
+        let mut asked = 0;
+        assert!(at_startup_with(
+            &mut world,
+            true,
+            &Fake::default(),
+            &mut |_| {
+                asked += 1;
+                ui::Answer::Unanswered
+            }
+        ));
+        assert_eq!(asked, 1);
+        assert!(t.0.join("setup-declined.txt").exists());
+        assert!(!t.0.join("nav").exists(), "nothing built");
+        assert!(at_startup_with(
+            &mut world,
+            true,
+            &Fake::default(),
+            &mut |q| panic!("asked {q} again")
+        ));
+        // The question's wait ends, and a line typed in time is the answer.
+        let started = Instant::now();
+        let none = ui::line_within(
+            || {
+                std::thread::sleep(Duration::from_secs(5));
+                Some("y".into())
+            },
+            Duration::from_millis(50),
+        );
+        assert_eq!(none, None);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let typed = ui::line_within(|| Some("n\n".into()), Duration::from_secs(5));
+        assert_eq!(typed, Some(Some("n\n".into())));
     }
 
     #[test]

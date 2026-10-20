@@ -517,6 +517,73 @@ pub fn pick(prompt: &str, items: &[String], checked: &[bool]) -> Option<Vec<usiz
     restore(answer)
 }
 
+/// The answer to a question with a time limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    Yes,
+    No,
+    /// Nothing typed in time: no one is there (a server started again by
+    /// a script, in tmux or screen).
+    Unanswered,
+}
+
+/// A yes or no, typed and Enter, within `limit`: `default` for Enter
+/// alone, [`Answer::No`] for the end of the input. A line read, not a key,
+/// so that a question left unanswered leaves the terminal as it was.
+pub fn confirm_within(prompt: &str, default: bool, limit: Duration) -> Answer {
+    let choices = if default { "[Y/n]" } else { "[y/N]" };
+    eprint!(
+        "{prompt} {choices} (starting as it is in {} s) ",
+        limit.as_secs()
+    );
+    let _ = std::io::stderr().flush();
+    let answer = line_within(
+        || {
+            let mut line = String::new();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => None,
+                Ok(_) => Some(line),
+            }
+        },
+        limit,
+    );
+    match answer {
+        None => {
+            eprintln!();
+            Answer::Unanswered
+        }
+        Some(None) => Answer::No,
+        Some(Some(line)) => match line.trim().chars().next().map(|c| c.to_ascii_lowercase()) {
+            None => {
+                if default {
+                    Answer::Yes
+                } else {
+                    Answer::No
+                }
+            }
+            Some('y') => Answer::Yes,
+            Some(_) => Answer::No,
+        },
+    }
+}
+
+/// What `read` gives, if it gives it within `limit` (`None` when it
+/// doesn't). It reads on a thread of its own, left waiting when the time is
+/// up: nothing else reads the input after.
+pub fn line_within(
+    read: impl FnOnce() -> Option<String> + Send + 'static,
+    limit: Duration,
+) -> Option<Option<String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("question".into())
+        .spawn(move || {
+            let _ = tx.send(read());
+        })
+        .ok()?;
+    rx.recv_timeout(limit).ok()
+}
+
 /// The cursor back, which a prompt cut short leaves hidden.
 fn restore<T>(answer: dialoguer::Result<Option<T>>) -> Option<T> {
     match answer {

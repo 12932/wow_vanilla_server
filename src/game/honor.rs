@@ -132,8 +132,11 @@ impl Ledger {
     pub fn load(records: &[(String, u64, String)], day: i64, weekday: u8) -> Self {
         let mut l = Self::new(day, weekday);
         let mut oldest: Option<i64> = None;
-        for (_, _, data) in records.iter().filter(|r| r.0 == KIND) {
-            if let Ok(e) = serde_json::from_str::<Entry>(data) {
+        for (_, id, data) in records.iter().filter(|r| r.0 == KIND) {
+            // A field that doesn't read goes back to its default, not the
+            // whole entry (its lifetime kills and highest rank).
+            if let Some(mut e) = crate::game::store::parse_record::<Entry>(KIND, *id, data) {
+                e.guid = *id as u32;
                 if let Some(w) = e.last_settled_week {
                     oldest = Some(oldest.map_or(w, |o: i64| o.min(w)));
                 }
@@ -151,6 +154,13 @@ impl Ledger {
             }
         }
         l
+    }
+
+    /// A character deleted: their entry goes (mangos's honor is columns of
+    /// the row it deletes). Whether there was one, to delete from the store.
+    pub fn forget(&mut self, guid: u32) -> bool {
+        self.dirty.remove(&guid);
+        self.entries.remove(&guid).is_some()
     }
 
     /// A character honor knows of, with its team and level now.
@@ -345,7 +355,12 @@ impl Ledger {
     }
 
     /// For a GM: set rank points (capped by level).
+    /// Not a NaN or an infinity: `clamp` keeps a NaN, and it is saved as
+    /// `null`.
     pub fn set_rank_points(&mut self, guid: u32, points: f32) {
+        if !points.is_finite() {
+            return;
+        }
         if let Some(e) = self.entries.get_mut(&guid) {
             e.rank_points = points.clamp(0.0, rank_maximum(e.level));
             e.highest_rank = e.highest_rank.max(rank_number(e.rank_points));

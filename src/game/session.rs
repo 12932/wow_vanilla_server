@@ -618,6 +618,12 @@ impl Session {
             crate::game::social::auction::character_deleted(&self.realm, counter);
             crate::game::social::friends::character_deleted(&self.realm, g);
             crate::game::social::groups::character_deleted(&self.realm, g);
+            crate::game::instances::character_deleted(&self.realm, counter);
+            if self.realm.social.honor.lock().forget(counter) {
+                self.realm
+                    .store
+                    .delete_record(crate::game::honor::KIND, u64::from(counter));
+            }
             WorldResult::CharDeleteSuccess
         } else {
             WorldResult::CharDeleteFailed
@@ -677,6 +683,11 @@ impl Session {
                 .online(g)
                 .or_else(|| self.realm.registry.online_for_account(&self.account));
             let Some(existing) = existing else {
+                // A store that can't write would lose what they did: they
+                // wait until it can (the GMs are told).
+                if self.realm.store.failing() {
+                    return login_failed(&self.outbound, WorldResult::CharLoginFailed);
+                }
                 match self.enter(g, &name).await {
                     Entered::Done => return,
                     // Another login of the account went online meanwhile.
