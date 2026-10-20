@@ -745,6 +745,13 @@ showed a difference. Phase 2 takes what is left.
   `wrong-for-1.12` (an unflagged player's pet at a flagged enemy, autocast under a stun, a pet kept at any
   distance, a partial path's point). **For phase 2:** EventAI for owned creatures (`event_ai::fire` skips every
   creature with an owner), how long a pet stays in its fight, guardians' distance and map rules, Devour Magic.
+- **9entity:** a summon's going is told to its summoner while it is still there (its despawn event's condition on
+  it can be met); a new pet comes in at its passives' full health (an imp had 60 of 160); a demon keeps its class
+  armor over a level row with none (mangos-zero's). **Its calls:** a creature notices a pet at its master's level
+  (Thistle Tea; mangos the unit's own); `SMSG_SPELL_GO` lists every target as hit, misses apart (1.12's layout).
+  **For phase 2:** summon spots unchecked against terrain and sight; triggered casts' cast-end procs (Arcane
+  Missiles spends one Unstable Power stack a channel); `inverseEffectMask` unloaded; script command 27's level; **a
+  player's wild summon isn't tapped by its creator and can give XP.**
 
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
