@@ -323,3 +323,76 @@ async fn each_viewers_own_view_passes_the_client() {
     );
     emu::run_checker(&check_py, &wow_exe, &capture);
 }
+
+async fn group(leader: &mut Client, member: &mut Client, name: &str) {
+    leader.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+    member
+        .wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+    member.send(CMSG_GROUP_ACCEPT {}).await;
+    leader
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => (!l.members.is_empty()).then_some(()),
+            _ => None,
+        })
+        .await;
+}
+
+/// A corpse's loot sparkles (`UNIT_DYNFLAG_LOOTABLE`) only for those who
+/// may open it, as mangos's per-viewer `Loot::CanLoot` shows it: under
+/// round robin its looter, not the rest of the group it fell to, though
+/// it isn't grey to them (theirs is the kill); nor for one who comes
+/// later from outside it, in their create.
+#[tokio::test]
+async fn a_corpses_loot_shows_only_to_those_who_may_open_it() {
+    use crate::game::map::loot::{DYNFLAG_LOOTABLE, Loot};
+    const TAPPED: u32 = crate::game::map::ai::DYNFLAG_TAPPED;
+    let realm = harness::realm_with(world());
+    let (mut a, ga, map) = enter(&realm, "A", "Ari", Race::Dwarf, Class::Hunter).await;
+    let (mut c, gc, _) = enter(&realm, "C", "Cy", Race::Dwarf, Class::Hunter).await;
+    group(&mut a, &mut c, "Cy").await;
+    let boar = place(&map, ga, BOAR, 0x71_0021, 6.0).await;
+    a.sees(boar).await;
+    c.sees(boar).await;
+    a.clear();
+    c.clear();
+    on(&map, move |m| {
+        let realm = m.realm.clone();
+        let b = m.creature_mut(boar).unwrap();
+        crate::game::map::tap::take(&realm, b, ga);
+        b.loot = Some(Loot {
+            gold: 10,
+            allowed: vec![ga, gc],
+            method: Some(GroupLootSetting::RoundRobin),
+            assigned: Some(ga),
+            ..Default::default()
+        });
+        b.fields
+            .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, true);
+    })
+    .await;
+    let mine = flags_of(&mut a, boar).await;
+    let theirs = flags_of(&mut c, boar).await;
+    assert_eq!(
+        mine & (DYNFLAG_LOOTABLE | TAPPED),
+        DYNFLAG_LOOTABLE,
+        "the looter's"
+    );
+    assert_eq!(
+        theirs & (DYNFLAG_LOOTABLE | TAPPED),
+        0,
+        "the group's other member"
+    );
+    // One who comes later, outside the group, in their create.
+    let created = {
+        let (mut c2, _, _) = enter(&realm, "D", "Di", Race::Dwarf, Class::Hunter).await;
+        create_of(&mut c2, boar).await
+    };
+    assert_eq!(
+        created.get(&UNIT_DYNAMIC_FLAGS).copied().unwrap_or(0) & DYNFLAG_LOOTABLE,
+        0,
+        "nor in a stranger's create"
+    );
+}

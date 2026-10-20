@@ -23,8 +23,10 @@ use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::auras::{AURA_EMPATHY, AURA_MOD_STALKED, Auras, DYNFLAG_TRACK_UNIT};
 use crate::game::map::creature::Creature;
+use crate::game::map::loot::DYNFLAG_LOOTABLE;
 use crate::game::map::player::Player;
 use crate::game::update::{self, Batch};
+use wow_world_messages::vanilla::GroupLootSetting;
 
 /// Those who see a unit otherwise than a stranger does, but for its tap.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,11 +38,55 @@ pub struct Viewers {
     pub markers: Vec<Guid>,
     /// Whose Empathy auras are on it (a creature's).
     pub empathic: Vec<Guid>,
+    /// Who may open a lootable corpse's loot, where not everyone may.
+    pub loot: Option<LootRights>,
+}
+
+/// Who may open a corpse's loot (`Loot::may_loot`): its owner alone, or
+/// the group's members near at the kill, round robin's looter alone
+/// among them. Another sees no loot on it (mangos's `Loot::CanLoot` in
+/// its per-viewer `UNIT_DYNFLAG_LOOTABLE`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LootRights {
+    owner: Option<Guid>,
+    allowed: Vec<Guid>,
+    looter: Option<Guid>,
+}
+
+impl LootRights {
+    fn of(c: &Creature) -> Option<Self> {
+        let l = c.loot.as_ref()?;
+        if c.fields.get_u32(UNIT_DYNAMIC_FLAGS) & DYNFLAG_LOOTABLE == 0
+            || (l.owner.is_none() && l.allowed.is_empty())
+        {
+            return None;
+        }
+        let mut allowed = l.allowed.clone();
+        allowed.sort_unstable();
+        Some(Self {
+            owner: l.owner,
+            allowed,
+            looter: l
+                .assigned
+                .filter(|_| l.method == Some(GroupLootSetting::RoundRobin)),
+        })
+    }
+
+    /// Whether `g` may not open it.
+    fn bars(&self, g: Guid) -> bool {
+        if !self.allowed.is_empty() {
+            return !self.allowed.contains(&g) || self.looter.is_some_and(|a| a != g);
+        }
+        self.owner.is_some_and(|o| o != g)
+    }
 }
 
 impl Viewers {
     pub fn is_empty(&self) -> bool {
-        self.master.is_none() && self.markers.is_empty() && self.empathic.is_empty()
+        self.master.is_none()
+            && self.markers.is_empty()
+            && self.empathic.is_empty()
+            && self.loot.is_none()
     }
 
     pub fn of_creature(c: &Creature) -> Self {
@@ -55,6 +101,7 @@ impl Viewers {
             master,
             markers: casters(&c.auras, AURA_MOD_STALKED),
             empathic: casters(&c.auras, AURA_EMPATHY),
+            loot: LootRights::of(c),
         }
     }
 
@@ -85,6 +132,8 @@ fn casters(auras: &Auras, kind: u32) -> Vec<Guid> {
 pub struct View {
     /// Outside its tap.
     pub grey: bool,
+    /// Its loot isn't theirs to open.
+    pub barred: bool,
     /// Its Hunter's Mark is theirs.
     pub marker: bool,
     /// Its master.
@@ -113,6 +162,9 @@ impl View {
         let mut flags = raw;
         if self.grey {
             flags = crate::game::map::tap::grey(flags);
+        }
+        if self.barred {
+            flags &= !DYNFLAG_LOOTABLE;
         }
         if !self.marker {
             flags &= !DYNFLAG_TRACK_UNIT;
@@ -158,6 +210,7 @@ pub fn view_of(map: &Map, observer: Guid, object: Guid) -> View {
 
 fn creature_view(viewers: &Viewers, observer: Guid) -> View {
     View {
+        barred: viewers.loot.as_ref().is_some_and(|l| l.bars(observer)),
         marker: viewers.markers.contains(&observer),
         master: viewers.master == Some(observer),
         empathy: viewers.empathic.contains(&observer),
@@ -293,7 +346,7 @@ pub fn tell_creature(
     // flags go to some otherwise than they are, or what only its master
     // or an Empathy sees changed: else the one block for all.
     let personal = told
-        || (flags_sent && (c.tapped_by.is_some() || !plain(&c.fields)))
+        || (flags_sent && (c.tapped_by.is_some() || viewers.loot.is_some() || !plain(&c.fields)))
         || ((viewers.master.is_some() || !viewers.empathic.is_empty())
             && owner_only_dirty(&c.fields));
     if !personal {
