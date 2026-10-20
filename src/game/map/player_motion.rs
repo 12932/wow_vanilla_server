@@ -159,6 +159,23 @@ pub fn control_path(
     (out.len() >= 2).then_some(out)
 }
 
+/// A confused unit's walk from `at` to `to`: the navmesh's path, cut at
+/// [`CONFUSION_PATH`], if every point of it keeps within the circle about
+/// `anchor` (Thistle Tea's "rejects detours that leave the confusion
+/// circle"). `None` for a detour that leaves it, or no way at all: the
+/// unit pauses instead.
+pub fn confusion_route(
+    map: &mut Map,
+    anchor: Vector3d,
+    at: Vector3d,
+    to: Vector3d,
+) -> Option<Vec<Vector3d>> {
+    control_path(map, at, to, CONFUSION_PATH).filter(|p| {
+        p.iter()
+            .all(|x| dist(*x, anchor) <= CONFUSION_RADIUS + 0.01)
+    })
+}
+
 /// How a player's auras and control would have them moved now.
 fn wanted(map: &Map, g: Guid) -> Option<Mode> {
     let p = map.players.get(&g)?;
@@ -422,12 +439,8 @@ pub fn update(map: &mut Map) {
             }
             Mode::Confusion { anchor } => {
                 let pause = Duration::from_millis(rng.random_range(500..1500));
-                let route = confusion_point(map, anchor, &mut rng).and_then(|to| {
-                    control_path(map, at, to, CONFUSION_PATH).filter(|p| {
-                        p.iter()
-                            .all(|x| dist(*x, anchor) <= CONFUSION_RADIUS + 0.01)
-                    })
-                });
+                let route = confusion_point(map, anchor, &mut rng)
+                    .and_then(|to| confusion_route(map, anchor, at, to));
                 match route {
                     Some(route) => walk(map, g, route, false, pause),
                     None => wait(map, g, pause),
