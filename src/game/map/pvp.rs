@@ -300,13 +300,16 @@ pub fn entrance(map: &mut Map, g: Guid, trigger: u32) {
     } else {
         let side = if e.team == 469 { "Alliance" } else { "Horde" };
         let min = data.battlegrounds.get(&e.bg).map_or(10, |t| t.min_level);
-        map.system_message(
-            g,
-            &format!(
-                "You must be in the {side} and at least {} level to enter.",
-                ordinal(min)
-            ),
-        );
+        // An area trigger's refusal, as mangos tells one
+        // (`SendAreaTriggerMessage`) and Thistle Tea this.
+        if let Some(p) = map.players.get(&g) {
+            p.outbound.send(&SMSG_AREA_TRIGGER_MESSAGE {
+                message: format!(
+                    "You must be in the {side} and at least {} level to enter.",
+                    ordinal(min)
+                ),
+            });
+        }
     }
     if e.exit_map == map.key.map {
         let (x, y, z, o) = e.exit;

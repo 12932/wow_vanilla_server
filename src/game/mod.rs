@@ -933,6 +933,8 @@ mod tests_p8_world_units;
 #[cfg(test)]
 mod tests_p9_player_bank;
 #[cfg(test)]
+mod tests_p9_player_bg;
+#[cfg(test)]
 mod tests_p9_player_control;
 #[cfg(test)]
 mod tests_p9_player_items;
