@@ -1196,6 +1196,11 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             .texts
             .push((text, condition));
     }
+    for (spawn, text) in rows(db, "SELECT npc_guid, textid FROM npc_gossip", |c| {
+        (c.u32("npc_guid"), c.u32("textid"))
+    }) {
+        npc.npc_gossip.insert(spawn, text);
+    }
     for (menu, o) in rows(
         db,
         "SELECT * FROM gossip_menu_option ORDER BY menu_id, id",
