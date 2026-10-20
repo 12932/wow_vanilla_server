@@ -894,11 +894,16 @@ fn let_go(realm: &Realm, key: MapKey, event: MapEvent) {
     match event {
         MapEvent::Arrive(a) => {
             let Arrival { kind, online } = *a;
-            if let ArrivalKind::Transfer(mut p) = kind {
-                p.row.map = key.map;
-                realm.store.save(p.to_row(Instant::now()));
+            match kind {
+                // From the world: they leave it as at a logout.
+                ArrivalKind::Transfer(mut p) => {
+                    p.row.map = key.map;
+                    realm.store.save(p.to_row(Instant::now()));
+                    social::went_offline(realm, online.guid);
+                }
+                // Never in it: no one heard they came.
+                ArrivalKind::Login(_) => realm.registry.go_offline(online.guid),
             }
-            realm.registry.go_offline(online.guid);
             let _ = online.session.send(crate::game::session::Control::Kick);
         }
         MapEvent::Shutdown(reply) => {
@@ -1269,8 +1274,7 @@ impl Map {
     pub fn save_and_go_offline(&mut self, mut p: Player) {
         let row = p.to_row(self.now);
         self.realm.store.save(row);
-        social::logged_out(self, p.guid);
-        self.realm.registry.go_offline(p.guid);
+        social::went_offline(&self.realm, p.guid);
     }
 
     /// Save the players and records an item or money just moved between,

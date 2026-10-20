@@ -232,3 +232,52 @@ async fn a_copy_stopped_with_an_arrival_in_its_queue_saves_the_player() {
     b.login(gb).await;
     assert_eq!(map_of(&realm, gb).key, MapKey::world(0));
 }
+
+/// Review 5's maps 6: a player let go by a map that won't take them (a copy
+/// its raid's reset took, as they were sent its way) is saved and goes
+/// offline as at a logout: out of their channels. Before, the online list
+/// alone: they stayed in their channels, and so in their battleground
+/// queues, online to their friends and group.
+#[tokio::test]
+async fn a_player_let_go_by_a_copy_that_has_gone_leaves_their_channels() {
+    let realm = realm();
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    join_peon(&realm, &b).await;
+    let key = MapKey {
+        map: DUNGEON,
+        instance: 9,
+    };
+    realm.social.instances.lock().saves.insert(
+        key.instance,
+        instances::InstanceSave {
+            id: key.instance,
+            map: DUNGEON,
+            expired: true,
+            ..Default::default()
+        },
+    );
+    let stale = realm.maps.get(&realm, key);
+    realm.maps.stop(key);
+    until("the copy stopped", || stale.is_closed()).await;
+    let mut bob = on(&map_of(&realm, gb), move |m| m.take_player(gb))
+        .await
+        .expect("Bob");
+    bob.fields.set_u32(PLAYER_FIELD_COINAGE, 4321);
+    let online = bob.online.clone();
+    let took = crate::game::map::deliver(
+        &realm,
+        stale,
+        Box::new(Arrival {
+            kind: ArrivalKind::Transfer(Box::new(bob)),
+            online,
+        }),
+    );
+    assert!(took.is_none(), "let go");
+    assert!(realm.registry.online(gb).is_none(), "offline");
+    assert_eq!(money_saved(&realm, gb).await, 4321, "saved");
+    assert!(
+        realm.social.channels.lock().of(gb).is_empty(),
+        "out of his channels"
+    );
+}

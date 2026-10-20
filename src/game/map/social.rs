@@ -505,10 +505,20 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     groups::logged_in(&map.realm, g);
 }
 
-/// A player going offline leaves their channels; their friends and group
-/// hear of it.
-pub fn logged_out(map: &Map, g: Guid) {
-    let realm = &map.realm;
+/// A player has gone from the world, however they went (a logout, their
+/// client gone, let go with a map, reaped, or dropped by a panic): they
+/// leave the social world ([`logged_out`]), then the online list. Every
+/// way out comes here. Before, those let go or lost with a map left the
+/// online list alone, and stayed in their channels and battleground
+/// queues, online to their friends and group.
+pub fn went_offline(realm: &crate::game::Realm, g: Guid) {
+    logged_out(realm, g);
+    realm.registry.go_offline(g);
+}
+
+/// A player going offline leaves their channels and battleground queues;
+/// their friends, guild and group hear of it.
+fn logged_out(realm: &crate::game::Realm, g: Guid) {
     if let Some(me) = realm.registry.online(g) {
         channels::leave_all(realm, &me);
     }
