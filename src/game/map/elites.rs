@@ -471,15 +471,21 @@ pub fn released(map: &mut Map, who: Champion) {
         if let Some(s) = crate::game::map::event_ai::scripted_mut(map, *e) {
             s.follow = None;
         }
+        // Out of a fight, one following its champion stops where it has
+        // come to, to wander from there.
+        if wander > 0.0
+            && map
+                .creature(*e)
+                .is_some_and(|c| !c.combat.attacking && !c.evading)
+        {
+            crate::game::map::ai::rest(map, *e, Some(now));
+        }
         if let Some(c) = map.creature_mut(*e) {
             c.home = c.position;
             c.home_orientation = c.orientation;
             if wander > 0.0 {
                 c.movement_type = crate::game::map::creature::MOVEMENT_RANDOM;
                 c.wander_distance = wander;
-                if !c.combat.attacking && !c.evading {
-                    c.motion = crate::game::map::creature::Motion::Idle { until: Some(now) };
-                }
             }
         }
     }

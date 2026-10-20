@@ -87,6 +87,8 @@ mod tests_dead_body;
 #[cfg(test)]
 mod tests_elites;
 #[cfg(test)]
+mod tests_entity_rest;
+#[cfg(test)]
 mod tests_entity_views;
 #[cfg(test)]
 mod tests_events;

@@ -596,8 +596,8 @@ fn release_agathelos(map: &mut Map) {
         }
         if let Some(c) = map.creature_mut(g) {
             c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
-            c.motion = crate::game::map::creature::Motion::Idle { until: Some(now) };
         }
+        crate::game::map::ai::rest(map, g, Some(now));
     }
 }
 

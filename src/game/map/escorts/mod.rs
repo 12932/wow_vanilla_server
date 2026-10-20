@@ -527,8 +527,8 @@ fn set_out(map: &mut Map, player: Guid, quest: u32, creature: Guid) {
     if let Some(c) = map.creature_mut(creature) {
         c.fields.set_u32(UNIT_NPC_FLAGS, 0);
         c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
-        c.motion = Motion::Idle { until: None };
     }
+    crate::game::map::ai::rest(map, creature, None);
     map.escorts.push(Active {
         quest,
         player,

@@ -8,10 +8,18 @@ use wow_world_messages::vanilla::SMSG_CLIENT_CONTROL_UPDATE;
 
 use super::*;
 use crate::game::map::Map;
-use crate::game::map::creature::Motion;
 
 /// `master` takes direct control of their own `pet`.
 pub fn look(map: &mut Map, master: Guid, pet: Guid) {
+    if !map
+        .creature(pet)
+        .and_then(|c| c.pet.as_deref())
+        .is_some_and(|s| s.owner == master && s.eyes.is_none())
+    {
+        return;
+    }
+    // It stops where it has come to: the hunter moves it from there.
+    crate::game::map::ai::rest(map, pet, None);
     let Some(c) = map.creature_mut(pet) else {
         return;
     };
@@ -19,14 +27,10 @@ pub fn look(map: &mut Map, master: Guid, pet: Guid) {
     let Some(s) = c.pet.as_deref_mut() else {
         return;
     };
-    if s.owner != master || s.eyes.is_some() {
-        return;
-    }
     s.eyes = Some((s.react, s.command));
     s.react = REACT_PASSIVE;
     s.command = COMMAND_STAY;
     s.stay_at = Some(position);
-    c.motion = Motion::Idle { until: None };
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, true);
     crate::game::map::combat::stop_attack(map, pet);

@@ -18,7 +18,7 @@ use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::spells::Targets;
 
-mod ai;
+pub(crate) mod ai;
 mod control;
 pub mod eyes;
 mod hunter;

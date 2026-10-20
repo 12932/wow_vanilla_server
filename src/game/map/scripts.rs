@@ -2262,10 +2262,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
                 c.waypoint = start;
                 c.last_waypoint = None;
-                c.motion = Motion::Idle {
-                    until: Some(now + Duration::from_millis(u64::from(d3))),
-                };
             }
+            // Its walk so far stops where it has come to.
+            crate::game::map::ai::rest(
+                map,
+                source,
+                Some(now + Duration::from_millis(u64::from(d3))),
+            );
             true
         }
         // Default movement: wandering (1) datalong3 yards about.
@@ -2275,8 +2278,8 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 if d1 == 1 {
                     c.wander_distance = d3 as f32;
                 }
-                c.motion = Motion::Idle { until: Some(now) };
             }
+            crate::game::map::ai::rest(map, source, Some(now));
             true
         }
         // Script datalong for everything near of a kind (datalong2: 0
@@ -3195,30 +3198,19 @@ fn movement(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> boo
     match d1 {
         0 => {
             crate::game::map::escorts::halt(map, source);
-            let at = map.position_of(source);
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
-                if matches!(c.motion, Motion::Moving(_)) {
-                    c.motion = Motion::Idle { until: None };
-                    if let Some(at) = at {
-                        let spline_id = map.next_spline_id;
-                        map.next_spline_id = map.next_spline_id.wrapping_add(1);
-                        let frame = crate::game::map::ai::stop_packet(source, at, spline_id);
-                        map.send_to_observers(source, &frame, false);
-                    }
-                } else {
-                    c.motion = Motion::Idle { until: None };
-                }
             }
+            crate::game::map::ai::rest(map, source, None);
         }
         // Wander x yards about its home, or (datalong2) where it stands:
         // an anchor of its own, its home still its spawn's.
         1 => {
+            crate::game::map::ai::rest(map, source, Some(now));
             let here = map.position_of(source).filter(|_| d2 != 0);
             if let Some(c) = creature_mut(map, source) {
                 c.movement_type = crate::game::map::creature::MOVEMENT_RANDOM;
                 c.wander_distance = step.x.max(0.0);
-                c.motion = Motion::Idle { until: Some(now) };
             }
             if let Some(s) = event_ai::scripted_mut(map, source) {
                 s.wander_anchor = here;
