@@ -157,8 +157,10 @@ async fn restless_strength_starts_full_and_spends_a_stack_a_blow_that_lands() {
         .unwrap();
     let (before, full, after, spent, kept, out, again) = got;
     assert_eq!(full, (true, Some(20), Some(19)), "twenty, shown as such");
-    // The bonus goes on each blow, not on the fields (Thistle Tea and
-    // mangos put it there): the empty hands' fields stay as they were.
+    // Its forty go in the main hand's fields, as Thistle Tea and mangos's
+    // `HandleModDamageDone` put them, so the character sheet shows them;
+    // the empty hands' fields stay as they were.
+    assert_eq!((after.0 - before.0).round(), 40.0, "in the main hand's");
     assert_eq!(
         (after.1, after.2),
         (before.1, before.2),

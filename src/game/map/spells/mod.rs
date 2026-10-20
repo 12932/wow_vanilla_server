@@ -1035,6 +1035,55 @@ pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Gu
     execute(map, caster, s, targets, None, true);
 }
 
+/// `s`'s reagents taken from what `caster` carries (none from a GM).
+fn take_reagents(map: &mut Map, caster: Guid, s: &SpellTemplate) {
+    let gm = map.players.get(&caster).is_some_and(|p| p.gm);
+    for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
+        let mut left = *count;
+        while left > 0 {
+            let Some(i) = map.players.get(&caster).and_then(|p| {
+                p.items
+                    .iter()
+                    .position(|it| it.entry == *reagent && it.carried())
+            }) else {
+                break;
+            };
+            let n = map.players[&caster].items[i].count().min(left);
+            crate::game::map::inventory::take_item(map, caster, i, n);
+            left -= n;
+        }
+    }
+}
+
+/// Whether a player's `trigger`, set off by an aura of `by`, may go: one
+/// whose aura spell has no reagent pays its own, and doesn't go without
+/// them, as mangos's `IgnoreItemRequirements` has it (a triggered spell's
+/// reagents are its trigger's to pay when that has some in its first slot;
+/// Thistle Tea's `pays_reagents?`). Will Drain Festive Mug's drain takes
+/// the Filled Festive Mug it empties; a wind stone's summon, the Twilight
+/// set. Paid as it goes.
+pub fn trigger_reagents(map: &mut Map, caster: Guid, by: &SpellTemplate, trigger: u32) -> bool {
+    let data = map.realm.data.clone();
+    let Some(t) = data.spells.get(trigger) else {
+        return true;
+    };
+    if by.reagents[0].0 != 0 || t.reagents.iter().all(|(r, _)| *r == 0) {
+        return true;
+    }
+    let Some(p) = map.players.get(&caster).filter(|p| !p.gm) else {
+        return true;
+    };
+    let carried = t
+        .reagents
+        .iter()
+        .filter(|(r, _)| *r != 0)
+        .all(|(r, n)| p.carried_count_of(*r) >= *n);
+    if carried {
+        take_reagents(map, caster, t);
+    }
+    carried
+}
+
 /// A spell cast for free at `targets`: a trap's on whoever sprang it, at
 /// the trap.
 pub fn cast_triggered_with(map: &mut Map, caster: Guid, spell: u32, targets: Targets) {
@@ -1166,22 +1215,7 @@ fn execute(
         if cost > 0 {
             pay(map, caster, s, cost);
         }
-        let gm = map.players.get(&caster).is_some_and(|p| p.gm);
-        for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
-            let mut left = *count;
-            while left > 0 {
-                let Some(i) = map.players.get(&caster).and_then(|p| {
-                    p.items
-                        .iter()
-                        .position(|it| it.entry == *reagent && it.carried())
-                }) else {
-                    break;
-                };
-                let n = map.players[&caster].items[i].count().min(left);
-                crate::game::map::inventory::take_item(map, caster, i, n);
-                left -= n;
-            }
-        }
+        take_reagents(map, caster, s);
         cooldowns::start(map, caster, s, &m, item);
         // The item cast with: its charge spent, its cooldown, binding on use.
         if let Some(i) = item {
@@ -2370,9 +2404,7 @@ fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     {
         auras::remove_spell(map, pet, casting.spell, Some(g));
     }
-    map.spells
-        .areas
-        .retain(|a| !(a.caster == g && a.spell == casting.spell));
+    effects::areas_cancelled(map, g, casting.spell, target);
     dynamic::remove_spell(map, g, casting.spell);
     if let Some(f) = map.unit_fields_mut(g) {
         f.set_u32(UNIT_CHANNEL_SPELL, 0);
@@ -2497,11 +2529,13 @@ pub fn pushback_by(map: &mut Map, g: Guid, from: Guid) {
     let Some(delta) = pushed.filter(|d| !d.is_zero()) else {
         return;
     };
-    // The channel's auras end that much sooner too.
+    // The channel's auras end that much sooner too, and its areas on the
+    // ground with what they hold on those inside.
     if let Some((spell, target, cut)) = delayed
         && !cut.is_zero()
     {
         auras::delay_source(map, target, spell, g, cut);
+        effects::delay_areas(map, g, spell, cut);
     }
     let Some(p) = map.players.get(&g) else {
         return;

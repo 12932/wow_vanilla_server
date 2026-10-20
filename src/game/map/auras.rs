@@ -1255,6 +1255,9 @@ pub fn apply_spell(
             started(map, target, &h, x);
         }
         dummy_flags(map, target, spell.id, true);
+        if spell.attr(1, sd::ATTR_EX_PREVENTS_ANIM) {
+            body_held(map, target);
+        }
         crate::game::map::trinkets::applied(map, target, spell.id, caster);
         crate::game::map::spells::class_scripts::aura_applied(map, target, &h);
         crate::game::map::spells::single_target::applied(map, caster, target, spell);
@@ -1616,6 +1619,41 @@ pub fn delay_source(map: &mut Map, target: Guid, spell: u32, caster: Guid, cut: 
             && let Some(at) = b.break_at
         {
             b.break_at = Some(at.checked_sub(cut).unwrap_or(now).max(now));
+        }
+    }
+    if let Some(p) = map.players.get(&target) {
+        for (slot, ms) in shown {
+            p.outbound.send(&SMSG_UPDATE_AURA_DURATION {
+                aura_slot: slot as u8,
+                aura_duration: ms,
+            });
+        }
+    }
+}
+
+/// `target`'s auras of `spell` from `caster` end no later than `until`,
+/// the client told of a slotted one's new duration (an area's, its area
+/// cut short: mangos's `DelaySpellAuraHolder`).
+pub fn shorten_to(map: &mut Map, target: Guid, spell: u32, caster: Guid, until: Instant) {
+    let now = map.now;
+    let until = until.max(now);
+    let Some(a) = auras_mut(map, target) else {
+        return;
+    };
+    let mut shown = Vec::new();
+    for h in a
+        .holders
+        .iter_mut()
+        .filter(|h| h.spell == spell && h.caster == caster)
+    {
+        if h.expires.is_none_or(|t| t > until) {
+            h.expires = Some(until);
+            if let Some(slot) = h.slot {
+                shown.push((
+                    slot,
+                    until.saturating_duration_since(now).as_millis() as u32,
+                ));
+            }
         }
     }
     if let Some(p) = map.players.get(&target) {
@@ -2154,9 +2192,10 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
         }
         AURA_FEIGN_DEATH if !still(map, AURA_FEIGN_DEATH) => {
             if let Some(f) = map.unit_fields_mut(target) {
-                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_FEIGN_DEATH, false);
                 f.set_flag(UNIT_DYNAMIC_FLAGS, 0x20, false);
             }
+            // The body is let go unless a stun or the like holds it too.
+            body_held(map, target);
             if let Some(c) = map.combat_mut(target) {
                 c.feigning = false;
             }
@@ -2354,6 +2393,9 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
         crate::game::map::outdoor_pvp::carrying_ended(map, target);
     }
     dummy_flags(map, target, h.spell, false);
+    if holds_body(&map.realm.data, h) {
+        body_held(map, target);
+    }
     crate::game::map::captured::ended(map, h.spell, h.caster);
     if h.caster == target {
         crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
@@ -2400,7 +2442,33 @@ pub const UNIT_FLAG_PACIFIED: u32 = 0x0002_0000;
 pub const UNIT_FLAG_DISARMED: u32 = 0x0020_0000;
 pub const UNIT_FLAG_CONFUSED: u32 = 0x0040_0000;
 pub const UNIT_FLAG_FLEEING: u32 = 0x0080_0000;
-pub const UNIT_FLAG_FEIGN_DEATH: u32 = 0x2000_0000;
+/// The body is held: no emote and no change of posture (mangos's
+/// `UNIT_FLAG_PREVENT_ANIM`), while an aura of a spell with
+/// `SPELL_ATTR_EX_PREVENTS_ANIM` or a feign lasts.
+pub const UNIT_FLAG_PREVENT_ANIM: u32 = 0x2000_0000;
+/// Feign Death's flag is the same.
+pub const UNIT_FLAG_FEIGN_DEATH: u32 = UNIT_FLAG_PREVENT_ANIM;
+
+/// Whether `h` holds its bearer's body: its spell has
+/// `SPELL_ATTR_EX_PREVENTS_ANIM`, or it is a feign.
+fn holds_body(data: &crate::game::data::GameData, h: &Holder) -> bool {
+    h.has(AURA_FEIGN_DEATH)
+        || data
+            .spells
+            .get(h.spell)
+            .is_some_and(|s| s.attr(1, sd::ATTR_EX_PREVENTS_ANIM))
+}
+
+/// `UNIT_FLAG_PREVENT_ANIM` set while any of `target`'s auras holds its
+/// body, and cleared with the last (mangos's `_AddSpellAuraHolder` and
+/// `_RemoveSpellAuraHolder`).
+fn body_held(map: &mut Map, target: Guid) {
+    let data = map.realm.data.clone();
+    let held = auras(map, target).is_some_and(|a| a.holders.iter().any(|h| holds_body(&data, h)));
+    if let Some(f) = map.unit_fields_mut(target) {
+        f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PREVENT_ANIM, held);
+    }
+}
 
 /// Shapeshift forms.
 pub const FORM_CAT: u8 = 1;
@@ -3237,6 +3305,14 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     map, target, h,
                 ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
+            // A reagent-less aura's trigger pays its own reagents, and
+            // without them doesn't go.
+            let data = map.realm.data.clone();
+            if let Some(by) = data.spells.get(h.spell)
+                && !crate::game::map::spells::trigger_reagents(map, h.caster, by, a.trigger)
+            {
+                return;
+            }
             crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
             // A spell aimed at a unit the client picks goes at the unit the
             // aura is on, or a channel's at the channel's target. Anything

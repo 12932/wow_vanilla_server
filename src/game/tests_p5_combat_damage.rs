@@ -131,13 +131,19 @@ async fn a_flat_bonus_takes_the_hands_percentages_and_the_off_hands_half() {
             );
             auras::remove_spell(m, ga, 90_853, None);
             auras::remove_spell(m, ga, 90_856, None);
-            // Ten more damage done, for all.
+            // Ten more damage done, for all: the hands' fields hold it, as
+            // mangos's `TOTAL_VALUE`, so the character sheet shows it.
+            let before = hands(m, ga);
             stacked(m, ga, 90_857, AURA_MOD_DAMAGE_DONE, 1, 10, 1);
-            let all = (
+            auras::recalc(m, ga);
+            let after = hands(m, ga);
+            let all = ((after.0 - before.0).round(), (after.1 - before.1).round());
+            // A blow adds no more of it than its fields have.
+            let unchanged = (
                 blow(m, ga, humanoid, Hand::Main, 2000),
                 blow(m, ga, humanoid, Hand::Off, 2000),
             );
-            (creature, all)
+            (creature, all, unchanged)
         })
         .await
         .unwrap();
@@ -146,7 +152,21 @@ async fn a_flat_bonus_takes_the_hands_percentages_and_the_off_hands_half() {
         (154, 143),
         "(100 + 20 x 2) x 1.1; (100 + 20 x 2 x 0.75) x 1.1"
     );
-    assert_eq!(r.1, (120, 115), "100 + 10 x 2; 100 + 10 x 2 x 0.75");
+    assert_eq!(
+        r.1,
+        (20.0, 15.0),
+        "10 x 2 in the main hand; 10 x 2 x 0.75 in the off"
+    );
+    assert_eq!(r.2, (100, 100), "and a blow adds none of it again");
+}
+
+/// The hands' least damage, as their fields have it.
+fn hands(m: &Map, g: Guid) -> (f32, f32) {
+    let f = m.unit_fields(g).unwrap();
+    (
+        f.get_f32(UNIT_FIELD_MINDAMAGE),
+        f.get_f32(UNIT_FIELD_MINOFFHANDDAMAGE),
+    )
 }
 
 /// Thistle Tea's "weapon restrictions filter flat and percentage damage
@@ -188,21 +208,28 @@ async fn a_flat_bonus_held_to_a_weapon_counts_for_its_hand_alone() {
                 };
                 let _ = auras::apply_spell(m, ga, ga, &s, &[(0, 4)], auras::Context::default());
             };
+            // Each hand's fields take what fits its weapon (mangos's
+            // `_ApplyWeaponDependentAuraDamageMod`).
+            let delta = |m: &mut Map, id: u32, subclass: u32| {
+                let before = hands(m, ga);
+                held(m, id, subclass);
+                let after = hands(m, ga);
+                auras::remove_spell(m, ga, id, None);
+                ((after.0 - before.0).round(), (after.1 - before.1).round())
+            };
+            let swords = delta(m, 90_858, 7);
+            let daggers = delta(m, 90_859, 15);
+            // A blow adds none of it again.
             held(m, 90_858, 7);
-            let swords = (
+            let blows = (
                 blow(m, ga, humanoid, Hand::Main, 2000),
                 blow(m, ga, humanoid, Hand::Off, 2000),
             );
-            auras::remove_spell(m, ga, 90_858, None);
-            held(m, 90_859, 15);
-            let daggers = (
-                blow(m, ga, humanoid, Hand::Main, 2000),
-                blow(m, ga, humanoid, Hand::Off, 2000),
-            );
-            (swords, daggers)
+            (swords, daggers, blows)
         })
         .await
         .unwrap();
-    assert_eq!(r.0, (104, 100), "the sword's");
-    assert_eq!(r.1, (100, 102), "the dagger's, halved");
+    assert_eq!(r.0, (4.0, 0.0), "the sword's");
+    assert_eq!(r.1, (0.0, 2.0), "the dagger's, halved");
+    assert_eq!(r.2, (100, 100), "and no blow adds it again");
 }

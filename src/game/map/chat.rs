@@ -214,9 +214,6 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
     None
 }
 
-/// `UNIT_FIELD_FLAGS`: animations are held: Feign Death's
-/// (`SPELL_ATTR_EX_PREVENTS_ANIM`), the bit `auras::UNIT_FLAG_FEIGN_DEATH`.
-const UNIT_FLAG_PREVENT_ANIM: u32 = 0x2000_0000;
 /// Text emotes whose animation is a posture the client asks for itself
 /// (Thistle Tea's `@text_only_animations`): none, sleep, sit, kneel.
 const TEXT_ONLY_ANIMATIONS: [u32; 4] = [0, 12, 13, 68];
@@ -225,16 +222,18 @@ const TEXT_ONLY_ANIMATIONS: [u32; 4] = [0, 12, 13, 68];
 const CLIENT_EMOTES: [u32; 2] = [0, 3];
 
 /// Whether `g` may emote or change posture: alive, and not held from
-/// moving its body. Feign Death holds it, so an emote neither plays nor is
-/// heard and the feign goes on (mangos-classic's `HandleEmoteOpcode`,
-/// `HandleTextEmoteOpcode` and `HandleStandStateChangeOpcode` refuse under
-/// `UNIT_FLAG_PREVENT_ANIM`; Thistle Tea's emote ends the feign instead).
+/// moving its body (`UNIT_FLAG_PREVENT_ANIM`, from a spell with
+/// `SPELL_ATTR_EX_PREVENTS_ANIM`: a stun, Polymorph, Sap, Sleep, Feign
+/// Death). Held, an emote neither plays nor is heard and the feign goes on
+/// (mangos-classic's `HandleEmoteOpcode`, `HandleTextEmoteOpcode` and
+/// `HandleStandStateChangeOpcode` refuse under it; Thistle Tea's emote ends
+/// the feign instead).
 fn may_emote(map: &Map, g: Guid) -> bool {
     map.players.get(&g).is_some_and(|p| {
         p.death == crate::game::map::death::Death::Alive
             && !p.fields.has_flag(
                 crate::game::fields::UNIT_FIELD_FLAGS,
-                UNIT_FLAG_PREVENT_ANIM,
+                crate::game::map::auras::UNIT_FLAG_PREVENT_ANIM,
             )
     })
 }

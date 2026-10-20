@@ -374,34 +374,13 @@ pub fn deep_wounds(
     } else {
         (UNIT_FIELD_MINDAMAGE, UNIT_FIELD_MAXDAMAGE)
     };
-    // The hand's damage with its flat physical bonuses that fit its weapon
-    // by the hand's percentages, as a swing adds them, where mangos's fields
-    // hold them (`TOTAL_VALUE` under `TOTAL_PCT`; Thistle Tea's "includes
-    // applicable flat and percentage weapon bonuses").
-    let flat = match (auras::auras(map, owner), map.players.contains_key(&owner)) {
-        (Some(a), true) => {
-            let weapon = combat::hand_weapon(map, owner, hand);
-            let flat = a
-                .effects()
-                .filter(|(h, x)| {
-                    x.kind == auras::AURA_MOD_DAMAGE_DONE
-                        && x.misc & 1 != 0
-                        && crate::game::map::derive::fits(h, weapon.as_ref())
-                })
-                .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
-                .sum::<f32>();
-            let mut pct = crate::game::map::derive::physical_pct_for(a, weapon.as_ref());
-            if hand == combat::Hand::Off {
-                pct *= 0.5 * (1.0 + a.sum(auras::AURA_MOD_OFFHAND_DAMAGE_PCT) as f32 / 100.0);
-            }
-            flat * pct
-        }
-        _ => 0.0,
-    };
+    // The hand's damage, with its flat physical bonuses that fit its
+    // weapon by the hand's percentages: its fields hold them, as mangos's
+    // (`TOTAL_VALUE` under `TOTAL_PCT`; Thistle Tea's "includes applicable
+    // flat and percentage weapon bonuses").
     let average = map
         .unit_fields(owner)
-        .map_or(0.0, |f| (f.get_f32(lo) + f.get_f32(hi)) / 2.0)
-        + flat;
+        .map_or(0.0, |f| (f.get_f32(lo) + f.get_f32(hi)) / 2.0);
     let tick = (average * *pct as f32 / 100.0 / DEEP_WOUND_TICKS as f32) as i32;
     if tick > 0 && map.unit_view(other).is_some_and(|u| u.alive) {
         aura_with(map, owner, other, DEEP_WOUND_BLEED, tick);

@@ -1525,6 +1525,12 @@ pub fn weapon_damage(
         };
         let weapon = hand_weapon(map, attacker, hand);
         let is_player = map.players.contains_key(&attacker);
+        // A player's hand holds its flat physical damage done in its
+        // fields already (`derive::physical_flat_for`), but a wand's.
+        let in_fields = is_player
+            && !weapon.as_ref().is_some_and(|w| {
+                hand == Hand::Ranged && w.subclass == crate::game::map::derive::SUBCLASS_WAND
+            });
         // A hunter's pet's mood scales its flat damage done with its
         // weapon's, as its fields already have it (mangos's
         // `Pet::GetConditionalTotalPhysicalDamageModifier` over the
@@ -1539,6 +1545,7 @@ pub fn weapon_damage(
             .filter(|(h, x)| {
                 x.kind == AURA_MOD_DAMAGE_DONE
                     && (x.misc as u32) & school != 0
+                    && !(in_fields && x.misc & 1 != 0)
                     && (!is_player || crate::game::map::derive::fits(h, weapon.as_ref()))
             })
             .map(|(h, x)| (x.amount * h.stacks.max(1) as i32) as f32)
