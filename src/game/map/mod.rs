@@ -148,7 +148,14 @@ impl std::fmt::Display for MapKey {
 #[allow(clippy::large_enum_variant)] // Packets move through the channel once.
 pub enum MapEvent {
     Arrive(Box<Arrival>),
-    Packet(Guid, ClientOpcodeMessage),
+    /// A player's client's packet, by the session it came from: one from
+    /// a session whose player another login has taken over since is
+    /// dropped, as a [`MapEvent::Disconnect`] is.
+    Packet(
+        Guid,
+        ClientOpcodeMessage,
+        tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+    ),
     /// A player's client has gone, by the session it went from: one whose
     /// player another login has taken over since leaves them be.
     Disconnect(
@@ -745,7 +752,7 @@ fn guarded<T>(map: &mut Map, what: &str, f: impl FnOnce(&mut Map) -> T) -> Optio
 /// packet that panics counts against them.
 fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
     let from = match &event {
-        MapEvent::Packet(g, _) => Some(*g),
+        MapEvent::Packet(g, ..) => Some(*g),
         _ => None,
     };
     #[cfg(all(feature = "world-bench", unix))]
@@ -755,7 +762,7 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Login(_) => "a login",
                 ArrivalKind::Transfer(_) => "a transfer",
             },
-            MapEvent::Packet(_, m) => packet_name(m),
+            MapEvent::Packet(_, m, _) => packet_name(m),
             MapEvent::Disconnect(..) => "a disconnect",
             MapEvent::Call(_) => "a call",
             MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
@@ -1076,6 +1083,24 @@ impl Map {
         self.now.duration_since(self.started).as_millis() as u32
     }
 
+    /// Whether what `from` sent for `guid` is theirs to act on: not if
+    /// another login has taken the player over since (`login::take_over`),
+    /// when it is the old client's, sent before its session heard.
+    pub fn from_their_session(
+        &self,
+        guid: Guid,
+        from: &tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+    ) -> bool {
+        let theirs = self
+            .players
+            .get(&guid)
+            .is_none_or(|p| p.online.session.same_channel(from));
+        if !theirs {
+            tracing::debug!("{guid}: dropped what their old session sent after the takeover");
+        }
+        theirs
+    }
+
     /// Handle one event; true to stop the actor.
     fn handle_event(&mut self, event: MapEvent) -> bool {
         self.stats.events += 1;
@@ -1084,23 +1109,20 @@ impl Map {
                 let _z = crate::zone!("arrival");
                 self.arrive(*a)
             }
-            MapEvent::Packet(guid, msg) => {
+            MapEvent::Packet(guid, msg, from) => {
                 let _z = crate::tracy::on()
                     .then(|| crate::tracy::Zone::named("packet", packet_name(&msg)));
                 #[cfg(test)]
                 if self.faults.any() {
                     self.faults.check(&format!("packets of {guid}"));
                 }
-                self.handle_packet(guid, msg)
+                if self.from_their_session(guid, &from) {
+                    self.handle_packet(guid, msg)
+                }
             }
             MapEvent::Disconnect(guid, from) => {
                 let _z = crate::zone!("disconnect");
-                // Taken over by another login since: theirs now.
-                let theirs = self
-                    .players
-                    .get(&guid)
-                    .is_none_or(|p| p.online.session.same_channel(&from));
-                if theirs {
+                if self.from_their_session(guid, &from) {
                     self.handle_disconnect(guid)
                 }
             }

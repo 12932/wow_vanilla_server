@@ -334,8 +334,11 @@ impl Session {
             crate::game::conn::Inbound::Raw(opcode, body) => {
                 if let State::InWorld { guid, .. } = &self.state {
                     let g = *guid;
+                    let from = self.control.clone();
                     let call = MapEvent::Call(Box::new(move |m: &mut crate::game::map::Map| {
-                        m.handle_raw(g, opcode, &body)
+                        if m.from_their_session(g, &from) {
+                            m.handle_raw(g, opcode, &body)
+                        }
                     }));
                     if !self.send_to_map(call).await {
                         self.outbound.close();
@@ -347,7 +350,7 @@ impl Session {
             }
         };
         if let State::InWorld { guid, .. } = &self.state {
-            let packet = MapEvent::Packet(*guid, msg);
+            let packet = MapEvent::Packet(*guid, msg, self.control.clone());
             if !self.send_to_map(packet).await {
                 self.outbound.close();
             }

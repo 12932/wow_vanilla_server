@@ -396,8 +396,15 @@ mod channels {
     }
 
     /// A movement packet from a session, what a map is sent most: the real
-    /// `MapEvent`, so each send moves what wvs's does.
+    /// `MapEvent`, so each send moves what wvs's does (its session's
+    /// channel cloned, as a session's packet carries it).
     fn event(sender: usize, i: usize) -> MapEvent {
+        static SESSION: std::sync::OnceLock<
+            tokio::sync::mpsc::UnboundedSender<wow_vanilla_server::game::session::Control>,
+        > = std::sync::OnceLock::new();
+        let session = SESSION
+            .get_or_init(|| tokio::sync::mpsc::unbounded_channel().0)
+            .clone();
         MapEvent::Packet(
             guid::player(sender as u32 + 1),
             ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(MSG_MOVE_HEARTBEAT_Client {
@@ -413,6 +420,7 @@ mod channels {
                     fall_time: 0,
                 },
             }),
+            session,
         )
     }
 

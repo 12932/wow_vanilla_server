@@ -199,7 +199,7 @@ under "Found by the other reviews too", with what this review adds.
   only once its proof passes.
 - **Effort:** easy to medium.
 
-#### 8. Packets the old client sent still act on the player after another login takes them over (low, robustness)
+#### 8. Packets the old client sent still act on the player after another login takes them over (low, robustness) **Fixed.**
 - **Where:** `src/game/session.rs:263-281` (`MapEvent::Packet(*guid, msg)` and `handle_raw(g, ..)` carry the
   player's guid, not the session), `src/game/map/mod.rs:1042-1049` (the map handles a packet for whoever has the
   guid), `src/game/map/login.rs:235` (`take_over` tells the old session `TakenOver`).
