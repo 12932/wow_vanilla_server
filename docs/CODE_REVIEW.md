@@ -30,6 +30,9 @@ missing world data). None fixed yet; waiting on your choice.
   migrated is copied first (`characters.sqlite.v4.bak`, `VACUUM INTO`).
 - **#20** fixed: the start's offer to build the navmesh waits 30 s for a typed answer (`ui::confirm_within`), then
   starts as it is; a "no" or no answer is remembered (`data/setup-declined.txt`) and only the hint is logged after.
+- **#10** fixed: saves the store can't write (full disk, I/O, read-only, busy) are kept in order, superseded ones
+  dropped, and written ahead of the next or every 5 s; reads see a kept row; logins wait meanwhile, the GMs are told
+  (`social::store_watch`), and the log says so once a minute.
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

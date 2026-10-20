@@ -377,3 +377,80 @@ fn a_second_server_on_a_store_is_refused_at_its_lock() {
     let _a = crate::game::store::lock(Path::new(":memory:")).unwrap();
     let _b = crate::game::store::lock(Path::new(":memory:")).unwrap();
 }
+
+/// #10: a store that couldn't write (a full disk, the file made read-only)
+/// lost each save tried in the meantime, and a record written once then
+/// was never written again. They are kept and written once it can, and a
+/// read sees them meanwhile.
+#[tokio::test]
+async fn saves_the_store_couldnt_write_are_written_once_it_can() {
+    use crate::game::store::CharacterRow;
+    let t = Temp::new("readonly");
+    let row = |level: u8| CharacterRow {
+        guid: 1,
+        account: "A".into(),
+        name: "Alice".into(),
+        race: 1,
+        class: 1,
+        level,
+        ..Default::default()
+    };
+    {
+        let (store, _) = Store::open(t.db()).unwrap();
+        store.save(row(1));
+        store.flush().await;
+        store.read_only_for_test(true);
+        store.save(row(2));
+        store.put_record("mail", 5, &"a mail");
+        store.save(row(3));
+        store.flush().await;
+        assert!(store.failing(), "the store can't write");
+        assert_eq!(store.news(), Some(true));
+        assert_eq!(store.news(), None, "told once");
+        assert_eq!(
+            store.load(1).await.map(|r| r.level),
+            Some(3),
+            "a read sees the save kept"
+        );
+        assert_eq!(store.record("mail", 5).await, None, "not written yet");
+        store.read_only_for_test(false);
+        store.flush().await;
+        assert!(!store.failing(), "it writes again");
+        assert_eq!(store.news(), Some(false));
+    }
+    let (store, _) = Store::open(t.db()).unwrap();
+    assert_eq!(store.load(1).await.map(|r| r.level), Some(3));
+    assert_eq!(store.record("mail", 5).await.as_deref(), Some("\"a mail\""));
+}
+
+/// #10: while the store can't write, logins wait (a character who played
+/// on would lose it all), and the GMs online are told, then told again
+/// when it writes.
+#[tokio::test]
+async fn while_the_store_cant_write_logins_wait_and_the_gms_are_told() {
+    let realm = harness::realm();
+    let mut gm = Client::connect(&realm, "GM");
+    gm.enter("Gamemaster", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    logout(&mut b).await;
+    realm.store.read_only_for_test(true);
+    realm.store.put_record("mail", 1, &"a mail");
+    realm.store.flush().await;
+    assert!(realm.store.failing());
+    crate::game::social::store_watch(&realm);
+    gm.system_message("can't write").await;
+    b.send(CMSG_PLAYER_LOGIN { guid: bob }).await;
+    let r = b
+        .wait_for("SMSG_CHARACTER_LOGIN_FAILED", |m| match m {
+            ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(f) => Some(f.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(r, WorldResult::CharLoginFailed);
+    realm.store.read_only_for_test(false);
+    realm.store.flush().await;
+    crate::game::social::store_watch(&realm);
+    gm.system_message("writes again").await;
+    b.login(bob).await;
+}

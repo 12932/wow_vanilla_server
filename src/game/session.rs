@@ -596,6 +596,11 @@ impl Session {
                 .online(g)
                 .or_else(|| self.realm.registry.online_for_account(&self.account));
             let Some(existing) = existing else {
+                // A store that can't write would lose what they did: they
+                // wait until it can (the GMs are told).
+                if self.realm.store.failing() {
+                    return login_failed(&self.outbound, WorldResult::CharLoginFailed);
+                }
                 match self.enter(g, &name).await {
                     Entered::Done => return,
                     // Another login of the account went online meanwhile.

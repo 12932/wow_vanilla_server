@@ -170,6 +170,15 @@ action button in a character used to be such a bad save: the `character_spells` 
 keys failed the insert, and with it the whole batch, at every save. The second copy is now ignored (a spell) or
 replaces the first (a button).
 
+**A store that can't write** (a full disk, an I/O error, the file made read-only or replaced) used to lose each
+save tried meanwhile, with an `error` line each, while the realm played on: a logout's save, and a record written
+once (a mail, an auction, a guild's change) for good. Now what it couldn't write is kept, in order, each without the
+older saves of the same character or record, and written ahead of the next saves, or every 5 s with none; a read
+sees a character's kept row. Meanwhile logins wait (`CharLoginFailed`), the GMs online are told when it stops and
+when it writes again (`social::store_watch`), and the log says so once a minute. What is still kept at a shutdown
+is lost, and logged. (`saves_the_store_couldnt_write_are_written_once_it_can`,
+`while_the_store_cant_write_logins_wait_and_the_gms_are_told`)
+
 **Saving together.** A character is saved whole at its periodic save, at logout and by `.save`, but mail, auctions
 and guilds are records saved at once. So an item or money moving between them reached the database at two times,
 and a crash in between copied or lost it: a trade with one side saved, a mail with its item still in the sender's

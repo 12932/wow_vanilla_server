@@ -12,7 +12,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::thread;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -475,6 +475,9 @@ enum Request {
     /// A save whose writing panics.
     #[cfg(test)]
     BadSave,
+    /// The store can't write (`PRAGMA query_only`), as on a full disk.
+    #[cfg(test)]
+    ReadOnly(bool),
 }
 
 /// A change to a record, kept to be written with others.
@@ -528,6 +531,7 @@ pub struct Store {
     tx: mpsc::UnboundedSender<Request>,
     /// Requests sent and not yet taken by the thread.
     queued: Arc<AtomicUsize>,
+    health: Arc<Health>,
 }
 
 impl std::fmt::Debug for Store {
@@ -556,14 +560,29 @@ impl Store {
         );
         let (tx, rx) = mpsc::unbounded_channel();
         let queued = Arc::new(AtomicUsize::new(0));
+        let health = Arc::new(Health::default());
         {
             let queued = queued.clone();
+            let health = health.clone();
             thread::Builder::new()
                 .name("store".into())
-                .spawn(move || store_thread(conn, rx, &queued))
+                .spawn(move || store_thread(conn, rx, &queued, health))
                 .expect("spawn the store thread");
         }
-        Ok((Store { tx, queued }, startup))
+        Ok((Store { tx, queued, health }, startup))
+    }
+
+    /// Whether the store can't write now: what it couldn't write is kept,
+    /// and tried again, and logins wait.
+    pub fn failing(&self) -> bool {
+        self.health.failing.load(Ordering::Relaxed)
+    }
+
+    /// Whether the store started or stopped failing since this was last
+    /// asked: `Some(failing)` once for each change, for the GMs.
+    pub fn news(&self) -> Option<bool> {
+        let failing = self.failing();
+        (self.health.told.swap(failing, Ordering::Relaxed) != failing).then_some(failing)
     }
 
     fn send(&self, req: Request) {
@@ -712,6 +731,13 @@ impl Store {
     #[cfg(test)]
     pub fn bad_save_for_test(&self) {
         self.send_test(Request::BadSave);
+    }
+
+    /// Make the store unable to write (`on`), as a full disk or a file
+    /// made read-only would, or able again.
+    #[cfg(test)]
+    pub fn read_only_for_test(&self, on: bool) {
+        self.send_test(Request::ReadOnly(on));
     }
 }
 
@@ -945,10 +971,26 @@ fn write_counters(conn: &Connection, (character, item): (u32, u32)) -> rusqlite:
     Ok(())
 }
 
+/// Whether the store writes, for the realm: logins wait while it can't,
+/// and the GMs are told (`social::store_watch`).
+#[derive(Debug, Default)]
+pub struct Health {
+    failing: AtomicBool,
+    /// What the GMs were last told.
+    told: AtomicBool,
+}
+
 /// What the store's thread keeps between requests.
 #[derive(Default)]
 struct Kept {
     counters: Option<Counters>,
+    /// Saves the store couldn't write, oldest first, written ahead of the
+    /// next (`write_saves`).
+    pending: Vec<Request>,
+    /// Since when it couldn't write, and when that was last logged.
+    failing_since: Option<std::time::Instant>,
+    logged: Option<std::time::Instant>,
+    health: Arc<Health>,
 }
 
 /// The store's thread. It outlives a panic in what it does: that request
@@ -957,8 +999,12 @@ fn store_thread(
     mut conn: Connection,
     mut rx: mpsc::UnboundedReceiver<Request>,
     queued: &AtomicUsize,
+    health: Arc<Health>,
 ) {
-    let mut kept = Kept::default();
+    let mut kept = Kept {
+        health,
+        ..Default::default()
+    };
     loop {
         match catch(|| serve_all(&mut conn, &mut kept, &mut rx, queued)) {
             Ok(()) => return,
@@ -973,7 +1019,31 @@ fn serve_all(
     rx: &mut mpsc::UnboundedReceiver<Request>,
     queued: &AtomicUsize,
 ) {
-    while let Some(first) = rx.blocking_recv() {
+    loop {
+        // While saves are kept that the store couldn't write, they are
+        // tried again every so often, new saves or not.
+        let first = if kept.pending.is_empty() {
+            rx.blocking_recv()
+        } else {
+            match next_within(rx, RETRY_EVERY) {
+                Next::Request(r) => Some(r),
+                Next::TimeUp => {
+                    write_saves(conn, kept, Vec::new());
+                    continue;
+                }
+                Next::Closed => None,
+            }
+        };
+        let Some(first) = first else {
+            write_saves(conn, kept, Vec::new());
+            if !kept.pending.is_empty() {
+                error!(
+                    "the character store couldn't write {} saves; they are lost",
+                    kept.pending.len()
+                );
+            }
+            return;
+        };
         // Saves queued together go in one transaction.
         let mut batch = vec![first];
         while let Ok(more) = rx.try_recv() {
@@ -1053,14 +1123,24 @@ fn describe(req: &Request) -> String {
 /// How many times a batch the database was too busy for is tried.
 const BUSY_TRIES: u32 = 3;
 
-/// Write saves in one transaction. If that fails (the database busy past
-/// its timeout, a bad row, a panic), the busy are tried again, and the
-/// rest each go alone: one bad save is lost, not those batched with it. A
-/// save together is one request, so it goes alone whole: never in parts.
+/// Write saves in one transaction, behind those kept from before (the
+/// store couldn't write them). If that fails because the store can't
+/// write (a full disk, an I/O error, the file read-only, busy past its
+/// tries), every save is kept, to be written ahead of the next ones. If it
+/// fails otherwise (a bad row, a panic), each goes alone: one bad save is
+/// lost, not those batched with it. A save together is one request, so it
+/// goes alone whole: never in parts.
 fn write_saves(conn: &mut Connection, kept: &mut Kept, saves: Vec<Request>) {
-    if saves.is_empty() {
+    if saves.is_empty() && kept.pending.is_empty() {
         return;
     }
+    let batch = if kept.pending.is_empty() {
+        saves
+    } else {
+        let mut batch = std::mem::take(&mut kept.pending);
+        batch.extend(saves);
+        batch
+    };
     let counters = kept.counters.as_ref().and_then(Counters::moved);
     let written = |kept: &mut Kept| {
         if let (Some(c), Some(now)) = (&mut kept.counters, counters) {
@@ -1070,32 +1150,194 @@ fn write_saves(conn: &mut Connection, kept: &mut Kept, saves: Vec<Request>) {
     let mut tries = 0;
     let failed = loop {
         tries += 1;
-        match catch(|| write_batch(conn, counters, &saves)) {
-            Ok(Ok(())) => return written(kept),
+        match catch(|| write_batch(conn, counters, &batch)) {
+            Ok(Ok(())) => {
+                written(kept);
+                return kept.writes_again();
+            }
             Ok(Err(e)) if busy(&e) && tries < BUSY_TRIES => {
                 warn!(
                     "the character store is busy ({e}); trying {} saves again",
-                    saves.len()
+                    batch.len()
                 );
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
+            Ok(Err(e)) if cant_write(&e) => return kept.keep(batch, &e.to_string()),
             Ok(Err(e)) => break e.to_string(),
             Err(e) => break format!("it panicked: {e}"),
         }
     };
-    if saves.len() == 1 {
-        error!("lost a save ({}): {failed}", describe(&saves[0]));
-        return;
+    if batch.len() == 1 {
+        error!("lost a save ({}): {failed}", describe(&batch[0]));
+        return kept.writes_again();
     }
     warn!(
         "saving {} records together failed ({failed}); saving each alone",
-        saves.len()
+        batch.len()
     );
-    for s in &saves {
-        match catch(|| write_batch(conn, counters, std::slice::from_ref(s))) {
+    let mut unwritten = Vec::new();
+    let mut why = None;
+    for s in batch {
+        match catch(|| write_batch(conn, counters, std::slice::from_ref(&s))) {
             Ok(Ok(())) => written(kept),
-            Ok(Err(e)) => error!("lost a save ({}): {e}", describe(s)),
-            Err(e) => error!("lost a save ({}): it panicked: {e}", describe(s)),
+            Ok(Err(e)) if cant_write(&e) => {
+                why = Some(e.to_string());
+                unwritten.push(s);
+            }
+            Ok(Err(e)) => error!("lost a save ({}): {e}", describe(&s)),
+            Err(e) => error!("lost a save ({}): it panicked: {e}", describe(&s)),
+        }
+    }
+    match why {
+        Some(why) => kept.keep(unwritten, &why),
+        None => kept.writes_again(),
+    }
+}
+
+/// Whether a write failed because the store can't write now, not because
+/// of what was written: worth keeping, to write when it can.
+fn cant_write(e: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode::*;
+    matches!(
+        e.sqlite_error_code(),
+        Some(
+            DatabaseBusy
+                | DatabaseLocked
+                | DiskFull
+                | SystemIoFailure
+                | ReadOnly
+                | CannotOpen
+                | FileLockingProtocolFailed
+                | OutOfMemory
+                | DatabaseCorrupt
+                | NotADatabase
+        )
+    )
+}
+
+/// What a save writes over, for a later one of the same to take the place
+/// of one kept: a character's row, an account's data, a record, bones.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Key {
+    Character(u32),
+    AccountData(String, u8),
+    Record(&'static str, u64),
+    Bones(u32),
+}
+
+fn key(req: &Request) -> Option<Key> {
+    match req {
+        Request::Save(row) => Some(Key::Character(row.guid)),
+        Request::SetAccountData(account, kind, ..) => {
+            Some(Key::AccountData(account.clone(), *kind))
+        }
+        Request::PutRecord(kind, id, _) | Request::DeleteRecord(kind, id) => {
+            Some(Key::Record(kind, *id))
+        }
+        Request::PutBones(b) => Some(Key::Bones(b.id)),
+        Request::DeleteBones(id) => Some(Key::Bones(*id)),
+        _ => None,
+    }
+}
+
+/// How often a store that can't write tries what it keeps again, with no
+/// new save to write.
+const RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+/// How often a store that can't write says so in the log.
+const LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+/// The most saves kept while the store can't write; the oldest go first.
+const MAX_KEPT: usize = 100_000;
+
+impl Kept {
+    /// Saves the store couldn't write, kept in order to be written ahead of
+    /// the next, each without the older saves of what it writes over.
+    fn keep(&mut self, saves: Vec<Request>, why: &str) {
+        self.pending.extend(saves);
+        let mut seen = ahash::AHashSet::new();
+        let mut newest_first: Vec<Request> = Vec::with_capacity(self.pending.len());
+        for s in self.pending.drain(..).rev() {
+            // A later save of the same key writes over it: it goes.
+            if key(&s).is_none_or(|k| seen.insert(k)) {
+                newest_first.push(s);
+            }
+        }
+        newest_first.reverse();
+        self.pending = newest_first;
+        if self.pending.len() > MAX_KEPT {
+            let over = self.pending.len() - MAX_KEPT;
+            for s in self.pending.drain(..over) {
+                error!(
+                    "lost a save ({}): kept too long while the store couldn't write",
+                    describe(&s)
+                );
+            }
+        }
+        let now = std::time::Instant::now();
+        let first = self.failing_since.is_none();
+        if first {
+            self.failing_since = Some(now);
+            self.health.failing.store(true, Ordering::Relaxed);
+        }
+        if first
+            || self
+                .logged
+                .is_none_or(|t| now.duration_since(t) >= LOG_EVERY)
+        {
+            error!(
+                "the character store can't write ({why}): {} saves kept to write when it can; \
+                 logins wait meanwhile",
+                self.pending.len()
+            );
+            self.logged = Some(now);
+        }
+    }
+
+    /// The store wrote what it kept, if it kept anything.
+    fn writes_again(&mut self) {
+        if !self.pending.is_empty() {
+            return;
+        }
+        if let Some(since) = self.failing_since.take() {
+            self.logged = None;
+            self.health.failing.store(false, Ordering::Relaxed);
+            info!(
+                "the character store writes again, after {:.0} s: what it kept is written",
+                since.elapsed().as_secs_f32()
+            );
+        }
+    }
+
+    /// The latest of a character's rows kept, not yet written: what a read
+    /// of them must see.
+    fn kept_row(&self, guid: u32) -> Option<&CharacterRow> {
+        self.pending.iter().rev().find_map(|s| match s {
+            Request::Save(row) if row.guid == guid => Some(&**row),
+            Request::Together(rows, _) => rows.iter().find(|r| r.guid == guid),
+            _ => None,
+        })
+    }
+}
+
+/// What a wait for the next request came to.
+enum Next {
+    Request(Request),
+    TimeUp,
+    Closed,
+}
+
+/// The next request, or `TimeUp` after `limit`.
+fn next_within(rx: &mut mpsc::UnboundedReceiver<Request>, limit: std::time::Duration) -> Next {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match rx.try_recv() {
+            Ok(r) => return Next::Request(r),
+            Err(mpsc::error::TryRecvError::Disconnected) => return Next::Closed,
+            Err(mpsc::error::TryRecvError::Empty) if std::time::Instant::now() >= deadline => {
+                return Next::TimeUp;
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
         }
     }
 }
@@ -1207,17 +1449,26 @@ fn serve(conn: &Connection, kept: &mut Kept, req: Request) {
             });
         }
         Request::Characters(account, reply) => {
-            let rows = characters_for(conn, &account).unwrap_or_else(|e| {
+            let mut rows = characters_for(conn, &account).unwrap_or_else(|e| {
                 warn!("listing characters for {account}: {e}");
                 Vec::new()
             });
+            // As saved, though not yet written.
+            for row in &mut rows {
+                if let Some(kept) = kept.kept_row(row.guid) {
+                    *row = kept.clone();
+                }
+            }
             let _ = reply.send(rows);
         }
         Request::Load(guid, reply) => {
-            let row = load_row(conn, guid).unwrap_or_else(|e| {
-                warn!("loading character {guid}: {e}");
-                None
-            });
+            let row = match kept.kept_row(guid) {
+                Some(kept) => Some(kept.clone()),
+                None => load_row(conn, guid).unwrap_or_else(|e| {
+                    warn!("loading character {guid}: {e}");
+                    None
+                }),
+            };
             let _ = reply.send(row);
         }
         Request::Create(row, reply) => {
@@ -1292,7 +1543,20 @@ fn serve(conn: &Connection, kept: &mut Kept, req: Request) {
             let _ = reply.send(rows);
         }
         Request::Flush(reply) => {
+            if !kept.pending.is_empty() {
+                error!(
+                    "the character store still can't write {} saves: they are lost if the server \
+                     stops now",
+                    kept.pending.len()
+                );
+            }
             let _ = reply.send(());
+        }
+        #[cfg(test)]
+        Request::ReadOnly(on) => {
+            if let Err(e) = conn.pragma_update(None, "query_only", on) {
+                error!("the store's test read-only: {e}");
+            }
         }
         #[cfg(test)]
         Request::Record(kind, id, reply) => {
