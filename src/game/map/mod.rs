@@ -194,6 +194,12 @@ impl MapHandle {
         self.tx.send(event).is_ok()
     }
 
+    /// [`MapHandle::send`], giving back what an actor that has gone
+    /// didn't take.
+    fn try_send(&self, event: MapEvent) -> Result<(), MapEvent> {
+        self.tx.send(event).map_err(|e| e.0)
+    }
+
     /// Whether the actor has gone: what is sent is lost.
     pub fn is_closed(&self) -> bool {
         self.tx.is_closed()
@@ -812,14 +818,56 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
 /// as long as anyone may ([`let_go_all`]). A player handed to it after its
 /// shutdown isn't lost with its queue: their session may have taken them
 /// from their old map before the shutdown, and pass them on after.
+///
+/// A copy that stops otherwise (unloaded, reset) closes its queue first
+/// and then reads it to its end: what a handle taken before it stopped
+/// sends is either read here and handed on, or refused, and so sent on by
+/// the sender ([`deliver`]). Before, a send between the last read and the
+/// queue's drop was taken, and dropped with it.
 async fn finish(map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     if map.realm.maps.is_closed() {
         let (realm, key) = (map.realm.clone(), map.key);
         drop(map);
         let_go_all(realm, key, rx).await;
     } else {
-        hand_on(&map, &mut rx);
+        rx.close();
+        let mut rest = Vec::new();
+        // Closed, the queue ends once it is empty and no send is under
+        // way: a `try_recv` could stop short of one being made.
+        while let Some(e) = rx.recv().await {
+            rest.push(e);
+        }
+        hand_on(&map, rest);
     }
+}
+
+/// Send a player arriving to `map`: the handle of the map that took them.
+/// If its actor has stopped since the handle was taken (a copy unloaded or
+/// reset as they were sent its way), they go to the map started again in
+/// its place, or, as the server shuts down, to the stand-in that saves
+/// them ([`Maps::get`]). `None` if they were let go instead, saved where
+/// they were going ([`let_go`]): into a copy its raid's reset took, which
+/// would stop again at once. Before, a player sent to a copy that had
+/// stopped was dropped with the send, unsaved, still online and in no map.
+pub fn deliver(realm: &Arc<Realm>, map: MapHandle, arrival: Box<Arrival>) -> Option<MapHandle> {
+    let mut map = map;
+    let mut event = MapEvent::Arrive(arrival);
+    for _ in 0..4 {
+        match map.try_send(event) {
+            Ok(()) => return Some(map),
+            Err(back) => event = back,
+        }
+        if !realm.maps.is_closed() && crate::game::instances::expired(realm, map.key) {
+            break;
+        }
+        warn!(
+            "{} stopped as a player was sent to it; sending them to it again",
+            map.key
+        );
+        map = realm.maps.get(realm, map.key);
+    }
+    let_go(realm, map.key, event);
+    None
 }
 
 /// A map's queue once the server is shutting down, until every handle to
@@ -857,8 +905,9 @@ fn let_go(realm: &Realm, key: MapKey, event: MapEvent) {
 /// player was on their way in) isn't lost with it: a player arriving goes
 /// on into the map started afresh, or, as the server shuts down, is saved
 /// and let go. Before, they were dropped, unsaved and still online.
-fn hand_on(map: &Map, rx: &mut mpsc::UnboundedReceiver<MapEvent>) {
-    let rest: Vec<MapEvent> = std::iter::from_fn(|| rx.try_recv().ok())
+fn hand_on(map: &Map, rest: Vec<MapEvent>) {
+    let rest: Vec<MapEvent> = rest
+        .into_iter()
         .filter(|e| !matches!(e, MapEvent::Stop | MapEvent::Shutdown(_)))
         .collect();
     if !rest.iter().any(|e| matches!(e, MapEvent::Arrive(_))) {
@@ -877,9 +926,18 @@ fn hand_on(map: &Map, rx: &mut mpsc::UnboundedReceiver<MapEvent>) {
         "{} stopped with a player on the way in; starting it again",
         map.key
     );
-    let next = realm.maps.get(realm, map.key);
+    let mut next = realm.maps.get(realm, map.key);
     for e in rest {
-        next.send(e);
+        match e {
+            MapEvent::Arrive(a) => {
+                if let Some(h) = deliver(realm, next.clone(), a) {
+                    next = h;
+                }
+            }
+            e => {
+                next.send(e);
+            }
+        }
     }
 }
 
