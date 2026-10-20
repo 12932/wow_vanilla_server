@@ -20,6 +20,10 @@ missing world data). None fixed yet; waiting on your choice.
   its length.
 - #16 fixed: a possessed unit's movement is checked as its controller's own is (`movement::finite`: no NaN, nothing
   past 20,000 yards, a deck's offset on a deck), and dropped when it fails. The speed check isn't applied to it.
+- #5 fixed: a pet, totem, guardian or charmed creature keeps no threat list (`ai::keeps_threat`, mangos's
+  `CanHaveThreatList`), isn't taunted, and one attacking a unit that vanishes or feigns stops (`ai::forget`); a passive
+  creature in a fight has its turn though no one sees it, and lets go of one gone past its threat radius with no blow
+  for the leash's time (`creature_combat::gone_from_fight`).
 
 ## Fixed (about 60)
 - **Items and money that could be duplicated or lost:**

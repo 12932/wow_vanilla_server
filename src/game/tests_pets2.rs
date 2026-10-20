@@ -389,6 +389,57 @@ async fn mind_control_moves_a_player_only_once_made_the_active_mover_and_ends_cl
     assert_eq!((faction, mover, charm), (before, None, None));
 }
 
+/// Review 5's combat finding 1: whoever struck a player's pet went on its
+/// threat list, which nothing prunes, and so stayed in their fight while
+/// both lived. A pet keeps no list (mangos's `CanHaveThreatList`): the
+/// blow's PvP timer run out, the striker is out of it; and a pet fighting
+/// one who vanishes stops, as the creatures on their list do.
+#[tokio::test]
+async fn whoever_strikes_a_pet_leaves_the_fight_once_its_timer_runs_out() {
+    use crate::game::map::combat;
+    use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
+    let realm = harness::realm_with(more());
+    let (realm, _h, gh, map, pet, _wolf) = tamed_on(realm).await;
+    let (_b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    bring(&map, gb, gh, 8.0).await;
+    flag_pvp(&map, vec![gh, gb]);
+    let fighting = |m: &crate::game::map::Map, g: Guid| {
+        m.unit_fields(g)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT))
+    };
+    let r = map
+        .query(move |m| {
+            // A blow, as a swing deals it.
+            combat::engage(m, gb, pet);
+            combat::deal_damage(m, gb, pet, 1);
+            combat::enter(m, gb, true);
+            let struck = fighting(m, gb);
+            // The pet strikes no one back (a passive one), and the PvP
+            // timer runs out.
+            combat::stop_attack(m, pet);
+            let listed = m.creature(pet).map(|c| c.threat.len());
+            let now = m.now;
+            let c = m.combat_mut(gb).unwrap();
+            c.combat_until = Some(now);
+            c.next_check = Some(now);
+            combat::update_players(m);
+            (struck, listed, fighting(m, gb))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r, (true, Some(0), false), "out once nothing holds them");
+    let attacking = map
+        .query(move |m| {
+            pets::attack_target(m, pet, gb);
+            let before = m.combat(pet).is_some_and(|c| c.attacking);
+            crate::game::map::ai::forget(m, gb);
+            (before, m.combat(pet).is_some_and(|c| c.attacking))
+        })
+        .await
+        .unwrap();
+    assert_eq!(attacking, (true, false), "Vanish or Feign Death stops it");
+}
+
 /// The first movement a client sends of `unit` that is told to `to`.
 async fn first_heartbeat_of(to: &mut Client, unit: Guid) -> Vector3d {
     to.wait_for("a heartbeat", |m| match m {

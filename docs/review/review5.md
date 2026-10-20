@@ -11,7 +11,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 | 2 | high | net | A connection's writer outlives its close while the client doesn't read, keeping its socket and its frames |
 | 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox |
 | 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue |
-| 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live |
+| 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live **Fixed.** |
 | 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
 | 7 | medium | maps | One panic in a map's shutdown loses the saves of every player on it |
 | 8 | medium | combat | A panic inside a death leaves its victim unkillable at no health |

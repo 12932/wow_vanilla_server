@@ -135,6 +135,48 @@ fn look_now(m: &mut Map, g: Guid) {
     m.combat_mut(g).unwrap().next_check = Some(now);
 }
 
+/// Review 5's combat finding 1, of a passive creature: one no player saw
+/// had no turn, and one with a turn held whoever struck it while they
+/// lived, however far they went. In a fight, it has its turn though no one
+/// sees it, and one gone past its threat radius, with no blow for the
+/// leash's time, comes off its list.
+#[tokio::test]
+async fn a_passive_creature_lets_go_of_whoever_struck_it_and_went() {
+    let (_realm, _a, ga, map) = setup(Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let dummy = spawn(m, ga, BRUTE, 20, 1.0);
+            m.creature_mut(dummy)
+                .unwrap()
+                .scripted
+                .get_or_insert_default()
+                .passive = true;
+            forced_swing(m, ga, dummy, Outcome::Hit);
+            let struck = (
+                in_combat(m, ga),
+                m.creature(dummy).unwrap().threat.len(),
+                m.combat(dummy).unwrap().attacking,
+            );
+            // Gone 200 yards, long since the blow, and seen by no one.
+            m.players.get_mut(&ga).unwrap().movement.position.x += 200.0;
+            let c = m.creature_mut(dummy).unwrap();
+            c.observers.clear();
+            c.engagement.last_hostile = None;
+            ai::update_creatures(m);
+            look_now(m, ga);
+            combat::update_players(m);
+            (
+                struck,
+                m.creature(dummy).unwrap().threat.len(),
+                in_combat(m, ga),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, (true, 1, false), "struck, held, not struck back");
+    assert_eq!((r.1, r.2), (0, false), "let go");
+}
+
 #[tokio::test]
 async fn an_attack_that_lands_nowhere_holds_no_one_and_ends_with_the_fight() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;

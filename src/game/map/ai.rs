@@ -247,7 +247,7 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
     if from == creature || from.is_zero() || guid::is_game_object(from) {
         return;
     }
-    let Some(c) = map.creature_mut(creature) else {
+    let Some(c) = map.creature_mut(creature).filter(|c| keeps_threat(c)) else {
         return;
     };
     match c.threat.iter_mut().find(|(g, _)| *g == from) {
@@ -263,13 +263,27 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
     }
 }
 
+/// Whether a creature keeps a threat list: not a pet, totem, guardian or
+/// charmed one, whose own AI picks its foes from those fighting it and
+/// its master, and which no fight's turn would ever prune (mangos's
+/// `Unit::CanHaveThreatList`, which keeps one for a guardian, whose AI
+/// there reads it). On one, whoever struck it was held in their fight
+/// while both lived.
+pub fn keeps_threat(c: &crate::game::map::creature::Creature) -> bool {
+    c.pet.is_none()
+}
+
 /// Creatures forget `g` (feigning death, vanishing): its threat goes, and
-/// one fighting it turns to the next on its list.
+/// one fighting it turns to the next on its list. A pet fighting it, with
+/// no list, stops too (mangos's `CombatStop`, its `RemoveAllAttackers`).
 pub fn forget(map: &mut Map, g: Guid) {
     let fighting: Vec<Guid> = map
         .creatures
         .iter()
-        .filter(|(_, c)| c.threat.iter().any(|(t, _)| *t == g))
+        .filter(|(_, c)| {
+            c.threat.iter().any(|(t, _)| *t == g)
+                || (!keeps_threat(c) && c.combat.attacking && c.combat.victim == g)
+        })
         .map(|(_, c)| c.guid)
         .collect();
     forget_by(map, g, fighting);
@@ -353,7 +367,8 @@ fn pet_fight_over(map: &mut Map, g: Guid) {
 /// A taunt: `by` is `creature`'s victim while the taunt lasts, and level
 /// with its old target's threat meanwhile.
 pub fn taunted(map: &mut Map, creature: Guid, by: Guid) {
-    let Some(c) = map.creature_mut(creature) else {
+    // One with no list isn't taunted (mangos's `TauntApply`).
+    let Some(c) = map.creature_mut(creature).filter(|c| keeps_threat(c)) else {
         return;
     };
     // On the threat list, and borrowing what brings it level with the
@@ -857,6 +872,9 @@ pub fn update_creatures(map: &mut Map) {
                 && (!c.observers.is_empty()
                     || c.keep_awake
                     || c.combat.attacking
+                    // A passive one in a fight, that no one sees: its turn
+                    // lets go of those gone from it.
+                    || !c.threat.is_empty()
                     || c.evading
                     || c.scripted
                         .as_deref()
@@ -1068,6 +1086,25 @@ fn passive_fight(map: &mut Map, g: Guid) {
     if c.combat.attacking || !c.fields.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT) {
         return;
     }
+    // One gone far from its fight comes off its list, as one a fighting
+    // creature would go home from (mangos's `CombatManager` drops an
+    // immobile creature's references out of range): else whoever struck
+    // it and walked away was held in their fight while both lived.
+    let gone: Vec<Guid> = c
+        .threat
+        .iter()
+        .map(|(t, _)| *t)
+        .filter(|t| crate::game::map::creature_combat::gone_from_fight(map, g, *t))
+        .collect();
+    for t in gone {
+        crate::game::map::spells::threat_sync::removed(map, g, t);
+        if let Some(c) = map.creature_mut(g) {
+            c.threat.retain(|(x, _)| *x != t);
+        }
+    }
+    let Some(c) = map.creature(g) else {
+        return;
+    };
     let left = c
         .threat
         .iter()
