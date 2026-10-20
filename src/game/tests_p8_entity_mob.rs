@@ -447,3 +447,116 @@ async fn a_scripts_reaction_decides_aggro_and_assistance() {
         .unwrap();
     assert_eq!(seen, [(false, false), (false, true), (true, true)]);
 }
+
+/// The kobold's pockets and the rogue's Pick Pocket and Stealth, as round
+/// 7's pickpocket tests have them.
+fn pockets_world(d: &mut GameData) {
+    use crate::game::data::spells::SpellEffect;
+    use crate::game::data::{ItemTemplate, LootEntry};
+    use crate::game::map::{auras, professions};
+    use crate::game::tests_p3_cast_kit::{KOBOLD, LASTS_LONG, aura, bare, effect, insert};
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    if let Some(k) = d.creature_templates.get_mut(&KOBOLD) {
+        k.pickpocket_loot_id = POCKETS;
+    }
+    d.items.insert(
+        COIN,
+        ItemTemplate {
+            entry: COIN,
+            name: "Coin".into(),
+            display_id: 1000,
+            stackable: 20,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        },
+    );
+    d.loot.pickpocket.insert(
+        POCKETS,
+        vec![LootEntry {
+            item: COIN,
+            chance: 100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }],
+    );
+    let mut pick = bare(PICK, 0);
+    pick.attributes[0] = 0x3_0010;
+    pick.attributes[1] = 0x20_1020;
+    effect(
+        &mut pick,
+        0,
+        SpellEffect {
+            effect: professions::EFFECT_PICKPOCKET,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
+    let mut stealth = bare(STEALTH, 0);
+    stealth.duration_index = LASTS_LONG;
+    stealth.dispel = 5;
+    stealth.aura_interrupt_flags = 0x1_3C03;
+    effect(&mut stealth, 0, aura(auras::AURA_MOD_STEALTH, 0, 1, 1));
+    insert(d, [pick, stealth]);
+}
+
+const PICK: u32 = 997_901;
+const STEALTH: u32 = 997_902;
+const COIN: u32 = 997_910;
+const POCKETS: u32 = 997_920;
+
+/// Pockets open as their creature dies shut on the rogue: their window
+/// closes (mangos's `Loot::~Loot` as `PrepareCorpseLoot` replaces the
+/// pickpocketing loot), and the corpse's loot is the corpse's; its next
+/// life's pockets are to be picked anew (Thistle Tea's "death closes
+/// pockets ... or corpse loot"). The window left open over the corpse's
+/// loot let its slots take the corpse's items.
+#[tokio::test]
+async fn death_shuts_the_pockets_open_on_it() {
+    use crate::game::map::loot::LootKind;
+    use crate::game::tests_p3_cast_kit::{fast_realm, human};
+    use crate::game::tests_p3_spells_kit as kit;
+    let realm = fast_realm(pockets_world);
+    let (mut c, g, map) = human(&realm, "P8P1", "Picker", Class::Rogue).await;
+    let kobold = map
+        .query(move |m| {
+            kit::ready(m, g, 60, &[PICK]);
+            let kobold = kit::dummy(m, g, 60, 3.0);
+            crate::game::map::spells::cast_triggered(m, g, STEALTH, Some(g));
+            kit::cast_fresh(m, g, PICK, kit::at(kobold));
+            assert_eq!(m.players[&g].looting, Some(kobold), "the pockets open");
+            kobold
+        })
+        .await
+        .unwrap();
+    c.clear();
+    let after = map
+        .query(move |m| {
+            let picked = m.loot_state.picked.contains(&kobold);
+            crate::game::map::combat::kill(m, g, kobold);
+            (
+                m.players[&g].looting,
+                m.creature(kobold)
+                    .and_then(|c| c.loot.as_ref())
+                    .map(|l| (l.kind, l.looters.contains(&g))),
+                (picked, m.loot_state.picked.contains(&kobold)),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(after.0, None, "the rogue looks in nothing");
+    assert_eq!(
+        after.1,
+        Some((LootKind::Corpse, false)),
+        "the corpse's loot"
+    );
+    assert_eq!(after.2, (true, false), "picked this life, fresh the next");
+    c.wait_for("the pockets shut", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(
+            r,
+        ) if r.guid == kobold => Some(()),
+        _ => None,
+    })
+    .await;
+}
