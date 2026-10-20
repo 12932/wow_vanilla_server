@@ -23,6 +23,21 @@ pub const KIND_TEXT: &str = "text";
 pub const POSTAGE: u32 = 30;
 /// The mails a mailbox lists.
 const MAX_LISTED: usize = 254;
+/// The most a mail list's body holds: mangos's `MAX_NETCLIENT_PACKET_SIZE`,
+/// which it calls the 1.12 client's hard cap, and where its
+/// `HandleGetMailList` stops listing.
+pub const LIST_BYTES: usize = 32_766;
+/// A listed mail's bytes less its subject's, at most: a player's mail, whose
+/// sender is a whole GUID (wow_messages' `Mail`).
+const LISTED_BYTES: usize = 75;
+/// The longest subject a mail keeps, in letters: the client's
+/// `SendMailSubjectEditBox` takes 64 (1.12.1's FrameXML).
+pub const SUBJECT_LETTERS: usize = 64;
+/// The longest body a mail keeps, in bytes. The client's box takes 500
+/// letters; an addon's `SendMail` may send more, and the body comes back
+/// whole in an item text's answer, which this keeps well under the
+/// client's cap.
+pub const BODY_BYTES: usize = 8_000;
 pub const MAX_MAILS: usize = 100;
 pub const DAY: i64 = 86_400;
 /// The letter a mail's text is copied onto.
@@ -122,6 +137,29 @@ impl Mails {
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
+}
+
+/// `s` cut to at most `letters` characters and `bytes` bytes, at a
+/// character's boundary.
+fn cut(s: &str, letters: usize, bytes: usize) -> &str {
+    let mut end = s.len().min(bytes);
+    if let Some((at, _)) = s.char_indices().nth(letters) {
+        end = end.min(at);
+    }
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// A subject as a mail keeps and lists it.
+fn subject(s: &str) -> &str {
+    cut(s, SUBJECT_LETTERS, usize::MAX)
+}
+
+/// A body as a mail keeps and shows it.
+fn body(s: &str) -> &str {
+    cut(s, usize::MAX, BODY_BYTES)
 }
 
 fn save(realm: &Realm, m: &Mail) {
@@ -232,11 +270,19 @@ pub fn list(map: &Map, g: Guid) {
     };
     let now = now();
     let mails = realm.social.mail.lock();
-    let list = mails
+    // As many as the list's count byte holds, as Thistle Tea shows, and as
+    // fit the client's cap, as mangos's `HandleGetMailList` stops: past
+    // 65,535 bytes the frame's size wraps and the client reads the rest as
+    // packets.
+    let mut bytes = 1;
+    let list: Vec<_> = mails
         .of(guid::counter(g), now)
         .into_iter()
-        // As many as the list's count byte holds, as Thistle Tea shows.
         .take(MAX_LISTED)
+        .take_while(|m| {
+            bytes += LISTED_BYTES + subject(&m.subject).len();
+            bytes <= LIST_BYTES
+        })
         .map(|m| {
             let item = m.item.as_ref();
             let max_durability = item
@@ -258,7 +304,7 @@ pub fn list(map: &Map, g: Guid) {
                         sender: guid::player(m.sender),
                     },
                 },
-                subject: m.subject.clone(),
+                subject: subject(&m.subject).to_owned(),
                 item_text_id: if m.body.is_empty() { 0 } else { m.id },
                 unknown1: 0,
                 stationery: m.stationery,
@@ -278,7 +324,10 @@ pub fn list(map: &Map, g: Guid) {
             }
         })
         .collect();
-    p.outbound.send(&SMSG_MAIL_LIST_RESULT { mails: list });
+    drop(mails);
+    let list = SMSG_MAIL_LIST_RESULT { mails: list };
+    debug_assert!(wow_world_messages::Message::size_without_header(&list) as usize <= LIST_BYTES);
+    p.outbound.send(&list);
 }
 
 /// `CMSG_SEND_MAIL`.
@@ -387,8 +436,10 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
             kind: NORMAL,
             sender: guid::counter(g),
             receiver: guid::counter(to.guid),
-            subject: m.subject,
-            body: m.body,
+            // Cut to what the client sends: a list of long subjects, or a
+            // long body's text, would pass the client's cap.
+            subject: subject(&m.subject).to_owned(),
+            body: body(&m.body).to_owned(),
             item,
             money,
             cod,
@@ -663,8 +714,8 @@ pub fn text_query(map: &Map, g: Guid, text_id: u32) {
     let text = mails
         .texts
         .get(&text_id)
-        .cloned()
-        .or_else(|| mails.mails.get(&text_id).map(|m| m.body.clone()))
+        .or_else(|| mails.mails.get(&text_id).map(|m| &m.body))
+        .map(|t| body(t).to_owned())
         .unwrap_or_default();
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_ITEM_TEXT_QUERY_RESPONSE {

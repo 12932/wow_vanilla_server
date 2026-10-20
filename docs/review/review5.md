@@ -9,7 +9,7 @@ is fixed yet: [CODE_REVIEW.md](../CODE_REVIEW.md) lists them as open until you c
 |---|---|---|---|
 | 1 | high | world | A crafted express flight route overflows an update frame's size field and corrupts the packet stream of every player near |
 | 2 | high | net | A connection's writer outlives its close while the client doesn't read, keeping its socket and its frames |
-| 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox |
+| 3 | high | social | A long mail subject disconnects the receiver each time they open a mailbox **Fixed.** |
 | 4 | high | maps | A copy stopped from outside drops, unsaved, a player whose arrival is already in its queue |
 | 5 | high | combat | A player pet's threat list is never pruned: whoever strikes a pet stays in combat while both live |
 | 6 | high | data | A start on missing or broken world data wipes the skills of every character who logs in |
