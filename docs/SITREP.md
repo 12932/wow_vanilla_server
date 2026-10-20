@@ -1,4 +1,4 @@
-# Sitrep (2026-10-18)
+# Sitrep (2026-10-20)
 
 Two days of work toward the goal you set: align wvs with Thistle Tea, using mangos-classic as a second reference;
 fix the kobold's reach; focus on performance and robustness; write down every decision and question here; then
@@ -6,9 +6,9 @@ review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS
 question and decision in full; this page is the index.
 
 ## In short
-- **Parity:** 5,656 of Thistle Tea's 8,373 applicable tests have a wvs test that checks the same behaviour, or an
-  accepted difference (67.6%, from 21% when the matrix was first mapped). The rest are listed by area in
-  [parity/matrix.csv](parity/matrix.csv).
+- **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an
+  accepted difference (87.8%, from 21% when the matrix was first mapped, 67.5% before rounds 6 to 8). 814 are still
+  gap, listed by area in [parity/matrix.csv](parity/matrix.csv); paused before round 9 (your word, 2026-10-20).
 - **The kobold:** fixed. A unit no longer swings from beyond its reach; two running units get the client's 8/3 yards.
 - **Robustness:**
   - a panic costs one step, creature turn or packet, not the server;
@@ -690,6 +690,6 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | Round 8 (8a to 8f) and fix/master1019 | 86.7% | 0.1.28 |
 | 8g, 8i and your two answers (fix/userdec) | 87.1% | 0.1.29 |
 
-**Running now:** round 8 (8g creature scripts, 8h entities, 8i pets); then 8j to 8m, and the full extended suite.
+**Running now:** nothing: paused before round 9 (your word, 2026-10-20). Round 8 is in.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

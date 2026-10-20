@@ -1,8 +1,8 @@
-# Where wow_vanilla_server stands (2026-10-18)
+# Where wow_vanilla_server stands (2026-10-20)
 
 wvs is a WoW 1.12.1 server in Rust. It is being aligned with [Thistle Tea](https://github.com/pikdum/thistle_tea),
 an Elixir server, as the behaviour to match, with mangos-classic as a second reference for what 1.12 does. This page
-covers how it's built, how to run, test and measure it, what changed on 17–18 October 2026, and what's left.
+covers how it's built, how to run, test and measure it, what changed on 17–20 October 2026, and what's left.
 
 ## How it's built
 - **One actor per map:** a continent, a dungeon copy, a battleground. Each has its own 20 Hz update. Sessions talk
@@ -121,17 +121,31 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   rises through 50 (`elite_from`), once a crossing, as guards come and go; four come 40 yards around Jaina, walk to
   her side fighting what they meet, guard her and leave with her.
 
-## What's left
-- **Parity:** 2,652 rows are still gap. The biggest areas:
-  - the world's entities (players, creatures and objects in the world), about 590;
-  - creature AI and scripts, about 340;
-  - spells, about 490 (core and world);
-  - the world's loaders, about 240;
-  - combat, about 210;
-  - pets and creatures, about 155.
+## Rounds 6 to 8 (19–20 October)
+Thirty-odd agent agents, one area each, took the parity matrix from 67.5% to 87.8% (7,317 of 8,330 applicable
+Thistle Tea tests matched or accepted), with the user's evening list, review 2's M2 and M3, and the navmesh's
+erosion (format 13) on the way. Every stage's fixes and calls are in [SITREP.md](SITREP.md), "Rounds 6 to 8".
+Among what players notice: a poison or a trap's disarming no longer breaks Stealth; engineering guardians have
+their cooldowns; Shadow Trance and Netherwind Focus are spent; spells' procs go off once a target; forced movements
+wait for the client's acknowledgement; a fast reconnect no longer loads a character before its last save; the bank
+works only at its banker; the Lunar Festival's fireworks, cheer speakers and the Ghost Magnet are in; Alterac
+Valley's war riders, Balinda and the rituals are scripted; two of a group entering a dungeon at once share a copy,
+and a shutdown saves a player between maps.
 
-  Round 5 is in. Some rows wait on a question, and some on a system wvs doesn't have, such as Scourge camps, the
-  Lunar Festival's fireworks, or a movement-acknowledgement system.
+## What's left
+- **Parity:** 814 rows are still gap (paused before round 9, 2026-10-20). By area:
+  - the player in the world, about 200; spells, about 180; the rest of the core (stats, classes, events, loot,
+    trade), about 150; entities, mobs and objects, about 105;
+  - the world's systems, about 60; the loaders, about 55; creature AI, about 45; combat, movement and auras, about
+    20 together.
+
+  What's left is mostly what wvs doesn't model: an aura origin on casts (Thistle Tea's proc origins), owner and
+  caster views of a creature's fields (Empathy), creature-group routes, cases that need a navmesh that refuses, and
+  Thistle Tea internals. The leftovers each round named are in `<runs>/prompts/_carryover.md`, and round 9's briefs
+  are written by `<runs>/prompts/gen_round.py 9 docs/parity/matrix.csv`.
+- **The fork (12932/wow_messages):** three 1.12 layouts are wrong there and worked around in wvs: `HitInfo` read as
+  one value (it is flags), `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a byte (a u32 in 1.12) and
+  `CMSG_BATTLEFIELD_JOIN` without its instance and group byte.
 - **Open questions:** 50 or so, in [SITREP.md](SITREP.md). Each says what wvs does until you answer.
 - **The hard findings** ([CODE_REVIEW.md](CODE_REVIEW.md)):
   - a client claiming a transport skips the speed check;
@@ -158,5 +172,10 @@ covers how it's built, how to run, test and measure it, what changed on 17–18 
   - **Memory:** too many agents compiling at once exhausted it. Cap each agent's memory and keep to four or five
     running at once.
   - **Sessions:** long agent sessions sometimes end without a report. Their commits carry what they did.
-  - **Overlap:** agents working the same code from two sides (5a and 4d on purchases into a slot) write it twice.
-    Give stages areas that don't share files, or merge more often.
+  - **Overlap:** agents working the same code from two sides (5a and 4d on purchases into a slot; 8h and 8j on the
+    fireworks; 6d and 6h on each hand's weapon skill) write it twice. Give stages areas that don't share files, or
+    merge more often.
+  - **Merging untested:** on 2026-10-19 the machine ran short of memory and rounds 7 and 8 merged without the fast
+    suite between them; two branches' changes broke each other's tests (7j's sizes against 7k's transforms) and two
+    `match` arms shadowed each other silently. Run `cargo check` after each hand-resolved merge and the fast suite
+    before each push; keep at most three agents up for the full extended suite.
