@@ -161,16 +161,15 @@ fn data() -> GameData {
     };
     d.items.insert(KEY, key_item(KEY));
     d.items.insert(WRONG_KEY, key_item(WRONG_KEY));
-    for (entry, lock) in [(BOX, 48)] {
-        d.items.insert(
-            entry,
-            ItemTemplate {
-                stackable: 1,
-                lock_id: lock,
-                ..item(entry)
-            },
-        );
-    }
+    // A lockbox its key opens.
+    d.items.insert(
+        BOX,
+        ItemTemplate {
+            stackable: 1,
+            lock_id: 48,
+            ..item(BOX)
+        },
+    );
     let mut bracer = item(BRACER);
     bracer.class = 4;
     bracer.quality = 2;

@@ -52,18 +52,17 @@ fn data() -> GameData {
             (30_000, START.0 + 50.0, START.1, START.2 + 10.0),
         ],
     );
-    for (id, name, kind) in [(36, "DeadminesInstance", 1)] {
-        d.maps.insert(
-            id,
-            MapInfo {
-                id,
-                internal_name: name.into(),
-                name: name.into(),
-                instance_type: kind,
-                player_limit: 0,
-            },
-        );
-    }
+    // The Deadmines, a dungeon's copy to go into.
+    d.maps.insert(
+        36,
+        MapInfo {
+            id: 36,
+            internal_name: "DeadminesInstance".into(),
+            name: "DeadminesInstance".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
     d.gameobject_templates.insert(
         STONE,
         crate::game::tests_p3_entity_objects::object(STONE, 5, "Stone", &[]),
@@ -418,9 +417,7 @@ async fn a_mails_item_taken_with_full_bags_is_its_equip_error() {
     .await;
     let full = a
         .wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
-            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) if r.mail_id == id => {
-                Some(r.action.clone())
-            }
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) if r.mail_id == id => Some(r.action),
             _ => None,
         })
         .await;
@@ -445,9 +442,7 @@ async fn a_mails_item_taken_with_full_bags_is_its_equip_error() {
     .await;
     let taken = a
         .wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
-            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) if r.mail_id == id => {
-                Some(r.action.clone())
-            }
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) if r.mail_id == id => Some(r.action),
             _ => None,
         })
         .await;
