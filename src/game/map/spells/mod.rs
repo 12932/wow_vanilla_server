@@ -299,8 +299,23 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
             .find(|t| t.ranks.contains(&spell))
             .map(|t| t.ranks.to_vec())
             .unwrap_or_default();
+        let gone: Vec<u32> = p
+            .spells
+            .iter()
+            .copied()
+            .filter(|s| *s != spell && ranks.contains(s))
+            .collect();
         p.spells.retain(|s| *s == spell || !ranks.contains(s));
+        // And their passive auras with them: the ranks never stack (mangos's
+        // `removeSpell` of the rank below, Thistle Tea's "without duplicate
+        // ranks").
+        for r in gone {
+            auras::remove_spell(map, player, r, Some(player));
+        }
     }
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
     p.spells.push(spell);
     if let Some(old) = old {
         log::superceded(map, player, old, spell);

@@ -12,6 +12,8 @@ const LANGUAGES: &[u32] = &[
     98, 109, 111, 113, 115, 137, 138, 139, 140, 141, 313, 315, 673,
 ];
 pub const PROFESSIONS: &[u32] = &[129, 164, 165, 171, 182, 185, 186, 197, 202, 333, 356, 393];
+/// Riding (the client's `SkillLine` 762).
+pub const RIDING: u32 = 762;
 
 fn slot_of(p: &Player, skill: u32) -> Option<u16> {
     (0..SLOTS).find(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) & 0xFFFF == skill)
@@ -88,7 +90,9 @@ fn cap(p: &Player, skill: u32, step: u32) -> u32 {
         300
     } else if ARMOR.contains(&skill) {
         1
-    } else if PROFESSIONS.contains(&skill) {
+    } else if PROFESSIONS.contains(&skill) || skill == RIDING {
+        // Riding too has 75 a step (mangos's `SetSkillStep` from its
+        // tiers), learned at its cap.
         75 * step.max(1)
     } else {
         5 * u32::from(p.level()).max(1)
@@ -102,6 +106,9 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
     }
     let max = cap(p, skill, step);
     let (slot, value) = match slot_of(p, skill) {
+        // Riding's next rank is had whole, as its first (mangos's
+        // `SetSkillStep` at the tier's value).
+        Some(i) if skill == RIDING => (i, max),
         Some(i) => (i, value(p, skill).unwrap_or(1)),
         None => {
             let Some(free) =
