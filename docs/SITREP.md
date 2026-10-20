@@ -766,6 +766,16 @@ showed a difference. Phase 2 takes what is left.
   aura at a corpse always refused, `SPELL_EFFECT_SPAWN` (46) does nothing, demon and possessed summons ignore
   the destination, the client's source location dropped, Frost Trap never procs Entrapment, ranged abilities take
   the weapon skill.
+- **9core:** Monster Slaying's aura (169) raises a crit's damage against the type, not the chance; attack power
+  against a type and Hunter's Mark on a white swing by the weapon's own speed (mangos's `GetAPMultiplier`); the
+  client's spell damage field takes spirit's share; buyback pauses an item's own and its enchantment's timers; a
+  key the player can't use is refused in a trade; Reincarnation only for one who knows it; a script teleport's
+  watchers told its facing; a liquid's spell off as the player leaves it. **To tell me if you'd rather:** aura 169
+  follows vmangos and Thistle Tea (the crit bonus raised, ×1.5 → ×2.0 at +100%); mangos-classic multiplies the
+  whole multiplier (×3.0). Two rows where wvs is mangos's are `wrong-for-1.12` (Drain Mana breaks no damage aura;
+  penetration read at each tick). **For phase 2:** the creature stat model (creatures and pets take nothing from
+  stat changes), weapon spells' attack power against a type, meeting stones and group changes, pets' 10% regen
+  rule, quest-only loot sparkling for one who doesn't need it.
 
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
