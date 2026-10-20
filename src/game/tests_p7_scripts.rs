@@ -152,6 +152,18 @@ pub(super) fn reached(m: &Map, g: Guid, point: u32) -> bool {
         .is_some_and(|p| p.point == point)
 }
 
+/// [`reached`] the point at `at`, or there with its script's route over:
+/// a route's last point, reached, ends the route at the creature's next
+/// step (with no wait there), and with it what [`reached`] reads, so a
+/// look an update late found no point.
+pub(super) fn came_to(m: &Map, g: Guid, point: u32, at: Vector3d) -> bool {
+    reached(m, g, point)
+        || m.creature(g).is_some_and(|c| {
+            c.scripted.as_deref().is_some_and(|s| s.route.is_none())
+                && (c.position.x - at.x).hypot(c.position.y - at.y) < 0.1
+        })
+}
+
 /// Whether `g` has gone: despawned (a spawn, till it comes back) or
 /// removed.
 pub(super) fn gone(m: &Map, g: Guid) -> bool {
