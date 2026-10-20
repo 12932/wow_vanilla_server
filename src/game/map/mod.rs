@@ -194,10 +194,16 @@ impl MapHandle {
         self.tx.send(event).is_ok()
     }
 
+    /// An event sent, or given back if the actor has gone.
+    #[allow(clippy::result_large_err)] // Handing the event back unmoved.
+    pub fn try_send(&self, event: MapEvent) -> Result<(), MapEvent> {
+        self.tx.send(event).map_err(|mpsc::error::SendError(e)| e)
+    }
+
     /// An arrival sent, or given back if the actor has gone.
     fn try_arrive(&self, arrival: Box<Arrival>) -> Result<(), Box<Arrival>> {
-        match self.tx.send(MapEvent::Arrive(arrival)) {
-            Err(mpsc::error::SendError(MapEvent::Arrive(a))) => Err(a),
+        match self.try_send(MapEvent::Arrive(arrival)) {
+            Err(MapEvent::Arrive(a)) => Err(a),
             _ => Ok(()),
         }
     }
@@ -205,6 +211,12 @@ impl MapHandle {
     /// Whether the actor has gone: what is sent is lost.
     pub fn is_closed(&self) -> bool {
         self.tx.is_closed()
+    }
+
+    /// Whether both are handles to the same actor: a copy started again
+    /// has the key of the one that stopped, and a queue of its own.
+    pub fn same(&self, other: &MapHandle) -> bool {
+        self.tx.same_channel(&other.tx)
     }
 
     pub fn call(&self, f: impl FnOnce(&mut Map) + Send + 'static) -> bool {
@@ -917,6 +929,10 @@ fn let_go(realm: &Realm, key: MapKey, event: MapEvent) {
 /// player was on their way in) isn't lost with it: a player arriving goes
 /// on into the map started afresh, or, as the server shuts down, is saved
 /// and let go. Before, they were dropped, unsaved and still online.
+///
+/// The map that takes them tells their session, behind all that was handed
+/// on with them ([`Map::handed_on`]): the session's handle is the stopped
+/// copy's, and what it sends from then on follows what it sent before.
 fn hand_on(map: &Map, rest: Vec<MapEvent>) {
     let rest: Vec<MapEvent> = rest
         .into_iter()
@@ -939,17 +955,25 @@ fn hand_on(map: &Map, rest: Vec<MapEvent>) {
         map.key
     );
     let mut next = realm.maps.get(realm, map.key);
+    let mut handed = Vec::new();
     for e in rest {
         match e {
             MapEvent::Arrive(a) => {
+                let guid = a.online.guid;
                 if let Some(h) = deliver(realm, next.clone(), a) {
                     next = h;
+                    handed.push(guid);
                 }
             }
             e => {
                 next.send(e);
             }
         }
+    }
+    // A copy that won't have this (stopped in turn) hands them on itself,
+    // and tells their session from there.
+    for guid in handed {
+        next.call(move |m| m.handed_on(guid));
     }
 }
 
@@ -1109,6 +1133,29 @@ impl Map {
         if let Some(p) = self.take_player(guid) {
             debug!("{} disconnected from {}", p.name, self.key);
             self.save_and_go_offline(p);
+        }
+    }
+
+    /// A player handed on to this map by a copy that stopped as they were on
+    /// their way in, everything sent after them with them ([`hand_on`]):
+    /// their session, whose handle is the stopped copy's, hears that this
+    /// map has them, and sends their packets here. One whose session has
+    /// gone leaves, saved, as at a disconnect: theirs went to the copy that
+    /// had stopped. One gone on from here was passed to the session by the
+    /// map they left ([`Map::teleport_with`]).
+    fn handed_on(&mut self, guid: Guid) {
+        let Some(p) = self.players.get(&guid) else {
+            return;
+        };
+        let told = p
+            .online
+            .session
+            .send(crate::game::session::Control::HandedOn {
+                guid,
+                map: self.handle.clone(),
+            });
+        if told.is_err() {
+            self.handle_disconnect(guid);
         }
     }
 
