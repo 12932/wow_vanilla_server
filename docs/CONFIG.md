@@ -70,8 +70,8 @@ process. A config that doesn't load is reported and changes nothing. Otherwise:
   (`Map::cfg`), so a reload is seen whole, between updates, never mid-step. Code outside a map reads
   `Realm::config()`, a read lock and an `Arc` clone.
 - **What needs a restart:** keys marked *restart*: the network's limits, the paths, the character store, the
-  accounts, the level cap, the PvP realm type, the honor week, the start position and the arena. A reload leaves
-  them as they run.
+  accounts, the level cap, the PvP realm type, the honor week, the start position and the arena's battles (its
+  free-for-all grace, `ffa_grace_secs`, is live). A reload leaves them as they run.
 - **The reply:** the command says which keys changed and which of those need a restart:
   `Config reloaded: [rates] xp_kill. Needs a restart: [world] characters_db.` SIGHUP logs the same.
 
@@ -311,6 +311,7 @@ Gurubashi Arena's last man standing: `.arena start [countdown s] [max minutes]` 
 | `reward_item` | The champion's item (Arena Grand Master). | `19024` |  | restart |  |
 | `champion_spell` | The champion's buff (Spirit of Zandalar). | `24425` |  | restart |  |
 | `min_fighters` | Fighters a battle needs to start. | `2` |  | restart |  |
+| `ffa_grace_secs` | Seconds a player keeps the free-for-all flag after walking out of an arena's area (Gurubashi's pit), so the edge can't be teased; back in within them, it carries on. A death or a teleport ends them. 0 drops the flag at once, as mangos does. | `20` | 0 to 3600, clamped | live |  |
 
 
 ## What is configurable, and what is not

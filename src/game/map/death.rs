@@ -201,6 +201,8 @@ pub fn kill(map: &mut Map, g: Guid) {
     crate::game::map::pets::master_died(map, g);
     crate::game::map::intoxication::clear(map, g);
     crate::game::map::duel::left(map, g, false);
+    // Out of an arena, free-for-all no more.
+    crate::game::map::pvp::died(map, g);
     crate::game::map::trade::cancel(
         map,
         g,

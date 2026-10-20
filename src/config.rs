@@ -611,6 +611,11 @@ settings! {
         champion_spell: u32 = 24425, Any, Restart, "";
         /// Fighters a battle needs to start.
         min_fighters: u32 = 2, Any, Restart, "";
+        /// Seconds a player keeps the free-for-all flag after walking out
+        /// of an arena's area (Gurubashi's pit), so the edge can't be
+        /// teased; back in within them, it carries on. A death or a
+        /// teleport ends them. 0 drops the flag at once, as mangos does.
+        ffa_grace_secs: u64 = 20, Clamp(0.0, 3600.0), Live, "";
     }
 }
 

@@ -568,3 +568,10 @@ champion_spell = 24425
 # Fighters a battle needs to start.
 # Default 2. Needs a restart.
 min_fighters = 2
+
+# Seconds a player keeps the free-for-all flag after walking out
+# of an arena's area (Gurubashi's pit), so the edge can't be
+# teased; back in within them, it carries on. A death or a
+# teleport ends them. 0 drops the flag at once, as mangos does.
+# Default 20. Range 0 to 3600, clamped. Changes at a reload.
+ffa_grace_secs = 20

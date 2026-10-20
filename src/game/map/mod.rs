@@ -1443,9 +1443,12 @@ impl Map {
         npc::cancel_flight(self, guid);
         // The player's fight ends, but not their pet's (mangos's
         // `CombatStop`, not `CombatStopWithPets`): the creatures keep them
-        // on their lists, and a blow puts them back in it.
+        // on their lists, and a blow puts them back in it. An arena's
+        // free-for-all grace ends with it; a Blink out of the pit (which
+        // keeps the fight) keeps it, as a walk out does.
         if self.players.contains_key(&guid) && (key != self.key || !keep_combat) {
             combat::leave_combat(self, guid);
+            pvp::teleported(self, guid);
         }
         crate::game::map::spells::interrupts::teleported(self, guid);
         if self.players.contains_key(&guid)

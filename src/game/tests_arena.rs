@@ -5,15 +5,19 @@ use std::time::Duration;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
-use crate::game::data::GameData;
 use crate::game::data::items::ItemTemplate;
+use crate::game::data::{AREA_FLAG_ARENA, AreaInfo, GameData};
 use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::arena::{self, CENTRE};
-use crate::game::map::death::Death;
-use crate::game::map::{MapHandle, MapKey};
+use crate::game::map::combat::can_attack;
+use crate::game::map::death::{self, Death};
+use crate::game::map::player::PLAYER_FLAGS_FFA_PVP;
+use crate::game::map::{Map, MapHandle, MapKey, pvp};
 
 const TRINKET: u32 = 19024;
+/// The arena's stands, around the pit: not free-for-all.
+const STANDS: u32 = 1741;
 
 fn data() -> GameData {
     let mut d = GameData::empty();
@@ -324,7 +328,10 @@ fn probe_the_pit() {
             let (x, y) = (CENTRE.x + r as f32 * a.cos(), CENTRE.y + r as f32 * a.sin());
             let z = nav.ground(x, y, 22.0).unwrap_or(-1.0);
             let z40 = nav.ground(x, y, 40.0).unwrap_or(-1.0);
-            line += &format!(" {r}:{z:.0}/{z40:.0}");
+            let area = nav
+                .zone_and_area(Vector3d { x, y, z: z40 })
+                .map_or(0, |(_, a)| a);
+            line += &format!(" {r}:{z:.0}/{z40:.0}@{area}");
         }
         println!("{line}");
     }
@@ -391,4 +398,212 @@ async fn fighters_of_one_side_are_free_for_all_for_the_fight() {
     hears(&mut a, "Champion of Gurubashi Arena").await;
     let after = map.query(move |m| flags(m)).await.unwrap();
     assert_eq!(after, [false, false], "friends again once it's over");
+}
+
+/// [`data`] with the pit (an arena's area), its stands and Stranglethorn,
+/// as AreaTable has them.
+fn with_areas(mut d: GameData) -> GameData {
+    for (id, zone, flags) in [
+        (arena::AREA_PIT, arena::ZONE_STRANGLETHORN, AREA_FLAG_ARENA),
+        (STANDS, arena::ZONE_STRANGLETHORN, 0),
+        (arena::ZONE_STRANGLETHORN, 0, 0),
+    ] {
+        d.areas.insert(
+            id,
+            AreaInfo {
+                id,
+                zone,
+                flags,
+                name: format!("Area {id}"),
+                ..Default::default()
+            },
+        );
+    }
+    d
+}
+
+/// Two of one side, Alice and Bob, logged in.
+async fn two(realm: &std::sync::Arc<crate::game::Realm>) -> ([Client; 2], Guid, Guid) {
+    let mut a = Client::connect(realm, "Alice");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(realm, "Bob");
+    let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    ([a, b], alice, bob)
+}
+
+/// `g` found to stand in `area`, as `world::update_zone` finds it from the
+/// navmesh (which the fast suite has none of).
+fn stand_in(m: &mut Map, g: Guid, area: u32) {
+    m.players.get_mut(&g).unwrap().area = area;
+    pvp::free_for_all(m, g);
+}
+
+fn ffa(m: &Map, g: Guid) -> bool {
+    m.players[&g]
+        .fields
+        .has_flag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP)
+}
+
+/// The map's clock `secs` on, and its PvP step run.
+fn later(m: &mut Map, secs: u64) {
+    m.now += Duration::from_secs(secs);
+    pvp::update(m);
+}
+
+/// Out of the pit, Bob is free-for-all twenty seconds more (`[arena]
+/// ffa_grace_secs`): Alice, inside, may strike him, and he her, until they
+/// run out; then they are of one side again.
+#[tokio::test]
+async fn stepping_out_of_the_pit_keeps_one_free_for_all_twenty_seconds() {
+    let realm = harness::realm_with(with_areas(data()));
+    let (_clients, alice, bob) = two(&realm).await;
+    let seen = arena_map(&realm)
+        .query(move |m| {
+            stand_in(m, alice, arena::AREA_PIT);
+            stand_in(m, bob, arena::AREA_PIT);
+            let inside = can_attack(m, alice, bob);
+            stand_in(m, bob, STANDS);
+            let out = (can_attack(m, alice, bob), can_attack(m, bob, alice));
+            later(m, 19);
+            let at_19 = can_attack(m, alice, bob);
+            later(m, 2);
+            let at_21 = (can_attack(m, alice, bob), can_attack(m, bob, alice));
+            (inside, out, at_19, at_21, ffa(m, bob), ffa(m, alice))
+        })
+        .await
+        .unwrap();
+    assert!(seen.0, "free for all in the pit");
+    assert_eq!(seen.1, (true, true), "just out: still");
+    assert!(seen.2, "nineteen seconds out: still");
+    assert_eq!(seen.3, (false, false), "twenty-one seconds out: no more");
+    assert_eq!(
+        (seen.4, seen.5),
+        (false, true),
+        "Bob's flag off, Alice's on"
+    );
+}
+
+/// Back in the pit within the twenty seconds, the flag carries on without
+/// a gap; out again, it has twenty seconds from then.
+#[tokio::test]
+async fn stepping_back_into_the_pit_carries_free_for_all_on() {
+    let realm = harness::realm_with(with_areas(data()));
+    let (_clients, alice, bob) = two(&realm).await;
+    let seen = arena_map(&realm)
+        .query(move |m| {
+            stand_in(m, alice, arena::AREA_PIT);
+            stand_in(m, bob, arena::AREA_PIT);
+            stand_in(m, bob, STANDS);
+            let mut seen = Vec::new();
+            later(m, 15);
+            seen.push(ffa(m, bob));
+            stand_in(m, bob, arena::AREA_PIT);
+            seen.push(ffa(m, bob));
+            // Twenty-five seconds after first stepping out, in the pit.
+            later(m, 10);
+            seen.push(ffa(m, bob));
+            stand_in(m, bob, STANDS);
+            later(m, 19);
+            seen.push(can_attack(m, alice, bob));
+            later(m, 2);
+            seen.push(can_attack(m, alice, bob));
+            seen
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen, [true, true, true, true, false]);
+}
+
+/// A death ends the twenty seconds, as does a teleport away (a
+/// hearthstone's); a Blink out of the pit doesn't, as a walk out doesn't.
+#[tokio::test]
+async fn a_death_or_a_teleport_ends_the_free_for_all_grace() {
+    let realm = harness::realm_with(with_areas(data()));
+    let (_clients, alice, bob) = two(&realm).await;
+    let seen = arena_map(&realm)
+        .query(move |m| {
+            stand_in(m, alice, arena::AREA_PIT);
+            stand_in(m, bob, arena::AREA_PIT);
+            stand_in(m, bob, STANDS);
+            later(m, 5);
+            death::kill(m, bob);
+            let dead = ffa(m, bob);
+            death::resurrect(m, bob, 1.0);
+            let raised = (ffa(m, bob), can_attack(m, alice, bob));
+            stand_in(m, bob, arena::AREA_PIT);
+            stand_in(m, bob, STANDS);
+            let at = m.players[&bob].position();
+            m.near_teleport(
+                bob,
+                Vector3d {
+                    x: at.x + 20.0,
+                    ..at
+                },
+                0.0,
+            );
+            let blinked = can_attack(m, alice, bob);
+            m.teleport(
+                bob,
+                m.key,
+                Vector3d {
+                    x: at.x + 500.0,
+                    ..at
+                },
+                0.0,
+            );
+            (dead, raised, blinked, ffa(m, bob))
+        })
+        .await
+        .unwrap();
+    assert!(!seen.0, "dead, no longer free for all");
+    assert_eq!(seen.1, (false, false), "and not once raised");
+    assert!(seen.2, "a Blink keeps it");
+    assert!(!seen.3, "a teleport away ends it");
+}
+
+/// On the real navmesh (`world::update_zone`): Bob gone up from the pit's
+/// floor into the stands is free-for-all twenty seconds, and not after.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_navmesh_finds_one_out_of_the_pit_and_the_grace_runs() {
+    let nav = harness::real_data("nav");
+    if !nav.join("Azeroth.map").exists() {
+        eprintln!("no navmesh at {}: skipped", nav.display());
+        return;
+    }
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(nav);
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, with_areas(data()), None);
+    let (_clients, alice, bob) = two(&realm).await;
+    let seen = arena_map(&realm)
+        .query(move |m| {
+            let put = |m: &mut Map, g: Guid, at: Vector3d| {
+                m.players.get_mut(&g).unwrap().movement.position = at;
+                crate::game::map::world::update_zone(m, g);
+                (m.players[&g].area, ffa(m, g))
+            };
+            // The stands' rows seventy yards east of the centre.
+            let (x, y) = (CENTRE.x + 70.0, CENTRE.y);
+            let z = m.nav.as_mut().and_then(|n| n.ground(x, y, 40.0));
+            let stands = Vector3d {
+                x,
+                y,
+                z: z.unwrap_or(43.0),
+            };
+            put(m, alice, CENTRE);
+            let floor = put(m, bob, CENTRE);
+            let up = put(m, bob, stands);
+            let out = can_attack(m, alice, bob);
+            later(m, 19);
+            let at_19 = can_attack(m, alice, bob);
+            later(m, 2);
+            (floor, up, out, at_19, can_attack(m, alice, bob))
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen.0, (arena::AREA_PIT, true), "on the floor");
+    assert_eq!(seen.1, (STANDS, true), "up in the stands, still");
+    assert!(seen.2 && seen.3, "struck from the pit for twenty seconds");
+    assert!(!seen.4, "and not after");
 }

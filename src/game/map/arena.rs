@@ -1186,19 +1186,9 @@ pub fn fighting(map: &Map, g: Guid) -> bool {
 }
 
 /// A fighter's free-for-all flag: on while they fight, else as their area
-/// has it. The client lets a player strike one of their own side only when
-/// both carry it, and the server knows the pit's area only from the navmesh
-/// or the terrain; without them, two of one side could never fight.
+/// (and its grace) has it ([`crate::game::map::pvp::free_for_all`]).
 fn free_for_all(map: &mut Map, g: Guid) {
-    let area = map.players.get(&g).map_or(0, |p| p.area);
-    let on = fighting(map, g) || crate::game::map::world::area_is_ffa(&map.realm.data, area);
-    if let Some(p) = map.players.get_mut(&g) {
-        p.fields.set_flag(
-            PLAYER_FLAGS,
-            crate::game::map::player::PLAYER_FLAGS_FFA_PVP,
-            on,
-        );
-    }
+    crate::game::map::pvp::free_for_all(map, g);
 }
 
 /// Whether `a` may strike `b` because of the battle: no blows before the
