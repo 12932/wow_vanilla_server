@@ -149,18 +149,20 @@ impl Walk {
             );
         }
         let travelled = now.duration_since(self.started).as_secs_f32() * self.speed;
-        for i in 1..self.points.len() {
-            if travelled <= self.lengths[i] {
-                let (a, b) = (self.points[i - 1], self.points[i]);
-                let seg = (self.lengths[i] - self.lengths[i - 1]).max(f32::EPSILON);
-                let t = ((travelled - self.lengths[i - 1]) / seg).clamp(0.0, 1.0);
-                let p = Vector3d {
-                    x: a.x + (b.x - a.x) * t,
-                    y: a.y + (b.y - a.y) * t,
-                    z: a.z + (b.z - a.z) * t,
-                };
-                return (p, (b.y - a.y).atan2(b.x - a.x));
-            }
+        // The first point not yet passed. The lengths only grow, so it is
+        // found by halves: a flight has hundreds of points, and each flier
+        // is placed every update.
+        let i = 1 + self.lengths[1..].partition_point(|&l| l < travelled);
+        if i < self.points.len() {
+            let (a, b) = (self.points[i - 1], self.points[i]);
+            let seg = (self.lengths[i] - self.lengths[i - 1]).max(f32::EPSILON);
+            let t = ((travelled - self.lengths[i - 1]) / seg).clamp(0.0, 1.0);
+            let p = Vector3d {
+                x: a.x + (b.x - a.x) * t,
+                y: a.y + (b.y - a.y) * t,
+                z: a.z + (b.z - a.z) * t,
+            };
+            return (p, (b.y - a.y).atan2(b.x - a.x));
         }
         let n = self.points.len();
         let (a, b) = (self.points[n.saturating_sub(2)], self.points[n - 1]);
@@ -1022,6 +1024,51 @@ mod tests {
         };
         assert_eq!(splines[0].x, 10.0);
         assert_eq!(duration, 8000);
+    }
+
+    /// A long walk (a flight's hundreds of points, some a stop's repeat) is
+    /// where a look along it from its start puts it, at every point and
+    /// between them: the search by halves finds the segment the look did.
+    #[test]
+    fn a_long_walk_is_found_where_a_look_from_its_start_finds_it() {
+        let now = Instant::now();
+        let mut points: Vec<Vector3d> = (0..300)
+            .map(|i| Vector3d {
+                x: i as f32 * 7.0,
+                y: if i % 2 == 0 { 0.0 } else { 3.0 },
+                z: (i % 5) as f32,
+            })
+            .collect();
+        // A stop: the same point twice, a segment of no length.
+        points.insert(150, points[150]);
+        let w = Walk::new(points.clone(), 32.0, now, 1, true);
+        let from_start = |travelled: f32| {
+            for i in 1..points.len() {
+                if travelled <= w.lengths[i] {
+                    let (a, b) = (points[i - 1], points[i]);
+                    let seg = (w.lengths[i] - w.lengths[i - 1]).max(f32::EPSILON);
+                    let t = ((travelled - w.lengths[i - 1]) / seg).clamp(0.0, 1.0);
+                    return (
+                        a.x + (b.x - a.x) * t,
+                        a.y + (b.y - a.y) * t,
+                        a.z + (b.z - a.z) * t,
+                    );
+                }
+            }
+            let b = points[points.len() - 1];
+            (b.x, b.y, b.z)
+        };
+        let total = *w.lengths.last().unwrap();
+        let mut at = 0.0;
+        while at <= total + 50.0 {
+            let (p, _) = w.position_at(now + Duration::from_secs_f32(at / 32.0));
+            let (x, y, z) = from_start(at);
+            assert!(
+                (p.x - x).abs() < 0.01 && (p.y - y).abs() < 0.01 && (p.z - z).abs() < 0.01,
+                "{at} yards in: {p:?}, not ({x}, {y}, {z})"
+            );
+            at += 0.5;
+        }
     }
 
     #[test]
