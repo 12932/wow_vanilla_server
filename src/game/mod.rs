@@ -821,11 +821,11 @@ mod tests_p8_combat_share;
 #[cfg(test)]
 mod tests_p8_combat_state;
 #[cfg(test)]
+mod tests_p8_creature;
+#[cfg(test)]
 mod tests_p8_creature2;
 #[cfg(test)]
 mod tests_p8_creature3;
-#[cfg(test)]
-mod tests_p8_creature;
 #[cfg(test)]
 mod tests_p8_entity;
 #[cfg(test)]

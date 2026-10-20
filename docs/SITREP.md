@@ -689,6 +689,8 @@ Agent agents, one area each (6a player, 6b spells, 6c the world's loaders, 6d to
 | 7m: the core\'s other areas, round 7 | merged | aace0cc |
 | Round 8 (8a to 8f) and fix/master1019 | 86.7% | 0.1.28 |
 | 8g, 8i and your two answers (fix/userdec) | 87.1% | 0.1.29 |
+| M2 and M3 (fix/m2m3) | merged | 0.1.30 |
+| 8h, 8j, 8k and 8l: round 8 done | 87.8% | 0.1.31 |
 
 **Running now:** nothing: paused before round 9 (your word, 2026-10-20). Round 8 is in.
 
