@@ -263,6 +263,8 @@ mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
+mod tests_p12k_auction;
+#[cfg(test)]
 mod tests_p12k_mail;
 #[cfg(test)]
 mod tests_p12k_npc;

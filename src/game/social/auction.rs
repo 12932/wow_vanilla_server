@@ -25,7 +25,7 @@ pub const PAGE: usize = 50;
 /// The most an auction may ask: mangos's `MAX_MONEY_AMOUNT`.
 const MAX_PRICE: u32 = 0x7FFF_FFFE;
 
-// The mail an auction sends: `item:0:answer`.
+// The mail an auction sends: `item:random property:answer`.
 const OUTBID: u32 = 0;
 const WON: u32 = 1;
 const SOLD: u32 = 2;
@@ -156,29 +156,49 @@ fn save(realm: &Realm, a: &Auction) {
     realm.store.put_record(KIND_AUCTION, u64::from(a.id), a);
 }
 
-fn subject(a: &Auction, answer: u32) -> String {
-    format!("{}:0:{answer}", a.item.entry)
+/// An auction mail's subject, which the client reads into its title: the
+/// item, its random property (the "of the Monkey" of its name) and what
+/// happened (mangos's `itemTemplate:itemRandomPropertyId:answer`).
+fn subject(data: &GameData, a: &Auction, answer: u32) -> String {
+    let random = Item::shown(data, &a.item).random_property;
+    format!("{}:{random}:{answer}", a.item.entry)
 }
 
-/// A mail from the auction house.
+/// The invoice a won or sold auction's mail carries, which the client
+/// reads (`GetInboxInvoiceInfo`): the other party's GUID in hex, the bid
+/// and the buyout, and for the seller the deposit and the house's cut
+/// (mangos's `SendAuctionWonMail` and `SendAuctionSuccessfulMail`).
+fn invoice(other: u32, a: &Auction, deposit_and_cut: Option<u32>) -> String {
+    let mut body = format!("{other:>16x}:{}:{}", a.bid, a.buyout);
+    if let Some(cut) = deposit_and_cut {
+        body.push_str(&format!(":{}:{cut}", a.deposit));
+    }
+    body
+}
+
+/// A mail from the auction house, at once: none is copied onto a letter
+/// (mangos's `MAIL_CHECK_MASK_COPIED`).
 fn mail_from(
+    data: &GameData,
     a: &Auction,
     to: u32,
     answer: u32,
     item: Option<ItemRow>,
     money: u32,
-    delay: i64,
+    body: String,
 ) -> Mail {
     let now = mail::now();
     Mail {
         kind: mail::AUCTION,
         sender: a.house,
         receiver: to,
-        subject: subject(a, answer),
+        subject: subject(data, a, answer),
+        body,
         item,
         money,
-        deliver_at: now + delay,
-        expires_at: now + delay + 30 * DAY,
+        deliver_at: now,
+        expires_at: now + 30 * DAY,
+        flags: mail::COPIED,
         auction: a.id,
         ..Default::default()
     }
@@ -341,20 +361,30 @@ fn settle(realm: &Realm, mails: &mut Mails, a: &Auction, records: &mut Records) 
     mail::post_in(
         realm,
         mails,
-        mail_from(a, a.bidder, WON, Some(a.item.clone()), 0, 0),
+        mail_from(
+            &realm.data,
+            a,
+            a.bidder,
+            WON,
+            Some(a.item.clone()),
+            0,
+            invoice(a.owner, a, None),
+        ),
         records,
     );
-    let delay = realm.config().mail_delay.as_secs() as i64;
+    // The takings at once, as mangos-classic pays them (its
+    // `SendAuctionSuccessfulMail`, with no delay; wvs held them an hour).
     mail::post_in(
         realm,
         mails,
         mail_from(
+            &realm.data,
             a,
             a.owner,
             SOLD,
             None,
             (a.bid - cut).saturating_add(a.deposit),
-            delay,
+            invoice(a.bidder, a, Some(cut)),
         ),
         records,
     );
@@ -468,7 +498,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         mail::post_in(
             &realm,
             &mut mails,
-            mail_from(a, a.bidder, OUTBID, None, a.bid, 0),
+            mail_from(&realm.data, a, a.bidder, OUTBID, None, a.bid, String::new()),
             &mut records,
         );
         send_to(
@@ -575,14 +605,14 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
         mail::post_in(
             &realm,
             &mut mails,
-            mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+            mail_from(&realm.data, &a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, String::new()),
             &mut records,
         );
     }
     mail::post_in(
         &realm,
         &mut mails,
-        mail_from(&a, a.owner, CANCELLED, Some(a.item.clone()), 0, 0),
+        mail_from(&realm.data, &a, a.owner, CANCELLED, Some(a.item.clone()), 0, String::new()),
         &mut records,
     );
     // The auction gone, its item mailed back, the bid refunded and the
@@ -769,7 +799,7 @@ pub fn sweep(realm: &Realm) {
             mail::post_in(
                 realm,
                 &mut mails,
-                mail_from(&a, a.owner, EXPIRED, Some(a.item.clone()), 0, 0),
+                mail_from(&realm.data, &a, a.owner, EXPIRED, Some(a.item.clone()), 0, String::new()),
                 &mut records,
             );
             send_to(
@@ -810,7 +840,7 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
             mail::post_in(
                 realm,
                 &mut mails,
-                mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+                mail_from(&realm.data, &a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, String::new()),
                 &mut records,
             );
         }

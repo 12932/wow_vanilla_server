@@ -224,7 +224,7 @@ fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) {
 #[tokio::test]
 async fn repair_all_mends_what_the_money_pays_for_worn_first() {
     let realm = fast_realm(data);
-    let (mut c, g, vendor) = at_vendor(&realm, "P12KREPAIR").await;
+    let (c, g, vendor) = at_vendor(&realm, "P12KREPAIR").await;
     let map = world(&realm);
     map.query(move |m| {
         equip(m, g, GLOVES, 9);
