@@ -222,7 +222,7 @@ pub fn same_group(map: &Map, a: Guid, b: Guid) -> bool {
 }
 
 fn present(map: &Map, g: Guid) -> bool {
-    map.players.contains_key(&g) || map.creature(g).is_some()
+    map.players.contains_key(&g) || map.creature(g).is_some() || map.gameobject(g).is_some()
 }
 
 fn send(map: &Map, object: Guid, m: &impl wow_world_messages::vanilla::ServerMessage) {
@@ -422,6 +422,24 @@ pub fn despawn(map: &mut Map, g: Guid) {
         g,
         (respawn > 0).then(|| Duration::from_secs(u64::from(respawn))),
     );
+}
+
+/// `owner` leaves the world: what they raised goes with them now, before
+/// they are saved, so that a cooldown that waited for it has started and
+/// is kept (mangos-classic's `RemoveAllGameObjects` at `RemoveFromWorld`,
+/// its `AddCooldown` for `SPELL_ATTR_COOLDOWN_ON_EVENT`), where it went at
+/// the next update, its owner gone, and the cooldown with it.
+pub fn owner_leaves(map: &mut Map, owner: Guid) {
+    let owned: Vec<Guid> = map
+        .objects
+        .summoned
+        .iter()
+        .filter(|s| s.owner == Some(owner))
+        .map(|s| s.guid)
+        .collect();
+    for g in owned {
+        despawn(map, g);
+    }
 }
 
 /// An object goes as [`despawn`] has it, and a spawned one comes back

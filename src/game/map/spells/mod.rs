@@ -1404,6 +1404,16 @@ fn execute(
         if let Some(i) = item {
             crate::game::map::items::used(map, caster, i, s.id);
         }
+    } else if s.requires_spell_focus != 0
+        && map.players.contains_key(&caster)
+        && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
+    {
+        // A player's triggered spell wants its focus too, and fails without
+        // it (mangos-classic's `SpellStart` checks it of every spell before
+        // the triggered ones' exemptions; Thistle Tea's "checks the original
+        // player before projecting triggered effects"), where it went off.
+        send_cast_result(map, caster, s.id, Some(fail::REQUIRES_SPELL_FOCUS));
+        return;
     }
     // A finishing move's combo points, on the target they are on.
     let combo = map
@@ -1680,12 +1690,17 @@ const DISPEL_INVISIBILITY: u32 = 6;
 /// a spell cast rather than on its hits (Unstable Power and Ascendance
 /// spend a stack a cast, Elemental Focus and the Blue Dragon may come of
 /// one), whether it hit, was resisted or landed on many. At its unit
-/// target, else its caster. A triggered cast's too, as mangos's
-/// `Spell::cast` raises it for every cast with no spell to ask whether it
-/// was triggered: each of Arcane Missiles' missiles spends a stack of
-/// Unstable Power (Thistle Tea raises none for a triggered cast). Not a
-/// helpful item's.
+/// target, else its caster. A triggered cast's too: an Arcane Missile's
+/// spends its stack of Unstable Power, as mangos-classic's `Spell::cast`
+/// procs `PROC_EX_CAST_END` for every spell, passing no `Spell` for the
+/// triggered spells' filter (Thistle Tea's missile completion of aura
+/// origin), where a triggered cast's ended nothing; not one that
+/// suppresses its caster's procs (`SPELL_ATTR_EX3_SUPPRESS_CASTER_PROCS`),
+/// nor a helpful item's.
 fn cast_end_procs(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets, item: Option<Guid>) {
+    if s.attr(3, sd::ATTR_EX3_SUPPRESS_CASTER_PROCS) {
+        return;
+    }
     if item.is_some() && auras::positive(s) {
         return;
     }

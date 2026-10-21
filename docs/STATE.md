@@ -1,8 +1,8 @@
-# Where wow_vanilla_server stands (2026-10-20)
+# Where wow_vanilla_server stands (2026-10-21)
 
 wvs is a WoW 1.12.1 server in Rust. It is being aligned with [Thistle Tea](https://github.com/pikdum/thistle_tea),
 an Elixir server, as the behaviour to match, with mangos-classic as a second reference for what 1.12 does. This page
-covers how it's built, how to run, test and measure it, what changed on 17–20 October 2026, and what's left.
+covers how it's built, how to run, test and measure it, what changed on 17–21 October 2026, and what's left.
 
 ## How it's built
 - **One actor per map:** a continent, a dungeon copy, a battleground. Each has its own 20 Hz update. Sessions talk
@@ -132,22 +132,33 @@ works only at its banker; the Lunar Festival's fireworks, cheer speakers and the
 Valley's war riders, Balinda and the rituals are scripted; two of a group entering a dungeon at once share a copy,
 and a shutdown saves a player between maps.
 
-## What's left
-- **Parity:** 814 rows are still gap (paused before round 9, 2026-10-20). By area:
-  - the player in the world, about 200; spells, about 180; the rest of the core (stats, classes, events, loot,
-    trade), about 150; entities, mobs and objects, about 105;
-  - the world's systems, about 60; the loaders, about 55; creature AI, about 45; combat, movement and auras, about
-    20 together.
+## Rounds 9 and 10 and the open questions (20–21 October)
+Round 9 (phase 1, six agents) tested the rows wvs was said to do already: 91.8%. Round 10 (phase 2, an agent an
+area) fixed what differed, by Thistle Tea checked against mangos-classic, with 11h's second pass at the entities and
+12q settling the open questions by mangos-classic (your rule each time asked): **94.6%** (7,850 of 8,302 applicable
+rows), 0.1.68. Every agent's fixes and calls are in [SITREP.md](SITREP.md), "Round 10". Among what players notice:
+the Scourge invasion's camps (shards, minions, cultists) and `.invasion attack`; Silithus's wind stones; creatures'
+and pets' stats from their class, ranged attack power, pets healing from spirit; owned creatures running their
+EventAI; a pet's fight ending as its master's; summons on the ground; leaps falling and swimming; a talent reset
+keeping its weapon skills' values; procs by mangos's origins (Hellfire's flames no longer proc ordinary auras;
+each Arcane Missile spends Unstable Power); mana given makes threat; no XP for a creature's pet; Stay stopping the
+pet's cast; a charm's end interrupting the freed creature; a mounted player taking the Warsong flag.
 
-  What's left is mostly what wvs doesn't model: an aura origin on casts (Thistle Tea's proc origins),
-  creature-group routes, cases that need a navmesh that refuses, and Thistle Tea internals. (Owner and Empathy
-  views of a creature's fields, and a mark's tracking for its hunter alone, are in `map::views` since `fix/entity`.) The leftovers each round named are in `<runs>/prompts/_carryover.md`, and round 9's briefs
-  are written by `<runs>/prompts/gen_round.py 9 docs/parity/matrix.csv`.
+## What's left
+- **Parity:** 145 rows are still gap (stopped after round 10, 2026-10-21). By area: the player in the world 77,
+  spells 28, the core's other areas 17, the world's systems 13, loaders 3, entities 3, creature AI 2. What's left:
+  cross-map resurrection, meeting stones (a port of mangos's LFG, about 1,300 lines), a spell's hit rolled at launch
+  with misses in `SPELL_GO` (a packet change), casting and range edge cases, objects' own casts, and tests that need
+  a navmesh that refuses. Round 11's briefs are written (`<runs>/prompts/p11*.md`, by
+  `gen_round.py 11 docs/parity/matrix.csv`), and the leftovers each round named are in
+  `<runs>/prompts/_carryover.md`. Phase 3 (the missing features) and phase 4's rest (THISTLE_TEA_DIFFERENCES.md for
+  the unresolved rows, a full extended run, a peon load test, the carry-over's robustness items) aren't started.
 - **The fork (12932/wow_messages):** its 1.12 `HitInfo` is flags (with the debug trailer under 0x1),
   `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u32, `CMSG_BATTLEFIELD_JOIN` the map, the instance and the group
   byte, and a spell's targets the client's (a corpse's guid before the locations), so wvs encodes and reads them
   with its types.
-- **Open questions:** 50 or so, in [SITREP.md](SITREP.md). Each says what wvs does until you answer.
+- **Open questions:** settled by mangos-classic on 2026-10-21 (12q), but #4 (reporting the fork's bugs upstream);
+  eight places where wvs keeps Thistle Tea's over mangos's are listed in [SITREP.md](SITREP.md) for your word.
 - **The hard findings** ([CODE_REVIEW.md](CODE_REVIEW.md)):
   - a client claiming a transport skips the speed check;
   - groups aren't saved;
@@ -171,7 +182,9 @@ and a shutdown saves a player between maps.
 - **Records:** decisions and questions went into [DECISIONS.md](DECISIONS.md) as stages reported them.
 - **Lessons for next time:**
   - **Memory:** too many agents compiling at once exhausted it. Cap each agent's memory and keep to four or five
-    running at once.
+    running at once (the user's cap, 2026-10-21: six; `<runs>/rustc-gate.sh` lets three wvs compiles run at once).
+  - **Overlap:** agents by area still met the same feature (`inverseEffectMask` three times, pets' fights, demon
+    summons, regen): each merge kept one and folded the other's tests onto it.
   - **Sessions:** long agent sessions sometimes end without a report. Their commits carry what they did.
   - **Overlap:** agents working the same code from two sides (5a and 4d on purchases into a slot; 8h and 8j on the
     fireworks; 6d and 6h on each hand's weapon skill) write it twice. Give stages areas that don't share files, or

@@ -206,34 +206,33 @@ fn a_quests_xp_is_whole_to_five_levels_over_then_less_rounded_up_and_none_withou
     assert_eq!(crate::game::map::quests::quest_xp(&quest(10, 0), 10), 0);
 }
 
+/// A pet victim is worth nothing now (mangos-classic's `XP::Gain` for
+/// `IsPet`, the user's #51), not Thistle Tea's three quarters: what is
+/// left is the formula's cap, multipliers and levels.
 #[test]
-fn kill_xp_caps_a_higher_levels_bonus_at_four_and_a_pets_kill_is_three_quarters_without_elites() {
+fn kill_xp_caps_a_higher_levels_bonus_at_four_and_takes_its_multipliers_and_levels() {
     let plain = KillXp::default();
     assert_eq!(
         combat::kill_xp_with(10, 10, 14, &plain),
         combat::kill_xp_with(10, 10, 15, &plain)
     );
     assert!(combat::kill_xp_with(10, 10, 14, &plain) > combat::kill_xp_with(10, 10, 13, &plain));
-    let pet = KillXp {
-        pet_victim: true,
-        ..Default::default()
-    };
-    assert_eq!(combat::kill_xp_with(24, 24, 24, &pet), 124);
-    // An elite pet, in a dungeon, is a pet: no elite bonus.
-    let elite_pet = KillXp {
+    assert_eq!(combat::kill_xp_with(24, 24, 24, &plain), 165);
+    // An elite in a dungeon: two and a half times, 412.5 to the even.
+    let elite = KillXp {
         elite: true,
         dungeon: true,
-        ..pet
+        ..plain
     };
-    assert_eq!(combat::kill_xp_with(24, 24, 24, &elite_pet), 124);
+    assert_eq!(combat::kill_xp_with(24, 24, 24, &elite), 412);
     let halved = KillXp {
         multiplier: 2.0,
         damage_share: 0.5,
-        ..pet
+        ..plain
     };
-    assert_eq!(combat::kill_xp_with(24, 24, 24, &halved), 124);
+    assert_eq!(combat::kill_xp_with(24, 24, 24, &halved), 165);
     // Its base from its owner's level, the level factor from its own.
-    assert_eq!(combat::kill_xp_with(24, 20, 24, &pet), 149);
+    assert_eq!(combat::kill_xp_with(24, 20, 24, &plain), 198);
 }
 
 #[test]
@@ -280,9 +279,9 @@ async fn a_kills_options_tell_npc_pets_players_pets_and_charmed_units_flags_and_
         out
     })
     .await;
-    // 20 * 5 + 45, doubled for an elite; three quarters, no elite bonus,
-    // as a pet; nothing as a player's.
-    assert_eq!(got, vec![290, 109, 0, 0]);
+    // 20 * 5 + 45, doubled for an elite; nothing as an NPC's pet
+    // (mangos-classic's `IsPet`, #51) or a player's.
+    assert_eq!(got, vec![290, 0, 0, 0]);
     // The no-XP flag; always running (flags_extra 0x40) is no bar. A
     // summoned critter, unspecified creature or totem, or one of a tenth
     // of the health or less, gives nothing; one of more, its XP.

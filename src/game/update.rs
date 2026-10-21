@@ -39,6 +39,9 @@ pub const MOVEFLAG_JUMPING: u32 = MovementFlags::JUMPING;
 pub const MOVEFLAG_SWIMMING: u32 = MovementFlags::SWIMMING;
 pub const MOVEFLAG_SPLINE_ENABLED: u32 = MovementFlags::SPLINE_ENABLED;
 pub const MOVEFLAG_SPLINE_ELEVATION: u32 = MovementFlags::SPLINE_ELEVATION;
+/// A spline's flag for the way it faces at its end (1.12's
+/// `SPLINEFLAG_FINAL_ANGLE`).
+pub const SPLINE_FINAL_ANGLE: u32 = 0x0004_0000;
 
 /// Run, walk, swim and turn speeds, in the order a living block carries
 /// them.
@@ -75,6 +78,8 @@ pub struct SplineState {
     pub id: u32,
     pub nodes: Vec<Vector3d>,
     pub final_node: Vector3d,
+    /// The way it faces at its end, if it turns there.
+    pub final_angle: Option<f32>,
 }
 
 /// A unit on a transport: the transport, and its place and facing on deck.
@@ -270,9 +275,18 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                 out.extend_from_slice(&s.to_le_bytes());
             }
             if let Some(spline) = spline {
-                // No final angle, target or point.
-                let spline_flags = spline.flags & !(0x0001_0000 | 0x0002_0000 | 0x0004_0000);
+                // No final target or point; a final angle if it turns at its
+                // end, written after the flags (mangos-classic's
+                // `PacketBuilder::WriteCreate`), so one who comes to see it
+                // on its way sees it turn as it arrives.
+                let mut spline_flags = spline.flags & !(0x0001_0000 | 0x0002_0000 | 0x0004_0000);
+                if spline.final_angle.is_some() {
+                    spline_flags |= SPLINE_FINAL_ANGLE;
+                }
                 out.extend_from_slice(&spline_flags.to_le_bytes());
+                if let Some(angle) = spline.final_angle {
+                    out.extend_from_slice(&angle.to_le_bytes());
+                }
                 out.extend_from_slice(&spline.time_passed.to_le_bytes());
                 out.extend_from_slice(&spline.duration.to_le_bytes());
                 out.extend_from_slice(&spline.id.to_le_bytes());
@@ -656,6 +670,7 @@ mod tests {
             id: 446,
             nodes: vec![v(-13719.4, 249.08, 28.52), v(-13718.58, 253.25, 29.73)],
             final_node: v(-13718.58, 253.25, 29.73),
+            final_angle: None,
         };
         let block = create_block(
             &Create {
@@ -716,6 +731,7 @@ mod tests {
                         id: 9,
                         nodes: vec![from, to],
                         final_node: to,
+                        final_angle: None,
                     }),
                     transport: None,
                 },

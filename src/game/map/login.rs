@@ -443,6 +443,7 @@ pub fn arrived(map: &Map, g: Guid) {
 /// The logout is due: save the character and hand the session back to the
 /// character screen, which tells the client.
 pub fn complete_logout(map: &mut Map, guid: Guid) {
+    crate::game::map::objects::owner_leaves(map, guid);
     let Some(mut p) = map.take_player(guid) else {
         return;
     };

@@ -6,9 +6,12 @@ review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS
 question and decision in full; this page is the index.
 
 ## In short
-- **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an
-  accepted difference (87.8%, from 21% when the matrix was first mapped, 67.5% before rounds 6 to 8). 814 are still
-  gap, listed by area in [parity/matrix.csv](parity/matrix.csv); paused before round 9 (your word, 2026-10-20).
+- **Parity:** 7,850 of Thistle Tea's 8,302 applicable tests have a wvs test that checks the same behaviour, or an
+  accepted difference (94.6%, from 21% when the matrix was first mapped, 87.8% before rounds 9 and 10). 145 are
+  still gap, listed by area in [parity/matrix.csv](parity/matrix.csv). Stopped 2026-10-21 after round 10, at your
+  word, at 0.1.68; phase 3 (the missing features) and the rest of phase 4 not started.
+- **Open questions:** settled by mangos-classic (12q), but #4; **eight places where wvs keeps Thistle Tea's over
+  mangos's** are listed under Open questions for your word.
 - **The kobold:** fixed. A unit no longer swings from beyond its reach; two running units get the client's 8/3 yards.
 - **Robustness:**
   - a panic costs one step, creature turn or packet, not the server;
@@ -43,7 +46,8 @@ answers are under **Answered**. What is left for you:
   - effect immunity holds for one side unless the spell's attribute says both; mangos ignores sides;
   - a party-accept quest's prompt isn't sent to a raid's other subgroups; mangos sends it and refuses;
   - an item-making reward spell aimed at its caster stays the player's cast; mangos's quest giver would make it
-    for itself.
+    for itself;
+  - a spell focus is checked for a player's cast only; mangos checks a creature's too.
 
 ## Your list of 2026-10-19 evening, and my calls
 Being done by agent agents, four at a time; merged after the fast suite (the whole extended suite at most every 4
@@ -888,6 +892,22 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   healing bonuses by school mask (mangos). Twelve rows `wrong-for-1.12` (wvs is mangos's). Left `gap`: druid form
   attack power (12q's #48 has since settled it by mangos), six meeting-stone rows (a port of mangos's LFG, about
   1,300 lines), and some not reached (insignia, Soul Link's range, taxi resume and others).
+- **11h, entities, a second pass (0.1.68):** 35 of 36 rows settled (43 in its CSV with eight of other areas its
+  fixes moved), twelve fixes: **no XP for a creature's pet or guardian** (your #51; mangos's `XP::Gain` for
+  `IsPet`; the quest kill credit stays, as `KilledMonster`); a player's triggered spell needs its spell focus; an
+  aggressive pet notices by its aggro radius (its detection, a yard more a level below it, up to 25, within 3
+  yards' height; mangos's `PetAI` with `GetAttackDistance`), where it looked a flat 20 at any height; a possessed
+  unit's moves go to all who see it but its mover, and a dead one can't be moved; a player's summoned objects go
+  before the logout save, so a cooldown waiting on them is kept; **a scripted walk's final facing goes with the
+  walk, and a create mid-walk carries it** (mangos's `WriteCreate`; a new client check passes); a creature's
+  totems fire their summoner's EventAI as they come, die and go; a follower respawns in its place by its leader;
+  script command 76's attached object is its raiser's and goes with it (vmangos). **Merge:** its Arcane Missiles
+  cast-end proc was 10b's too; its version kept (it also spares a spell that suppresses its caster's procs).
+  **Its calls:** spell focus checked for players only (Thistle Tea; mangos checks creatures too, so on the list
+  above); a pet template with no detection range looks 20 yards. **Worth a look:** vmangos's `spell_cone` rows for
+  the whirl's children look like direction offsets, which `boss_mechanics::fixups` overwrites with 120. Left `gap`:
+  a spell's hit rolled at launch and misses listed in `SPELL_GO` (mangos's; it changes the packet, so it needs the
+  fork's `SpellMiss` layout and the client check first).
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -1035,7 +1055,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10b: spells, round 10 | 93.8% | 0.1.65 |
 | 10m: the core, round 10 | 94.2% | 0.1.66 |
 | 12q: the open questions, by mangos | 94.2% | 0.1.67 |
+| 11h: entities, a second pass | 94.6% | 0.1.68 |
 
-**Running now:** 11h (entities, a second pass), **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
+**Running now:** nothing. Stopped 2026-10-21 at your word, after round 10, 11h and 12q merged: 94.6%, 0.1.68.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

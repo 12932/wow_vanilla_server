@@ -1243,6 +1243,7 @@ impl Map {
 
     /// A player's client has gone: they leave, saved.
     pub fn handle_disconnect(&mut self, guid: Guid) {
+        objects::owner_leaves(self, guid);
         if let Some(p) = self.take_player(guid) {
             debug!("{} disconnected from {}", p.name, self.key);
             self.save_and_go_offline(p);
@@ -2456,6 +2457,25 @@ impl Map {
             return;
         };
         for o in observers {
+            if let Some(p) = self.players.get(o) {
+                p.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+
+    /// [`Map::send_to_observers`], but not to `but` (mangos's
+    /// `SendMessageToAllWhoSeeMeMove` sparing the client that moved it).
+    pub fn send_to_observers_but(&self, object: Guid, frame: &Arc<[u8]>, to_self: bool, but: Guid) {
+        if to_self
+            && object != but
+            && let Some(p) = self.players.get(&object)
+        {
+            p.outbound.send_frame(frame.clone());
+        }
+        let Some(observers) = self.observers(object) else {
+            return;
+        };
+        for o in observers.iter().filter(|o| **o != but) {
             if let Some(p) = self.players.get(o) {
                 p.outbound.send_frame(frame.clone());
             }

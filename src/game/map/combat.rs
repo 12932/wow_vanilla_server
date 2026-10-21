@@ -458,8 +458,6 @@ pub struct KillXp {
     /// The share of its damage players dealt (`DamageOrigin`).
     pub damage_share: f32,
     pub no_xp: bool,
-    /// The victim was a pet.
-    pub pet_victim: bool,
 }
 
 impl Default for KillXp {
@@ -470,7 +468,6 @@ impl Default for KillXp {
             multiplier: 1.0,
             damage_share: 1.0,
             no_xp: false,
-            pet_victim: false,
         }
     }
 }
@@ -491,7 +488,7 @@ pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillX
         0.0
     };
     let base = (owner_level * 5 + 45) as f32 * factor;
-    let elite = if o.pet_victim || !o.elite {
+    let elite = if !o.elite {
         1.0
     } else if o.dungeon {
         2.5
@@ -499,9 +496,6 @@ pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillX
         2.0
     };
     let mut xp = base * elite;
-    if o.pet_victim {
-        xp *= 0.75;
-    }
     // A multiplier of nothing gives nothing; only one below that is
     // taken for one (Thistle Tea's `experience_multiplier`).
     xp *= if o.multiplier >= 0.0 {
@@ -525,8 +519,11 @@ fn round_half_even(x: f32) -> u32 {
 
 /// The options of a kill of creature `victim` (Thistle Tea's
 /// `Experience.kill_options`): elites are ranks one to three; nothing for a
-/// creature flagged so, one a player controls, or a summoned critter,
-/// totem or the like.
+/// creature flagged so, one a player controls, a summoned critter, totem
+/// or the like, or a pet or guardian of anyone's, a creature's too
+/// (mangos-classic's `XP::Gain`, nothing for `IsPet`, which a guardian
+/// is; Thistle Tea and vmangos give three quarters for a creature's: the
+/// user's call, #51).
 pub fn kill_options(map: &Map, victim: Guid) -> KillXp {
     let Some(c) = map.creature(victim) else {
         return KillXp {
@@ -538,13 +535,13 @@ pub fn kill_options(map: &Map, victim: Guid) -> KillXp {
     let controlled = c.owner.is_some_and(guid::is_player);
     let summoned = c.fields.get_u32(UNIT_CREATED_BY_SPELL) != 0
         && t.is_some_and(|t| matches!(t.creature_type, 8 | 10 | 11) || t.health_multiplier <= 0.1);
+    let pet = c.pet.is_some() || c.scripted.as_deref().is_some_and(|s| s.guardian);
     KillXp {
         elite: t.is_some_and(|t| matches!(t.rank, 1..=3)),
         dungeon: crate::game::instances::instance_type(&map.realm, map.key.map) == 1,
         multiplier: t.map_or(1.0, |t| t.xp_rate()),
         damage_share: crate::game::map::creature_combat::xp_share(map, victim),
-        no_xp: controlled || summoned || t.is_some_and(|t| t.static_flags1 & 0x2 != 0),
-        pet_victim: c.pet.is_some(),
+        no_xp: controlled || summoned || pet || t.is_some_and(|t| t.static_flags1 & 0x2 != 0),
     }
 }
 
