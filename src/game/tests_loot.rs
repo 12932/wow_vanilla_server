@@ -21,15 +21,15 @@ const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
 pub(super) const LOOT_ITEM: u32 = 2000;
 const CRAFTED: u32 = 2001;
-const ORE: u32 = 2770;
+pub(super) const ORE: u32 = 2770;
 pub(super) const FISH: u32 = 6291;
-const MINING_PICK: u32 = 2901;
+pub(super) const MINING_PICK: u32 = 2901;
 const BRACER: u32 = 2010;
 const SET_HELM: u32 = 2020;
 const SET_CHEST: u32 = 2021;
 
 const RECIPE: u32 = 900_001;
-const MINING: u32 = 2575;
+pub(super) const MINING: u32 = 2575;
 pub(super) const FISHING: u32 = 7620;
 const ENCHANT_STRENGTH: u32 = 900_002;
 const STRENGTH_AURA: u32 = 7507;
@@ -39,7 +39,7 @@ const SET_BONUS: u32 = 900_005;
 
 const SKINNING: u32 = 8613;
 const LEATHER: u32 = 2318;
-const VEIN: u32 = 1731;
+pub(super) const VEIN: u32 = 1731;
 const BOBBER: u32 = 35591;
 
 fn item(
@@ -512,7 +512,7 @@ pub(super) fn learn(m: &mut Map, g: Guid, spell: u32, skill: u32) {
     }
 }
 
-fn skill_of(m: &Map, g: Guid, skill: u32) -> u32 {
+pub(super) fn skill_of(m: &Map, g: Guid, skill: u32) -> u32 {
     m.players
         .get(&g)
         .and_then(|p| crate::game::map::skills::value(p, skill))

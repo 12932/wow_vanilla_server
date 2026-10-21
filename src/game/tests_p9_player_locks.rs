@@ -28,8 +28,8 @@ const KEYED: u32 = 180_952;
 const ORE: u32 = 9450;
 const KEY: u32 = 9451;
 const WRONG_KEY: u32 = 9452;
-const BOX: u32 = 9453;
-const COIN: u32 = 9454;
+pub(crate) const BOX: u32 = 9453;
+pub(crate) const COIN: u32 = 9454;
 const BRACER: u32 = 9455;
 const DUST: u32 = 9456;
 const MARK: u32 = 3450;
@@ -42,12 +42,12 @@ const SLOW_OPEN: u32 = 900_961;
 const WRONG_KIND: u32 = 900_962;
 /// A key's spell, and Pick Lock's (a second's cast).
 const KEY_SPELL: u32 = 900_963;
-const PICK_LOCK: u32 = 900_964;
+pub(crate) const PICK_LOCK: u32 = 900_964;
 const LINE: u32 = 900_965;
 const DISENCHANT: u32 = 900_966;
 const PICK_POCKET: u32 = 900_967;
 const STEALTH: u32 = 900_968;
-const LOCKPICKING: u32 = 633;
+pub(crate) const LOCKPICKING: u32 = 633;
 const ENCHANTING: u32 = 333;
 const ONE_SECOND: u32 = 7;
 
@@ -58,7 +58,7 @@ const LOW_CASTLEVEL: u8 = 0x2c;
 const OUT_OF_RANGE: u8 = 0x59;
 const ONLY_INDOORS: u8 = 0x52;
 const SMSG_CAST_RESULT: u16 = 0x130;
-const SMSG_LOOT_RESPONSE: u16 = 0x160;
+pub(crate) const SMSG_LOOT_RESPONSE: u16 = 0x160;
 
 fn item(entry: u32) -> ItemTemplate {
     ItemTemplate {
@@ -94,7 +94,7 @@ fn spell(id: u32, effects: &[(u32, u32, i32, i32)]) -> SpellTemplate {
     s
 }
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = GameData::empty();
     let key = |kind, index, skill| LockKey { kind, index, skill };
     d.crafts.locks.insert(47, vec![key(LOCK_KEY_SKILL, 19, 0)]);
@@ -254,7 +254,7 @@ fn keyed() -> Guid {
     guid::game_object(KEYED, 802)
 }
 
-async fn setup(realm: &Arc<Realm>, account: &str, name: &str) -> (Client, Guid, MapHandle) {
+pub(crate) async fn setup(realm: &Arc<Realm>, account: &str, name: &str) -> (Client, Guid, MapHandle) {
     let mut a = Client::connect(realm, account);
     let g = a.enter(name, Race::Human, Class::Rogue).await;
     let map = realm.maps.get(realm, MapKey::world(0));
@@ -276,7 +276,7 @@ fn object(o: Guid) -> Targets {
     }
 }
 
-fn item_target(i: Guid) -> Targets {
+pub(crate) fn item_target(i: Guid) -> Targets {
     Targets {
         item: Some(i),
         ..Default::default()
@@ -291,7 +291,7 @@ fn why(m: &mut Map, caster: Guid, spell: u32, t: &Targets, item: Option<Guid>) -
 }
 
 /// A fresh cast: no global cooldown or cast left over.
-fn cast(m: &mut Map, g: Guid, spell: u32, t: Targets, item: Option<Guid>) {
+pub(crate) fn cast(m: &mut Map, g: Guid, spell: u32, t: Targets, item: Option<Guid>) {
     if let Some(p) = m.players.get_mut(&g) {
         p.caster.gcd_until = None;
         p.caster.casting = None;
@@ -300,14 +300,14 @@ fn cast(m: &mut Map, g: Guid, spell: u32, t: Targets, item: Option<Guid>) {
 }
 
 /// The cast under way ends at the map's next update.
-fn hurry(m: &mut Map, g: Guid) {
+pub(crate) fn hurry(m: &mut Map, g: Guid) {
     let now = m.now;
     if let Some(c) = m.caster_mut(g).and_then(|c| c.casting.as_mut()) {
         c.ends = now;
     }
 }
 
-fn learn_skill(m: &mut Map, g: Guid, skill: u32, value: u32) {
+pub(crate) fn learn_skill(m: &mut Map, g: Guid, skill: u32, value: u32) {
     let p = m.players.get_mut(&g).unwrap();
     crate::game::map::skills::learn_skill(p, skill, 1);
     let i = (0..128u16)
@@ -317,7 +317,7 @@ fn learn_skill(m: &mut Map, g: Guid, skill: u32, value: u32) {
         .set_u32(PLAYER_SKILL_INFO_1_1 + i * 3 + 1, (300 << 16) | value);
 }
 
-fn give(m: &mut Map, g: Guid, entry: u32) -> Guid {
+pub(crate) fn give(m: &mut Map, g: Guid, entry: u32) -> Guid {
     crate::game::map::inventory::add_item(m, g, entry, 1, false).unwrap();
     let p = &m.players[&g];
     p.items
