@@ -175,12 +175,39 @@ pub struct Casting {
     /// Where the caster stood and faced as it began: a move from there, or
     /// a turn of a tenth of a radian, is what breaks it (mangos's
     /// `m_castPositionX` and `m_castOrientation`).
-    pub at: Option<(Vector3d, f32)>,
+    pub at: Option<Stance>,
+}
+
+/// Where a caster stands and faces, for [`Casting::at`]: aboard a boat or
+/// a zeppelin, on its deck, in the transport's own frame (Thistle Tea's
+/// `CastMovement.anchor`, the user's call): the ship's own way and turns
+/// aren't the caster's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stance {
+    pub position: Vector3d,
+    pub orientation: f32,
+    /// The transport it is measured on, if any.
+    pub transport: Option<Guid>,
 }
 
 /// Where a caster stands and faces, for [`Casting::at`].
-pub fn stance(map: &Map, g: Guid) -> Option<(Vector3d, f32)> {
-    map.unit_view(g).map(|u| (u.position, u.orientation))
+pub fn stance(map: &Map, g: Guid) -> Option<Stance> {
+    if let Some(t) = map
+        .players
+        .get(&g)
+        .and_then(|p| p.movement.flags.get_on_transport())
+    {
+        return Some(Stance {
+            position: t.transport.position,
+            orientation: t.transport.orientation,
+            transport: Some(t.transport.guid),
+        });
+    }
+    map.unit_view(g).map(|u| Stance {
+        position: u.position,
+        orientation: u.orientation,
+        transport: None,
+    })
 }
 
 /// A unit's spellcasting: the cast under way and the cooldowns.
@@ -2841,16 +2868,19 @@ const MOVED_FROM_CAST: f32 = 0.01;
 /// `Spell::update` against `m_castPositionX`).
 pub fn moved(map: &mut Map, g: Guid) {
     environment::moved(map, g);
-    let here = map.unit_view(g).map(|u| u.position);
+    let here = stance(map, g);
     let Some((spell, channel, from)) = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
-        .map(|c| (c.spell, c.channel_until.is_some(), c.at.map(|(p, _)| p)))
+        .map(|c| (c.spell, c.channel_until.is_some(), c.at))
     else {
         return;
     };
+    // On the deck it began on, measured there; off it, or onto another,
+    // moved.
     if let (Some(from), Some(here)) = (from, here)
-        && combat::dist(from, here) <= MOVED_FROM_CAST
+        && from.transport == here.transport
+        && combat::dist(from.position, here.position) <= MOVED_FROM_CAST
     {
         return;
     }
@@ -2899,13 +2929,13 @@ pub fn channel_turned(map: &mut Map, g: Guid, turned: bool, jumped: bool) {
     else {
         return;
     };
-    let facing = map.unit_view(g).map_or(0.0, |u| u.orientation);
+    let facing = stance(map, g).map_or(0.0, |u| u.orientation);
     let turns = turned
         && map.realm.data.spells.get(c.spell).is_some_and(|s| {
             if s.channel_interrupt_flags & CHANNEL_INTERRUPT_TURNING == 0 {
                 return false;
             }
-            let Some((_, from)) = c.at else {
+            let Some(from) = c.at.map(|a| a.orientation) else {
                 return true;
             };
             let mut leeway = TURN_LEEWAY;
