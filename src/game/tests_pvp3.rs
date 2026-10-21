@@ -74,7 +74,7 @@ fn text(d: &mut GameData, id: u32, line: &str) {
 }
 
 /// Move `c` within the match's map, at once, to a height.
-async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
+pub(super) async fn put(map: &MapHandle, c: &mut Client, x: f32, y: f32, z: f32) {
     let g = c.guid;
     map.query(move |m| m.teleport(g, m.key, Vector3d { x, y, z }, 0.0))
         .await;
@@ -119,7 +119,7 @@ fn all_of(m: &crate::game::map::Map, entry: u32) -> Vec<Guid> {
     out
 }
 
-async fn pair(
+pub(super) async fn pair(
     realm: &std::sync::Arc<crate::game::Realm>,
 ) -> (Client, Guid, Client, Guid, MapHandle) {
     let mut a = Client::connect(realm, "A");

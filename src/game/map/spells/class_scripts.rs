@@ -304,7 +304,13 @@ pub fn dummy(
     index: usize,
     amount: i32,
 ) -> bool {
-    if index == 0 && id_dummy(map, caster, target, s) {
+    // Once a cast, at its first dummy or script effect: Summon Screecher
+    // Spirit's is its second, its first the summon.
+    let first = s
+        .effects
+        .iter()
+        .position(|e| matches!(e.effect, super::EFFECT_DUMMY | super::EFFECT_SCRIPT_EFFECT));
+    if first == Some(index) && id_dummy(map, caster, target, s) {
         return true;
     }
     match s.script_name.as_str() {

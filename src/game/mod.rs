@@ -217,6 +217,20 @@ mod tests_p11g_zones;
 #[cfg(test)]
 mod tests_p11h_stones;
 #[cfg(test)]
+mod tests_p11j_control;
+#[cfg(test)]
+mod tests_p11j_loot;
+#[cfg(test)]
+mod tests_p11j_pets;
+#[cfg(test)]
+mod tests_p11j_quests;
+#[cfg(test)]
+mod tests_p11j_real;
+#[cfg(test)]
+mod tests_p11j_spells;
+#[cfg(test)]
+mod tests_p11j_world;
+#[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p3_ai_commands;

@@ -167,7 +167,7 @@ fn plaguelands() -> GameData {
 }
 
 /// The towers' places: Crown Guard, Eastwall, Northpass, Plaguewood.
-const AT: [(f32, f32, f32); 4] = [
+pub(super) const AT: [(f32, f32, f32); 4] = [
     (1860.85, -3731.23, 196.716),
     (2574.51, -4794.89, 144.704),
     (3181.08, -4379.36, 174.123),
@@ -186,7 +186,7 @@ pub(crate) async fn tick(map: &MapHandle) {
 }
 
 /// Players in the Eastern Kingdoms, the towers up.
-async fn in_the_plaguelands(
+pub(super) async fn in_the_plaguelands(
     names: &[(&str, Race)],
 ) -> (std::sync::Arc<crate::game::Realm>, Vec<Client>, MapHandle) {
     let realm = harness::realm_with(plaguelands());
@@ -211,7 +211,7 @@ async fn in_the_plaguelands(
 }
 
 /// `g` in the Plaguelands at `at`, flagged for PvP.
-fn stand(m: &mut crate::game::map::Map, g: Guid, at: (f32, f32, f32)) {
+pub(super) fn stand(m: &mut crate::game::map::Map, g: Guid, at: (f32, f32, f32)) {
     m.teleport(
         g,
         m.key,

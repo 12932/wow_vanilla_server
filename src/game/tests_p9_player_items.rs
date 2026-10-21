@@ -101,7 +101,7 @@ fn damage(id: u32) -> SpellTemplate {
     s
 }
 
-fn data() -> GameData {
+pub(super) fn data() -> GameData {
     let mut d = crate::game::tests_p3_combat::data();
     let mut bracer = item(BRACER);
     (bracer.class, bracer.subclass, bracer.inventory_type) = (4, 1, 9);
@@ -292,7 +292,7 @@ fn data() -> GameData {
     d
 }
 
-async fn setup() -> (Arc<Realm>, Client, Guid, MapHandle) {
+pub(super) async fn setup() -> (Arc<Realm>, Client, Guid, MapHandle) {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
     let g = a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -311,7 +311,7 @@ async fn setup() -> (Arc<Realm>, Client, Guid, MapHandle) {
     (realm, a, g, map)
 }
 
-async fn on<T: Send + 'static>(
+pub(super) async fn on<T: Send + 'static>(
     map: &MapHandle,
     f: impl FnOnce(&mut Map) -> T + Send + 'static,
 ) -> T {
@@ -319,7 +319,7 @@ async fn on<T: Send + 'static>(
 }
 
 /// Give `count` of `entry` at `at`; its guid.
-fn give_at(m: &mut Map, g: Guid, entry: u32, count: u32, at: (u8, u8)) -> Guid {
+pub(super) fn give_at(m: &mut Map, g: Guid, entry: u32, count: u32, at: (u8, u8)) -> Guid {
     let d = m.realm.data.clone();
     let counter = m
         .realm
@@ -334,7 +334,7 @@ fn give_at(m: &mut Map, g: Guid, entry: u32, count: u32, at: (u8, u8)) -> Guid {
     item
 }
 
-fn holds(m: &Map, g: Guid, at: (u8, u8)) -> Option<(u32, u32)> {
+pub(super) fn holds(m: &Map, g: Guid, at: (u8, u8)) -> Option<(u32, u32)> {
     let p = &m.players[&g];
     p.item_at(at.0, at.1)
         .map(|i| (p.items[i].entry, p.items[i].count()))
@@ -372,7 +372,7 @@ fn health(m: &Map, g: Guid) -> u32 {
 }
 
 /// What a blow of `g`'s that hit takes off `victim`, its procs sure.
-fn blow(m: &mut Map, g: Guid, victim: Guid) -> u32 {
+pub(super) fn blow(m: &mut Map, g: Guid, victim: Guid) -> u32 {
     let before = health(m, victim);
     enchant::FORCED_PROC_ROLL.with(|f| f.set(Some(0.0)));
     procs::trigger(
