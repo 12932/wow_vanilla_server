@@ -875,6 +875,22 @@ fn effect(
             {
                 return;
             }
+            // A drain takes the caster's spell power and damage done, and
+            // the target's damage taken (mangos's `EffectPowerDrain`:
+            // `SpellDamageBonusDone`, `SpellDamageBonusTaken`); a burn
+            // takes what it burns.
+            let amount = if e.effect == EFFECT_POWER_DRAIN
+                && amount > 0
+                && !s.custom(sd::CUSTOM_FIXED_DAMAGE)
+            {
+                let mut d = amount as f32
+                    + outcome::bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
+                d *= outcome::done_multiplier(map, caster, target, s);
+                d = l.mods.apply(super::mods::OP_DAMAGE, d);
+                outcome::taken_of(map, caster, target, s, index, Kind::Direct, 1, d) as i32
+            } else {
+                amount
+            };
             let taken = map
                 .unit_fields_mut(target)
                 .map(|f| {
