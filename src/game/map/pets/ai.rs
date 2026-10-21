@@ -97,8 +97,15 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             summon::remove(map, g);
             return;
         }
+        // A hunter's pet lies as long as a creature of its template's
+        // rank (mangos's `Creature::InitEntry`, `Corpse.Decay.*`); a
+        // summoned one five seconds (`Pet::Create`'s `SetCorpseDelay(5)`).
         let stays = if kind == Kind::Hunter {
-            CORPSE_STAYS
+            let rank = map
+                .creature(g)
+                .and_then(|c| map.realm.data.creature_template(c.entry))
+                .map_or(0, |t| t.rank);
+            map.cfg.creatures.corpse_decay(rank)
         } else {
             SUMMON_CORPSE_STAYS
         };

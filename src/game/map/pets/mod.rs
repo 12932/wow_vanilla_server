@@ -105,9 +105,8 @@ pub const DYNFLAG_SPECIALINFO: u32 = 0x10;
 /// its master.
 pub const FOLLOW_DISTANCE: f32 = 2.0;
 const TELEPORT_DISTANCE: f32 = 60.0;
-/// A dead hunter's pet waits this long, then goes (to be revived).
-const CORPSE_STAYS: Duration = Duration::from_secs(60);
-/// Other dead pets go soon.
+/// A dead hunter's pet lies as a creature of its rank does, then goes (to
+/// be revived); other dead pets go soon.
 const SUMMON_CORPSE_STAYS: Duration = Duration::from_secs(5);
 
 /// What a controlled creature is.

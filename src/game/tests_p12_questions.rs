@@ -381,3 +381,32 @@ async fn a_scripted_follower_goes_back_to_where_its_fight_began_and_follows_on()
     .await;
     assert_eq!(got, (true, Some(true), true), "home to where it began, following");
 }
+
+// #45: a dead pet's corpse.
+
+/// mangos-classic's hunter pet takes the corpse time of its template, as
+/// any creature (`Creature::InitEntry`: by rank, `Corpse.Decay.NORMAL`'s
+/// 300 seconds for a normal beast), and `Pet::Update` unsummons it once
+/// that has run out; only a summoned pet's is five seconds
+/// (`SetCorpseDelay(5)`). wvs gave a hunter's pet a minute.
+#[tokio::test]
+async fn a_dead_hunters_pet_lies_as_long_as_a_creature_of_its_rank() {
+    use std::time::Duration;
+    use crate::game::map::{combat, pets};
+    use crate::game::tests_p5_ai_pets::tamed_with;
+    let (_realm, _h, _gh, map, pet, wolf) = tamed_with(crate::game::tests_pets::data()).await;
+    let got = on(&map, move |m| {
+        let decay = m.cfg.creatures.corpse_decay_normal;
+        combat::kill(m, wolf, pet);
+        let start = m.now;
+        let mut lying = Vec::new();
+        for secs in [61, decay - 1, decay + 1] {
+            m.now = start + Duration::from_secs(secs);
+            pets::update(m);
+            lying.push(m.creature(pet).is_some());
+        }
+        (decay, lying)
+    })
+    .await;
+    assert_eq!(got, (300, vec![true, true, false]));
+}
