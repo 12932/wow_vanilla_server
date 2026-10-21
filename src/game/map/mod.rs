@@ -95,6 +95,7 @@ pub mod tiles;
 pub mod trade;
 pub mod trade_spells;
 pub mod trinkets;
+pub mod ubrs_stadium;
 pub mod vendor;
 pub mod views;
 pub mod visibility;

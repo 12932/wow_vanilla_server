@@ -568,6 +568,9 @@ pub fn area_trigger(map: &mut Map, guid: Guid, id: u32) {
             guid,
         );
     }
+    if scripted {
+        crate::game::map::instance_script::area_trigger(map, guid, id);
+    }
     let Some(tp) = &t.teleport else {
         return;
     };

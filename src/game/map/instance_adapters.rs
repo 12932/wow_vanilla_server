@@ -460,6 +460,14 @@ pub fn doors(s: Script) -> &'static [(u32, Open)] {
         Script::BlackrockSpire => &[
             (175244, Open::Done(0)),
             (175153, Open::Done(1)),
+            (
+                super::ubrs_stadium::ENTRY_DOOR,
+                Open::Rule(super::ubrs_stadium::entry_open),
+            ),
+            (
+                super::ubrs_stadium::EXIT_DOOR,
+                Open::Done(super::ubrs_stadium::STADIUM),
+            ),
             (175946, Open::Done(7)),
             (175947, Open::Done(7)),
         ],
@@ -525,7 +533,10 @@ pub fn creature_event(
         Script::Gnomeregan => gnome_creature(map, entry, event),
         Script::ZulFarrak => zf_creature(map, g, entry, spawn, event),
         Script::Uldaman => uld_creature(map, g, entry, spawn, event),
-        Script::BlackrockSpire => brs_creature(map, spawn, event),
+        Script::BlackrockSpire => {
+            super::ubrs_stadium::creature_event(map, g, event);
+            brs_creature(map, spawn, event)
+        }
         Script::DireMaul => dm_creature(map, g, entry, spawn, event),
         Script::BlackrockDepths => brd_creature(map, g, entry, event),
         Script::Stratholme => strat_creature(map, g, entry, spawn, event),
@@ -1948,6 +1959,9 @@ fn brs_creature(map: &mut Map, spawn: Option<u32>, event: Event) {
 }
 
 fn brs_timer(map: &mut Map, key: u32) {
+    if super::ubrs_stadium::timer(map, key) {
+        return;
+    }
     if (T_BRS_DOOR..T_BRS_ROOKERY).contains(&key) {
         let step = (key - T_BRS_DOOR) as usize;
         if let Some((l, r)) = BRS_BRAZIERS.get(step.wrapping_sub(1)).copied() {
