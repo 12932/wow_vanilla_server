@@ -66,6 +66,7 @@ fn walk(m: &mut Map, g: Guid) -> Arc<Vec<Waypoint>> {
     c.scripted.get_or_insert_with(Default::default).route = Some(Route {
         points: points.clone(),
         repeat: true,
+        pathfind: true,
     });
     c.movement_type = MOVEMENT_WAYPOINT;
     c.waypoint = 1;

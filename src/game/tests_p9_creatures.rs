@@ -456,6 +456,7 @@ fn on_route(m: &mut Map, g: Guid, points: Vec<Waypoint>) {
     event_ai::scripted_mut(m, g).unwrap().route = Some(event_ai::Route {
         points: std::sync::Arc::new(points),
         repeat: false,
+        pathfind: true,
     });
     let c = m.creature_mut(g).unwrap();
     c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;

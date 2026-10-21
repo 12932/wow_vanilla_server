@@ -2248,6 +2248,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 s.route = Some(event_ai::Route {
                     points: std::sync::Arc::new(points),
                     repeat: d4 != 0,
+                    pathfind: d1 != 3,
                 });
                 s.follow = None;
             }

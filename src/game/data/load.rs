@@ -318,6 +318,7 @@ pub fn load(dir: &Path) -> GameData {
         {
             let _z = crate::zone!("load: Thistle Tea's scripts");
             let _ = super::tt_scripts::install(&mut data);
+            crate::game::wind_stones::install(&mut data);
         }
         // Alterac Valley's NPCs as the battleground drives them, over the
         // general import.

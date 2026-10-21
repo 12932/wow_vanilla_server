@@ -170,6 +170,10 @@ pub struct Feign {
 pub struct Route {
     pub points: std::sync::Arc<Vec<crate::game::data::Waypoint>>,
     pub repeat: bool,
+    /// Walked over the navmesh, its points on the ground; a special path
+    /// (`creature_movement_special`) goes straight, at its points' own
+    /// heights (vmangos's, Thistle Tea's `pathfind?: false`).
+    pub pathfind: bool,
 }
 
 /// A move a script started: its spline, where it ends, the point its
@@ -273,6 +277,52 @@ pub fn has_events_entry(data: &crate::game::data::GameData, entry: u32) -> bool 
 pub fn has_events(map: &Map, g: Guid) -> bool {
     map.creature(g)
         .is_some_and(|c| events_of(map, ai_entry(c)).is_some())
+}
+
+/// Whether `c` runs its own events: one of no one's, and of the owned a
+/// guardian, a companion and a creature's pet, each of a mind of its own
+/// (mangos-classic's `GuardianAI`, a `CreatureEventAI`, for every pet but
+/// a player's controlled one; Thistle Tea's `EventAI.events`); not a
+/// player's hunter pet or demon, a charmed or possessed creature (their
+/// master's `PetAI`), nor a totem (`TotemAI`).
+pub fn runs_own(c: &crate::game::map::creature::Creature) -> bool {
+    use crate::game::map::pets::Kind;
+    match c.pet.as_deref() {
+        None => c.owner.is_none(),
+        Some(s) => match s.kind {
+            Kind::Guardian | Kind::Critter => true,
+            Kind::Hunter | Kind::Demon => !guid::is_player(s.owner),
+            Kind::Totem | Kind::Charmed | Kind::Possessed => false,
+        },
+    }
+}
+
+/// The events of an owned creature that runs its own ([`runs_own`]), at
+/// its pet AI's step: its fight's start is seen here, at its first step in
+/// one (its pet AI starts its fights, where a creature's own are started
+/// by [`aggro`]), and its end too, as a guardian's evade (mangos's
+/// `GuardianAI::EnterEvadeMode` runs its evade events); then its timers.
+pub fn owned_tick(map: &mut Map, g: Guid) {
+    if !has_events(map, g) || !map.creature(g).is_some_and(runs_own) {
+        return;
+    }
+    ensure_started(map, g);
+    let fighting = in_combat(map, g);
+    let was = scripted(map, g).is_some_and(|s| s.in_combat);
+    if fighting && !was {
+        let enemy = victim(map, g)
+            .or_else(|| {
+                map.creature(g)
+                    .and_then(|c| c.combat.attackers.iter().min_by_key(|a| a.guid()).copied())
+            })
+            .unwrap_or_default();
+        aggro(map, g, enemy);
+    } else if !fighting && was {
+        evade(map, g);
+    }
+    if map.creature(g).is_some_and(|c| c.alive()) {
+        tick(map, g);
+    }
 }
 
 /// The creature's scripted state, made if it has none.
@@ -652,7 +702,7 @@ fn ooc_los(map: &mut Map, g: Guid, e: &AiEvent) -> Option<Option<Guid>> {
 /// Try the events `matches` picks, with `invoker` as the one who caused
 /// them.
 fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Option<Guid>) {
-    let Some(entry) = map.creature(g).filter(|c| c.owner.is_none()).map(ai_entry) else {
+    let Some(entry) = map.creature(g).filter(|c| runs_own(c)).map(ai_entry) else {
         return;
     };
     let Some(events) = events_of(map, entry).map(<[AiEvent]>::to_vec) else {

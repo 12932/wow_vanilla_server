@@ -112,6 +112,15 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         return;
     }
     crate::game::map::ai::advance_motion(map, g);
+    // A guardian's, a companion's or a creature's pet's own events (its
+    // EventAI), before its pet AI's step; one of them may have taken it.
+    crate::game::map::event_ai::owned_tick(map, g);
+    if !map
+        .creature(g)
+        .is_some_and(|c| c.alive() && c.pet.is_some())
+    {
+        return;
+    }
     match kind {
         Kind::Totem => totems::step(map, g, now),
         Kind::Possessed => {
@@ -148,7 +157,16 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             regen(map, g, now);
             act(map, g, now);
         }
-        Kind::Critter => follow(map, g, now),
+        // A companion follows, but where a script told it to stay (Thistle
+        // Tea's mini-pet tree, its command state).
+        Kind::Critter => {
+            let stay = state(map, g).and_then(|s| (s.command == COMMAND_STAY).then_some(s.stay_at));
+            match stay {
+                Some(Some(at)) => go_to(map, g, at, now),
+                Some(None) => {}
+                None => follow(map, g, now),
+            }
+        }
         _ => {
             regen(map, g, now);
             if kind == Kind::Hunter {
@@ -253,7 +271,18 @@ fn still_fights(map: &Map, g: Guid, owner: Guid, v: Guid) -> bool {
 /// to stay takes on of its own accord only what stands within its reach,
 /// as Thistle Tea's `Targeting.within_stay_range?` has it.
 fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
-    let pick = acquire_any(map, g, owner, aggressive);
+    // A creature's own pet takes no fight up while its master goes home,
+    // and takes its foes by its threat list first (Thistle Tea's
+    // `TargetSelection.next` for NPC pets; mangos's `GuardianAI`, a
+    // `CreatureEventAI` on its own list).
+    let creatures = !guid::is_player(owner);
+    if creatures && map.creature(owner).is_some_and(|c| c.evading) {
+        return None;
+    }
+    let pick = creatures
+        .then(|| by_threat(map, g, owner))
+        .flatten()
+        .or_else(|| acquire_any(map, g, owner, aggressive));
     let stays = state(map, g).is_some_and(|s| s.command == COMMAND_STAY);
     if !stays {
         return pick;
@@ -268,6 +297,19 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
         // The nearest is out of reach; none nearer is in it.
         _ => None,
     }
+}
+
+/// The foe highest on a creature's pet's threat list it may fight (the
+/// lower guid of two as high), but one under crowd control it leaves be.
+fn by_threat(map: &Map, g: Guid, owner: Guid) -> Option<Guid> {
+    map.creature(g)?
+        .threat
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t != owner && still_fights(map, g, owner, *t))
+        .filter(|(t, _)| !avoids_breaking(map, g, *t))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.guid().cmp(&a.0.guid())))
+        .map(|(t, _)| t)
 }
 
 /// Whether `v` is held by crowd control that damage would break
@@ -551,6 +593,12 @@ fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)
         {
             return None;
         }
+        // A dispel (Devour Magic) goes only where it has something to
+        // take, and gives way to the next spell where it hasn't.
+        if dispels(t) {
+            let range = data.spells.range(t).1;
+            return dispel_target(map, g, s.owner, t, victim, range).map(|w| (id, w));
+        }
         let effects = || t.effects.iter().filter(|e| e.effect != 0);
         let on_self = effects().all(|e| matches!(e.target_a, 0 | 1 | 20 | 22));
         let on_master = effects().all(|e| e.target_a == TARGET_MASTER);
@@ -584,6 +632,63 @@ pub(super) fn helpful(t: &crate::game::data::spells::SpellTemplate) -> bool {
 
 /// `TARGET_MASTER`: a spell on the pet's master alone.
 const TARGET_MASTER: u32 = 27;
+
+/// `SPELL_EFFECT_DISPEL`.
+const EFFECT_DISPEL: u32 = 38;
+
+/// Whether every effect of `t` is a dispel (Devour Magic).
+fn dispels(t: &crate::game::data::spells::SpellTemplate) -> bool {
+    let mut effects = t.effects.iter().filter(|e| e.effect != 0).peekable();
+    effects.peek().is_some() && effects.all(|e| e.effect == EFFECT_DISPEL)
+}
+
+/// Whom a pet's dispel goes on, of those within `range` and in its sight:
+/// an enemy with a buff it takes (its victim, its master's, then those
+/// fighting either, the lower guid first), else a friend with an
+/// affliction it takes (its master, then their party), as Thistle Tea's
+/// `Autocast.candidates` has it for a spell at any unit, by the dispel
+/// options it observes (mangos's `PetAI` tries its victim first, its
+/// `CheckCast` refusing one with nothing to take). Never itself: Devour
+/// Magic takes nothing of its caster's own (mangos's `DevourMagic`
+/// script).
+fn dispel_target(
+    map: &Map,
+    g: Guid,
+    owner: Guid,
+    t: &crate::game::data::spells::SpellTemplate,
+    victim: Option<Guid>,
+    range: f32,
+) -> Option<Guid> {
+    let me = map.position_of(g)?;
+    let victim_of = |u: Guid| map.combat(u).filter(|c| c.attacking).map(|c| c.victim);
+    let mut attackers: Vec<Guid> = [g, owner]
+        .iter()
+        .filter_map(|u| map.combat(*u))
+        .flat_map(|c| c.attackers.iter().copied())
+        .collect();
+    attackers.sort_by_key(|a| a.guid());
+    let near = |w: &Guid| {
+        map.unit_view(*w).is_some_and(|u| {
+            u.alive
+                && dist(u.position, me) <= range + 2.0
+                && crate::game::map::spells::checks::sight(map, me, u.position)
+        })
+    };
+    let enemies = victim
+        .or_else(|| victim_of(g))
+        .into_iter()
+        .chain(victim_of(owner))
+        .chain(attackers)
+        .filter(|e| !e.is_zero() && *e != g && combat::can_attack(map, g, *e) && near(e));
+    let friends = allies(map, g, owner, range).into_iter();
+    let takes = |w: &Guid| {
+        t.effects
+            .iter()
+            .filter(|e| e.effect == EFFECT_DISPEL)
+            .any(|e| !crate::game::map::spells::dispellable(map, g, *w, e.misc_value).is_empty())
+    };
+    enemies.chain(friends).find(|w| takes(w))
+}
 
 /// Whom of its master's a pet's spell for a friend may go on, as mangos's
 /// `PetAI::UpdateAllies` and Thistle Tea's `pet_allies`: its master, then
@@ -668,18 +773,28 @@ fn worth(
     if t.has_effect(2) {
         return true;
     }
-    let held = auras(map, whom).is_some_and(|a| a.has_spell(t.id));
+    // An effect held is judged by its index: one a holder of the spell
+    // has lost (taken off alone) is worth putting back (mangos's
+    // `PetAI::CanAutoCast`, `HasAura(id, index)`; Thistle Tea's
+    // `held?` by spell and effect).
+    let held = |i: usize| {
+        auras(map, whom).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == t.id && h.effects.iter().any(|x| usize::from(x.effect) == i))
+        })
+    };
     let in_reach = victim
         .and_then(|v| map.unit_view(v))
         .zip(map.unit_view(g))
         .is_some_and(|(v, me)| combat::in_melee_range(&me, &v));
-    t.effects.iter().all(|e| match e.effect {
+    t.effects.iter().enumerate().all(|(i, e)| match e.effect {
         6 if t.stack_amount <= 1 => {
-            !held
+            !held(i)
                 && !(e.aura == AURA_MOD_INCREASE_SPEED && in_reach)
                 && !(e.aura == AURA_MOD_STUN && stunned(map, whom))
         }
-        35 => !held,
+        35 => !held(i),
         _ => true,
     })
 }
@@ -804,33 +919,52 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     }
 }
 
-/// A pet nothing fights leaves its fight this long after its last blow.
-/// (mangos has a pet leave with its master, `HandleExitCombat`; wvs's
-/// pets keep their own window.)
-const CALM_AFTER: Duration = Duration::from_secs(6);
-
-/// Out of the fight: the combat flag goes when nothing fights it.
+/// Out of the fight, as a player is (your call on #20, mangos's
+/// `CombatManager::Update` for a player-controlled unit, Thistle Tea's
+/// `PetCombat.reconcile`): once no living creature here holds it on its
+/// threat list or attacks it, and its PvP timer (5 s after its last blow
+/// with another player's side) has run out; looked at every
+/// [`combat::COMBAT_CHECK`], and at once as that timer ends. There is no
+/// timer against creatures: a foe that died, went, evaded, left its fight
+/// or came back anew holds it no more. Its own threat list goes with its
+/// fight.
 fn calm(map: &mut Map, g: Guid, now: Instant) {
-    let fighting = map.combat(g).is_some_and(|c| {
-        c.attackers
-            .iter()
-            .any(|a| map.unit_view(*a).is_some_and(|u| u.alive))
+    let in_combat = map.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
     });
-    let since = map
-        .combat(g)
-        .and_then(|c| c.last_action)
-        .is_some_and(|t| now.duration_since(t) < CALM_AFTER);
-    if !fighting
-        && !since
-        && map.unit_fields(g).is_some_and(|f| {
-            f.has_flag(
-                UNIT_FIELD_FLAGS,
-                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-            )
-        })
+    let Some(c) = map.combat(g) else {
+        return;
+    };
+    if !in_combat
+        || c.combat_until.is_some_and(|t| t > now)
+        || c.next_check.is_some_and(|t| t > now)
     {
-        combat::leave_combat(map, g);
+        return;
     }
+    let held = !map
+        .awake_where(
+            |c| {
+                c.alive()
+                    && !c.evading
+                    && ((c.combat.attacking && c.combat.victim == g)
+                        || c.threat.iter().any(|(t, _)| *t == g))
+            },
+            |k, _| k,
+        )
+        .is_empty();
+    if let Some(c) = map.combat_mut(g) {
+        c.next_check = Some(now + combat::COMBAT_CHECK);
+    }
+    if held {
+        return;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        c.threat.clear();
+    }
+    combat::leave_combat(map, g);
 }
 
 /// Turn to `other`, as a creature does in a fight: its observers are told

@@ -601,6 +601,7 @@ pub fn died(map: &mut Map, g: Guid) {
     let route = crate::game::map::event_ai::Route {
         points: std::sync::Arc::new(path.clone()),
         repeat: true,
+        pathfind: true,
     };
     lead_on(map, next, route, bound_for, last);
 }
@@ -647,6 +648,7 @@ fn walk_of(
             crate::game::map::event_ai::Route {
                 points: std::sync::Arc::new(points.clone()),
                 repeat: true,
+                pathfind: true,
             }
         }
         None => return None,

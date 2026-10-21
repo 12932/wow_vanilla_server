@@ -1890,8 +1890,16 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
     if let Some(c) = map.combat_mut(attacker) {
         c.last_swing_error = None;
     }
-    // A script's melee spell stands in for the blow.
-    if main_due && let Some(spell) = crate::game::map::event_ai::melee_spell(map, attacker) {
+    // A script's melee spell stands in for the blow; not for one under
+    // its master's control, which swings as a pet does (Thistle Tea's
+    // "controlled creatures use ordinary swings": its own AI is set
+    // aside, as mangos's `PetAI` takes a charmed creature's).
+    if main_due
+        && map
+            .creature(attacker)
+            .is_some_and(crate::game::map::event_ai::runs_own)
+        && let Some(spell) = crate::game::map::event_ai::melee_spell(map, attacker)
+    {
         let period = map
             .unit_fields(attacker)
             .map_or(2000, |f| f.get_u32(UNIT_FIELD_BASEATTACKTIME))

@@ -854,7 +854,6 @@ pub fn died(map: &mut Map, killer: Guid, victim: Guid) -> bool {
         return false;
     };
     let (kind, owner) = (s.kind, s.owner);
-    let _ = killer;
     match kind {
         Kind::Charmed | Kind::Possessed => {
             // Death lets it go, and it dies as itself.
@@ -862,6 +861,20 @@ pub fn died(map: &mut Map, killer: Guid, victim: Guid) -> bool {
             false
         }
         _ => {
+            // A guardian's, a companion's or a creature's pet's death
+            // events (mangos's `GuardianAI::JustDied`).
+            if map
+                .creature(victim)
+                .is_some_and(crate::game::map::event_ai::runs_own)
+            {
+                crate::game::map::event_ai::death(map, victim, killer);
+                if let Some(s) = map
+                    .creature_mut(victim)
+                    .and_then(|c| c.scripted.as_deref_mut())
+                {
+                    s.in_combat = false;
+                }
+            }
             summon::die(map, victim);
             true
         }

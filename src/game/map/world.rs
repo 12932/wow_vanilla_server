@@ -162,6 +162,13 @@ fn step_creature(
     mut nav: Option<&mut Nav>,
     rng: &mut impl rand::Rng,
 ) {
+    // A special path goes straight, at its points' own heights.
+    let pathfind = map
+        .creatures
+        .get(key)
+        .and_then(|c| c.scripted.as_deref())
+        .and_then(|s| s.route.as_ref())
+        .is_none_or(|r| r.pathfind);
     let waypoints = {
         let Some(c) = map.creatures.get(key) else {
             return;
@@ -297,7 +304,7 @@ fn step_creature(
                     // A waypoint is reached even where the navmesh stops
                     // short; a wanderer goes nowhere it has no path to.
                     let path = match nav {
-                        Some(n) => {
+                        Some(n) if pathfind => {
                             let target = n
                                 .ground(target.x, target.y, target.z)
                                 .map(|z| Vector3d { z, ..target })
@@ -308,7 +315,7 @@ fn step_creature(
                                 None => Some(vec![from, target]),
                             }
                         }
-                        None => Some(vec![from, target]),
+                        _ => Some(vec![from, target]),
                     };
                     let run = c.scripted.as_deref().is_some_and(|s| s.run);
                     frame = path.and_then(|p| c.walk(p, run, now, spline_id));

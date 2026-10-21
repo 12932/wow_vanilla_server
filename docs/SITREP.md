@@ -843,6 +843,20 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   tap, a creature's teleport told by `MSG_MOVE_TELEPORT` (two rows; wvs sends a stop `SMSG_MONSTER_MOVE`, mangos a
   heartbeat). 33 rows not reached (cast-end procs, hit at launch, formations, vein refills, ritual owners, command
   76's owner, Blackrock's lava, a feared player's spline): a second pass.
+- **10f, creature AI (0.1.62):** 20 of 22 rows settled, six fixes: a creature's guardians, companions and pets run
+  their own EventAI (mangos-classic's GuardianAI: spawned, timed, aggro, evade, death), a companion told to stay
+  stays, a charmed creature swings without its script's melee spell; a pet autocasts Devour Magic (an enemy's buff,
+  else a friend's affliction, else nothing and the next spell goes) and a held effect is judged by its index
+  (mangos's `PetAI::CanAutoCast`); **a pet's fight ends as its master's does under your #20** (no timer against
+  creatures, 5 s against players; the 6 s window gone), so a living foe or a respawn no longer holds it forever; a
+  creature's pet keeps a threat list and attacks its top (mangos's `CanHaveThreatList`); **Silithus's wind stones
+  call their lords** (`wind_stones.rs`, vmangos's `go_wind_stone`, as Thistle Tea ports it: mangos-classic has no
+  script); a special path (`creature_movement_special`) keeps its points' heights. **Its calls:** a player's
+  guardian keeps nearest-first targets (Thistle Tea; mangos would give it a threat list); the Battle Chicken is a
+  totem by 1.12's data (effect 74), so runs no EventAI. `wrong-for-1.12`: a guardian kept at 120 yards (mangos's),
+  a pet's regen ticks (wvs every 2 s at mangos's rate), a partial path's point. Two `gap` (an aquatic route the
+  navmesh half reaches, two points with no route: no test place found). **Merge:** Onyxia's Eruption and the wind
+  stones both kept in the activate effect; 10e's formation routes given 10f's new `pathfind` (on).
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -960,7 +974,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10e: the world, round 10 | 92.2% | 0.1.59 |
 | 10c: the loaders, round 10 | 92.4% | 0.1.60 |
 | 10h: entities, round 10 | 92.8% | 0.1.61 |
+| 10f: creature AI, round 10 | 93.0% | 0.1.62 |
 
-**Running now:** round 10 (phase 2): 10a, 10b, 10d (with 10l's rows), 10f, 10h and 10m (six at most).
+**Running now:** round 10 (phase 2): 10a, 10b, 10d (with 10l's rows), 10m; 11h (entities, a second pass); 12q (phase 4's open questions, by mangos-classic, started early in a free slot). Six at most.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
