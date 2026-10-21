@@ -154,3 +154,72 @@ async fn a_towers_buff_is_its_rank_now_and_off_the_dead_and_those_gone() {
     tick(&map).await;
     assert_eq!(on(&map, ranks).await, vec![11414], "a new login: the rank now");
 }
+
+const RES: u32 = 900_390;
+
+/// Thistle Tea's "logout clears an offer before retaining the character":
+/// a resurrection offered to a fallen warrior who logs out is not kept
+/// (mangos's `m_resurrectGuid` isn't saved): logged in again, a ghost, her
+/// acceptance of it does nothing.
+#[tokio::test]
+async fn a_resurrection_offered_is_gone_after_a_logout() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut d = crate::game::data::GameData::empty();
+    d.spells.ranges.insert(1, (0.0, 30.0));
+    let mut s = SpellTemplate {
+        id: RES,
+        name: "Resurrection".into(),
+        equipped_item_class: -1,
+        range_index: 1,
+        ..Default::default()
+    };
+    s.effects[0] = SpellEffect {
+        effect: 18,
+        target_a: 25,
+        base_points: 34,
+        ..Default::default()
+    };
+    d.spells.spells.insert(RES, s);
+    let realm = crate::game::harness::realm_with(d);
+    let (_a, priest, map) =
+        crate::game::tests_pets::enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (mut b, fallen, _) =
+        crate::game::tests_pets::enter(&realm, "B", "Fallen", Race::Human, Class::Warrior).await;
+    on(&map, move |m| {
+        crate::game::map::combat::deal_damage(m, priest, fallen, 1_000_000);
+        crate::game::map::combat::leave_combat(m, fallen);
+        crate::game::map::combat::leave_combat(m, priest);
+        // Released, so that she is a ghost at her login.
+        crate::game::map::death::release(m, fallen);
+        crate::game::map::spells::cast_triggered(m, priest, RES, Some(fallen));
+    })
+    .await;
+    b.wait_frame("the offer", 0x15B, |_| true).await;
+    b.send(CMSG_LOGOUT_REQUEST {}).await;
+    b.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE
+        )
+        .then_some(())
+    })
+    .await;
+    b.clear();
+    b.login(fallen).await;
+    let map = realm.registry.online(fallen).expect("online").map();
+    let offer = on(&map, move |m| m.players[&fallen].resurrect_offer).await;
+    assert_eq!(offer, None, "no offer after the logout");
+    let state = on(&map, move |m| format!("{:?}", m.players[&fallen].death)).await;
+    assert!(state.starts_with("Ghost"), "a ghost at login: {state}");
+    b.send(CMSG_RESURRECT_RESPONSE {
+        guid: priest,
+        status: 1,
+    })
+    .await;
+    crate::game::tests_p3_player2_ammo::handled(&mut b).await;
+    let alive = on(&map, move |m| {
+        m.players[&fallen].death == crate::game::map::death::Death::Alive
+    })
+    .await;
+    assert!(!alive, "the old offer raises no one");
+}
