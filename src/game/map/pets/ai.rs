@@ -791,33 +791,55 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     }
 }
 
-/// A pet nothing fights leaves its fight this long after its last blow.
-/// (mangos has a pet leave with its master, `HandleExitCombat`; wvs's
-/// pets keep their own window.)
-const CALM_AFTER: Duration = Duration::from_secs(6);
+/// A pet no creature fights leaves its fight this long after its last
+/// blow, given or taken, landed or not: the PvP timer mangos runs on a pet
+/// as on its master (`TriggerCombatTimer`), Thistle Tea's drop window
+/// (`CombatTimer`). (mangos has a pet leave with its master,
+/// `HandleExitCombat`; wvs's pets keep their own window.)
+const CALM_AFTER: Duration = combat::PVP_COMBAT;
 
-/// Out of the fight: the combat flag goes when nothing fights it.
+/// Out of the fight: the combat flag goes once no creature fights it and
+/// its window is past. Those that struck it and fight it no more (alive,
+/// but out of their fight; a player whose timer ran out) don't hold it.
 fn calm(map: &mut Map, g: Guid, now: Instant) {
-    let fighting = map.combat(g).is_some_and(|c| {
-        c.attackers
-            .iter()
-            .any(|a| map.unit_view(*a).is_some_and(|u| u.alive))
+    let in_combat = map.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
     });
     let since = map
         .combat(g)
         .and_then(|c| c.last_action)
         .is_some_and(|t| now.duration_since(t) < CALM_AFTER);
-    if !fighting
-        && !since
-        && map.unit_fields(g).is_some_and(|f| {
-            f.has_flag(
-                UNIT_FIELD_FLAGS,
-                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-            )
-        })
-    {
+    if in_combat && !since && !held(map, g) {
         combat::leave_combat(map, g);
     }
+}
+
+/// Whether a creature holds pet `g` in its fight: one alive, in a fight of
+/// its own, not on its way home, with `g` on its threat list or swinging
+/// at it (mangos's hostile references, Thistle Tea's threat references
+/// and their `CombatReferences.prune`). Not one dead, despawned, evading,
+/// out of its fight, gone from the map or come back anew. A player, or
+/// another's pet, keeps no threat list: their blows hold it for its window
+/// alone.
+fn held(map: &mut Map, g: Guid) -> bool {
+    !map.awake_where(
+        |c| {
+            c.pet.is_none()
+                && c.alive()
+                && !c.evading
+                && c.fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                )
+                && (c.threat.iter().any(|(t, _)| *t == g)
+                    || (c.combat.attacking && c.combat.victim == g))
+        },
+        |_, c| c.guid,
+    )
+    .is_empty()
 }
 
 /// Turn to `other`, as a creature does in a fight: its observers are told
