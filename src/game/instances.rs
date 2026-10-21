@@ -31,7 +31,10 @@ pub const KIND_RAID: &str = "raid";
 pub const KIND_INSTANCE: &str = "instance";
 /// How long an empty copy lasts, by default (`[instances]
 /// unload_delay_secs`); what it remembers is kept at least this long.
-pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(5 * 60);
+/// mangos's: a dungeon copy resets `NORMAL_INSTANCE_RESET_TIME` (30
+/// minutes) after its last player leaves, and `Instance.UnloadDelay` is 30
+/// minutes too.
+pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(30 * 60);
 /// Raid resets count from a Tuesday, 04:00 UTC.
 const RESET_EPOCH: i64 = 1_101_182_400;
 /// The hour of [`RESET_EPOCH`], the default of `[instances] reset_hour`.

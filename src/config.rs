@@ -693,7 +693,7 @@ settings! {
     /// Dungeon and raid copies.
     pub struct InstancesConfig in "instances" {
         /// Seconds an empty copy stays up. What it remembers (its dead,
-        /// who went in) is kept at least five minutes after its last use,
+        /// who went in) is kept at least thirty minutes after its last use,
         /// for its players to come back to.
         unload_delay_secs: u64 = crate::game::instances::UNLOAD_EMPTY_AFTER.as_secs(), Clamp(1.0, 86_400.0), Live, "Instance.UnloadDelay";
         /// The hour of the day, UTC, raids reset at, on their reset days.

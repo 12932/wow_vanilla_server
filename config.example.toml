@@ -645,10 +645,10 @@ high_level_hide_diff = 7
 [instances]
 
 # Seconds an empty copy stays up. What it remembers (its dead,
-# who went in) is kept at least five minutes after its last use,
+# who went in) is kept at least thirty minutes after its last use,
 # for its players to come back to.
-# Default 300. Range 1 to 86400, clamped. Changes at a reload. mangos: Instance.UnloadDelay.
-unload_delay_secs = 300
+# Default 1800. Range 1 to 86400, clamped. Changes at a reload. mangos: Instance.UnloadDelay.
+unload_delay_secs = 1800
 
 # The hour of the day, UTC, raids reset at, on their reset days.
 # Default 4. Range 0 to 23, clamped. Changes at a reload. mangos: Instance.ResetTimeHour.
