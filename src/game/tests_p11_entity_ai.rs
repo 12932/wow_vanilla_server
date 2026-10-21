@@ -184,3 +184,55 @@ async fn a_possessed_units_moves_reach_its_watchers_not_its_mover_and_not_once_d
         "dead, where it fell: {moved:?}"
     );
 }
+
+/// Part of Thistle Tea's "an observer arriving during the move retains its
+/// final facing" (mob/movement_inform_test.exs:27): a creature a script
+/// walks to a point facing 1.5 is seen to walk there by its watcher with
+/// that facing at the walk's end (`SMSG_MONSTER_MOVE`'s facing angle,
+/// vmangos's `MovePoint` with its orientation), where it turned on the
+/// server alone and its watchers saw it stand facing its way.
+#[tokio::test]
+async fn a_scripted_walks_facing_is_told_with_the_walk() {
+    use crate::game::map::scripts;
+    use crate::game::tests_p3_combat::{BRUTE, data, setup_with, spawn};
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let (_realm, mut a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let brute = map
+        .query(move |m| spawn(m, ga, BRUTE, 20, 8.0))
+        .await
+        .unwrap();
+    a.sees(brute).await;
+    a.clear();
+    map.query(move |m| {
+        let at = m.creature(brute).unwrap().position;
+        let to = Vector3d {
+            x: at.x + 6.0,
+            ..at
+        };
+        scripts::move_with(
+            m,
+            brute,
+            to,
+            scripts::Move {
+                face: Some(1.5),
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .unwrap();
+    let facing = a
+        .wait_for("the walk", |m| match m {
+            ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == brute => {
+                Some(mv.move_type.clone())
+            }
+            _ => None,
+        })
+        .await;
+    match facing {
+        SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle, .. } => {
+            assert!((angle - 1.5).abs() < 0.001, "facing {angle}")
+        }
+        other => panic!("a walk with no facing: {other:?}"),
+    }
+}

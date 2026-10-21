@@ -1281,7 +1281,17 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
     let Some(c) = map.creature_mut(g) else {
         return false;
     };
-    let frame = c.walk_at(path, how.run, how.fly, how.time, now, spline_id);
+    let mut frame = c.walk_at(path, how.run, how.fly, how.time, now, spline_id);
+    // A facing to end on is the walk's own, told with it (vmangos's
+    // `MovePoint` with its orientation, mangos's `MoveSplineInit::SetFacing`;
+    // Thistle Tea's final facing), so its watchers see it turn as it
+    // arrives; before, it turned on the server alone.
+    if let (Some(o), Motion::Moving(w)) = (how.face, &mut c.motion)
+        && w.spline_id == spline_id
+    {
+        w.face = Some(o);
+        frame = w.frame(g, from);
+    }
     let moved = matches!(&c.motion, Motion::Moving(w) if w.spline_id == spline_id);
     if let Some(s) = c.scripted.as_deref_mut() {
         s.scripted_move = None;
