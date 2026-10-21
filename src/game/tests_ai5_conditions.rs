@@ -687,7 +687,7 @@ async fn a_spell_script_target_meets_its_condition() {
         .query(move |m| {
             let rat = summon(m, RAT, 5.0, 0.0);
             let fits = |m: &Map| {
-                crate::game::map::spells::targets::script_target(m, me, SHOT, &[1, 2], RAT, rat)
+                crate::game::map::spells::targets::script_target(m, me, SHOT, 0, &[1, 2], RAT, rat)
             };
             let f = m.unit_fields_mut(rat).unwrap();
             f.set_u32(UNIT_FIELD_MAXHEALTH, 1000);

@@ -429,7 +429,7 @@ pub fn effect_targets(
                 .get(&s.id)
                 .copied()
                 .unwrap_or(60);
-            script_area(map, caster, center(map, caster, t, false), s, r)
+            script_area(map, caster, center(map, caster, t, false), s, index, r)
                 .into_iter()
                 .filter(|g| *g != about && in_cone(map, caster, *g, degrees))
                 .collect()
@@ -449,7 +449,7 @@ pub fn effect_targets(
                 e.target_a
             };
             let at_dest = kind == 8 && e.target_a != 18;
-            script_area(map, caster, center(map, caster, t, at_dest), s, r)
+            script_area(map, caster, center(map, caster, t, at_dest), s, index, r)
         }
         (ScriptUnits, _) | (CreatureNearCaster, _) => script_units(map, caster, s, index, t, r),
         (GameObject, _) | (Location, _) => Vec::new(),
@@ -589,12 +589,15 @@ fn chain(
 }
 
 /// Whether `g`, of `entry`, is a target a `spell_script_target` row of
-/// `kinds` names for spell `spell`, meeting the row's condition with the
-/// caster as its source.
+/// `kinds` names for effect `index` of spell `spell`, meeting the row's
+/// condition with the caster as its source. A row whose
+/// `inverseEffectMask` has the effect's bit isn't for it (mangos's
+/// `CanNotHitWithSpellEffect`, Thistle Tea's `selectors/2`).
 pub fn script_target(
     map: &Map,
     caster: Guid,
     spell: u32,
+    index: usize,
     kinds: &[u32],
     entry: u32,
     g: Guid,
@@ -607,6 +610,10 @@ pub fn script_target(
         v.iter().any(|(k, e)| {
             kinds.contains(k)
                 && *e == entry
+                && data
+                    .script_target_masks
+                    .get(&(spell, *k, *e))
+                    .is_none_or(|m| m & (1 << index) == 0)
                 && match (*k, alive) {
                     (1, Some(alive)) => alive,
                     (2, Some(alive)) => !alive,
@@ -625,13 +632,20 @@ pub fn script_target(
 /// The units a scripted spell aims at: the creatures `spell_script_target`
 /// names, near the caster (or the target the client picked).
 /// Every creature a spell's script targets name within `radius` of `at`.
-fn script_area(map: &Map, caster: Guid, at: Vector3d, s: &SpellTemplate, radius: f32) -> Vec<Guid> {
+fn script_area(
+    map: &Map,
+    caster: Guid,
+    at: Vector3d,
+    s: &SpellTemplate,
+    index: usize,
+    radius: f32,
+) -> Vec<Guid> {
     if !map.realm.data.spells.script_targets.contains_key(&s.id) {
         return units_around(map, at, radius, |g| alive(map, g));
     }
     units_around(map, at, radius, |g| {
         map.creature(g)
-            .is_some_and(|c| script_target(map, caster, s.id, &[1, 2], c.entry, g))
+            .is_some_and(|c| script_target(map, caster, s.id, index, &[1, 2], c.entry, g))
     })
 }
 
@@ -653,7 +667,7 @@ pub(crate) fn script_place(
     let reach = script_reach(map, s, index, radius);
     let nearest = |of: &mut dyn Iterator<Item = (Vector3d, u32, Guid)>, kinds: &[u32]| {
         of.filter(|(p, entry, g)| {
-            dist(*p, at) <= reach && script_target(map, caster, s.id, kinds, *entry, *g)
+            dist(*p, at) <= reach && script_target(map, caster, s.id, index, kinds, *entry, *g)
         })
         .map(|(p, ..)| p)
         .min_by(|a, b| dist(*a, at).total_cmp(&dist(*b, at)))
@@ -729,7 +743,7 @@ fn script_units(
     let mine = bounding(map, t.origin.unwrap_or(caster));
     let fits = |g: Guid| {
         map.creature(g).is_some_and(|c| {
-            script_target(map, caster, s.id, &[1, 2], c.entry, g)
+            script_target(map, caster, s.id, index, &[1, 2], c.entry, g)
                 && dist(c.position, at) <= reach + mine + bounding(map, g)
         })
     };

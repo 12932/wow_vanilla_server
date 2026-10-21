@@ -688,7 +688,15 @@ fn object_targets(
     t: &Targets,
 ) -> Vec<Guid> {
     let named = |o: &GameObject| {
-        crate::game::map::spells::targets::script_target(map, caster, s.id, &[0], o.entry, o.guid)
+        crate::game::map::spells::targets::script_target(
+            map,
+            caster,
+            s.id,
+            index,
+            &[0],
+            o.entry,
+            o.guid,
+        )
     };
     let e = &s.effects[index];
     if let Some(area) = [e.target_b, e.target_a]
@@ -708,14 +716,16 @@ fn object_targets(
             .map(|o| o.guid)
             .collect();
     }
-    // The object aimed at, unless a condition its row puts on it fails.
+    // The object aimed at, unless a condition its row puts on it fails or
+    // the row isn't for this effect.
     if let Some(o) = t.object.and_then(|o| map.gameobject(o)) {
-        let barred = map
-            .realm
-            .data
-            .spells
-            .script_target_conditions
-            .contains_key(&(s.id, 0, o.entry))
+        let spells = &map.realm.data.spells;
+        let row = (s.id, 0, o.entry);
+        let barred = (spells.script_target_conditions.contains_key(&row)
+            || spells
+                .script_target_masks
+                .get(&row)
+                .is_some_and(|m| m & (1 << index) != 0))
             && !named(o);
         if !barred {
             return vec![o.guid];

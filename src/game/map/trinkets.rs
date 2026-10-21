@@ -25,6 +25,13 @@ pub const MERCURIAL_SHIELD_BONUS: u32 = 26464;
 /// The scripts a hit casts: each takes a stack off a bonus.
 pub const BRITTLE_ARMOR_HIT: u32 = 24590;
 pub const MERCURIAL_SHIELD_HIT: u32 = 26465;
+/// The implicit targets of an area: about a place (7, 8, 15, 16, 28),
+/// the caster's party or raid (20, 33, 34, 37, 61), a chain or cone
+/// (24, 54, 60) and the rest of mangos's enumerations (30, 31, 52, 56),
+/// as Thistle Tea's `@area_target_ints` lists them.
+const AREA_TARGETS: [u32; 17] = [
+    7, 8, 15, 16, 20, 24, 28, 30, 31, 33, 34, 37, 52, 54, 56, 60, 61,
+];
 
 /// A bonus's parent.
 fn parent_of(bonus: u32) -> Option<u32> {
@@ -153,11 +160,15 @@ pub fn proc(map: &mut Map, owner: Guid, h: &Holder, e: &Event) -> bool {
             true
         }
         ASCENDANCE => {
+            // An area spell, by either of an effect's targets, spends
+            // nothing: Arcane Explosion, Blizzard, Prayer of Healing
+            // (Thistle Tea's `area_target?`).
             let skip = spell.is_some_and(|s| {
-                s.effects
-                    .iter()
-                    .any(|x| matches!(x.target_a, 15 | 16 | 22 | 24 | 28))
-                    || s.effects[0].effect == 77
+                s.effects.iter().any(|x| {
+                    [x.target_a, x.target_b]
+                        .iter()
+                        .any(|t| AREA_TARGETS.contains(t))
+                }) || s.effects[0].effect == 77
             });
             if skip || spell.is_none() {
                 return true;

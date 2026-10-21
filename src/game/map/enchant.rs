@@ -482,6 +482,19 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     let Some(p) = map.players.get(&e.actor) else {
         return;
     };
+    // No weapon is struck with in cat or bear form, nor a disarmed main
+    // hand (mangos's `GetWeaponForAttack` of a usable one and
+    // `CanUseEquippedWeapon`; Thistle Tea's `weapon_procs`, "excludes
+    // feral weapon procs").
+    if matches!(
+        p.fields.get_byte(UNIT_FIELD_BYTES_1, 2),
+        crate::game::map::auras::FORM_CAT
+            | crate::game::map::auras::FORM_BEAR
+            | crate::game::map::auras::FORM_DIREBEAR
+    ) || (slot == 15 && p.auras.has(crate::game::map::auras::AURA_MOD_DISARM))
+    {
+        return;
+    }
     let Some(item) = p
         .items
         .iter()
