@@ -1,8 +1,8 @@
-# Where wow_vanilla_server stands (2026-10-20)
+# Where wow_vanilla_server stands (2026-10-21)
 
 wvs is a WoW 1.12.1 server in Rust. It is being aligned with [Thistle Tea](https://github.com/pikdum/thistle_tea),
 an Elixir server, as the behaviour to match, with mangos-classic as a second reference for what 1.12 does. This page
-covers how it's built, how to run, test and measure it, what changed on 17–20 October 2026, and what's left.
+covers how it's built, how to run, test and measure it, what changed on 17–21 October 2026, and what's left.
 
 ## How it's built
 - **One actor per map:** a continent, a dungeon copy, a battleground. Each has its own 20 Hz update. Sessions talk
@@ -43,8 +43,8 @@ covers how it's built, how to run, test and measure it, what changed on 17–20 
   That suits development and load tests; see sitrep question #53 before exposing the ports.
 
 ## Testing it ([TESTING.md](TESTING.md))
-- **The fast suite**, `cargo nextest run --lib`: about 1,640 tests in 25 seconds, none needing the real world.
-- **The extended suite**, `cargo extended`: every test, about 1,990, in 6 to 8 minutes. It loads the real world from
+- **The fast suite**, `cargo nextest run --lib`: about 3,020 tests in 24 seconds on 32 cores, none needing the real world.
+- **The extended suite**, `cargo extended`: every test, about 3,730 (707 of them marked extended). It loads the real world from
   a snapshot and runs the long walks in parallel shards. Run it before merging or pushing.
 - **Marking:** a test that reads the real world is marked `#[ignore = "extended"]`. An unmarked one fails in the
   fast suite, saying so.
@@ -132,22 +132,35 @@ works only at its banker; the Lunar Festival's fireworks, cheer speakers and the
 Valley's war riders, Balinda and the rituals are scripted; two of a group entering a dungeon at once share a copy,
 and a shutdown saves a player between maps.
 
-## What's left
-- **Parity:** 814 rows are still gap (paused before round 9, 2026-10-20). By area:
-  - the player in the world, about 200; spells, about 180; the rest of the core (stats, classes, events, loot,
-    trade), about 150; entities, mobs and objects, about 105;
-  - the world's systems, about 60; the loaders, about 55; creature AI, about 45; combat, movement and auras, about
-    20 together.
+## Rounds 9 and 10, and the questions (20–21 October)
+Round 9 (six stages: the player, spells, the core, entities, creatures, the world) and round 10 (eight: 10a to 10f,
+10h, 10m) took the matrix from 87.8% to 94.2%: 7,824 of 8,304 applicable Thistle Tea tests covered (7,741)
+or accepted (83). Of the rest, 302 are kept as mangos-classic where Thistle Tea isn't 1.12 (`wrong-for-1.12`), and
+178 are gap. Among what changed: proc origins and
+cast-end procs by mangos, the creature stat model, owned creatures' EventAI and a pet's fight as its master's, the
+wild-summon tap, formations led on past a dead leader, the Scourge camps, healing by school, PvP timers in a fight.
+Alongside them: `fix/flaky` made nine load-flaky tests deterministic, `fix/lowsa` took review 5's lows, and
+`fix/entity` gave each viewer its own view of a unit (`map::views`). Then `fix/questions` (0.1.67) settled the
+open questions by mangos-classic (#1, #8, #9, #12, #16, #19/#44, #23, #28, #32, #36, #40, #45, #48, #52), the rest
+confirmed.
 
-  What's left is mostly what wvs doesn't model: an aura origin on casts (Thistle Tea's proc origins),
-  creature-group routes, cases that need a navmesh that refuses, and Thistle Tea internals. (Owner and Empathy
-  views of a creature's fields, and a mark's tracking for its hunter alone, are in `map::views` since `fix/entity`.) The leftovers each round named are in `<runs>/prompts/_carryover.md`, and round 9's briefs
-  are written by `<runs>/prompts/gen_round.py 9 docs/parity/matrix.csv`.
+## What's left
+- **Parity:** 178 rows are still gap (2026-10-21), across 98 of Thistle Tea's test files, most with one to three.
+  By area:
+  - the player in the world, 77 (game object quests 8, resurrection 7, items and quest conditions 4 each);
+  - spells, 40 (casting 8, spell objects 8, stacking 3);
+  - entities and mobs, 24; the effect resolver, 9 (triggered hits 5); the rest of the core, 7 (the meeting
+    stones 6); the loaders, 3; 18 others, one or two each.
+
+  What's left is mostly what wvs doesn't model: creature-group routes, the meeting stones' LFG queue, cases that
+  need a navmesh that refuses, and Thistle Tea internals. The briefs of rounds 1 to 10 and their leftovers were in
+  `<runs>/prompts/` on the machine that ran them; it isn't on this one.
 - **The fork (12932/wow_messages):** its 1.12 `HitInfo` is flags (with the debug trailer under 0x1),
   `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u32, `CMSG_BATTLEFIELD_JOIN` the map, the instance and the group
   byte, and a spell's targets the client's (a corpse's guid before the locations), so wvs encodes and reads them
   with its types.
-- **Open questions:** 50 or so, in [SITREP.md](SITREP.md). Each says what wvs does until you answer.
+- **Open questions:** settled by mangos-classic on 2026-10-21 (`fix/questions`), but for #4 (reporting wow_messages' crash
+  bugs upstream) and six calls where wvs keeps Thistle Tea's or vmangos's behaviour over mangos's, in [SITREP.md](SITREP.md).
 - **The hard findings** ([CODE_REVIEW.md](CODE_REVIEW.md)):
   - a client claiming a transport skips the speed check;
   - groups aren't saved;

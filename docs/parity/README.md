@@ -4,29 +4,29 @@
 Phase 1a of [FULL_PARITY_PLAN.md](../FULL_PARITY_PLAN.md): its headline, covered over applicable, measures how close
 wvs is.
 
-## Where it stands (2026-10-18, partway through Phase 3's third round)
+## Where it stands (2026-10-21, after round 10)
 
-Every row is mapped. Phase 1a found 1,781 of the 8,429 applicable tests covered (21%). Phase 3's first round (3a to
-3f) settled 1,377 more rows, its second (3h to 3l) 786, and its third (3m to 3r, so far) 637, most as covered, with a
-fix where a test showed wvs differed. The open gaps are listed by
+Every row is mapped. Phase 1a found 1,781 of the 8,429 applicable tests covered (21%). Phase 3's rounds and rounds 6
+to 10 settled the rest but for 178 gaps, most as covered, with a fix where a test showed wvs differed; 302 rows keep
+mangos-classic's behaviour where Thistle Tea isn't 1.12. The table is `summary.py`'s. The open gaps are listed by
 feature in [FINDINGS.md](FINDINGS.md).
 
 | Area | Covered or accepted / applicable | | The rest |
 |---|---|---|---|
-| game/core | 3424 / 5394 | 63.5% | gap 1939, not-applicable 279, wrong-for-1.12 31 |
-| game/world | 1324 / 2564 | 51.6% | gap 1228, not-applicable 157, wrong-for-1.12 12 |
-| game/network | 232 / 261 | 88.9% | gap 28, not-applicable 6, wrong-for-1.12 1 |
-| game/inbound | 101 / 119 | 84.9% | gap 16, not-applicable 1, wrong-for-1.12 2 |
-| . | 17 / 20 | 85.0% | gap 3, not-applicable 1 |
-| game | 6 / 12 | 50.0% | gap 6 |
+| game/core | 5138 / 5363 | 95.8% | gap 46, not-applicable 310, wrong-for-1.12 179 |
+| game/world | 2280 / 2519 | 90.5% | gap 129, not-applicable 202, wrong-for-1.12 110 |
+| game/network | 255 / 261 | 97.7% | not-applicable 6, wrong-for-1.12 6 |
+| game/inbound | 112 / 119 | 94.1% | not-applicable 1, wrong-for-1.12 7 |
+| . | 18 / 20 | 90.0% | gap 2, not-applicable 1 |
+| game | 11 / 12 | 91.7% | gap 1 |
 | game/architecture | 0 / 0 | 100.0% | not-applicable 8 |
 | telemetry | 0 / 0 | 100.0% | not-applicable 7 |
 | auth | 6 / 6 | 100.0% |  |
 | dev_seed | 0 / 0 | 100.0% | not-applicable 6 |
-| db/mangos | 0 / 4 | 0.0% | gap 4 |
+| db/mangos | 4 / 4 | 100.0% |  |
 | native | 0 / 0 | 100.0% | not-applicable 3 |
 | web/utils | 0 / 0 | 100.0% | not-applicable 2 |
-| **all** | 5110 / 8380 | 61.0% | gap 3224, not-applicable 470, wrong-for-1.12 46 |
+| **all** | 7824 / 8304 | 94.2% | gap 178, not-applicable 546, wrong-for-1.12 302 |
 
 ## The columns
 
