@@ -22,6 +22,7 @@ pub mod jaina;
 pub mod map;
 pub mod omen;
 pub mod registry;
+pub mod respawns;
 pub mod session;
 pub mod social;
 pub mod store;
@@ -262,6 +263,8 @@ mod tests_p11j_spells;
 mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
+#[cfg(test)]
+mod tests_p12a_restarts;
 #[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]

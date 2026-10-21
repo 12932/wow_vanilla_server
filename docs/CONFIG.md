@@ -308,7 +308,7 @@ Dungeon and raid copies.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
-| `unload_delay_secs` | Seconds an empty copy stays up. What it remembers (its dead, who went in) is kept at least five minutes after its last use, for its players to come back to. | `300` | 1 to 86400, clamped | live | `Instance.UnloadDelay` |
+| `unload_delay_secs` | Seconds an empty copy stays up. What it remembers (its dead, who went in) is kept at least thirty minutes after its last use, for its players to come back to. | `1800` | 1 to 86400, clamped | live | `Instance.UnloadDelay` |
 | `reset_hour` | The hour of the day, UTC, raids reset at, on their reset days. | `4` | 0 to 23, clamped | live | `Instance.ResetTimeHour` |
 | `entries_per_hour` | Copies an account may go into an hour; one it was in within the hour doesn't count again. | `5` | 1 to 1000, clamped | live |  |
 

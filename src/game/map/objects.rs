@@ -465,6 +465,7 @@ pub fn despawn_then(map: &mut Map, g: Guid, back: Option<Duration>) {
         // One return a spawn: this one's.
         map.objects.respawns.retain(|(_, x)| *x != s);
         map.objects.respawns.push((map.now + back, s));
+        crate::game::instances::object_gone(&map.realm, map.key, s, back);
     }
 }
 
@@ -1783,6 +1784,7 @@ pub fn update(map: &mut Map) {
         map.objects.respawns.retain(|(t, _)| *t > now);
         let data = map.realm.data.clone();
         for s in due {
+            crate::game::instances::object_back(&map.realm, map.key, s);
             // Out already (an event's, a pool's).
             if crate::game::map::scripts::object_of_spawn(map, s).is_some() {
                 continue;

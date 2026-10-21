@@ -31,7 +31,10 @@ pub const KIND_RAID: &str = "raid";
 pub const KIND_INSTANCE: &str = "instance";
 /// How long an empty copy lasts, by default (`[instances]
 /// unload_delay_secs`); what it remembers is kept at least this long.
-pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(5 * 60);
+/// mangos's: a dungeon copy resets `NORMAL_INSTANCE_RESET_TIME` (30
+/// minutes) after its last player leaves, and `Instance.UnloadDelay` is 30
+/// minutes too.
+pub const UNLOAD_EMPTY_AFTER: Duration = Duration::from_secs(30 * 60);
 /// Raid resets count from a Tuesday, 04:00 UTC.
 const RESET_EPOCH: i64 = 1_101_182_400;
 /// The hour of [`RESET_EPOCH`], the default of `[instances] reset_hour`.
@@ -85,6 +88,14 @@ pub struct InstanceSave {
     /// The chests its script raised that have been opened, by spawn: what
     /// is left in them, so one raised again after a reload keeps it.
     pub chests: BTreeMap<u32, SavedChest>,
+    /// Its game objects gone (gathered, looted), by spawn, and when (Unix
+    /// seconds) each comes back: mangos's `gameobject_respawn`.
+    pub objects: BTreeMap<u32, i64>,
+    /// A group's copy that a restart left without an owner (the group
+    /// gone with it): until a group takes it up, it is still for those
+    /// who were in it, those whose last copy of its map it is, as mangos's
+    /// group binds outlast a restart.
+    pub held: bool,
 }
 
 /// What a raised chest holds, as it was last left.
@@ -124,6 +135,8 @@ pub struct Instances {
     /// seconds): they count against its limit until they arrive, so two
     /// let in at once can't both take its last place.
     on_the_way: AHashMap<MapKey, Vec<(Guid, i64)>>,
+    /// The open world's respawn times.
+    pub world: crate::game::respawns::World,
 }
 
 /// How long one let into a copy counts against its limit before they
@@ -135,6 +148,7 @@ impl Instances {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         let mut i = Self::default();
         let now = now();
+        i.world = crate::game::respawns::World::load(records, now);
         use crate::game::store::parse_record;
         for (kind, id, data) in records {
             let id = *id as u32;
@@ -158,6 +172,7 @@ impl Instances {
                         // its old leader's next group to take up.
                         if matches!(save.owner, Some(Owner::Group(_))) {
                             save.owner = None;
+                            save.held = true;
                         }
                         // Empty since the restart, as far as the sweep can
                         // tell: it has as long from now as a copy left
@@ -231,6 +246,15 @@ impl Instances {
     /// Whether players are bound to copy `id` of a raid.
     fn saved(&self, id: u32) -> bool {
         self.raids.get(&id).is_some_and(|r| !r.players.is_empty())
+    }
+
+    /// The copy of `map` a restart left held that `player` was in.
+    fn held_for(&self, player: u32, map: u32) -> Option<u32> {
+        self.last_entered(player, map).filter(|id| {
+            self.saves
+                .get(id)
+                .is_some_and(|s| s.held && s.owner.is_none() && !s.expired)
+        })
     }
 
     /// The copy of `map` that `player` last went into.
@@ -375,6 +399,7 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     if kind == 2 && !gm && !group.is_some_and(|(_, raid, _)| raid) {
         return Err(Refused::RaidGroupOnly);
     }
+    // (A raid group still, at the way in: mangos's `GetAreaTriggerLockStatus`.)
     let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
     let account = account_of(realm, g);
     let now = now();
@@ -392,7 +417,11 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
         inst.owned.remove(&(owner, map));
     }
     let owned = inst.owned.get(&(owner, map)).copied();
-    let selected = group_bound.or(bound).or(owned);
+    // A copy a restart left held, theirs who were in it: back into it,
+    // as mangos's group bind outlasts the restart. It stays held, for the
+    // rest of them.
+    let held = inst.held_for(me, map);
+    let selected = group_bound.or(bound).or(owned).or(held);
     // A raid bind holds: into another copy of the raid, no.
     if let Some(id) = selected
         && !gm
@@ -416,7 +445,9 @@ pub fn key_for(realm: &Realm, g: Guid, gm: bool, map: u32) -> Result<MapKey, Ref
     if selected.is_none() {
         inst.new_id();
     }
-    inst.owned.entry((owner, map)).or_insert(id);
+    if held != Some(id) {
+        inst.owned.entry((owner, map)).or_insert(id);
+    }
     let save = inst.saves.entry(id).or_insert_with(|| InstanceSave {
         id,
         map,
@@ -631,6 +662,7 @@ fn adopt(realm: &Realm, group: u32, leader: Guid) {
             };
             let (map, old) = (s.map, s.owner);
             s.owner = Some(Owner::Group(group));
+            s.held = false;
             changed.push(s.clone());
             if let Some(old) = old
                 && inst.owned.get(&(old, map)) == Some(&id)
@@ -686,15 +718,17 @@ fn releader(realm: &Realm, group: u32, old: Guid, new: Guid) {
 /// of theirs or their group's holds them to another, and it is their
 /// group's (or, alone, their own), their group's raid, or the raid they
 /// are bound to; a raid's is for a raid group.
+///
+/// A group's copy a restart left [`InstanceSave::held`] is still theirs
+/// who were in it, grouped or not, raid group or not: mangos keeps a
+/// player in the copy their group (saved with it) is bound to, and asks
+/// for a raid group only at the way in, not at a login.
 pub fn belongs(realm: &Realm, g: Guid, key: MapKey) -> bool {
     let kind = instance_type(realm, key.map);
     if key.instance == 0 || !matches!(kind, 1 | 2) {
         return true;
     }
     let group = group_of(realm, g);
-    if kind == 2 && !group.is_some_and(|(_, raid, _)| raid) {
-        return false;
-    }
     let me = guid::counter(g);
     let owner = group.map_or(Owner::Player(me), |(id, _, _)| Owner::Group(id));
     let inst = realm.social.instances.lock();
@@ -707,6 +741,12 @@ pub fn belongs(realm: &Realm, g: Guid, key: MapKey) -> bool {
         .iter()
         .any(|b| b.is_some_and(|b| b != key.instance))
     {
+        return false;
+    }
+    if inst.held_for(me, key.map) == Some(key.instance) {
+        return true;
+    }
+    if kind == 2 && !group.is_some_and(|(_, raid, _)| raid) {
         return false;
     }
     inst.owned.get(&(owner, key.map)) == Some(&key.instance)
@@ -796,18 +836,23 @@ fn change_save(realm: &Realm, key: MapKey, f: impl FnOnce(&mut InstanceSave)) {
         .put_record(KIND_INSTANCE, u64::from(key.instance), &record);
 }
 
-/// A spawn in a copy died; it comes back after `respawn` (`None`: never,
-/// a boss).
+/// A spawn died; it comes back after `respawn` (`None`: never, a boss in
+/// a copy). Saved in its copy, or in the open world's respawns.
 pub fn spawn_died(realm: &Realm, key: MapKey, spawn: u32, respawn: Option<Duration>) {
     let back = respawn.map_or(NEVER, |d| now() + d.as_secs() as i64);
+    if key.instance == 0 {
+        crate::game::respawns::gone(realm, false, key.map, spawn, back);
+        return;
+    }
     change_save(realm, key, |s| {
         s.dead.insert(spawn, back);
     });
 }
 
-/// A spawn in a copy is back.
+/// A spawn is back.
 pub fn spawn_back(realm: &Realm, key: MapKey, spawn: u32) {
     if key.instance == 0 {
+        crate::game::respawns::back(realm, false, key.map, spawn);
         return;
     }
     let had = realm
@@ -822,6 +867,52 @@ pub fn spawn_back(realm: &Realm, key: MapKey, spawn: u32) {
             s.dead.remove(&spawn);
         });
     }
+}
+
+/// A spawned game object went (gathered, looted, used up); it comes back
+/// after `after`. Saved in its copy, or in the open world's respawns.
+pub fn object_gone(realm: &Realm, key: MapKey, spawn: u32, after: Duration) {
+    let back = now() + after.as_secs() as i64;
+    if key.instance == 0 {
+        crate::game::respawns::gone(realm, true, key.map, spawn, back);
+        return;
+    }
+    change_save(realm, key, |s| {
+        s.objects.insert(spawn, back);
+    });
+}
+
+/// A spawned game object is back.
+pub fn object_back(realm: &Realm, key: MapKey, spawn: u32) {
+    if key.instance == 0 {
+        crate::game::respawns::back(realm, true, key.map, spawn);
+        return;
+    }
+    let had = realm
+        .social
+        .instances
+        .lock()
+        .saves
+        .get(&key.instance)
+        .is_some_and(|s| s.objects.contains_key(&spawn));
+    if had {
+        change_save(realm, key, |s| {
+            s.objects.remove(&spawn);
+        });
+    }
+}
+
+/// What of map `key` is down as it starts, by spawn, and when (Unix
+/// seconds) each comes back: its creatures, then its game objects.
+pub fn down_at_start(realm: &Realm, key: MapKey) -> (BTreeMap<u32, i64>, BTreeMap<u32, i64>) {
+    let inst = realm.social.instances.lock();
+    if key.instance == 0 {
+        return inst.world.of(key.map);
+    }
+    inst.saves
+        .get(&key.instance)
+        .map(|s| (s.dead.clone(), s.objects.clone()))
+        .unwrap_or_default()
 }
 
 /// The instance script's data, saved with the copy.
@@ -1018,6 +1109,7 @@ pub fn raid_info(map: &Map, g: Guid) {
 /// once it empties); dungeon saves of copies empty long enough (as after a
 /// restart) go too.
 pub fn sweep(realm: &Realm) {
+    crate::game::respawns::sweep(realm);
     let now = now();
     let due: Vec<u32> = {
         let inst = realm.social.instances.lock();

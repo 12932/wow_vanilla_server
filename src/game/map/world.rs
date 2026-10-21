@@ -56,6 +56,9 @@ pub fn populate(map: &mut Map) {
     if let Some(s) = &save {
         crate::game::map::instance_script::load(map, &s.data);
     }
+    // What is down, its copy's or the open world's: it stays down until
+    // it is due back (mangos's `creature_respawn`, `gameobject_respawn`).
+    let (dead, gone) = crate::game::instances::down_at_start(&map.realm, map.key);
     let unix = crate::game::social::mail::now();
     let mut lying = Vec::new();
     if let Some(spawns) = data.creature_spawns.get(&map.key.map) {
@@ -74,7 +77,7 @@ pub fn populate(map: &mut Map) {
                 let g = map.add_creature(c);
                 crate::game::map::ai::lie_dead_if_spawned_so(map, g, s);
                 crate::game::events::came_in(map, g);
-                if let Some(back) = save.as_ref().and_then(|v| v.dead.get(&s.guid)).copied()
+                if let Some(back) = dead.get(&s.guid).copied()
                     && back > unix
                 {
                     let wait = (back != crate::game::instances::NEVER)
@@ -113,6 +116,13 @@ pub fn populate(map: &mut Map) {
                 || !crate::game::map::battleground::spawn_allowed(map, false, s.guid)
                 || skip_objects.contains(&s.guid)
             {
+                continue;
+            }
+            if let Some(back) = gone.get(&s.guid).copied()
+                && back > unix
+            {
+                let wait = Duration::from_secs((back - unix) as u64);
+                map.loot_state.respawns.push((map.now + wait, s.guid));
                 continue;
             }
             if let Some(t) = data.gameobject_templates.get(&s.entry) {
