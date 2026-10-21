@@ -38,6 +38,15 @@ const DEMON_THERE: u32 = 991_804;
 const DEMON_AT_SPOT: u32 = 991_805;
 const EYE: u32 = 991_806;
 const R5: u32 = 997;
+/// A torch (an object, 76) put at a script's place (46): its beasts'; an
+/// object's in its active state; the beasts', cast in two seconds for 10
+/// mana.
+const AT_PLACE: u32 = 991_807;
+const AT_OBJECT: u32 = 991_808;
+const SLOW_PLACE: u32 = 991_809;
+const TORCH: u32 = 997_700;
+const MARKER: u32 = 997_701;
+const MARKER_ACTIVE: u32 = 997_702;
 
 fn data(d: &mut GameData) {
     sides(d);
@@ -97,6 +106,53 @@ fn data(d: &mut GameData) {
     ];
     insert(d, [mixed, life, excluded, capped]);
     insert(d, summons);
+    for entry in [TORCH, MARKER] {
+        d.gameobject_templates.insert(
+            entry,
+            crate::game::data::GameObjectTemplate {
+                entry,
+                kind: 5,
+                display_id: 1,
+                name: format!("Object {entry}"),
+                size: 1.0,
+                ..Default::default()
+            },
+        );
+    }
+    let torch = |id: u32| {
+        let mut s = bare(id, 0);
+        s.range_index = RANGE_30;
+        s.mana_cost = 10;
+        crate::game::tests_p3_cast_kit::effect(
+            &mut s,
+            0,
+            SpellEffect {
+                effect: crate::game::map::objects::EFFECT_SUMMON_OBJECT_WILD,
+                target_a: 46,
+                misc_value: TORCH as i32,
+                ..Default::default()
+            },
+        );
+        s
+    };
+    let mut slow = torch(SLOW_PLACE);
+    slow.casting_time_index = CAST_2S;
+    insert(d, [torch(AT_PLACE), torch(AT_OBJECT), slow]);
+    d.spells.script_targets.insert(AT_PLACE, vec![(1, BEAST)]);
+    d.spells.script_targets.insert(SLOW_PLACE, vec![(1, BEAST)]);
+    d.spells.script_targets.insert(AT_OBJECT, vec![(0, MARKER)]);
+    d.spells
+        .script_target_conditions
+        .insert((AT_OBJECT, 0, MARKER), MARKER_ACTIVE);
+    d.scripts.conditions.insert(
+        MARKER_ACTIVE,
+        crate::game::data::scripts::Condition {
+            entry: MARKER_ACTIVE,
+            kind: 55,
+            values: [0, 0, 0, 0],
+            flags: 0,
+        },
+    );
     let s = &mut d.spells;
     s.script_targets
         .insert(MIXED, vec![(1, BEAST), (1, DRAGONKIN)]);
@@ -266,4 +322,103 @@ async fn demon_and_possessed_summons_stand_where_their_target_puts_them() {
         .await
         .unwrap();
     assert_eq!(out, (true, true, true), "(where aimed, the spot, the spot)");
+}
+
+/// The newest torch's place.
+fn torch_at(m: &Map) -> Option<Vector3d> {
+    m.gameobjects
+        .iter()
+        .filter(|(_, o)| o.entry == TORCH)
+        .max_by_key(|(_, o)| o.guid.guid())
+        .map(|(_, o)| o.position)
+}
+
+fn why(m: &mut Map, caster: Guid, spell: u32) -> Option<u8> {
+    use crate::game::map::spells::checks;
+    kit::fresh(m, caster);
+    let s = m.realm.data.spells.get(spell).cloned().unwrap();
+    let mods = mods::for_spell(m, caster, &s);
+    checks::check(m, caster, &s, &Targets::default(), None, false, &mods)
+}
+
+/// Thistle Tea's `SpellLocations` "chooses a nearby creature and replaces
+/// supplied coordinates", "validates object conditions", "rejects absent
+/// owners, ... and out of range targets", "summons at an object
+/// destination" and "revalidates the location before power and cooldown
+/// costs": a torch put at a script's place goes at the nearest beast its
+/// script names, not where the cast was sent, and at the beast picked if
+/// one is; with none there, or one forty yards off, the cast is refused;
+/// at an object's place whose row wants it active, refused while it
+/// isn't, then at the object; and a slow one whose beast goes before it
+/// ends fails unpaid. mangos-classic's `CheckScriptTargeting` sets the
+/// destination, keeps the unit target it finds fit, and fails the cast
+/// with `SPELL_FAILED_BAD_TARGETS` where it finds none.
+#[tokio::test]
+async fn a_cast_at_a_scripts_place_is_there_and_refused_without_one() {
+    use crate::game::map::spells::fail;
+    use crate::game::tests_p6_wspell::{off, put};
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10WS4", "Torchbearer", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[AT_PLACE, AT_OBJECT, SLOW_PLACE]);
+            face_east(m, a);
+            let none = why(m, a, AT_PLACE);
+            let near = unit_at(m, a, BEAST, 2.0, 0.0);
+            let far = unit_at(m, a, BEAST, 6.0, 0.0);
+            let sent = Targets {
+                dest: Some(off(m, a, 20.0, 0.0)),
+                ..Default::default()
+            };
+            kit::fresh(m, a);
+            assert!(kit::cast_fresh(m, a, AT_PLACE, sent));
+            let nearest = torch_at(m) == m.position_of(near);
+            assert!(kit::cast_fresh(m, a, AT_PLACE, at(far)));
+            let picked = torch_at(m) == m.position_of(far);
+            m.remove_creature(near);
+            let beyond = off(m, a, 40.0, 0.0);
+            put(m, far, beyond);
+            let too_far = why(m, a, AT_PLACE);
+            m.remove_creature(far);
+            // An object's place, its row wanting it active.
+            let spot = off(m, a, 3.0, 1.0);
+            let marker =
+                crate::game::map::objects::summon(m, None, MARKER, spot, 0.0, 0, 0, 0, None)
+                    .unwrap();
+            let inactive = why(m, a, AT_OBJECT);
+            m.gameobject_mut(marker)
+                .unwrap()
+                .fields
+                .set_u32(GAMEOBJECT_STATE, 0);
+            kit::fresh(m, a);
+            assert!(kit::cast_fresh(m, a, AT_OBJECT, Targets::default()));
+            let at_object = torch_at(m) == Some(spot);
+            // Gone before the cast ends.
+            let gone = unit_at(m, a, BEAST, 2.0, 0.0);
+            kit::fresh(m, a);
+            let mana = kit::power(m, a, 0);
+            assert!(kit::cast_fresh(m, a, SLOW_PLACE, Targets::default()));
+            m.remove_creature(gone);
+            kit::pass(m, 2_100);
+            let failed = (kit::casting(m, a), mana - kit::power(m, a, 0));
+            (
+                (none, too_far, inactive),
+                (nearest, picked, at_object),
+                failed,
+            )
+        })
+        .await
+        .unwrap();
+    let refused = Some(fail::BAD_TARGETS);
+    assert_eq!(
+        out.0,
+        (refused, refused, refused),
+        "none, too far, inactive"
+    );
+    assert_eq!(
+        out.1,
+        (true, true, true),
+        "the nearest, the picked, the object"
+    );
+    assert_eq!(out.2, (None, 0), "failed unpaid");
 }

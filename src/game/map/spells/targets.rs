@@ -674,14 +674,17 @@ pub fn script_masks_alike(
 }
 
 /// Where effect `index` of `s` at target 46 is (mangos's
-/// `TARGET_LOCATION_SCRIPT_NEAR_CASTER`): at the nearest creature its
-/// script targets name, else the nearest object, within reach of the
-/// caster; none if it names none there.
+/// `TARGET_LOCATION_SCRIPT_NEAR_CASTER`): at the creature picked if its
+/// script targets name it, else the nearest they name, else the nearest
+/// object, within reach of the caster; none if it names none there.
+/// mangos-classic's `CheckScriptTargeting` keeps the unit target it
+/// finds fit and looks no further.
 pub(crate) fn script_place(
     map: &Map,
     caster: Guid,
     s: &SpellTemplate,
     index: usize,
+    t: &Targets,
 ) -> Option<Vector3d> {
     if !map.realm.data.spells.script_targets.contains_key(&s.id) {
         return None;
@@ -689,6 +692,12 @@ pub(crate) fn script_place(
     let at = map.position_of(caster)?;
     let radius = map.realm.data.spells.radius(s.effects[index].radius_index);
     let reach = script_reach(map, s, index, radius);
+    if let Some(c) = t.unit.and_then(|u| map.creature(u))
+        && dist(c.position, at) <= reach
+        && script_target(map, caster, s.id, index, &[1, 2], c.entry, c.guid)
+    {
+        return Some(c.position);
+    }
     let nearest = |of: &mut dyn Iterator<Item = (Vector3d, u32, Guid)>, kinds: &[u32]| {
         of.filter(|(p, entry, g)| {
             dist(*p, at) <= reach && script_target(map, caster, s.id, index, kinds, *entry, *g)
@@ -784,9 +793,11 @@ fn script_units(
 }
 
 /// Whether a cast's effect at a script's creature near its caster (38)
-/// finds none of those its spell names, which refuses it (mangos's
-/// `CheckScriptTargeting`'s `SPELL_FAILED_BAD_TARGETS`, Thistle Tea's
-/// `UnitTargets` error).
+/// finds none of those its spell names, or one at a script's place near
+/// it (46) none of the creatures and objects it names, which refuses it
+/// (mangos's `CheckScriptTargeting`'s `SPELL_FAILED_BAD_TARGETS`, Thistle
+/// Tea's `UnitTargets` and `LocationTargets` errors). A spell at a place
+/// that names none keeps the place it was sent.
 pub(crate) fn script_creature_missing(
     map: &Map,
     caster: Guid,
@@ -794,13 +805,25 @@ pub(crate) fn script_creature_missing(
     t: &Targets,
     m: &Mods,
 ) -> bool {
-    names_creatures(map, s)
+    let unit = names_creatures(map, s)
         && (0..3).any(|i| {
             let e = &s.effects[i];
             e.effect != 0
                 && e.target_a == 38
                 && script_units(map, caster, s, i, t, radius(map, s, i, m)).is_empty()
+        });
+    // The first effect at a place decides it (a later one at the same
+    // target is ignored).
+    let place = (0..3)
+        .find(|i| {
+            let e = &s.effects[*i];
+            e.effect != 0 && (e.target_a == 46 || e.target_b == 46)
         })
+        .is_some_and(|i| {
+            map.realm.data.spells.script_targets.contains_key(&s.id)
+                && script_place(map, caster, s, i, t).is_none()
+        });
+    unit || place
 }
 
 #[cfg(test)]

@@ -1139,6 +1139,25 @@ pub fn cast_triggered_at(map: &mut Map, caster: Guid, spell: u32, at: Vector3d) 
     execute(map, caster, s, targets, None, true);
 }
 
+/// A cast of an effect at a script's place near its caster (46) is at
+/// that place, the first such effect's, whatever place the cast was sent
+/// (mangos-classic's `CheckScriptTargeting` setting the destination; a
+/// later effect at the same target is ignored, `SpellTargetMgr`'s
+/// `ignoredTargets`): its summons, objects and areas are there, and its
+/// go says so. With no place found, the cast keeps its own.
+fn script_dest(map: &Map, caster: Guid, s: &SpellTemplate, mut t: Targets) -> Targets {
+    let place = (0..3)
+        .find(|i| {
+            let e = &s.effects[*i];
+            e.effect != 0 && (e.target_a == 46 || e.target_b == 46)
+        })
+        .and_then(|i| targets::script_place(map, caster, s, i, &t));
+    if let Some(p) = place {
+        t.dest = Some(p);
+    }
+    t
+}
+
 /// A cast of an effect at its spell's database place (17) is at that
 /// place, if its `spell_target_position` row is on this map, whatever
 /// place the cast was sent or a trigger gave it: its summons, its ground
@@ -1301,6 +1320,7 @@ fn execute(
     let aimed = targets.unit;
     let targets = magnet(map, caster, s, targets);
     let targets = database_place(map, s, targets);
+    let targets = script_dest(map, caster, s, targets);
     let resolved = resolve(map, caster, s, &targets, &m);
     // A spell a magnet took stops there: a chain jumps on to no one from
     // it (mangos's `CheckAndAddMagnetTarget`, Thistle Tea's resolver), and

@@ -98,7 +98,7 @@ pub fn destination(
             }),
         18 => map.position_of(caster),
         // At the nearest its script names (a firework launcher).
-        46 => crate::game::map::spells::targets::script_place(map, caster, s, index).or(t.dest),
+        46 => crate::game::map::spells::targets::script_place(map, caster, s, index, t).or(t.dest),
         53 | 63 => t.unit.and_then(|u| map.position_of(u)).or(t.dest),
         a if SPOTS.iter().any(|(id, _)| *id == a || *id == e.target_b) => None,
         _ => t.dest,
