@@ -133,6 +133,8 @@ mod tests_p10_core_real;
 #[cfg(test)]
 mod tests_p10_core_regen;
 #[cfg(test)]
+mod tests_p10_core_skills;
+#[cfg(test)]
 mod tests_p10_core_stats;
 #[cfg(test)]
 mod tests_p10_core_trade;

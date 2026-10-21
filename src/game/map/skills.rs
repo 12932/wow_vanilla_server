@@ -310,6 +310,32 @@ pub fn learn_from_spell(p: &mut Player, data: &GameData, spell: u32) {
     }
 }
 
+/// A spell's skill ranks forgotten with it: each skill falls to the step
+/// below the spell's, none for its first (mangos's
+/// `UpdateSpellTrainedSkills(spell, false)`, `SetSkillStep(skill, step -
+/// 1)`), its value kept as far as the lower cap.
+pub fn forget_from_spell(p: &mut Player, data: &GameData, spell: u32) {
+    let Some(s) = data.spells.get(spell) else {
+        return;
+    };
+    for e in s
+        .effects
+        .iter()
+        .filter(|e| e.effect == crate::game::map::spells::EFFECT_SKILL)
+    {
+        let skill = e.misc_value.max(0) as u32;
+        let step = (e.base_points + e.base_dice.max(1)).max(1) as u32;
+        if value(p, skill).is_none() {
+            continue;
+        }
+        if step > 1 {
+            learn_skill(p, skill, step - 1);
+        } else {
+            forget_skill(p, skill);
+        }
+    }
+}
+
 /// A rank known: its skill at its step, unless a higher rank known already
 /// gave a higher one. A login reads the spells back in any order, and a
 /// lower rank after a higher one changes nothing (Thistle Tea's
