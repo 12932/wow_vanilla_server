@@ -30,6 +30,8 @@ pub const SPELL_BLOCK: u32 = 107;
 const EFFECT_PARRY: u32 = 22;
 const EFFECT_BLOCK: u32 = 23;
 pub const SPELL_DUAL_WIELD: u32 = 674;
+/// Seal of the Crusader's ranks, 1 to 6.
+pub const SEAL_OF_THE_CRUSADER: [u32; 6] = [21082, 20162, 20305, 20306, 20307, 20308];
 
 /// What combat reads of a unit's stats.
 #[derive(Debug, Clone, Copy, Default)]
@@ -748,6 +750,18 @@ pub fn player(p: &mut Player, data: &GameData) {
         (base.max(1.0), (base * 1.25).max(2.0))
     } else {
         (min, max)
+    };
+    // Seal of the Crusader's dummy: the main hand's own damage over 1.4, so
+    // its 40% faster swings deal no more (mangos-classic's `HandleAuraDummy`,
+    // `m_modAttackBaseDPSPct[BASE_ATTACK]`, before attack power's bonus).
+    let crusader = a
+        .holders
+        .iter()
+        .filter(|h| SEAL_OF_THE_CRUSADER.contains(&h.spell))
+        .count();
+    let (min, max) = {
+        let pct = (100.0f32 / 140.0).powi(crusader as i32);
+        (min * pct, max * pct)
     };
     let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
     let bonus = ap / 14.0 * main_delay as f32 / 1000.0;

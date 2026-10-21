@@ -149,3 +149,64 @@ async fn winters_chill_raises_the_crit_chance_of_its_schools_at_its_bearer() {
         .unwrap();
     assert_eq!(got, (false, true, false, false));
 }
+
+// ---- Seal of the Crusader's per-hit damage cut ----------------------------
+
+/// Seal of the Crusader's rank 1, as made up: 40% faster swings and the
+/// dummy whose damage cut mangos does in code.
+const CRUSADER: u32 = 21082;
+/// Another seal of the same shape, which isn't the Crusader's.
+const OTHER_SEAL: u32 = 995_120;
+
+fn crusader_kit(d: &mut GameData) {
+    let mut seal = bare(CRUSADER, 1);
+    seal.duration_index = LASTS_15S;
+    effect(&mut seal, 0, aura(auras::AURA_MOD_HASTE, 0, 40, 1));
+    effect(&mut seal, 1, aura(auras::AURA_DUMMY, 0, 0, 1));
+    let mut other = seal.clone();
+    other.id = OTHER_SEAL;
+    insert(d, [seal, other]);
+}
+
+/// Seal of the Crusader divides the main hand's own damage by 1.4, before
+/// attack power's bonus, so its faster swings deal no more a second
+/// (mangos-classic's `HandleAuraDummy` for 21082 and its ranks, on
+/// `m_modAttackBaseDPSPct`): a fist's 1 to 2 become 0.71 to 1.43. Another
+/// haste of the same shape cuts nothing; the seal gone, the damage comes
+/// back.
+#[tokio::test]
+async fn seal_of_the_crusader_cuts_the_main_hands_damage_a_hit() {
+    let realm = fast_realm(crusader_kit);
+    let (_c, pally, map) = human(&realm, "P12FSOTC", "Crusader", Class::Paladin).await;
+    let got = map
+        .query(move |m| {
+            ready(m, pally, 60, &[]);
+            let damage = |m: &Map| {
+                let f = m.unit_fields(pally).unwrap();
+                (
+                    f.get_f32(UNIT_FIELD_MINDAMAGE),
+                    f.get_f32(UNIT_FIELD_MAXDAMAGE),
+                )
+            };
+            let bare = damage(m);
+            spells::cast_triggered(m, pally, OTHER_SEAL, Some(pally));
+            let other = damage(m);
+            auras::remove_spell(m, pally, OTHER_SEAL, None);
+            spells::cast_triggered(m, pally, CRUSADER, Some(pally));
+            let sealed = damage(m);
+            let held = auras::auras(m, pally).is_some_and(|a| a.has_spell(CRUSADER));
+            auras::remove_spell(m, pally, CRUSADER, None);
+            (bare, other, sealed, held, damage(m))
+        })
+        .await
+        .unwrap();
+    let (bare, other, sealed, held, after) = got;
+    assert!(held, "the seal on");
+    assert_eq!(other, bare, "another haste cuts nothing");
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(
+        near(bare.0 - sealed.0, 1.0 - 1.0 / 1.4) && near(bare.1 - sealed.1, 2.0 - 2.0 / 1.4),
+        "the fist's own damage over 1.4: {bare:?} to {sealed:?}"
+    );
+    assert_eq!(after, bare, "back when it goes");
+}
