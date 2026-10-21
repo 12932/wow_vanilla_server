@@ -265,6 +265,8 @@ mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p12h_death;
 #[cfg(test)]
+mod tests_p12h_gear;
+#[cfg(test)]
 mod tests_p12h_items;
 #[cfg(test)]
 mod tests_p12h_quests;

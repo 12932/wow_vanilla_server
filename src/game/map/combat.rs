@@ -1699,6 +1699,16 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
         send_to(map, attacker, encode(&SMSG_ATTACKSWING_CANT_ATTACK {}));
         return;
     }
+    // A player can't fight mounted (mangos's `Unit::Attack`: "player
+    // cannot attack in mount state").
+    if map
+        .players
+        .get(&attacker)
+        .is_some_and(|p| p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0)
+    {
+        send_to(map, attacker, encode(&SMSG_ATTACKSWING_CANT_ATTACK {}));
+        return;
+    }
     // Another victim: the old one hears the attack stop, and a strike
     // queued for it goes (mangos's `Unit::Attack`, Thistle Tea's
     // `start_melee_attack`).

@@ -85,6 +85,8 @@ pub enum Fail {
     NonemptyBagOverOtherBag,
     /// A bag's things too many for the one it is swapped for.
     ItemsCantBeSwapped,
+    /// Stunned, or logging out.
+    YouAreStunned,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -242,6 +244,11 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::ItemsCantBeSwapped => R::ItemsCantBeSwapped {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::YouAreStunned => R::YouAreStunned {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -1415,6 +1422,11 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         return;
     };
     let b = p.item_at(to.0, to.1);
+    if let Some(f) = refused_now(p, from, to, b.is_some()) {
+        let ag = p.items[a].guid;
+        send_fail(p, f, ag);
+        return;
+    }
     let exchange = match bag_moves(p, &data, a, b, from, to) {
         Ok(x) => x,
         Err(f) => {
@@ -1540,6 +1552,39 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
         crate::game::map::items::equipped(map, g, item);
     }
+}
+
+/// What the moment refuses of a move from `from` to `to` (onto an item
+/// there with `swap`), as mangos's `SwapItem`, `CanEquipItem` and
+/// `CanUnequipItem` do for the player's own: nothing moves for the dead;
+/// nothing is put on while stunned or logging out (`YOU_ARE_STUNNED`),
+/// casting, channelling or auto-repeating a shot (`IsNonMeleeSpellCasted`)
+/// or in Spirit of Redemption (`CANT_DO_RIGHT_NOW`); nothing comes off
+/// while logging out.
+fn refused_now(p: &Player, from: (u8, u8), to: (u8, u8), swap: bool) -> Option<Fail> {
+    use crate::game::map::player::UNIT_FLAG_STUNNED;
+    if p.death != crate::game::map::death::Death::Alive {
+        return Some(Fail::YouAreDead);
+    }
+    let worn = |(bag, slot): (u8, u8)| bag == BAG_PLAYER && slot < EQUIPMENT_END;
+    let logging_out = p.logout_at.is_some();
+    // Something put on: at `to`, or at `from` by a swap.
+    if worn(to) || (worn(from) && swap) {
+        if p.fields.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_STUNNED != 0 || logging_out {
+            return Some(Fail::YouAreStunned);
+        }
+        if p.caster.casting.is_some()
+            || p.combat.auto_repeat.is_some()
+            || p.fields.get_byte(UNIT_FIELD_BYTES_1, 2)
+                == crate::game::map::auras::FORM_SPIRIT_OF_REDEMPTION
+        {
+            return Some(Fail::CantDoRightNow);
+        }
+    }
+    if worn(from) && logging_out {
+        return Some(Fail::YouAreStunned);
+    }
+    None
 }
 
 /// Whether `(bag, slot)` is a bag's place: the bag bar or the bank's
@@ -1811,6 +1856,25 @@ pub fn split(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8), count: u32) {
         let ag = p.items[a].guid;
         send_fail(p, Fail::SplitTooMany, ag);
         return;
+    }
+    // Onto a stack of its own with room for it all (mangos's `SplitItem`,
+    // `CanStoreItem` at the slot: a stack of the entry with room).
+    if let Some(b) = p.item_at(to.0, to.1)
+        && b != a
+        && p.items[b].entry == p.items[a].entry
+        && mergeable(p, &p.items[b])
+        && !(to.0 == BAG_PLAYER && to.1 < EQUIPMENT_END)
+    {
+        let stack = data
+            .item(p.items[a].entry)
+            .map_or(1, |t| t.stackable.max(1));
+        if p.items[b].count() + count <= stack {
+            let (left, onto) = (p.items[a].count() - count, p.items[b].count() + count);
+            p.items[a].set_count(left);
+            p.items[b].set_count(onto);
+            p.refresh_inventory(&data);
+            return;
+        }
     }
     if p.item_at(to.0, to.1).is_some()
         || !slot_exists(p, &data, to.0, to.1)
