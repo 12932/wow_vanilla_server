@@ -870,7 +870,8 @@ pub fn area_trigger(map: &mut Map, g: Guid, trigger: u32) {
 /// was one.
 pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     let Some(m) = map.battleground.as_ref() else {
-        return false;
+        // A mine's supplies with no match here are no one's.
+        return av::supplies_barred(map, None, object);
     };
     let near = match (map.players.get(&g), map.gameobject(object)) {
         (Some(p), Some(o)) => crate::game::map::combat::dist(p.position(), o.position) <= 10.0,

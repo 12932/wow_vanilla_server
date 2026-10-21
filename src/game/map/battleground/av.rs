@@ -789,7 +789,8 @@ pub fn supply_mine(entry: u32) -> Option<usize> {
 }
 
 /// Whether `object` is a mine's supplies the side `s` may not take: only
-/// the side holding the mine may (Thistle Tea's `Mine.supply_allowed?`).
+/// the side holding the mine may, while the battle is on (Thistle Tea's
+/// `Mine.supply_allowed?`).
 pub fn supplies_barred(map: &Map, s: Option<usize>, object: Guid) -> bool {
     let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
         return false;
@@ -797,8 +798,10 @@ pub fn supplies_barred(map: &Map, s: Option<usize>, object: Guid) -> bool {
     let Some(mine) = supply_mine(entry) else {
         return false;
     };
+    // With no match here, no one may (Thistle Tea's `ActorFactory`, which
+    // denies supplies without an active match reservation).
     let Some(m) = map.battleground.as_ref() else {
-        return false;
+        return true;
     };
     let owner = m.av.as_ref().and_then(|av| av.mines[mine].owner);
     !m.playing() || owner.is_none() || owner != s
