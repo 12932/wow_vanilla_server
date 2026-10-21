@@ -774,7 +774,13 @@ pub(crate) fn targets_of(t: &SpellCastTargets) -> Targets {
             SpellCastTargets_SpellCastTargetFlags_Item::Item { item }
             | SpellCastTargets_SpellCastTargetFlags_Item::TradeItem { trade_item: item } => *item,
         }),
-        dest: f.get_dest_location().map(|d| d.destination),
+        // The ground a cast is at: its destination, else the source the
+        // client sent (mangos's `m_srcPos`, Thistle Tea's
+        // `Target.ground_location`).
+        dest: f
+            .get_dest_location()
+            .map(|d| d.destination)
+            .or_else(|| f.get_source_location().map(|s| s.source)),
         origin: None,
     }
 }
@@ -1038,6 +1044,43 @@ pub fn cast_now(map: &mut Map, caster: Guid, spell: u32, targets: Targets) -> bo
     true
 }
 
+thread_local! {
+    /// Whether the cast starting now is an aura's (see [`cast_by_aura`]).
+    static BY_AURA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The next cast an aura's, while it lives: put back as it goes, a panic's
+/// unwinding too.
+struct ByAura(bool);
+
+impl ByAura {
+    fn enter() -> Self {
+        Self(BY_AURA.replace(true))
+    }
+}
+
+impl Drop for ByAura {
+    fn drop(&mut self) {
+        BY_AURA.set(self.0);
+    }
+}
+
+/// A spell an aura casts for free: its periodic trigger's (Arcane
+/// Missiles' missiles, Hellfire's flames), a target trigger's (Frostbite).
+/// It procs and starts fights as an aura's, not a cast's (mangos's
+/// `m_triggeredByAuraSpell`, Thistle Tea's aura origin); a proc's spell is
+/// one too, cast while the proc goes off.
+pub fn cast_by_aura(map: &mut Map, caster: Guid, spell: u32, target: Option<Guid>) {
+    let _aura = ByAura::enter();
+    cast_triggered(map, caster, spell, target);
+}
+
+/// [`cast_by_aura`] at `targets`.
+pub fn cast_by_aura_with(map: &mut Map, caster: Guid, spell: u32, targets: Targets) {
+    let _aura = ByAura::enter();
+    cast_triggered_with(map, caster, spell, targets);
+}
+
 /// A spell cast for free, as another spell or an aura's tick does.
 pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Guid>) {
     let data = map.realm.data.clone();
@@ -1233,6 +1276,8 @@ fn execute(
     item: Option<Guid>,
     triggered: bool,
 ) {
+    // An aura's cast, or a proc's; what it casts in turn is its own.
+    let by_aura = BY_AURA.replace(false) || crate::game::map::procs::in_proc();
     let Some(_deeper) = Deeper::enter() else {
         tracing::debug!("spell {} not cast: {MAX_DEPTH} spells deep", s.id);
         return;
@@ -1406,6 +1451,7 @@ fn execute(
         item,
         targets,
         triggered,
+        by_aura,
         paid,
         shared,
     };
@@ -1498,7 +1544,7 @@ fn execute(
             auras::remove_where(map, caster, |h| h.has(auras::AURA_MOD_STEALTH));
         }
     }
-    cast_end_procs(map, caster, s, &targets, item, triggered);
+    cast_end_procs(map, caster, s, &targets, item);
     crate::game::map::combat::spell_launched(map, caster, s, triggered);
 }
 
@@ -1538,20 +1584,12 @@ const DISPEL_INVISIBILITY: u32 = 6;
 /// a spell cast rather than on its hits (Unstable Power and Ascendance
 /// spend a stack a cast, Elemental Focus and the Blue Dragon may come of
 /// one), whether it hit, was resisted or landed on many. At its unit
-/// target, else its caster. Not a triggered cast's, save a channel that
-/// is marked no proc's own (Thistle Tea's aura origin), nor a helpful
-/// item's.
-fn cast_end_procs(
-    map: &mut Map,
-    caster: Guid,
-    s: &SpellTemplate,
-    t: &Targets,
-    item: Option<Guid>,
-    triggered: bool,
-) {
-    if triggered && !(s.channeled() && s.attr(3, sd::ATTR_EX3_NOT_A_PROC)) {
-        return;
-    }
+/// target, else its caster. A triggered cast's too, as mangos's
+/// `Spell::cast` raises it for every cast with no spell to ask whether it
+/// was triggered: each of Arcane Missiles' missiles spends a stack of
+/// Unstable Power (Thistle Tea raises none for a triggered cast). Not a
+/// helpful item's.
+fn cast_end_procs(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets, item: Option<Guid>) {
     if item.is_some() && auras::positive(s) {
         return;
     }
@@ -1613,6 +1651,8 @@ pub struct Launch {
     item: Option<Guid>,
     targets: Targets,
     triggered: bool,
+    /// An aura's or a proc's cast (see [`cast_by_aura`]).
+    by_aura: bool,
     paid: u32,
     shared: u32,
 }
@@ -1744,6 +1784,7 @@ fn land(
                 offhand: false,
                 ranged: false,
                 extra_attack: false,
+                origin: crate::game::map::procs::Origin::of(s, l.by_aura, l.item.is_some()),
             },
         );
         aim = caster;
@@ -1770,6 +1811,7 @@ fn land(
                 offhand: false,
                 ranged: s.dmg_class == 3,
                 extra_attack: false,
+                origin: crate::game::map::procs::Origin::of(s, l.by_aura, l.item.is_some()),
             },
         );
         contact(map, caster, aim, s, l, false);
@@ -1839,6 +1881,8 @@ fn land(
         reflected: aim != target,
         shared: l.shared,
         triggered: l.triggered,
+        by_aura: l.by_aura,
+        item: l.item.is_some(),
     };
     // A quest's spell cast at what it hit (Thistle Tea's
     // `queue_quest_cast_credit`).
@@ -1923,7 +1967,9 @@ const ATTR_EX2_NO_INITIAL_THREAT: u32 = 0x40_0000;
 /// whether that puts it in the fight with its caster (Thistle Tea's
 /// `Spell.Combat.decide`). Landing, it does if the creature saw the caster
 /// (or it is Seduction), the cast was the caster's own (not an aura's or a
-/// proc's, unless it travelled) or makes threat outright, and the spell
+/// proc's, unless it travelled; another spell's trigger is: Thistle Tea's
+/// direct triggered cast, as mangos's `CasterHitTargetWithSpell` for every
+/// one, so a trap's spell pulls) or makes threat outright, and the spell
 /// starts fights: not Sap, nor one with no threat, threat only on a miss,
 /// or none as it lands. Missing, it does if the creature saw the caster or
 /// the miss breaks stealth, and the cast was the caster's own with threat.
@@ -1956,8 +2002,13 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
         }
         return;
     }
+    // Only at one it may attack (mangos's `CasterHitTargetWithSpell` asks
+    // `CanAttack` first), and not the world's harm (a campfire's).
+    if !combat::can_attack(map, caster, target) || s.has_effect(EFFECT_ENVIRONMENTAL_DAMAGE) {
+        return;
+    }
     let seen = stealth::sees(map, target, caster);
-    let own = !l.triggered || s.speed > 0.0;
+    let own = !l.by_aura || s.speed > 0.0;
     let fights = if hit {
         let sap = s.family_name == 8 && s.family_flags & SAP_FLAG != 0;
         let threat = s.effects.iter().any(|e| {
@@ -2260,6 +2311,7 @@ pub fn periodic_damage_of(
             offhand: false,
             ranged: false,
             extra_attack: false,
+            origin: Default::default(),
         },
     );
     if leech {

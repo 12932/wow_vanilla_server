@@ -75,7 +75,8 @@ async fn a_threat_spell_puts_its_caster_on_the_list_and_a_negative_one_only_lowe
             ai::add_threat(m, brute, ga, 20.0);
             spells::cast_triggered(m, ga, THREAT_DOWN, Some(brute));
             let lowered = threat(m, brute, ga);
-            spells::cast_triggered(m, helper, THREAT_DOWN, Some(brute));
+            // An aura's, starting no fight of its own: it only lowers.
+            spells::cast_by_aura(m, helper, THREAT_DOWN, Some(brute));
             (made, lowered, threat(m, brute, helper))
         })
         .await

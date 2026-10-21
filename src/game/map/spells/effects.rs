@@ -38,10 +38,15 @@ pub(crate) enum Dr {
     Knockout,
     Banish,
     Horror,
+    /// A root an aura or a proc gave (Improved Wing Clip's, Entrapment's).
+    TriggeredRoot,
 }
 
-/// A spell's diminishing returns group, as Thistle Tea follows vmangos.
-pub(crate) fn dr_group(s: &SpellTemplate) -> Option<Dr> {
+/// A spell's diminishing returns group, as Thistle Tea follows vmangos: a
+/// stun or a root an aura or a proc cast (`by_aura`) is a group apart
+/// from those cast, but a charge's (mangos-classic's
+/// `GetDiminishingReturnsGroupForSpell` with `m_triggeredByAuraSpell`).
+pub(crate) fn dr_group(s: &SpellTemplate, by_aura: bool) -> Option<Dr> {
     let flags = s.family_flags as u32;
     match (s.family_name, s.id) {
         (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),
@@ -77,7 +82,17 @@ pub(crate) fn dr_group(s: &SpellTemplate) -> Option<Dr> {
     ]
     .into_iter()
     .find(|(m, _)| mechanics.contains(m))
-    .map(|(_, g)| g)
+    .map(|(_, g)| match (g, by_aura) {
+        (Dr::ControlledStun, true) => Dr::TriggeredStun,
+        (Dr::ControlledRoot, true) => Dr::TriggeredRoot,
+        (g, _) => g,
+    })
+}
+
+/// The diminishing returns groups an aura of `s` may be of: as cast, and
+/// as an aura's (the holder doesn't say which it was).
+fn groups_of(s: &SpellTemplate) -> [Option<Dr>; 2] {
+    [dr_group(s, false), dr_group(s, true)]
 }
 
 /// The duration a crowd control lasts on `target` after its diminishing
@@ -88,11 +103,12 @@ fn diminished(
     target: Guid,
     s: &SpellTemplate,
     duration: Option<u32>,
+    by_aura: bool,
 ) -> Option<Option<u32>> {
     let Some(ms) = duration else {
         return Some(duration);
     };
-    let Some(group) = dr_group(s) else {
+    let Some(group) = dr_group(s, by_aura) else {
         return Some(duration);
     };
     let all = matches!(
@@ -145,26 +161,37 @@ const DR_RECOVERY: Duration = Duration::from_secs(15);
 fn group_on(map: &Map, target: Guid, group: Dr) -> bool {
     let data = &map.realm.data;
     auras::auras(map, target).is_some_and(|a| {
-        a.holders
-            .iter()
-            .any(|h| !h.positive && data.spells.get(h.spell).and_then(dr_group) == Some(group))
+        a.holders.iter().any(|h| {
+            !h.positive
+                && data
+                    .spells
+                    .get(h.spell)
+                    .is_some_and(|s| groups_of(s).contains(&Some(group)))
+        })
     })
 }
 
 /// An aura came off `target`: if it was the last of its diminishing
 /// group there, the group starts to recover.
 pub fn dr_aura_gone(map: &mut Map, target: Guid, spell: u32) {
-    let Some(group) = map.realm.data.spells.get(spell).and_then(dr_group) else {
+    let Some(s) = map.realm.data.spells.get(spell) else {
         return;
     };
-    if group_on(map, target, group) {
-        return;
-    }
     let now = map.now;
-    if let Some(c) = map.caster_mut(target)
-        && let Some(e) = c.diminishing.iter_mut().find(|(g, _, _)| *g == group as u8)
-    {
-        e.2 = Some(now + DR_RECOVERY);
+    for group in groups_of(s).into_iter().flatten() {
+        if group_on(map, target, group) {
+            continue;
+        }
+        // The group whose clock waits for its aura (not one already
+        // running).
+        if let Some(c) = map.caster_mut(target)
+            && let Some(e) = c
+                .diminishing
+                .iter_mut()
+                .find(|(g, _, r)| *g == group as u8 && r.is_none())
+        {
+            e.2 = Some(now + DR_RECOVERY);
+        }
     }
 }
 
@@ -309,6 +336,7 @@ pub fn run(
                     spell: Some(s.id),
                     school: s.school_mask(),
                     ranged: s.dmg_class == 3,
+                    origin: l.origin(s),
                     ..Default::default()
                 },
             );
@@ -443,7 +471,7 @@ fn apply_auras(
         let duration = if auras::positive(s) || target == caster {
             Some(duration)
         } else {
-            diminished(map, caster, target, s, duration)
+            diminished(map, caster, target, s, duration, l.by_aura)
         };
         let Some(duration) = duration else {
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
@@ -501,6 +529,7 @@ fn apply_auras(
                     offhand: false,
                     ranged: s.dmg_class == 3,
                     extra_attack: false,
+                    origin: l.origin(s),
                 },
             );
         }
@@ -817,6 +846,7 @@ fn effect(
                     offhand: false,
                     ranged: s.dmg_class == 3,
                     extra_attack: false,
+                    origin: l.origin(s),
                 },
             );
         }
@@ -1961,7 +1991,7 @@ pub fn tick_areas(map: &mut Map) {
                     // Frost Trap's pulse is its trap's activation, for
                     // Entrapment (mangos-classic's dummy 18350 rolling it).
                     super::class_scripts::periodic_triggered(map, g, &area_holder(&area, s));
-                    cast_triggered(map, area.caster, e.trigger_spell, Some(g));
+                    super::cast_by_aura(map, area.caster, e.trigger_spell, Some(g));
                 }
                 _ => {
                     // A slow, a debuff: on those inside while they stay.

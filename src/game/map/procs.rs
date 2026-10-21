@@ -128,6 +128,44 @@ pub struct Event {
     pub ranged: bool,
     /// An extra attack's: it can't give more.
     pub extra_attack: bool,
+    /// Where the spell came from, for whether it may proc.
+    pub origin: Origin,
+}
+
+/// Where a spell's hit came from, for what it may proc.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Origin {
+    /// Cast, or triggered by another spell's effect: it procs what it may.
+    #[default]
+    Cast,
+    /// An aura's (a periodic trigger's, a target trigger's) or a proc's:
+    /// it procs only an aura that takes procs' spells, unless it is marked
+    /// no proc's own (mangos-classic's `IsTriggeredAtSpellProcEvent`:
+    /// `SPELL_ATTR_EX3_NOT_A_PROC` or `SPELL_ATTR_EX3_CAN_PROC_FROM_PROCS`;
+    /// Thistle Tea's aura origin).
+    Aura,
+    /// An item's spell of no class family: it procs nothing, on either
+    /// side (mangos-classic's `prepareDataForTriggerSystem` for a cast
+    /// item).
+    Silent,
+}
+
+impl Origin {
+    /// A hit of `s`: an aura's (`by_aura`), or cast from an item (`item`).
+    pub fn of(s: &SpellTemplate, by_aura: bool, item: bool) -> Self {
+        if item && s.family_flags == 0 {
+            Self::Silent
+        } else if by_aura {
+            Self::Aura
+        } else {
+            Self::Cast
+        }
+    }
+}
+
+/// Whether a proc is going off now: a spell cast now is a proc's.
+pub fn in_proc() -> bool {
+    DEPTH.get() > 0
 }
 
 thread_local! {
@@ -227,6 +265,9 @@ pub fn spell_hit(map: &mut Map, e: Event) {
                     was.ex |= e.ex;
                     was.damage += e.damage;
                     was.school |= e.school;
+                    if e.origin != Origin::Cast {
+                        was.origin = e.origin;
+                    }
                     was
                 }
             });
@@ -240,6 +281,9 @@ pub fn spell_hit(map: &mut Map, e: Event) {
 
 /// Run the procs of both units for `e`.
 pub fn trigger(map: &mut Map, e: Event) {
+    if e.origin == Origin::Silent {
+        return;
+    }
     let Some(deeper) = Deeper::enter() else {
         return;
     };
@@ -460,7 +504,13 @@ fn run(
         if e.spell == Some(h.spell) {
             continue;
         }
-        if from_proc && !s.attr(3, sd::ATTR_EX3_CAN_PROC_FROM_PROCS) {
+        // A proc's spell, or an aura's, procs only an aura that takes
+        // procs' spells, unless it is no proc's own (Arcane Missiles'
+        // missiles, Seal of Command's strike).
+        if (from_proc || e.origin == Origin::Aura)
+            && !trigger_spell.is_some_and(|t| t.attr(3, sd::ATTR_EX3_NOT_A_PROC))
+            && !s.attr(3, sd::ATTR_EX3_CAN_PROC_FROM_PROCS)
+        {
             continue;
         }
         if let Some(t) = trigger_spell {
@@ -828,7 +878,7 @@ pub fn target_triggers(map: &mut Map, caster: Guid, target: Guid, spell_id: u32,
     let mut rng = rand::rng();
     for (trigger, chance) in triggers {
         if chance >= 100.0 || rng.random_range(0.0f32..100.0) < chance {
-            crate::game::map::spells::cast_triggered(map, caster, trigger, Some(target));
+            crate::game::map::spells::cast_by_aura(map, caster, trigger, Some(target));
         }
     }
 }

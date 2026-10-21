@@ -847,8 +847,9 @@ async fn single_target_auras_outlive_their_casters_death_but_not_its_going() {
         (on_boar(SHEEP), on_boar(MARK))
     };
     let after_death = on(&map, move |m| {
-        crate::game::map::spells::cast_triggered(m, g, SHEEP, Some(boar));
-        crate::game::map::spells::cast_triggered(m, g, MARK, Some(boar));
+        // As an aura's, starting no fight: the boar has no fight to leave.
+        crate::game::map::spells::cast_by_aura(m, g, SHEEP, Some(boar));
+        crate::game::map::spells::cast_by_aura(m, g, MARK, Some(boar));
         assert_eq!(held(m), (true, true), "both on");
         crate::game::map::combat::deal_damage(m, boar, g, 1_000_000);
         held(m)

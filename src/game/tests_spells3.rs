@@ -640,6 +640,7 @@ async fn vanish_and_blade_flurry() {
                     offhand: false,
                     ranged: false,
                     extra_attack: false,
+                    origin: Default::default(),
                 },
             );
             let flurried = before - health(m, other);

@@ -596,6 +596,7 @@ pub fn periodic_triggered(map: &mut Map, target: Guid, h: &Holder) {
                 offhand: false,
                 ranged: false,
                 extra_attack: false,
+                origin: Default::default(),
             },
         );
     }

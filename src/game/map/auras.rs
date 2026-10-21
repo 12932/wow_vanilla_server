@@ -3148,6 +3148,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                         offhand: false,
                         ranged: false,
                         extra_attack: false,
+                        origin: Default::default(),
                     },
                 );
             }
@@ -3334,7 +3335,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     origin: Some(target),
                     ..Default::default()
                 };
-                crate::game::map::spells::cast_triggered_with(map, h.caster, a.trigger, targets);
+                crate::game::map::spells::cast_by_aura_with(map, h.caster, a.trigger, targets);
                 return;
             }
             let aim = if h.caster == target {
@@ -3363,7 +3364,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if at_enemy && aim == h.caster {
                 return;
             }
-            crate::game::map::spells::cast_triggered(map, h.caster, a.trigger, Some(aim));
+            crate::game::map::spells::cast_by_aura(map, h.caster, a.trigger, Some(aim));
         }
         _ => {}
     }

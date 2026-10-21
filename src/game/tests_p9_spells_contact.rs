@@ -546,7 +546,7 @@ async fn a_procs_damage_hurts_without_a_fight_for_either() {
             kit::ready(m, a, 60, &[]);
             let kobold = kit::dummy(m, a, 60, 5.0);
             let before = kit::health(m, kobold);
-            spells::cast_triggered(m, a, PROC_FIRE, Some(kobold));
+            spells::cast_by_aura(m, a, PROC_FIRE, Some(kobold));
             let c = m.creature(kobold).unwrap();
             (
                 before - kit::health(m, kobold),
