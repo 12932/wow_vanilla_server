@@ -173,3 +173,114 @@ async fn a_lower_skill_step_keeps_the_value_over_its_cap() {
     assert_eq!(seen.1, (Some((125, 75)), 1), "the value kept over the cap");
     assert_eq!(seen.2, seen.1, "unrelated learning changes nothing");
 }
+
+/// Thistle Tea's "cancellation preserves the book and teaches nothing":
+/// the Expert Cookbook's cast (19886) cancelled keeps the book and
+/// teaches nothing; let finish, it teaches Expert Cooking and the book
+/// goes.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_cancelled_book_keeps_its_book_and_teaches_nothing() {
+    let Some((_a, g, map)) = player(Race::Human, Class::Warrior).await else {
+        return;
+    };
+    let seen = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, g, 35);
+        spells::learn(m, g, 2550);
+        spells::learn(m, g, 3102);
+        skills::set_value(m.players.get_mut(&g).unwrap(), 185, 125);
+        crate::game::map::inventory::add_item(m, g, 16_072, 1, false).unwrap();
+        let book = m.players[&g]
+            .items
+            .iter()
+            .find(|i| i.entry == 16_072)
+            .unwrap()
+            .guid;
+        spells::cast(m, g, 19_886, spells::Targets::default(), Some(book));
+        let began = m.players[&g].caster.casting.as_ref().map(|c| c.spell);
+        spells::cancel(m, g);
+        let cancelled = (
+            m.players[&g].item_by_guid(book).is_some(),
+            m.players[&g].spells.contains(&3413),
+        );
+        crate::game::tests_p3_spells_kit::fresh(m, g);
+        let again = spells::cast(m, g, 19_886, spells::Targets::default(), Some(book));
+        assert!(again, "cast again");
+        // Its cast time (vmangos's 20 s), passed.
+        crate::game::tests_p3_spells_kit::pass(m, 30_000);
+        let done = (
+            m.players[&g].item_by_guid(book).is_some(),
+            m.players[&g].spells.contains(&3413),
+        );
+        (began, cancelled, done)
+    })
+    .await;
+    assert_eq!(seen.0, Some(19_886), "a cast with a time");
+    assert_eq!(
+        seen.1,
+        (true, false),
+        "cancelled: the book kept, nothing taught"
+    );
+    assert_eq!(seen.2, (false, true), "finished: taught, the book gone");
+}
+
+/// Thistle Tea's "the registered packet removes spells and tracking, frees
+/// the slot, and persists", as mangos's `HandleUnlearnSkillOpcode`
+/// (`SetSkillStep(0)`, `removeSpell` of the skill's spells): Mining
+/// unlearned takes its spells (each told), Find Minerals' tracking with
+/// them, and the skill; learned again, it starts at 1.
+#[tokio::test]
+#[ignore = "extended"]
+async fn mining_unlearned_takes_its_spells_and_tracking_and_starts_again_at_one() {
+    let Some((mut a, g, map)) = player(Race::Dwarf, Class::Warrior).await else {
+        return;
+    };
+    let learned = on(&map, move |m| {
+        crate::game::tests_p3_combat::level(m, g, 20);
+        spells::learn(m, g, 2575);
+        spells::cast_triggered(m, g, 2580, Some(g));
+        skills::set_value(m.players.get_mut(&g).unwrap(), 186, 40);
+        (
+            [2575, 2580, 2656].map(|s| m.players[&g].spells.contains(&s)),
+            has(m, g, 2580),
+            skill(m, g, 186),
+        )
+    })
+    .await;
+    assert_eq!(learned, ([true; 3], true, Some((40, 75))));
+    a.clear();
+    a.send(CMSG_UNLEARN_SKILL {
+        skill: wow_world_messages::vanilla::Skill::Mining,
+    })
+    .await;
+    let mut told = Vec::new();
+    while told.len() < 3 {
+        let s = a
+            .wait_for("SMSG_REMOVED_SPELL", |m| match m {
+                wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_REMOVED_SPELL(
+                    r,
+                ) => Some(u32::from(r.spell)),
+                _ => None,
+            })
+            .await;
+        told.push(s);
+    }
+    told.sort_unstable();
+    assert_eq!(told, vec![2575, 2580, 2656], "each told");
+    let after = on(&map, move |m| {
+        let gone = (
+            [2575, 2580, 2656].map(|s| m.players[&g].spells.contains(&s)),
+            has(m, g, 2580),
+            skill(m, g, 186),
+        );
+        spells::learn(m, g, 2575);
+        (gone, skill(m, g, 186))
+    })
+    .await;
+    assert_eq!(
+        after.0,
+        ([false; 3], false, None),
+        "spells, tracking, skill"
+    );
+    assert_eq!(after.1, Some((1, 75)), "from 1 again");
+}
