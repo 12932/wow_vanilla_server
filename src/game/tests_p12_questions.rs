@@ -113,3 +113,55 @@ async fn an_untapped_creature_killed_by_a_stranger_leaves_the_warlock_no_shard()
     assert_eq!(got.0, Vec::<(Guid, u32, u32)>::new(), "Bob's blow taps it");
     assert_eq!(got.1, vec![(ga, SHARD, 1)], "her own blow, hers");
 }
+
+// #48: a druid's attack power by form.
+
+/// mangos-classic's `Player::UpdateAttackPowerAndDamage` (since its
+/// `adaa953`, "reimplement predatory strikes"): every druid's melee attack
+/// power is three a level, twice the strength, less 20, in any form, with
+/// the agility too in a form flagged for it (Cat Form's
+/// `SHAPESHIFT_FLAG_AGILITY_ATTACK_BONUS`); the forms' own share comes from
+/// their passive auras (3025, 1178, 9635). Ranged, Cat and Bear forms have
+/// none, the rest agility less 10. wvs gave a caster druid no level share,
+/// a cat two a level and a moonkin one and a half on top of the passives.
+#[tokio::test]
+async fn a_druids_attack_power_is_three_a_level_in_every_form_and_agility_in_cat() {
+    use crate::game::map::auras::{FORM_BEAR, FORM_CAT, FORM_DIREBEAR, FORM_MOONKIN};
+    use crate::game::map::derive;
+    use crate::game::tests_p4_core_stats::{MAGE_POOLS, MAGE_STATS, data, on_map, player};
+    let mut d = data(&[]);
+    d.player_level_stats.insert((4, 11, 60), MAGE_STATS);
+    d.player_class_stats.insert((11, 60), MAGE_POOLS);
+    let (realm, _a, g) = player(d, Race::NightElf, Class::Druid).await;
+    let got = on_map(&realm, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::stats::set_level(p, &data, 60);
+        let mut out = Vec::new();
+        for f in [0, FORM_CAT, FORM_BEAR, FORM_DIREBEAR, FORM_MOONKIN] {
+            let p = m.players.get_mut(&g).unwrap();
+            p.fields.set_byte(UNIT_FIELD_BYTES_1, 2, f);
+            derive::unit(m, g);
+            let f = &m.players[&g].fields;
+            out.push((
+                f.get_u32(UNIT_FIELD_ATTACK_POWER),
+                f.get_u32(UNIT_FIELD_RANGED_ATTACK_POWER),
+            ));
+        }
+        out
+    })
+    .await;
+    // Strength 35, agility 41 at 60.
+    let melee = 60 * 3 + 35 * 2 - 20;
+    assert_eq!(
+        got,
+        vec![
+            (melee, 41 - 10),
+            (melee + 41, 0),
+            (melee, 0),
+            (melee, 0),
+            (melee, 41 - 10),
+        ],
+        "caster, cat, bear, dire bear, moonkin"
+    );
+}

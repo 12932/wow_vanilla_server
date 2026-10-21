@@ -390,7 +390,9 @@ pub fn melee_attack_power(class: u8, level: u32, strength: u32, agility: u32) ->
         WARRIOR | PALADIN => l * 3 + s * 2 - 20,
         ROGUE | HUNTER => l * 2 + s + a - 20,
         SHAMAN => l * 2 + s * 2 - 20,
-        DRUID => s * 2 - 20,
+        // In every form (mangos-classic's `UpdateAttackPowerAndDamage`):
+        // the forms' own share is their passive auras'.
+        DRUID => l * 3 + s * 2 - 20,
         _ => s - 10,
     };
     v.max(0) as u32
@@ -674,15 +676,17 @@ pub fn player(p: &mut Player, data: &GameData) {
     // Attack power.
     let mut ap_base = melee_attack_power(class, level, strength, agility);
     if class == DRUID {
-        // Cat form adds agility; bear form gets three per level more.
-        match form {
-            auras::FORM_CAT => ap_base += agility + level * 2,
-            auras::FORM_BEAR | auras::FORM_DIREBEAR => ap_base += level * 3,
-            auras::FORM_MOONKIN => ap_base += level * 3 / 2,
-            _ => {}
+        // Cat form adds agility, the one form flagged so in
+        // SpellShapeshiftForm (`SHAPESHIFT_FLAG_AGILITY_ATTACK_BONUS`); a
+        // form's level share is its passive aura's (Cat Form (Passive)'s
+        // 40 and two a level, Bear Form's 30 and three), as
+        // mangos-classic has it, not here.
+        if form == auras::FORM_CAT {
+            ap_base += agility;
         }
         // Predatory Strikes: half, once or one and a half times the level
-        // more in cat and bear form.
+        // more in cat and bear form (mangos's
+        // `spell_druid_form_scaling_ap_auras` on the forms' passives).
         if matches!(
             form,
             auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
@@ -702,7 +706,16 @@ pub fn player(p: &mut Player, data: &GameData) {
     f.set_u32(UNIT_FIELD_ATTACK_POWER_MODS, ap_mods.max(0) as u32);
     f.set_f32(UNIT_FIELD_ATTACK_POWER_MULTIPLIER, ap_mult - 1.0);
     let ap = ((ap_base as i32 + ap_mods) as f32 * ap_mult).max(0.0);
-    let rap_base = ranged_attack_power(class, level, agility);
+    // A druid in Cat or Bear form has none ranged (mangos-classic's).
+    let rap_base = if class == DRUID
+        && matches!(
+            form,
+            auras::FORM_CAT | auras::FORM_BEAR | auras::FORM_DIREBEAR
+        ) {
+        0
+    } else {
+        ranged_attack_power(class, level, agility)
+    };
     let rap_mods = a.sum(AURA_MOD_RANGED_ATTACK_POWER);
     let rap_mult = a.product(AURA_MOD_RANGED_ATTACK_POWER_PCT);
     f.set_u32(UNIT_FIELD_RANGED_ATTACK_POWER, rap_base);

@@ -979,7 +979,8 @@ fn attack_power_and_stamina_health_follow_each_classs_formula_and_never_go_negat
     assert_eq!(melee(WARRIOR, 10, 30, 20), 10 * 3 + 30 * 2 - 20);
     assert_eq!(melee(ROGUE, 10, 20, 25), 10 * 2 + 20 + 25 - 20);
     assert_eq!(melee(shaman, 10, 20, 15), 10 * 2 + 20 * 2 - 20);
-    assert_eq!(melee(druid, 10, 20, 15), 20 * 2 - 20);
+    // mangos-classic's: three a level in every form (question #48).
+    assert_eq!(melee(druid, 10, 20, 15), 10 * 3 + 20 * 2 - 20);
     assert_eq!((melee(MAGE, 10, 15, 15), melee(priest, 10, 15, 15)), (5, 5));
     assert_eq!(melee(MAGE, 1, 3, 3), 0);
     assert_eq!(ranged(hunter, 10, 25), 10 * 2 + 25 * 2 - 10);
