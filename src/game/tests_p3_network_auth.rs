@@ -187,8 +187,10 @@ async fn a_reconnect_needs_a_session_and_its_proof() {
 
 /// A wrong reconnect proof (a stale session) isn't told the account is
 /// banned: it is answered as Thistle Tea answers it, `<<3, 1>>`
-/// (`FailUnknown0`), and the connection closed. Both reconnects: 1.12's
-/// protocol (3, as 2) and 8.
+/// (`FailUnknown0`), and the connection closed. Every reconnect: the
+/// 1.12.1 client's protocol 2 (its logon's is 3: wow_messages' test vectors
+/// for build 5875), 3 as 2, and 8; mangos's `_HandleReconnectChallenge`
+/// checks none (question #26).
 #[tokio::test]
 async fn a_wrong_reconnect_proof_is_not_told_banned() {
     accounts().set_password("STALE", "SECRET").unwrap();
@@ -196,7 +198,7 @@ async fn a_wrong_reconnect_proof_is_not_told_banned() {
     let mut s = login_server(users.clone()).await;
     let client = log_in(&mut s, "STALE", "SECRET").await;
     drop(s);
-    for protocol in [3u8, 8] {
+    for protocol in [2u8, 3, 8] {
         let mut s = login_server(users.clone()).await;
         let mut c = challenge(2, "STALE");
         c[1] = protocol;
@@ -359,7 +361,7 @@ async fn a_ban_outlasts_the_session_made_before_it() {
     log_in(&mut s, "OUTLAW", "SECRET").await;
     drop(s);
     assert!(accounts().ban("OUTLAW", -1, "testing"));
-    for protocol in [3u8, 8] {
+    for protocol in [2u8, 3, 8] {
         let mut s = login_server(users.clone()).await;
         let mut c = challenge(2, "OUTLAW");
         c[1] = protocol;
