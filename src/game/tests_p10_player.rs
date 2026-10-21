@@ -29,8 +29,24 @@ fn later(m: &mut Map, by: Duration) {
     charge::update(m);
 }
 
+const KNOCK: u32 = 97_961;
+
 fn charge_world() -> crate::game::data::GameData {
     let mut d = motion::wolf_world();
+    d.spells.spells.insert(
+        KNOCK,
+        spell(
+            KNOCK,
+            &[SpellEffect {
+                effect: crate::game::map::spells::EFFECT_KNOCK_BACK,
+                base_points: 69,
+                base_dice: 1,
+                misc_value: 120,
+                target_a: 1,
+                ..Default::default()
+            }],
+        ),
+    );
     d.creature_spawns.get_mut(&0).unwrap()[0] =
         motion::spawn(80, motion::WOLF, motion::at(20.0, 0.0));
     d
@@ -206,4 +222,131 @@ async fn a_lesson_of_a_spell_that_doesnt_exist_teaches_nothing() {
         })
         .await;
     assert!(told.is_none(), "nor told");
+}
+
+/// Thistle Tea's `movement_control_test` "assigns one sequence across
+/// acknowledged movement changes" and "supersedes older teleports", and
+/// `travel_test`'s "rejects stale and foreign acknowledgements", as
+/// mangos's session counts its orders (`GetOrderCounter`): a root and two
+/// teleports take one counter each, in turn; the first teleport is stale
+/// once the second is sent, its acknowledgement settling nothing, nor one
+/// naming another player; the second's settles it, once.
+#[tokio::test]
+async fn movement_orders_share_one_counter_and_a_stale_or_foreign_ack_settles_nothing() {
+    let (_realm, a, ga, map) = motion::enter(charge_world()).await;
+    let counters = on(&map, move |m| {
+        let p = &m.players[&ga];
+        crate::game::map::movement::root_to(&p.outbound, ga, true);
+        let at = p.position();
+        crate::game::map::movement::teleport_within(m, ga, at, 0.0);
+        let first = m.players[&ga]
+            .outbound
+            .pending_orders()
+            .last()
+            .map(|(c, _)| *c);
+        crate::game::map::movement::teleport_within(m, ga, at, 1.0);
+        let orders: Vec<u32> = m.players[&ga]
+            .outbound
+            .pending_orders()
+            .iter()
+            .map(|(c, _)| *c)
+            .collect();
+        (first.unwrap(), orders)
+    })
+    .await;
+    let (first, orders) = counters;
+    assert_eq!(orders.len(), 2, "the root and the second teleport wait");
+    assert_eq!(orders[1], orders[0] + 2, "one sequence: {orders:?}");
+    assert_eq!(first, orders[0] + 1, "the first teleport between them");
+    let second = orders[1];
+    let ack = |guid: Guid, movement_counter: u32| MSG_MOVE_TELEPORT_ACK_Client {
+        guid,
+        movement_counter,
+        time: Default::default(),
+    };
+    let waiting = move |m: &Map| m.players[&ga].teleport.is_some();
+    for (what, sent) in [
+        ("stale", ack(ga, first)),
+        ("foreign", ack(Guid::new(0x7777), second)),
+    ] {
+        a.send(sent).await;
+        harness::an_update(&map).await;
+        assert!(on(&map, move |m| waiting(m)).await, "{what}: still waiting");
+    }
+    a.send(ack(ga, second)).await;
+    harness::an_update(&map).await;
+    let settled = on(&map, move |m| {
+        (
+            waiting(m),
+            m.players[&ga]
+                .outbound
+                .pending_orders()
+                .iter()
+                .any(|(c, _)| *c == second),
+        )
+    })
+    .await;
+    assert_eq!(settled, (false, false), "the second's settles it, once");
+}
+
+/// Thistle Tea's "death and teleport prevent late acknowledgement
+/// relocation": a launch's acknowledgement that comes after its player
+/// died settles the order, and moves the body nowhere (a teleport's case:
+/// `tests_p7_movement_acks::a_launch_ack_settles_once_for_the_launch_sent`).
+#[tokio::test]
+async fn a_launch_acknowledged_after_death_moves_no_body() {
+    use crate::game::conn::Order;
+    let (_realm, a, ga, map) = motion::enter(charge_world()).await;
+    let (counter, impulse, here) = on(&map, move |m| {
+        crate::game::map::spells::cast_triggered(m, ga, KNOCK, Some(ga));
+        let p = &m.players[&ga];
+        let (c, impulse) = p
+            .outbound
+            .pending_orders()
+            .into_iter()
+            .find_map(|(c, o)| match o {
+                Order::KnockBack { impulse, .. } => Some((c, impulse)),
+                _ => None,
+            })
+            .expect("a launch waits");
+        let here = p.position();
+        crate::game::map::death::kill(m, ga);
+        (c, impulse, here)
+    })
+    .await;
+    let away = Vector3d {
+        x: here.x + 2.0,
+        ..here
+    };
+    a.send(CMSG_MOVE_KNOCK_BACK_ACK {
+        guid: ga,
+        counter,
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::new_jumping(MovementInfo_MovementFlags_Jumping {
+                cos_angle: impulse[0],
+                sin_angle: impulse[1],
+                xy_speed: impulse[2],
+                z_speed: impulse[3],
+            }),
+            timestamp: 0,
+            position: away,
+            orientation: 0.0,
+            fall_time: 0,
+        },
+    })
+    .await;
+    harness::an_update(&map).await;
+    let (at, waiting) = on(&map, move |m| {
+        let p = &m.players[&ga];
+        (
+            p.position(),
+            p.outbound
+                .pending_orders()
+                .iter()
+                .any(|(c, _)| *c == counter),
+        )
+    })
+    .await;
+    assert!(dist(at, here) < 0.01, "the body stays: {at:?}");
+    assert!(!waiting, "the order settled");
 }
