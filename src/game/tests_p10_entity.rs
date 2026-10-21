@@ -105,6 +105,98 @@ async fn a_creators_wild_summon_is_tapped_for_them_and_gives_no_experience() {
     assert!(from_plain > 0, "a plain one gives its killer experience");
 }
 
+/// The entry a script turns a creature into.
+const CHANGED: u32 = 990_217;
+
+/// Script command 27 (`update_entry`) makes a creature another entry, the
+/// same unit: its watcher is told the new entry, looks, level and npc
+/// flags in its values, under the same GUID, and the new entry's query
+/// answers its name (Thistle Tea's "publishes current identity and client
+/// fields while retaining the process"). The level is the new entry's,
+/// rolled in its range whatever the old one was (mangos's `SelectLevel`
+/// at `UpdateEntry`): wvs kept an old level that fell in the new range.
+#[tokio::test]
+async fn an_update_entry_tells_its_watcher_the_new_entry_and_level() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let mut d = data();
+    let mut changed = template(CHANGED, "Changed", 14, 1);
+    changed.display_ids = [102, 0, 0, 0];
+    changed.level_min = 15;
+    changed.level_max = 15;
+    changed.npc_flags = 3;
+    d.creature_templates.insert(CHANGED, changed);
+    // One of 10 to 20, at 12: the old level in the new range.
+    let mut ranged = template(CHANGED + 1, "Ranged", 14, 1);
+    ranged.level_min = 10;
+    ranged.level_max = 20;
+    d.creature_templates.insert(CHANGED + 1, ranged);
+    let realm = crate::game::harness::realm_with(d);
+    let (mut a, me, map) = enter(&realm, "A", "Watcher", Race::Human, Class::Warrior).await;
+    let wolf =
+        crate::game::tests_pets::place(&map, me, crate::game::tests_pets::WOLF, 0x70_0002, 5.0)
+            .await;
+    a.sees(wolf).await;
+    map.query(move |m| {
+        let step = crate::game::data::scripts::ScriptStep {
+            command: 27,
+            datalong: [CHANGED, 0, 0, 0],
+            ..Default::default()
+        };
+        crate::game::map::scripts::execute(m, &step, wolf, wolf);
+    })
+    .await
+    .unwrap();
+    let told = a
+        .wait_for("the new entry's values", |m| {
+            crate::game::harness::values(m)
+                .into_iter()
+                .find(|(g, _)| *g == wolf)
+                .map(|(_, mask)| crate::game::tests_bugs6::fields(&mask))
+                .filter(|f| f.get(&OBJECT_FIELD_ENTRY) == Some(&CHANGED))
+        })
+        .await;
+    assert_eq!(told.get(&UNIT_FIELD_DISPLAYID), Some(&102), "its looks");
+    assert_eq!(told.get(&UNIT_FIELD_LEVEL), Some(&15), "its level");
+    assert_eq!(told.get(&UNIT_NPC_FLAGS), Some(&3), "its npc flags");
+    a.send(CMSG_CREATURE_QUERY {
+        creature: CHANGED,
+        guid: wolf,
+    })
+    .await;
+    let name = a
+        .wait_for("its query's answer", |m| match m {
+            ServerOpcodeMessage::SMSG_CREATURE_QUERY_RESPONSE(r) if r.creature_entry == CHANGED => {
+                Some(r.found.clone())
+            }
+            _ => None,
+        })
+        .await
+        .expect("it is known")
+        .name1;
+    assert_eq!(name, "Changed");
+    // From level 12 to an entry of 10 to 20: rolled anew, not kept.
+    let levels = map
+        .query(move |m| {
+            let mut seen = std::collections::BTreeSet::new();
+            for i in 0..40 {
+                let c = m.creature_mut(wolf).unwrap();
+                c.fields.set_u32(UNIT_FIELD_LEVEL, 12);
+                let to = if i % 2 == 0 { CHANGED + 1 } else { CHANGED };
+                crate::game::map::scripts::update_entry(m, wolf, to);
+                if to == CHANGED + 1 {
+                    seen.insert(m.creature(wolf).unwrap().fields.get_u32(UNIT_FIELD_LEVEL));
+                }
+            }
+            seen
+        })
+        .await
+        .unwrap();
+    assert!(
+        levels.len() > 1 && levels.iter().all(|l| (10..=20).contains(l)),
+        "rolled in its range: {levels:?}"
+    );
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
