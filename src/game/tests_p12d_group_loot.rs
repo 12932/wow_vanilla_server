@@ -569,3 +569,94 @@ fn a_group_picks_again_half_the_time_over_a_duplicate() {
     }
     assert!((1350..1650).contains(&tusks), "{tusks} of 2000");
 }
+
+/// The tests' boar (`tests_loot`): a skin, and nothing else.
+const BOAR: u32 = 3002;
+const SKINNING: u32 = 8613;
+const LEATHER: u32 = 2318;
+
+/// The corpse's time left to lie, if it's a corpse.
+fn corpse_left(m: &Map, creature: Guid) -> Option<Duration> {
+    match m.creature(creature)?.life {
+        crate::game::map::creature::Life::Dead { corpse_until, .. } => {
+            Some(corpse_until.saturating_duration_since(m.now))
+        }
+        crate::game::map::creature::Life::Alive => None,
+    }
+}
+
+/// Looted, a corpse with no skin goes within two minutes, not its whole
+/// decay (mangos's `ReduceCorpseDecayTimer`).
+#[tokio::test]
+async fn a_looted_corpse_goes_sooner() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = map_of(&realm);
+    let gnoll = unit(GNOLL, 31);
+    kill(&map, ga, gnoll).await;
+    let left = on(&map, move |m| corpse_left(m, gnoll)).await.unwrap();
+    assert!(left > loot::LOOTING_TIME, "its decay: {left:?}");
+    assert_eq!(open(&mut a, gnoll).await, Some(vec![(LINEN, 0)]));
+    assert_eq!(take(&mut a, &map, 0, LINEN).await, 1);
+    release(&mut a, &map, gnoll).await;
+    let left = on(&map, move |m| corpse_left(m, gnoll)).await.unwrap();
+    assert!(left <= loot::LOOTING_TIME, "looted: {left:?}");
+}
+
+/// Alice skins the boar and leaves the leather: it's her group's, free
+/// for all (mangos's `SKIN_AVAILABLE`); Bob takes it, and the skinned
+/// corpse goes at once (`SKINNED`).
+#[tokio::test]
+async fn a_skin_left_is_the_groups_and_a_skinned_corpse_goes() {
+    let (realm, [mut a, mut b, _c]) = group(GroupLootSetting::GroupLoot).await;
+    let ga = a.guid;
+    let map = map_of(&realm);
+    let boar = unit(BOAR, 24);
+    on(&map, move |m| {
+        crate::game::tests_loot::learn(m, ga, SKINNING, 393);
+        let _ = crate::game::map::inventory::add_item(m, ga, 7005, 1, false);
+        crate::game::map::combat::kill(m, ga, boar);
+    })
+    .await;
+    let mut skinned = false;
+    for _ in 0..40 {
+        skinned = on(&map, move |m| {
+            if let Some(c) = m.caster_mut(ga) {
+                c.gcd_until = None;
+                c.cooldowns.clear();
+            }
+            crate::game::map::spells::cast(
+                m,
+                ga,
+                SKINNING,
+                crate::game::map::spells::Targets {
+                    unit: Some(boar),
+                    ..Default::default()
+                },
+                None,
+            );
+            m.creature(boar)
+                .and_then(|c| c.loot.as_ref())
+                .is_some_and(|l| l.kind == loot::LootKind::Skinning)
+        })
+        .await;
+        if skinned {
+            break;
+        }
+    }
+    assert!(skinned, "skinned");
+    release(&mut a, &map, boar).await;
+    assert_eq!(
+        open(&mut b, boar).await,
+        Some(vec![(LEATHER, 0)]),
+        "the group's"
+    );
+    assert_eq!(take(&mut b, &map, 0, LEATHER).await, 1);
+    release(&mut b, &map, boar).await;
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while !on(&map, move |m| m.creature(boar).is_none_or(|c| c.despawned)).await {
+        assert!(tokio::time::Instant::now() < deadline, "the corpse goes");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}

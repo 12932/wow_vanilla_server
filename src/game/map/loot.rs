@@ -48,6 +48,9 @@ pub const SMSG_LOOT_MONEY_NOTIFY: u16 = 0x163;
 pub const LOOT_YARDS: f32 = 6.0;
 /// How long a roll stands.
 pub const ROLL_FOR: Duration = Duration::from_secs(60);
+/// How long a looted corpse lies at most, and one looked in at least
+/// (mangos's `MINIMUM_LOOTING_TIME`).
+pub const LOOTING_TIME: Duration = Duration::from_secs(120);
 /// References nest this deep at most (Thistle Tea's `@max_reference_depth`).
 const MAX_DEPTH: u32 = 3;
 /// A loot window holds this many items at most.
@@ -1105,6 +1108,21 @@ pub fn refresh_lootable(map: &mut Map, object: Guid) -> bool {
     lootable
 }
 
+/// A corpse lies `within` from now at most, or (`at_least`) at least.
+fn corpse_within(map: &mut Map, creature: Guid, within: Duration, at_least: bool) {
+    let until = map.now + within;
+    if let Some(c) = map.creature_mut(creature)
+        && let crate::game::map::creature::Life::Dead { corpse_until, .. } = &mut c.life
+        && (if at_least {
+            *corpse_until < until
+        } else {
+            *corpse_until > until
+        })
+    {
+        *corpse_until = until;
+    }
+}
+
 /// Who of those a corpse's loot fell to would find nothing in it of
 /// theirs ([`Loot::quiet`]): no gold, no roll, and no slot they see.
 pub fn refresh_quiet(map: &mut Map, object: Guid) {
@@ -1368,6 +1386,14 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
         return;
     }
     loot.looters.insert(player);
+    // Looked in, a corpse lies long enough to loot (mangos's
+    // `InspectingLoot`).
+    if guid::is_unit(target) && loot.kind == LootKind::Corpse {
+        corpse_within(map, target, LOOTING_TIME, true);
+    }
+    let Some(loot) = loot_ref(map, target) else {
+        return;
+    };
     let master_list = (loot.master == Some(player)).then(|| loot.allowed.clone());
     let frame = response_for(&data, target, loot, player, &sight);
     if let Some(p) = map.players.get_mut(&player) {
@@ -1613,9 +1639,45 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
             }
             return;
         }
+        if kind == LootKind::Skinning {
+            if empty {
+                // Skinned: the corpse goes (mangos's
+                // `CREATURE_LOOT_STATUS_SKINNED`).
+                corpse_within(map, target, Duration::ZERO, false);
+            } else {
+                // A skin left is free for all to the skinner's group
+                // (mangos's `Loot::Release`, `SKIN_AVAILABLE`).
+                let group: Vec<Guid> = {
+                    let groups = map.realm.social.groups.lock();
+                    groups
+                        .group_of(player)
+                        .map(|g| g.members.iter().map(|m| m.guid).collect())
+                        .unwrap_or_default()
+                };
+                if let Some(l) = loot_mut(map, target)
+                    && !group.is_empty()
+                {
+                    l.owner = None;
+                    l.allowed = group;
+                    l.method = Some(GroupLootSetting::FreeForAll);
+                }
+                refresh_lootable(map, target);
+            }
+            return;
+        }
         let lootable = refresh_lootable(map, target);
         let empty = empty || loot_ref(map, target).is_some_and(|l| l.done);
         if (empty || !lootable) && kind == LootKind::Corpse {
+            // Looted for all with no skin on it, it goes sooner (mangos's
+            // `ReduceCorpseDecayTimer`, as the window closes: at the kill,
+            // its decay is set after).
+            let skins = map
+                .creature(target)
+                .and_then(|c| map.realm.data.creature_template(c.entry))
+                .is_some_and(|t| t.skinning_loot_id != 0);
+            if !skins {
+                corpse_within(map, target, LOOTING_TIME, false);
+            }
             crate::game::map::professions::corpse_looted(map, target);
         }
     } else {
