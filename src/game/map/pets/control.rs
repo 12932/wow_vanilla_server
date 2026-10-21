@@ -324,7 +324,7 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets) {
     let Some(t) = data.spells.get(spell) else {
         return;
     };
-    let helpful = crate::game::map::auras::positive(t);
+    let helpful = ai::helpful(t);
     let victim = map.combat(pet).filter(|c| c.attacking).map(|c| c.victim);
     let unit = target
         .filter(|g| !g.is_zero())
