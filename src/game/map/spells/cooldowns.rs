@@ -393,7 +393,7 @@ pub fn left_after(s: &SpellTemplate, left: Option<u32>, away: u64) -> Option<Opt
         return Some(Some(ms));
     }
     let ms = u64::from(ms).saturating_sub(away);
-    (ms > 0).then(|| Some(ms as u32))
+    (ms > 0).then_some(Some(ms as u32))
 }
 
 /// The cooldowns a player saved come back into their caster, before the

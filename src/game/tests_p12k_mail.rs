@@ -88,7 +88,7 @@ fn letter(item: Guid, money: u32, cod: u32) -> CMSG_SEND_MAIL {
 async fn sent(a: &mut Client) -> SMSG_SEND_MAIL_RESULT_MailResultTwo {
     a.wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
         ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => match &r.action {
-            SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 } => Some(result2.clone()),
+            SMSG_SEND_MAIL_RESULT_MailAction::Send { result2 } => Some(*result2),
             _ => None,
         },
         _ => None,
@@ -193,7 +193,7 @@ async fn a_read_mail_keeps_its_time_and_cash_on_delivery_isnt_deleted() {
     let deleted = b
         .wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
             ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => match &r.action {
-                SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => Some(result2.clone()),
+                SMSG_SEND_MAIL_RESULT_MailAction::Deleted { result2 } => Some(*result2),
                 _ => None,
             },
             _ => None,
