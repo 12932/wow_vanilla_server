@@ -1,7 +1,7 @@
 //! Meeting stones, mangos-classic's LFG (`src/game/LFG`): a player or a
 //! party's leader queues at a dungeon's stone; every few seconds each
 //! dungeon's queue is matched by role, a party taking the players it lacks
-//! (a tank, a healer, then damage; a hybrid placed in one role) and
+//! (a tank, a healer, then damage; a hybrid placed in one role) and five
 //! players alone forming one, a class that fills a role best ahead of one
 //! that fills it less until the other has waited half an hour. The queue
 //! follows a party's changes: a new leader keeps it queued; the leader
@@ -567,8 +567,11 @@ pub fn sweep(realm: &Realm) {
             .filter(|q| q.leader)
             .map(|q| (q.guid, q.group))
             .collect();
-        // Players alone with no party to join: the longest waiting leads.
-        if parties.is_empty() && solos.len() >= 2 {
+        // Players alone with no party to join, five of them for the
+        // dungeon (mangos-classic's `LFGQueue::Update`, `m_groupSize`:
+        // the leader and four others in the area): the longest waiting
+        // leads.
+        if parties.is_empty() && solos.len() >= PARTY {
             parties.push((solos.remove(0).guid, 0));
         }
         for (mut leader, mut id) in parties {

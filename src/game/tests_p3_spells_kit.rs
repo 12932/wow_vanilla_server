@@ -248,15 +248,9 @@ pub async fn saw_go(c: &mut Client, spell: u32) -> bool {
     .is_some()
 }
 
-/// How `c` was told `spell` missed its first target: `SMSG_SPELLLOGMISS`'s
-/// reason (7 immune, 2 resist, 11 reflect).
+/// How `c` was told `spell` missed its first target: the reason (7 immune,
+/// 2 resist, 11 reflect) in the go's misses, or in `SMSG_SPELLLOGMISS` for
+/// a miss that came about as it landed.
 pub async fn missed(c: &mut Client, spell: u32) -> u8 {
-    let b = c
-        .wait_frame(
-            "SMSG_SPELLLOGMISS",
-            crate::game::map::spells::outcome::SMSG_SPELLLOGMISS,
-            |b| b[..4] == spell.to_le_bytes(),
-        )
-        .await;
-    b[25]
+    c.told_miss(spell).await.1
 }

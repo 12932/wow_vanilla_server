@@ -361,19 +361,9 @@ fn restat(m: &mut Map, g: Guid) {
     m.players.get_mut(&g).unwrap().apply_stats(&data);
 }
 
-/// The next `SMSG_SPELLLOGMISS` of `spell`: its target and reason.
+/// The next miss `SMSG_SPELL_GO` of `spell` lists: its target and reason.
 async fn missed(c: &mut crate::game::harness::Client, spell: u32) -> (Guid, u8) {
-    let b = c
-        .wait_frame(
-            "SMSG_SPELLLOGMISS",
-            crate::game::map::spells::outcome::SMSG_SPELLLOGMISS,
-            |b| b.len() >= 26 && u32::from_le_bytes(b[0..4].try_into().unwrap()) == spell,
-        )
-        .await;
-    (
-        Guid::new(u64::from_le_bytes(b[17..25].try_into().unwrap())),
-        b[25],
-    )
+    c.go_miss(spell).await
 }
 
 /// Whether `SMSG_SPELL_GO` of `spell` came, listing `target`.
@@ -387,8 +377,8 @@ async fn went(c: &mut crate::game::harness::Client, spell: u32) -> Vec<Guid> {
 
 /// Thistle Tea's "queues a take-side outcome when a hostile magic spell is
 /// fully resisted": a hostile magic spell its caster can't land is
-/// resisted (`SPELL_MISS_RESIST`, reason 2 in `SMSG_SPELLLOGMISS`; wvs's
-/// `SMSG_SPELL_GO` lists every target, misses apart, round 9's call) and
+/// resisted (`SPELL_MISS_RESIST`, reason 2 in `SMSG_SPELL_GO`'s misses, as
+/// mangos-classic's `WriteSpellGoTargets`, the user's call of round 11) and
 /// does nothing to its target; a ward that turns spells back does so
 /// before the roll to hit (mangos-classic's `SpellHitResult`: the reflect
 /// first, then `MagicSpellHitResult`), the spell turned on its caster; and
@@ -411,7 +401,6 @@ async fn a_resisted_magic_spell_does_nothing_and_one_of_no_class_lands() {
     })
     .await;
     assert_eq!(hp, 1_000_000, "resisted: nothing");
-    went(&mut c, FROST).await;
     assert_eq!(missed(&mut c, FROST).await, (kobold, 2), "a resist");
     let hp = on(&map, move |m| {
         cast_fresh(m, a, PLAIN, at(kobold));

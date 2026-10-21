@@ -44,42 +44,40 @@ fn stacks(m: &Map, g: Guid, spell: u32) -> u32 {
     kit::holder(m, g, spell).map_or(0, |h| h.stacks)
 }
 
-/// The `SMSG_SPELL_GO`s of `spell` `c` is told of soon, by their hits.
+/// The `SMSG_SPELL_GO`s of `spell` `c` is told of soon: the units each
+/// names, its hits and then its misses.
 async fn goes(c: &mut Client, spell: u32) -> Vec<Vec<Guid>> {
     let mut out = Vec::new();
-    while let Some(hits) = c
+    while let Some(named) = c
         .gets(Duration::from_millis(300), |m| match m {
-            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => Some(g.hits.clone()),
+            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => Some(
+                g.hits
+                    .iter()
+                    .copied()
+                    .chain(g.misses.iter().map(|x| x.target))
+                    .collect::<Vec<_>>(),
+            ),
             _ => None,
         })
         .await
     {
-        out.push(hits);
+        out.push(named);
     }
     out
 }
 
-/// The `SMSG_SPELLLOGMISS`es of `spell` `c` is told of soon: whom, and why
-/// (2 resisted).
+/// The misses of `spell` `c` is told of soon, in its goes (mangos-classic's
+/// `WriteSpellGoTargets`) or in `SMSG_SPELLLOGMISS`: whom, and why (2
+/// resisted).
 async fn misses(c: &mut Client, spell: u32) -> Vec<(u64, u8)> {
     let mut out = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
     while tokio::time::Instant::now() < deadline {
         let left = deadline - tokio::time::Instant::now();
-        let got = tokio::time::timeout(
-            left,
-            c.wait_frame(
-                "SMSG_SPELLLOGMISS",
-                spells::outcome::SMSG_SPELLLOGMISS,
-                |b| b[..4] == spell.to_le_bytes(),
-            ),
-        )
-        .await;
-        let Ok(b) = got else {
+        let Ok((target, why)) = tokio::time::timeout(left, c.told_miss(spell)).await else {
             break;
         };
-        let target = u64::from_le_bytes(b[17..25].try_into().unwrap());
-        out.push((target, b[25]));
+        out.push((target.guid(), why));
     }
     out
 }
@@ -139,9 +137,9 @@ async fn lava_breath_and_sand_blast_breathe_on_their_cone_not_the_selected() {
 }
 
 /// Arcane Explosion rolls each enemy it reaches for itself: one warded
-/// against spells resists it (`SMSG_SPELLLOGMISS`, 2), the other takes its
-/// damage; both are in its one `SMSG_SPELL_GO`, as 1.12 lists every target
-/// there (mangos-zero's `WriteSpellGoTargets`). Its cast ends once, however
+/// against spells resists it (2), the other takes its damage; both are in
+/// its one `SMSG_SPELL_GO`, the one a hit and the other a miss
+/// (mangos-classic's `WriteSpellGoTargets`). Its cast ends once, however
 /// many it lands on: Unstable Power loses one stack (Thistle Tea's "area
 /// triggers roll each target and keep separate launch lists" and "an area
 /// trigger emits one completion across multiple recipients").

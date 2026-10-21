@@ -1476,12 +1476,13 @@ fn execute(
     } else {
         resolved
     };
-    // A spell that travels has its hit rolled as it goes, on each unit it
-    // flies to, and keeps it: its misses are the go's, and what lands is
-    // what was rolled, whatever the target's chances to be hit become in
-    // flight (mangos's `Spell::AddUnitTarget`, `missCondition =
-    // SpellHitResult`, applied at `DoAllEffectOnTarget`; Thistle Tea's
-    // saved launch result). One that doesn't rolls as it lands.
+    // Each unit's hit is rolled as the spell goes, and kept: its misses
+    // (a reflection among them) are the go's, and what lands is what was
+    // rolled, whatever the target's chances to be hit become in flight
+    // (mangos's `Spell::AddUnitTarget`, `missCondition = SpellHitResult`,
+    // written by `WriteSpellGoTargets` and applied at
+    // `DoAllEffectOnTarget`; Thistle Tea's saved launch result), an
+    // instant spell's as a travelling one's.
     let travels = travels(map) && s.speed > 0.0;
     let flights: Vec<(u32, Option<Hit>)> = resolved
         .iter()
@@ -1491,11 +1492,10 @@ fn execute(
             } else {
                 0
             };
-            let hit = (delay > 0).then(|| launch_roll(map, caster, *target, s, &m));
-            (delay, hit)
+            (delay, Some(launch_roll(map, caster, *target, s, &m)))
         })
         .collect();
-    let missed = |hit: &Option<Hit>| hit.is_some_and(|h| !h.lands() && h != Hit::Reflect);
+    let missed = |hit: &Option<Hit>| hit.is_some_and(|h| !h.lands());
     let hits: Vec<Guid> = resolved
         .iter()
         .zip(&flights)
@@ -1655,7 +1655,7 @@ fn execute(
             });
             continue;
         }
-        let landed = land(map, caster, s, target, effects, &mut chain, &launch, None);
+        let landed = land(map, caster, s, target, effects, &mut chain, &launch, hit);
         if landed && Some(target) == launch.targets.unit {
             landed_on_main = true;
         }
@@ -1847,8 +1847,8 @@ pub struct InFlight {
     hit: Option<Hit>,
 }
 
-/// A travelling spell's hit on `target` as it goes: its roll, or the
-/// target's template immunity to it.
+/// A spell's hit on `target` as it goes: its roll, or the target's
+/// template immunity to it.
 fn launch_roll(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mods) -> Hit {
     let hit = outcome::roll_hit(map, caster, target, s, m);
     if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
@@ -1944,8 +1944,11 @@ fn land_arrivals(map: &mut Map) {
     }
 }
 
-/// `s` gets to `target`: the hit (`rolled` as it went, else rolled now),
-/// then the effects. Whether it landed.
+/// `s` gets to `target`: the hit (`rolled` as it went, and told in the go,
+/// else rolled now), then the effects. Whether it landed. A miss the go
+/// told isn't told again; one that comes about as it lands (an immunity
+/// gained in flight) is, in `SMSG_SPELLLOGMISS` (mangos's
+/// `DoSpellHitOnUnit`, `SendSpellMiss`).
 #[allow(clippy::too_many_arguments)]
 fn land(
     map: &mut Map,
@@ -1957,6 +1960,7 @@ fn land(
     l: &Launch,
     rolled: Option<Hit>,
 ) -> bool {
+    let told = rolled;
     let mut hit = rolled.unwrap_or_else(|| outcome::roll_hit(map, caster, target, s, &l.m));
     // A creature immune to the spell (its template's masks), as it lands.
     if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
@@ -1980,7 +1984,9 @@ fn land(
         // Back at the caster; the reflector's procs see it reflected, and
         // a reflection of charges spends one (Sheen of Zanza's first, as
         // mangos's victim proc of `PROC_EX_REFLECT`).
-        outcome::send_miss(map, caster, target, s.id, Hit::Reflect);
+        if told != Some(Hit::Reflect) {
+            outcome::send_miss(map, caster, target, s.id, Hit::Reflect);
+        }
         let (_, taken) = outcome::proc_flags(s);
         crate::game::map::procs::trigger(
             map,
@@ -2003,7 +2009,9 @@ fn land(
         hit = Hit::Hit;
     }
     if !hit.lands() {
-        outcome::send_miss(map, caster, aim, s.id, hit);
+        if told != Some(hit) {
+            outcome::send_miss(map, caster, aim, s.id, hit);
+        }
         // An avoided ability gives back some of its rage or energy.
         if !l.triggered && outcome::physical(s) {
             crate::game::map::combat::ability_avoided(map, caster, s.id, hit.proc_ex(), l.paid);

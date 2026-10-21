@@ -288,7 +288,8 @@ async fn go(c: &mut Client, spell: u32) -> Option<SMSG_SPELL_GO> {
 /// target hit modifiers change", as mangos's `Spell::AddUnitTarget` rolls
 /// a spell's hit when it takes its target and keeps it to its impact: a
 /// travelling bolt at a kobold that wards off frost is resisted in its go
-/// and resisted as it lands, though the ward is gone by then; one at a
+/// and resisted as it lands, though the ward is gone by then, the go its
+/// only word of it (mangos's `WriteSpellGoTargets`); one at a
 /// kobold without it hits in its go and lands, though the kobold is warded
 /// while it flies.
 #[tokio::test]
@@ -326,7 +327,13 @@ async fn a_travelling_spells_hit_is_rolled_as_it_goes_and_kept() {
         vec![(warded, SpellMiss_SpellMissInfo::Resist)],
         "its resist at launch"
     );
-    assert_eq!(kit::missed(&mut c, BOLT).await, 2, "and at impact");
+    let told_again = crate::game::tests_p3_entity::gets_frame(
+        &mut c,
+        crate::game::map::spells::outcome::SMSG_SPELLLOGMISS,
+        |b| b[..4] == BOLT.to_le_bytes(),
+    )
+    .await;
+    assert!(!told_again, "the go told it: no miss log at impact");
     assert_eq!(resisted, 1_000_000, "nothing landed");
     let second = go(&mut c, BOLT).await.expect("the second go");
     assert_eq!(second.hits, vec![open], "a hit at launch");

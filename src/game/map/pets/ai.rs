@@ -51,9 +51,8 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         .get(&owner)
         .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
         || map.creature(owner).is_some_and(|o| !o.alive());
-    // A guardian's time waits while it fights (Thistle Tea's
-    // `TemporarySummon`), and it outlives a dead master while it fights,
-    // or as a corpse (`Guardian.lifetime`).
+    // A guardian outlives a dead master while it fights, or as a corpse
+    // (Thistle Tea's `Guardian.lifetime`).
     let fighting = kind == Kind::Guardian
         && map.unit_fields(g).is_some_and(|f| {
             f.has_flag(
@@ -78,17 +77,12 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         }
         inherit::sync(map, g);
     }
-    // Its time up, a living summon goes; a corpse lies its own time
-    // (Thistle Tea's `Guardian.lifetime`).
-    // A Target Dummy falls at its time, in a fight or not; so does a
-    // creature's guardian (mangos-classic's `Pet::Update`, its
-    // `m_duration` run out mid-fight too).
-    let dies_fighting = crate::game::map::item_scripts::target_dummy(map, g)
-        || !guid::is_player(master(map, owner));
-    if expires.is_some_and(|t| t <= now)
-        && (!fighting || dies_fighting)
-        && (alive || kind == Kind::Possessed)
-    {
+    // Its time up, a living summon goes, in a fight or not: a player's
+    // guardian (a Mechanical Dragonling), a creature's, a Target Dummy
+    // (mangos-classic's `Pet::Update`, its `m_duration` run out mid-fight
+    // too, where Thistle Tea's `TemporarySummon` waits for the fight's
+    // end); a corpse lies its own time (`Guardian.lifetime`).
+    if expires.is_some_and(|t| t <= now) && (alive || kind == Kind::Possessed) {
         // The Explosive Sheep's and the Goblin Bomb's time ends in a blast.
         if crate::game::map::item_scripts::guardian_expired(map, g) {
             return;

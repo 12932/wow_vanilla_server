@@ -2,7 +2,9 @@
 //! zone for maps without navigation data"): a dungeon with neither a
 //! navmesh nor terrain, and no zone of its own in `AreaTable.dbc`, is in
 //! the zone `Map.dbc` links it to (Blackrock Depths, 230, in 1584 on the
-//! continent); one with a zone of its own keeps it.
+//! continent); so is one with a zone of its own that `Map.dbc` links
+//! elsewhere (Sunken Temple, 109: 1477, not its own 1417; the user's call
+//! of round 11).
 
 use std::sync::Arc;
 
@@ -15,7 +17,8 @@ use crate::game::map::MapKey;
 
 const DEPTHS: u32 = 230;
 const DEPTHS_ZONE: u32 = 1584;
-/// A dungeon whose own zone (its only one) is not the one `Map.dbc` names.
+/// A dungeon whose own zone (its only one) is not the one `Map.dbc` names,
+/// which wins.
 const TEMPLE: u32 = 109;
 const TEMPLE_OWN: u32 = 1417;
 const TEMPLE_LINKED: u32 = 1477;
@@ -75,7 +78,7 @@ async fn a_dungeon_with_no_zone_of_its_own_is_in_the_one_map_dbc_links() {
         out,
         vec![
             (true, Some((DEPTHS_ZONE, DEPTHS_ZONE))),
-            (true, Some((TEMPLE_OWN, TEMPLE_OWN))),
+            (true, Some((TEMPLE_LINKED, TEMPLE_LINKED))),
         ]
     );
 }

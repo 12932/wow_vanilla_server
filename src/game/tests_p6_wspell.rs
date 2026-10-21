@@ -188,10 +188,17 @@ pub fn unit_at(m: &mut Map, from: Guid, entry: u32, dx: f32, dy: f32) -> Guid {
     g
 }
 
-/// The units a cast of `spell` went off at, as its caster's client heard.
+/// The units a cast of `spell` went off at, as its caster's client heard:
+/// its hits, then its misses (mangos's `WriteSpellGoTargets`).
 pub async fn go(c: &mut Client, spell: u32) -> Vec<Guid> {
     c.wait_for("the go", |m| match m {
-        ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => Some(g.hits.clone()),
+        ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => Some(
+            g.hits
+                .iter()
+                .copied()
+                .chain(g.misses.iter().map(|x| x.target))
+                .collect(),
+        ),
         _ => None,
     })
     .await

@@ -709,7 +709,7 @@ async fn the_dream_dragons_aura_draws_the_unmarked_out_of_stealth_unstunned() {
 async fn a_wholly_blocked_ability_procs_the_blockers_reaction() {
     let realm = fast_realm(data);
     let (mut c, a, map) = human(&realm, "P9E5", "Blocker", Class::Warrior).await;
-    let out = map
+    let kobold = map
         .query(move |m| {
             m.spells.rolls = Some(false);
             kit::ready(m, a, 60, &[SPELL_BLOCK]);
@@ -724,8 +724,15 @@ async fn a_wholly_blocked_ability_procs_the_blockers_reaction() {
                 kit::apply(m, a, a, s);
             }
             restat(m, a);
+            kit::dummy(m, a, 60, 3.0)
+        })
+        .await
+        .unwrap();
+    // The go is the miss's word, and a client hears it of what it knows.
+    c.sees(kobold).await;
+    let out = map
+        .query(move |m| {
             let block = m.players[&a].fields.get_f32(PLAYER_BLOCK_PERCENTAGE);
-            let kobold = kit::dummy(m, a, 60, 3.0);
             let before = kit::health(m, a);
             spells::cast_triggered(m, kobold, WHOLLY_BLOCKED, Some(a));
             (block, before, kit::health(m, a), has(m, a, REACTION))
