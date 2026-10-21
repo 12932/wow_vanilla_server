@@ -65,11 +65,7 @@ async fn tamed(
 ) {
     let realm = crate::game::harness::realm_with(d);
     let (mut h, g, map) = tp::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
-    tp::learn(
-        &map,
-        g,
-        &[tp::TAME_BEAST, tp::CALL_PET, tp::DISMISS_PET],
-    );
+    tp::learn(&map, g, &[tp::TAME_BEAST, tp::CALL_PET, tp::DISMISS_PET]);
     let boar = tp::place(&map, g, tp::BOAR, 0x70_0001, 4.0).await;
     h.sees(boar).await;
     tp::cast(&h, tp::TAME_BEAST, Some(boar)).await;

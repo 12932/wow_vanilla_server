@@ -81,7 +81,10 @@ async fn one_claim_of_a_corpses_insignia_makes_bones_and_its_gold_is_taken_once(
     a.send(CMSG_LOOT_MONEY {}).await;
     crate::game::tests_p3_player2_ammo::handled(&mut a).await;
     let once = on(&map, move |m| m.players[&alice].money()).await;
-    assert!(once - before >= bg::insignia::gold(1, 50), "{before} {once}");
+    assert!(
+        once - before >= bg::insignia::gold(1, 50),
+        "{before} {once}"
+    );
     a.send(CMSG_LOOT_MONEY {}).await;
     crate::game::tests_p3_player2_ammo::handled(&mut a).await;
     assert_eq!(
@@ -122,7 +125,11 @@ async fn a_towers_buff_is_its_rank_now_and_off_the_dead_and_those_gone() {
     })
     .await;
     tick(&map).await;
-    assert_eq!(on(&map, ranks).await, vec![11414], "two: the next rank alone");
+    assert_eq!(
+        on(&map, ranks).await,
+        vec![11414],
+        "two: the next rank alone"
+    );
     on(&map, move |m| crate::game::map::death::kill(m, alice)).await;
     tick(&map).await;
     assert_eq!(on(&map, ranks).await, Vec::<u32>::new(), "dead");
@@ -154,7 +161,11 @@ async fn a_towers_buff_is_its_rank_now_and_off_the_dead_and_those_gone() {
     })
     .await;
     tick(&map).await;
-    assert_eq!(on(&map, ranks).await, vec![11414], "a new login: the rank now");
+    assert_eq!(
+        on(&map, ranks).await,
+        vec![11414],
+        "a new login: the rank now"
+    );
 }
 
 const RES: u32 = 900_390;

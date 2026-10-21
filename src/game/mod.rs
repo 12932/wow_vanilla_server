@@ -175,6 +175,18 @@ mod tests_p10_player_real;
 #[cfg(test)]
 mod tests_p10_spell;
 #[cfg(test)]
+mod tests_p10_spell_cast;
+#[cfg(test)]
+mod tests_p10_world;
+#[cfg(test)]
+mod tests_p10_world_contact;
+#[cfg(test)]
+mod tests_p10_world_groups;
+#[cfg(test)]
+mod tests_p10_world_spells;
+#[cfg(test)]
+mod tests_p10_world_system;
+#[cfg(test)]
 mod tests_p11j_control;
 #[cfg(test)]
 mod tests_p11j_loot;
@@ -188,18 +200,6 @@ mod tests_p11j_real;
 mod tests_p11j_spells;
 #[cfg(test)]
 mod tests_p11j_world;
-#[cfg(test)]
-mod tests_p10_spell_cast;
-#[cfg(test)]
-mod tests_p10_world;
-#[cfg(test)]
-mod tests_p10_world_contact;
-#[cfg(test)]
-mod tests_p10_world_groups;
-#[cfg(test)]
-mod tests_p10_world_spells;
-#[cfg(test)]
-mod tests_p10_world_system;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]

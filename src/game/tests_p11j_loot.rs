@@ -96,7 +96,10 @@ async fn a_vein_reopened_teaches_no_second_point_and_its_ore_is_taken_once() {
         _ => None,
     })
     .await;
-    let ore = map.query(move |m| m.players[&g].count_of(ORE)).await.unwrap();
+    let ore = map
+        .query(move |m| m.players[&g].count_of(ORE))
+        .await
+        .unwrap();
     assert!(ore >= 1);
     a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
     let again = a
@@ -153,15 +156,16 @@ async fn a_craft_teaches_only_when_its_product_is_stored_by_one_with_the_skill()
     let realm = crate::game::harness::realm_with(d);
     let mut a = crate::game::harness::Client::connect(&realm, "Alice");
     let g = a.enter("Alice", Race::Human, Class::Warrior).await;
-    let map = realm
-        .maps
-        .get(&realm, crate::game::map::MapKey::world(0));
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
     // Without the profession: made, nothing learnt.
     let (made, skill) = map
         .query(move |m| {
             learn(m, g, RECIPE, 0);
             cast_now(m, g, RECIPE);
-            (m.players[&g].count_of(CRAFTED), skill_of(m, g, BLACKSMITHING))
+            (
+                m.players[&g].count_of(CRAFTED),
+                skill_of(m, g, BLACKSMITHING),
+            )
         })
         .await
         .unwrap();
@@ -180,7 +184,10 @@ async fn a_craft_teaches_only_when_its_product_is_stored_by_one_with_the_skill()
     let (made, skill) = map
         .query(move |m| {
             cast_now(m, g, RECIPE);
-            (m.players[&g].count_of(CRAFTED), skill_of(m, g, BLACKSMITHING))
+            (
+                m.players[&g].count_of(CRAFTED),
+                skill_of(m, g, BLACKSMITHING),
+            )
         })
         .await
         .unwrap();
@@ -194,7 +201,10 @@ async fn a_craft_teaches_only_when_its_product_is_stored_by_one_with_the_skill()
                 p.refresh_inventory(&data);
             }
             cast_now(m, g, RECIPE);
-            (m.players[&g].count_of(CRAFTED), skill_of(m, g, BLACKSMITHING))
+            (
+                m.players[&g].count_of(CRAFTED),
+                skill_of(m, g, BLACKSMITHING),
+            )
         })
         .await
         .unwrap();
@@ -235,9 +245,7 @@ async fn a_change_into_what_cant_be_worn_keeps_the_worn_item() {
     let realm = crate::game::harness::realm_with(d);
     let mut a = crate::game::harness::Client::connect(&realm, "A");
     let g = a.enter("Alice", Race::Human, Class::Warrior).await;
-    let map = realm
-        .maps
-        .get(&realm, crate::game::map::MapKey::world(0));
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
     let (old, before) = on(&map, move |m| {
         let d = m.realm.data.clone();
         let p = m.players.get_mut(&g).unwrap();
@@ -245,7 +253,13 @@ async fn a_change_into_what_cant_be_worn_keeps_the_worn_item() {
         p.refresh_inventory(&d);
         p.gm = false;
         let old = give_at(m, g, OLD, 1, (BAG_PLAYER, WRISTS));
-        give_at(m, g, REAGENT, 2, (BAG_PLAYER, crate::game::map::inventory::PACK_START));
+        give_at(
+            m,
+            g,
+            REAGENT,
+            2,
+            (BAG_PLAYER, crate::game::map::inventory::PACK_START),
+        );
         let p = m.players.get_mut(&g).unwrap();
         p.apply_stats(&d);
         (old, p.fields.get_u32(UNIT_FIELD_STAT0 + 2))

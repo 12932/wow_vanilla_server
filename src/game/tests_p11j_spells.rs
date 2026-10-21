@@ -66,7 +66,9 @@ fn world() -> GameData {
         ),
     );
     d.spells.script_targets.insert(LOCK_IT, vec![(0, STONE)]);
-    d.spells.script_target_conditions.insert((LOCK_IT, 0, STONE), READY);
+    d.spells
+        .script_target_conditions
+        .insert((LOCK_IT, 0, STONE), READY);
     d.scripts.conditions.insert(
         READY,
         Condition {
@@ -107,7 +109,9 @@ fn world() -> GameData {
     d.spells
         .script_target_masks
         .insert((LOCK_AREAS, 0, STONE), 0b10);
-    d.spells.script_target_masks.insert((LOCK_AREAS, 0, POST), 0b01);
+    d.spells
+        .script_target_masks
+        .insert((LOCK_AREAS, 0, POST), 0b01);
     // A mark on every unit about where the spell is aimed (mangos's
     // `TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC`, no script units named).
     let mut call = spell(

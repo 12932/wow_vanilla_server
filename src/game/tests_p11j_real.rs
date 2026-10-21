@@ -68,7 +68,11 @@ async fn buy(c: &mut Client, map: &MapHandle, learned: u32) {
     let (npc, spell) = on(map, move |m| trainer_of(m, g, learned))
         .await
         .expect("a trainer of it");
-    c.send(CMSG_TRAINER_BUY_SPELL { guid: npc, id: spell }).await;
+    c.send(CMSG_TRAINER_BUY_SPELL {
+        guid: npc,
+        id: spell,
+    })
+    .await;
     c.wait_for("SMSG_TRAINER_BUY_SUCCEEDED", |m| match m {
         ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(s) if s.id == spell => Some(()),
         ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(f) if f.id == spell => {
@@ -120,7 +124,11 @@ async fn an_enchanter_trained_has_her_recipes_and_keeps_her_skill_at_the_next_ra
     c.clear();
     buy(&mut c, &map, JOURNEYMAN).await;
     let journeyman = on(&map, move |m| skill(m, g, ENCHANTING)).await;
-    assert_eq!(journeyman, Some((50, 150)), "the skill kept, the cap raised");
+    assert_eq!(
+        journeyman,
+        Some((50, 150)),
+        "the skill kept, the cap raised"
+    );
     let rod_again = c
         .gets(std::time::Duration::from_millis(1), |m| match m {
             ServerOpcodeMessage::SMSG_LEARNED_SPELL(l) if l.id == 13262 => Some(()),
@@ -150,7 +158,11 @@ async fn a_screecher_spirit_rises_at_the_body_and_the_body_goes() {
         let s = data.spells.get(SPIRIT_SPELL).cloned().expect("12699");
         assert_ne!(s.attributes[2] & 1, 0, "ALLOW_DEAD_TARGET");
         assert_eq!(
-            (s.effects[0].effect, s.effects[0].target_b, s.effects[1].effect),
+            (
+                s.effects[0].effect,
+                s.effects[0].target_b,
+                s.effects[1].effect
+            ),
             (41, 46, 3),
             "a wild summon at its script's place, then a dummy"
         );
@@ -160,7 +172,10 @@ async fn a_screecher_spirit_rises_at_the_body_and_the_body_goes() {
             .get(&SPIRIT_SPELL)
             .and_then(|v| v.iter().find(|(k, _)| *k == 2).map(|(_, e)| *e))
             .expect("a dead screecher named");
-        let t = data.creature_template(entry).cloned().expect("the screecher");
+        let t = data
+            .creature_template(entry)
+            .cloned()
+            .expect("the screecher");
         let p = &m.players[&g];
         let (pos, o) = (p.position(), p.movement.orientation);
         let at = Vector3d {

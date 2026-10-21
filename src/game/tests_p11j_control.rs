@@ -142,7 +142,12 @@ async fn launch_of(map: &MapHandle, to: Guid, unit: Guid) -> (u32, [f32; 4]) {
     .await
 }
 
-fn knock_ack(unit: Guid, counter: u32, impulse: [f32; 4], at: Vector3d) -> CMSG_MOVE_KNOCK_BACK_ACK {
+fn knock_ack(
+    unit: Guid,
+    counter: u32,
+    impulse: [f32; 4],
+    at: Vector3d,
+) -> CMSG_MOVE_KNOCK_BACK_ACK {
     CMSG_MOVE_KNOCK_BACK_ACK {
         guid: unit,
         counter,
@@ -218,7 +223,10 @@ async fn only_a_unit_under_control_is_a_mover_and_its_launch_is_its_controllers(
     assert_eq!(pending, 0);
     // Another, acknowledged once control has ended: settled, nowhere.
     let (counter, impulse) = launch_of(&map, ga, gb).await;
-    on(&map, move |m| auras::remove_spell(m, gb, MIND_CONTROL, None)).await;
+    on(&map, move |m| {
+        auras::remove_spell(m, gb, MIND_CONTROL, None)
+    })
+    .await;
     assert!(control_update(&mut a, ga).await, "the priest has his own");
     let further = Vector3d {
         x: here.x + 6.0,
@@ -390,16 +398,16 @@ async fn a_charmed_mages_place_spell_goes_where_her_foe_stands_and_the_dead_cast
 
 const CONFUSE: u32 = 97_714;
 
-async fn confusion_setup() -> (
-    std::sync::Arc<crate::game::Realm>,
-    Client,
-    Guid,
-    MapHandle,
-) {
+async fn confusion_setup() -> (std::sync::Arc<crate::game::Realm>, Client, Guid, MapHandle) {
     let mut d = crate::game::tests_p3_combat::data();
     let mut s = spell(
         CONFUSE,
-        &[aura_effect(crate::game::map::auras::AURA_MOD_CONFUSE, 1, 0, 1)],
+        &[aura_effect(
+            crate::game::map::auras::AURA_MOD_CONFUSE,
+            1,
+            0,
+            1,
+        )],
     );
     // A minute.
     s.duration_index = 0;
@@ -452,7 +460,13 @@ async fn a_confusion_ended_stops_its_walk_where_it_got_and_a_new_one_starts_from
             .map(|w| w.position_at(mid).0);
         auras::remove_spell(m, g, CONFUSE, None);
         player_motion::control(m, g);
-        (start, anchor, at, m.players[&g].position(), m.players[&g].driven.is_some())
+        (
+            start,
+            anchor,
+            at,
+            m.players[&g].position(),
+            m.players[&g].driven.is_some(),
+        )
     })
     .await;
     assert_eq!(anchor, Some(start), "anchored where it began");
