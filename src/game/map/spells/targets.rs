@@ -392,6 +392,12 @@ pub fn effect_targets(
         (None, _) if matches!(e.effect, 18 | 113) && t.unit.is_some() => {
             t.unit.into_iter().collect()
         }
+        // A dummy with no implicit target is at the unit aimed at (mangos's
+        // `TARGET_NONE` dummy, of the explicit target): Summon Screecher
+        // Spirit's, that `spell_effect_mod` adds, at the screecher's body.
+        (None, None) if e.effect == super::EFFECT_DUMMY && t.unit.is_some_and(|u| u != caster) => {
+            t.unit.into_iter().collect()
+        }
         (Caster, _) | (None, _) => vec![caster],
         (Pet, _) => crate::game::map::pets::pet_of(map, caster)
             .into_iter()

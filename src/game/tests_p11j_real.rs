@@ -129,3 +129,89 @@ async fn an_enchanter_trained_has_her_recipes_and_keeps_her_skill_at_the_next_ra
         .await;
     assert!(rod_again.is_none(), "nothing learnt twice");
 }
+
+/// Thistle Tea's "corpse destinations summon at the body and retain
+/// corpse script delivery", of the real 12699 (Summon Screecher Spirit:
+/// `ALLOW_DEAD_TARGET`, a wild summon at the place its script names, 46,
+/// and a dummy): cast at a dead screecher its script names, the spirit
+/// (8612) comes where the body lies, and the body goes within a second
+/// (`class_scripts`' dummy of 12699 on the dead).
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_screecher_spirit_rises_at_the_body_and_the_body_goes() {
+    const SPIRIT_SPELL: u32 = 12699;
+    const SPIRIT: u32 = 8612;
+    let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
+    let mut c = Client::connect(&realm, "A");
+    let g = c.enter("Shaman", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, crate::game::map::MapKey::world(0));
+    let out = on(&map, move |m| {
+        let data = m.realm.data.clone();
+        let s = data.spells.get(SPIRIT_SPELL).cloned().expect("12699");
+        assert_ne!(s.attributes[2] & 1, 0, "ALLOW_DEAD_TARGET");
+        assert_eq!(
+            (s.effects[0].effect, s.effects[0].target_b, s.effects[1].effect),
+            (41, 46, 3),
+            "a wild summon at its script's place, then a dummy"
+        );
+        let entry = data
+            .spells
+            .script_targets
+            .get(&SPIRIT_SPELL)
+            .and_then(|v| v.iter().find(|(k, _)| *k == 2).map(|(_, e)| *e))
+            .expect("a dead screecher named");
+        let t = data.creature_template(entry).cloned().expect("the screecher");
+        let p = &m.players[&g];
+        let (pos, o) = (p.position(), p.movement.orientation);
+        let at = Vector3d {
+            x: pos.x + 4.0 * o.cos(),
+            y: pos.y + 4.0 * o.sin(),
+            z: pos.z,
+        };
+        let counter = m.next_creature_counter;
+        m.next_creature_counter += 1;
+        let body = m.add_creature(
+            crate::game::map::creature::Creature::new(
+                crate::game::guid::unit(entry, counter | 0x80_0000),
+                &t,
+                t.level_min.max(1),
+                at,
+                o,
+            )
+            .with_base(),
+        );
+        crate::game::map::combat::deal_damage(m, g, body, 1_000_000);
+        let dead = m.creature(body).is_some_and(|c| !c.alive());
+        let cast = crate::game::map::spells::cast_now(
+            m,
+            g,
+            SPIRIT_SPELL,
+            crate::game::map::spells::Targets {
+                unit: Some(body),
+                ..Default::default()
+            },
+        );
+        let spirit = m
+            .creatures
+            .iter()
+            .map(|(_, c)| c)
+            .find(|c| c.entry == SPIRIT)
+            .map(|c| c.position);
+        let goes = m.creature(body).map(|c| match c.life {
+            crate::game::map::creature::Life::Dead { corpse_until, .. } => {
+                corpse_until <= m.now + std::time::Duration::from_secs(1)
+            }
+            _ => false,
+        });
+        (dead, cast, spirit, at, goes)
+    })
+    .await;
+    let (dead, cast, spirit, at, goes) = out;
+    assert!(dead && cast, "cast at the body");
+    let spirit = spirit.expect("the spirit");
+    assert!(
+        (spirit.x - at.x).abs() < 1.0 && (spirit.y - at.y).abs() < 1.0,
+        "{spirit:?} {at:?}"
+    );
+    assert_eq!(goes, Some(true), "the body goes within a second");
+}
