@@ -49,6 +49,9 @@ pub use wild::remove_guardians;
 // Spell effects that make or touch pets.
 pub const EFFECT_SUMMON: u32 = 28;
 pub const EFFECT_SUMMON_WILD: u32 = 41;
+/// vmangos's `CREATURE_STATIC_FLAG_CREATOR_LOOT`: a creature lootable by
+/// its creator alone (an engineer's Target Dummy).
+pub const CREATOR_LOOT: u32 = 0x2000;
 pub const EFFECT_SUMMON_GUARDIAN: u32 = 42;
 pub const EFFECT_TAME_CREATURE: u32 = 55;
 pub const EFFECT_SUMMON_PET: u32 = 56;
@@ -332,6 +335,30 @@ pub fn happiness_damage(map: &Map, g: Guid) -> f32 {
     }
 }
 
+/// Where a summon put at a spot about its summoner, at `from`, stands: on
+/// the ground there, or short of what hides the spot from the summoner;
+/// at the summoner's own height where the ground there is more than five
+/// yards off it (one swimming, or at a ledge). mangos's `GetClosePoint`
+/// (the ground's height, a spot in sight; a totem at its caster's height
+/// past five yards), Thistle Tea's collision-clipped minion spot. A
+/// spot a spell names is taken as it is.
+pub(crate) fn clip(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
+    let at = crate::game::map::spells::first_clear(map, from, to);
+    if (at.z - from.z).abs() > 5.0 {
+        Vector3d { z: from.z, ..at }
+    } else {
+        at
+    }
+}
+
+/// [`clip`] for a spot about `owner`.
+fn clip_about(map: &mut Map, owner: Guid, (to, o): (Vector3d, f32)) -> (Vector3d, f32) {
+    match map.position_of(owner) {
+        Some(from) => (clip(map, from, to), o),
+        None => (to, o),
+    }
+}
+
 pub fn state(map: &Map, g: Guid) -> Option<&PetState> {
     map.creature(g).and_then(|c| c.pet.as_deref())
 }
@@ -397,6 +424,22 @@ pub fn effect(
     amount: i32,
     triggered: bool,
     t: &Targets,
+) {
+    effect_by(map, caster, target, s, index, amount, triggered, t, None);
+}
+
+/// [`effect`], cast from `item` if any.
+#[allow(clippy::too_many_arguments)]
+pub fn effect_by(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    amount: i32,
+    triggered: bool,
+    t: &Targets,
+    item: Option<Guid>,
 ) {
     let e = s.effects[index];
     // The stacking trinkets' hit scripts ride the same hook.
@@ -510,12 +553,12 @@ pub fn effect(
                     }
                 }
                 for i in 0..count {
-                    totems::summon_guardian(map, caster, entry, s, false, at(i));
+                    totems::summon_guardian(map, caster, entry, s, false, at(i), item);
                 }
                 return;
             }
             for i in 0..count {
-                totems::summon_guardian(map, caster, entry, s, i == 0, at(i));
+                totems::summon_guardian(map, caster, entry, s, i == 0, at(i), item);
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),

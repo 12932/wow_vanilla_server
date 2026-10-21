@@ -12,6 +12,9 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 
+pub(crate) use effects::first_clear;
+#[cfg(test)]
+pub(crate) use effects::leap_end;
 #[cfg(test)]
 pub(crate) use effects::{Dr, dr_group};
 pub use effects::{
@@ -1499,7 +1502,17 @@ fn execute(
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions, triggered);
+    effects::run_untargeted(
+        map,
+        caster,
+        s,
+        &targets,
+        &m,
+        combo,
+        professions,
+        triggered,
+        item,
+    );
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however

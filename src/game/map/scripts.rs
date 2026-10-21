@@ -928,10 +928,10 @@ pub fn update_entry(map: &mut Map, g: Guid, entry: u32) -> bool {
     }
     let old = data.creature_template(c.entry);
     let old_list = crate::game::map::spells::lists::base_list(map, g);
-    let level = c.fields.get_u32(UNIT_FIELD_LEVEL) as u8;
-    let level = if (t.level_min..=t.level_max.max(t.level_min)).contains(&level) {
-        level
-    } else if t.level_max > t.level_min {
+    // The new entry's level, rolled in its range whatever the old one was
+    // (mangos's `SelectLevel` at `UpdateEntry`, Thistle Tea's template
+    // level).
+    let level = if t.level_max > t.level_min {
         rand::rng().random_range(t.level_min..=t.level_max)
     } else {
         t.level_min.max(1)

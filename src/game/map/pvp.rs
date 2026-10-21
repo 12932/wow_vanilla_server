@@ -730,12 +730,29 @@ pub fn player_killed(map: &mut Map, killer: Guid, victim: Guid) {
     } else {
         // Damage by group (or alone), each group's share split among its
         // members near.
+        // In a battleground a side is one raid: everyone of the damager's
+        // side in it (mangos's battleground raid, `SetBattleGroundRaid`;
+        // Thistle Tea's battleground roster).
+        let side_in_battleground = |g: Guid| -> Option<Vec<Guid>> {
+            let bg = map.battleground.as_ref()?;
+            let team = bg.team_of(g)?;
+            Some(
+                bg.scores
+                    .iter()
+                    .filter(|(p, s)| s.team == team && map.players.contains_key(p))
+                    .map(|(p, _)| *p)
+                    .collect(),
+            )
+        };
         let groups = map.realm.social.groups.lock();
         let mut by_group: Vec<(Vec<Guid>, u32)> = Vec::new();
         for (g, d) in &history {
-            let members: Vec<Guid> = match groups.group_of(*g) {
-                Some(gr) => gr.members.iter().map(|m| m.guid).collect(),
-                None => vec![*g],
+            let members: Vec<Guid> = match side_in_battleground(*g) {
+                Some(side) => side,
+                None => match groups.group_of(*g) {
+                    Some(gr) => gr.members.iter().map(|m| m.guid).collect(),
+                    None => vec![*g],
+                },
             };
             match by_group.iter_mut().find(|(m, _)| m.contains(g)) {
                 Some((_, sum)) => *sum += d,

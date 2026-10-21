@@ -121,6 +121,10 @@ mod tests_order;
 #[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
+mod tests_p10_entity;
+#[cfg(test)]
+mod tests_p10_entity_real;
+#[cfg(test)]
 mod tests_p10_loader;
 #[cfg(test)]
 mod tests_p10_loader_pets;

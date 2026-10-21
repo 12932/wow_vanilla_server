@@ -404,8 +404,14 @@ pub fn next_number(map: &mut Map, owner: Guid) -> u32 {
     ((guid::counter(owner) & 0x7F_FFFF) << 8) | (p.row.state.pets.next_number & 0xFF)
 }
 
-/// Where a pet appears: at its master's side.
-pub(super) fn beside(map: &Map, owner: Guid) -> (Vector3d, f32) {
+/// Where a pet appears: at its master's side, on the ground there and in
+/// their sight ([`super::clip`]).
+pub(super) fn beside(map: &mut Map, owner: Guid) -> (Vector3d, f32) {
+    let spot = beside_spot(map, owner);
+    super::clip_about(map, owner, spot)
+}
+
+fn beside_spot(map: &Map, owner: Guid) -> (Vector3d, f32) {
     let (pos, o) = map
         .unit_view(owner)
         .map(|u| (u.position, u.orientation))

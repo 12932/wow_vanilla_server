@@ -276,11 +276,14 @@ pub fn may_reach(map: &Map, g: Guid, target: Guid) -> bool {
             return false;
         }
     }
-    // A player swimming is in the water; one not, on land.
+    // A player in water deep enough to swim is in the water, by the
+    // client's swimming or the terrain's liquid under them (mangos's
+    // `isInAccessablePlaceFor` by `IsInWater`, Thistle Tea's water
+    // sampled under a unit it could attack); one not, on land.
     let swimming = map
         .players
         .get(&target)
-        .map(|p| p.movement.flags.get_swimming().is_some());
+        .map(|p| p.movement.flags.get_swimming().is_some() || p.misc.in_water);
     match swimming {
         Some(true) => hab.swim,
         Some(false) => hab.walk || hab.fly,

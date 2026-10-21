@@ -826,6 +826,23 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   **My call on its open row** (combat_control 31; wvs differs from both): a pet's attack after a harmful spell from
   the bar follows mangos, for phase 3 (today the succubus attacks the target she has just seduced). Left `gap` for
   phase 3: a periodic trigger's cast (Hellfire) procs ordinary auras; a hunter's untrained pet called back.
+- **10h, entities (0.1.61):** 39 of 72 rows settled (19 covered, 9 not-applicable, 5 `wrong-for-1.12`, 3
+  accepted, 3 on open questions), nine fixes: **the wild-summon exploit** (a `CREATOR_LOOT` summon, the engineers'
+  Target Dummies, is tapped for its caster's side and group: mangos's `SetLootRecipient(GetCreator())`); summons
+  stand on the ground at their spot, short of what blocks the summoner's sight (mangos's `GetClosePoint`); a leap
+  while falling falls on (no ground within 3 yards: 2 yards lower, landing only within 10) and one under water keeps
+  its depth; script command 27 always rolls the new entry's level; a player's guardian at its template's level
+  nearest its owner's, an engineering trinket's at skill ÷ 5 (a level 60's Mechanical Dragonling is 47, was 60); a
+  slot's old object goes even if the new can't be made; a creature takes a player as in water by the terrain too;
+  a battleground kill's honor shared by the damager's whole side near the victim. **Merge:** its
+  `inverseEffectMask` copy dropped for 10e's (its object test moved onto 10e's map); its leap kept over round 9's,
+  with round 9's terrain-water check folded in so a creature's leap under water keeps its depth too. **Its calls:**
+  guardian levels by mangos-classic; **the dungeon pulse (command 49) draws in pets as Thistle Tea does, where
+  mangos-classic's `SetInCombatWithZone` takes players only: tell me if you'd rather mangos's.** `wrong-for-1.12`:
+  a falling leap's 40-yard ground search, a pet's name pushed with its create, battleground Soul Shards without the
+  tap, a creature's teleport told by `MSG_MOVE_TELEPORT` (two rows; wvs sends a stop `SMSG_MONSTER_MOVE`, mangos a
+  heartbeat). 33 rows not reached (cast-end procs, hit at launch, formations, vein refills, ritual owners, command
+  76's owner, Blackrock's lava, a feared player's spline): a second pass.
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -942,6 +959,7 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | Round 9 phase 1 (six areas) | 91.8% | 0.1.58 |
 | 10e: the world, round 10 | 92.2% | 0.1.59 |
 | 10c: the loaders, round 10 | 92.4% | 0.1.60 |
+| 10h: entities, round 10 | 92.8% | 0.1.61 |
 
 **Running now:** round 10 (phase 2): 10a, 10b, 10d (with 10l's rows), 10f, 10h and 10m (six at most).
 

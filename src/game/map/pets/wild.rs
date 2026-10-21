@@ -187,7 +187,15 @@ pub fn summon(
         .duration(s, view.level)
         .filter(|ms| *ms > 0)
         .map(|ms| map.now + Duration::from_millis(u64::from(ms)));
-    let base = at.unwrap_or_else(|| spot(map, s, index, view.position, view.orientation));
+    // A spot about the caster is on the ground there and in its sight; a
+    // place the spell names is taken as it is.
+    let base = match at {
+        Some(at) => at,
+        None => {
+            let to = spot(map, s, index, view.position, view.orientation);
+            clip(map, view.position, to)
+        }
+    };
     let radius = data.spells.radius(s.effects[index].radius_index);
     for i in 0..count {
         // The rest about the first, within the effect's radius.
@@ -210,6 +218,18 @@ pub fn summon(
             t.faction
         };
         c.hostile_to_players = crate::game::map::ai::hostile_to_players(&data, faction, t.civilian);
+        // One whose loot is its creator's (an engineer's Target Dummy) is
+        // made by its caster and tapped for the player whose side that is
+        // and their group, whoever strikes it first (mangos's
+        // `CREATOR_LOOT`, `SetLootRecipient(GetCreator())`; Thistle Tea's
+        // `creator_loot`).
+        if t.static_flags1 & CREATOR_LOOT != 0 {
+            c.fields.set_guid(UNIT_FIELD_CREATEDBY, caster);
+            let side = master(map, caster);
+            if guid::is_player(side) {
+                crate::game::map::tap::take(&map.realm, &mut c, side);
+            }
+        }
         let mut c = c.with_base();
         let scripted = c.scripted.get_or_insert_with(Default::default);
         scripted.summoner = Some(caster);
