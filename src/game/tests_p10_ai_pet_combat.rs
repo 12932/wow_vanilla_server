@@ -130,7 +130,12 @@ async fn a_pets_pvp_fight_lasts_five_seconds_from_its_last_act_through_its_comma
             let mut out = Vec::new();
             for command in [pets::COMMAND_STAY, pets::COMMAND_FOLLOW] {
                 // Its master's Attack, its blow, and its threat on him.
-                order(m, gh, pet, pets::button(u32::from(pets::REACT_DEFENSIVE), ACT_REACTION));
+                order(
+                    m,
+                    gh,
+                    pet,
+                    pets::button(u32::from(pets::REACT_DEFENSIVE), ACT_REACTION),
+                );
                 pets::attack_target(m, pet, gb);
                 combat::engage(m, pet, gb);
                 m.creature_mut(pet).unwrap().threat.push((gb, 20.0));
@@ -155,7 +160,12 @@ async fn a_pets_pvp_fight_lasts_five_seconds_from_its_last_act_through_its_comma
                 c.next_check = Some(now);
                 combat::update_players(m);
                 let him = in_combat(m, gb);
-                order(m, gh, pet, pets::button(u32::from(pets::COMMAND_FOLLOW), ACT_COMMAND));
+                order(
+                    m,
+                    gh,
+                    pet,
+                    pets::button(u32::from(pets::COMMAND_FOLLOW), ACT_COMMAND),
+                );
                 step(m, 200);
                 out.push((command, kept, over, him, in_combat(m, pet)));
             }
@@ -164,7 +174,11 @@ async fn a_pets_pvp_fight_lasts_five_seconds_from_its_last_act_through_its_comma
         .await
         .unwrap();
     for (command, kept, over, him, again) in out {
-        assert_eq!(kept, (true, false), "{command}: in its fight, not attacking");
+        assert_eq!(
+            kept,
+            (true, false),
+            "{command}: in its fight, not attacking"
+        );
         assert_eq!(over, (false, true), "{command}: out at 5 s, its list gone");
         assert!(!him, "{command}: he is out of his");
         assert!(!again, "{command}: a Follow starts no fight");
@@ -183,7 +197,11 @@ const SAP: u32 = 95_395;
 #[tokio::test]
 async fn a_creatures_pet_takes_its_foes_by_threat_and_none_while_its_master_goes_home() {
     let mut d = crate::game::tests_pets::data();
-    let mut sap = spell(SAP, "Sap", [effect(6, 0, 6), effect(0, 0, 0), effect(0, 0, 0)]);
+    let mut sap = spell(
+        SAP,
+        "Sap",
+        [effect(6, 0, 6), effect(0, 0, 0), effect(0, 0, 0)],
+    );
     sap.effects[0].aura = crate::game::map::auras::AURA_MOD_STUN;
     sap.aura_interrupt_flags = crate::game::map::auras::INTERRUPT_DAMAGE;
     d.spells.spells.insert(SAP, sap);
