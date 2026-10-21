@@ -603,6 +603,75 @@ async fn a_ground_areas_ticks_fire_no_spell_hit_event() {
     assert_eq!(after_touch, 2, "a spell cast at it fires its event");
 }
 
+const NEAR_STONE: u32 = 990_229;
+const FAR_STONE: u32 = 990_230;
+const WORK_STONES: u32 = 990_231;
+
+/// A script target's row spares the effects its `inverseEffectMask` names:
+/// a spell of two "activate object" effects works the near stone with its
+/// first (the near one's row spares its second) and the far stone with
+/// its second (the far one's spares its first), where both went to the
+/// nearest (mangos's `CanNotHitWithSpellEffect`, vmangos's 16 rows: Clean
+/// Up Stink Bomb, Fire Cannon, Lunar Invitation; Thistle Tea's "retains
+/// different recipients and applies only their effects").
+#[tokio::test]
+async fn a_script_targets_row_spares_the_effects_its_mask_names() {
+    let mut d = data();
+    for entry in [NEAR_STONE, FAR_STONE] {
+        d.gameobject_templates.insert(
+            entry,
+            crate::game::data::GameObjectTemplate {
+                entry,
+                kind: 5,
+                display_id: 1,
+                name: "Stone".into(),
+                size: 1.0,
+                ..Default::default()
+            },
+        );
+    }
+    // Each effect sets the object's no-interact flag (action 16).
+    let mut work = effect(crate::game::map::objects::EFFECT_ACTIVATE_OBJECT, 0, 40);
+    work.misc_value = 16;
+    let none = SpellEffect::default();
+    d.spells.spells.insert(
+        WORK_STONES,
+        spell(WORK_STONES, "Work Stones", [work, work, none]),
+    );
+    d.spells
+        .script_targets
+        .insert(WORK_STONES, vec![(0, NEAR_STONE), (0, FAR_STONE)]);
+    d.spells
+        .script_target_spared
+        .insert((WORK_STONES, 0, NEAR_STONE), 0b10);
+    d.spells
+        .script_target_spared
+        .insert((WORK_STONES, 0, FAR_STONE), 0b01);
+    let realm = crate::game::harness::realm_with(d);
+    let (_a, me, map) = enter(&realm, "A", "Worker", Race::Human, Class::Warrior).await;
+    learn(&map, me, &[WORK_STONES]);
+    let out = map
+        .query(move |m| {
+            let p = m.position_of(me).unwrap();
+            let at = |dx: f32| Vector3d { x: p.x + dx, ..p };
+            let summon = |m: &mut Map, entry: u32, dx: f32| {
+                crate::game::map::objects::summon(m, None, entry, at(dx), 0.0, 0, 1, 0, None)
+                    .unwrap()
+            };
+            let near = summon(m, NEAR_STONE, 3.0);
+            let far = summon(m, FAR_STONE, 6.0);
+            crate::game::map::spells::cast(m, me, WORK_STONES, Default::default(), None);
+            let worked = |m: &Map, g: Guid| {
+                m.gameobject(g)
+                    .is_some_and(|o| o.fields.get_u32(GAMEOBJECT_FLAGS) & 0x10 != 0)
+            };
+            (worked(m, near), worked(m, far))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true), "each stone by the effect its row allows");
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 

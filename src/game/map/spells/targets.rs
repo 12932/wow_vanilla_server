@@ -599,6 +599,21 @@ pub fn script_target(
     entry: u32,
     g: Guid,
 ) -> bool {
+    script_target_of(map, caster, spell, kinds, entry, g, None)
+}
+
+/// [`script_target`] for effect `index` if one is named: a row that spares
+/// that effect (its `inverseEffectMask`) doesn't count, as mangos's
+/// `CanNotHitWithSpellEffect` skips it.
+pub fn script_target_of(
+    map: &Map,
+    caster: Guid,
+    spell: u32,
+    kinds: &[u32],
+    entry: u32,
+    g: Guid,
+    index: Option<usize>,
+) -> bool {
     let data = &map.realm.data.spells;
     // A creature row (1) names the living, a dead one's (2) corpses
     // (vmangos's `SPELL_TARGET_TYPE_CREATURE` and `_DEAD`).
@@ -607,6 +622,11 @@ pub fn script_target(
         v.iter().any(|(k, e)| {
             kinds.contains(k)
                 && *e == entry
+                && index.is_none_or(|i| {
+                    data.script_target_spared
+                        .get(&(spell, *k, *e))
+                        .is_none_or(|m| m & (1 << i) == 0)
+                })
                 && match (*k, alive) {
                     (1, Some(alive)) => alive,
                     (2, Some(alive)) => !alive,

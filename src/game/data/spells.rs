@@ -349,6 +349,10 @@ pub struct SpellData {
     /// The condition a script target must meet, by (spell, type, entry):
     /// the caster the source, the candidate the target.
     pub script_target_conditions: AHashMap<(u32, u32, u32), u32>,
+    /// The effects a script target is spared, a bit an effect, by (spell,
+    /// type, entry): `inverseEffectMask` (mangos's
+    /// `SpellTargetEntry::CanNotHitWithSpellEffect`).
+    pub script_target_spared: AHashMap<(u32, u32, u32), u32>,
 }
 
 /// `SkillLineAbility`: a spell in a skill line, and the ranks it greys at.

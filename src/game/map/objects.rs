@@ -525,7 +525,7 @@ pub fn effect(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, t: &
             true
         }
         EFFECT_ACTIVATE_OBJECT => {
-            for o in object_targets(map, caster, s, t) {
+            for o in object_targets(map, caster, s, t, Some(index)) {
                 activate(map, caster, o, e.misc_value.max(0) as u32);
             }
             true
@@ -646,7 +646,7 @@ pub fn cast_at(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<G
         .into_iter()
         .collect();
     if s.effects.iter().any(|e| e.effect == EFFECT_ACTIVATE_OBJECT) {
-        for o in object_targets(map, caster, s, t) {
+        for o in object_targets(map, caster, s, t, None) {
             if !out.contains(&o) {
                 out.push(o);
             }
@@ -655,11 +655,25 @@ pub fn cast_at(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<G
     out
 }
 
-/// The objects a spell works on: the one aimed at, or the nearest its
-/// script targets name.
-fn object_targets(map: &Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Vec<Guid> {
+/// The objects a spell (its effect `index`, if one is named) works on: the
+/// one aimed at, or the nearest its script targets name for that effect.
+fn object_targets(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    index: Option<usize>,
+) -> Vec<Guid> {
     let named = |o: &GameObject| {
-        crate::game::map::spells::targets::script_target(map, caster, s.id, &[0], o.entry, o.guid)
+        crate::game::map::spells::targets::script_target_of(
+            map,
+            caster,
+            s.id,
+            &[0],
+            o.entry,
+            o.guid,
+            index,
+        )
     };
     // The object aimed at, unless a condition its row puts on it fails.
     if let Some(o) = t.object.and_then(|o| map.gameobject(o)) {
