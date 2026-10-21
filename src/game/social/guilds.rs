@@ -366,6 +366,8 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
         );
         return;
     };
+    // Asked before the guilds' lock, not under it.
+    let ignored = realm.social.lists.lock().ignores(them.guid, me.guid);
     let mut guilds = realm.social.guilds.lock();
     let Some(guild) = guilds.of(me.guid) else {
         command_result(
@@ -377,6 +379,12 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
         );
         return;
     };
+    // One ignoring the inviter isn't asked, and the inviter isn't told
+    // (mangos's `HandleGuildInviteOpcode`: "OK result but not send
+    // invite").
+    if ignored {
+        return;
+    }
     if Team::of_race(them.race) != Team::of_race(me.race) {
         command_result(
             realm,
@@ -1001,6 +1009,15 @@ pub fn chat(
         SMSG_MESSAGECHAT_ChatType::Officer { sender2: me.guid }
     } else {
         SMSG_MESSAGECHAT_ChatType::Guild { sender2: me.guid }
+    };
+    // Guild and officer chat are in Universal, whatever the speaker
+    // chose: no guildmate hears it garbled (mangos's
+    // `HandleMessagechatOpcode`, `BroadcastToGuild(.., LANG_UNIVERSAL)`).
+    // An addon's line keeps its marker.
+    let language = if language.as_int() == crate::game::map::chat::ADDON {
+        language
+    } else {
+        Language::Universal
     };
     let Some(frame) = encode(&SMSG_MESSAGECHAT {
         chat_type,

@@ -68,6 +68,17 @@ const FLAG_GENERAL: u8 = 0x10;
 const FLAG_CITY: u8 = 0x20;
 const FLAG_LFG: u8 = 0x40;
 
+/// The built-in channels' ids.
+pub const CHANNEL_GENERAL: u32 = 1;
+pub const CHANNEL_TRADE: u32 = 2;
+pub const CHANNEL_LOCAL_DEFENSE: u32 = 22;
+pub const CHANNEL_WORLD_DEFENSE: u32 = 23;
+pub const CHANNEL_GUILD_RECRUITMENT: u32 = 25;
+
+/// The honor rank (as the client shows it, 0 to 14) one needs to speak in
+/// WorldDefense (mangos's `Channel.h`; LocalDefense's is 0, anyone's).
+pub const SPEAK_IN_WORLD_DEFENSE_RANK: u8 = 11;
+
 /// `ChatChannels.dbc`: id, flags, and the name before " - zone".
 const BUILT_IN: [(u32, u32, &str); 6] = [
     (1, 0x3, "General"),
@@ -381,6 +392,8 @@ pub fn join(realm: &Realm, me: &Online, name: &str, password: &str) {
     if name.is_empty() || name.len() > 100 {
         return;
     }
+    // Asked before the channel's lock.
+    let in_guild = realm.social.guilds.lock().of(me.guid).is_some();
     realm.social.channels.with_made(key(me, name), name, |c| {
         if c.member(me.guid).is_some() {
             if !c.constant() {
@@ -396,6 +409,12 @@ pub fn join(realm: &Realm, me: &Online, name: &str, password: &str) {
         }
         if !c.password.is_empty() && c.password != password {
             to_one(realm, me.guid, &c.notify(WRONG_PASSWORD));
+            return;
+        }
+        // GuildRecruitment is for the unguilded: a guild's member isn't
+        // let in, and isn't told (mangos's `Channel::Join`, its flags
+        // 0x38).
+        if in_guild && c.flags == FLAG_GENERAL | FLAG_CITY | FLAG_NOT_LFG {
             return;
         }
         if c.announce {
@@ -456,14 +475,25 @@ pub fn say(
     language: Language,
     tag: PlayerChatTag,
 ) {
+    // The rank the client shows, asked before the channel's lock.
+    let rank = crate::game::honor::visual_rank_of(
+        realm
+            .social
+            .honor
+            .lock()
+            .rank(crate::game::guid::counter(me.guid)),
+    );
     let checked = realm.social.channels.with(&key(me, name), |c| {
         let Some(m) = c.member(me.guid) else {
             to_one(realm, me.guid, &c.notify(NOT_MEMBER));
             return None;
         };
-        // LocalDefense and WorldDefense are for GMs (and, in mangos, ranks
-        // this server has none of).
-        if m.flags & MEMBER_MUTED != 0 || (matches!(c.id, 22 | 23) && !me.gm) {
+        // Anyone may speak in LocalDefense, and in WorldDefense from the
+        // eleventh rank (mangos's `Channel::Say`,
+        // `SPEAK_IN_LOCALDEFENSE_RANK` 0 and `SPEAK_IN_WORLDDEFENSE_RANK`
+        // 11), GMs or not.
+        let ranked = c.id != CHANNEL_WORLD_DEFENSE || rank >= SPEAK_IN_WORLD_DEFENSE_RANK;
+        if m.flags & MEMBER_MUTED != 0 || !ranked {
             to_one(realm, me.guid, &c.notify(MUTED));
             return None;
         }

@@ -268,7 +268,16 @@ impl Map {
             ClientOpcodeMessage::CMSG_QUERY_TIME => query::time(&out),
             ClientOpcodeMessage::CMSG_PLAYED_TIME => query::played(self, guid),
             ClientOpcodeMessage::CMSG_MESSAGECHAT(m) => {
-                if chat::flooded(self, guid) {
+                // An addon's line and an AFK or DND toggle are no speech:
+                // they neither count towards a flood nor wait out a mute
+                // (mangos's `HandleMessagechatOpcode`: "LANG_ADDON should
+                // not be ... affected by flood control").
+                let speech = m.language.as_int() != chat::ADDON
+                    && !matches!(
+                        m.chat_type,
+                        CMSG_MESSAGECHAT_ChatType::Afk | CMSG_MESSAGECHAT_ChatType::Dnd
+                    );
+                if speech && chat::flooded(self, guid) {
                     return;
                 }
                 if let Some(m) = chat::message(self, guid, m) {

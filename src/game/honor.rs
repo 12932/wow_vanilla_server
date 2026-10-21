@@ -473,7 +473,12 @@ pub fn rank_number(points: f32) -> u8 {
 
 /// The rank a client shows, 0 to 14.
 pub fn visual_rank(points: f32) -> u8 {
-    rank_number(points).saturating_sub(4)
+    visual_rank_of(rank_number(points))
+}
+
+/// The rank a client shows, from a [`rank_number`].
+pub fn visual_rank_of(rank: u8) -> u8 {
+    rank.saturating_sub(4)
 }
 
 fn rank_bounds(rank: u8) -> (f32, f32) {

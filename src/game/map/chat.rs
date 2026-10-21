@@ -72,7 +72,7 @@ const LANGUAGE_SPELLS: &[(u32, u32)] = &[
 ];
 
 const EFFECT_LANGUAGE: u32 = 39;
-const ADDON: u32 = 0xFFFF_FFFF;
+pub(crate) const ADDON: u32 = 0xFFFF_FFFF;
 
 /// Whether `g` speaks `language`: a spell that teaches it.
 pub fn knows_language(map: &Map, g: Guid, language: u32) -> bool {

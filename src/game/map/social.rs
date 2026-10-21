@@ -72,16 +72,18 @@ pub fn message(map: &mut Map, g: Guid, m: CMSG_MESSAGECHAT) {
 /// to the speaker, and their AFK or DND message back.
 fn whisper(map: &Map, me: &Online, to: &str, text: &str, language: Language, tag: PlayerChatTag) {
     let realm = &map.realm;
-    let target = realm
-        .registry
-        .online_by_name(to)
-        .filter(|t| same_side(me, t));
-    let Some(t) = target else {
+    let Some(t) = realm.registry.online_by_name(to) else {
         me.outbound.send(&SMSG_CHAT_PLAYER_NOT_FOUND {
             name: to.to_owned(),
         });
         return;
     };
+    // One on the other side is there, but can't be whispered: "wrong
+    // faction", not "not found" (mangos's `SendWrongFactionNotice`).
+    if !same_side(me, &t) {
+        me.outbound.send(&SMSG_CHAT_WRONG_FACTION {});
+        return;
+    }
     if text.trim().is_empty() {
         return;
     }
