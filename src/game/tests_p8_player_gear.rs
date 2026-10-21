@@ -16,7 +16,8 @@ use crate::game::map::inventory::{PACK_START, SLOT_MAIN_HAND};
 use crate::game::store::BAG_PLAYER;
 
 const TRINKET: u32 = 20_100;
-const TRINKET_SPELL: u32 = 94_100;
+/// (The initial spells' cooldowns carry 16-bit spell ids.)
+const TRINKET_SPELL: u32 = 54_100;
 const SWORD: u32 = 20_101;
 const OTHER_SWORD: u32 = 20_102;
 /// The weapon switch's global cooldown, a second and a half.
@@ -194,13 +195,14 @@ async fn a_trinket_put_on_waits_its_thirty_seconds_through_a_use_and_a_relog() {
     .await;
     a.clear();
     a.login(g).await;
+    // Told in the initial spells' cooldowns, as mangos tells them.
     let told = a
-        .wait_for("SMSG_SPELL_COOLDOWN", |m| match m {
-            ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(s) => s
+        .wait_for("SMSG_INITIAL_SPELLS", |m| match m {
+            ServerOpcodeMessage::SMSG_INITIAL_SPELLS(s) => s
                 .cooldowns
                 .iter()
-                .find(|c| c.id == TRINKET_SPELL)
-                .map(|c| c.cooldown_time.as_millis()),
+                .find(|c| u32::from(c.spell_id) == TRINKET_SPELL)
+                .map(|c| c.cooldown.as_millis()),
             _ => None,
         })
         .await;

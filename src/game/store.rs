@@ -179,6 +179,8 @@ pub struct CharacterState {
     pub auras: Vec<crate::game::map::spells::cooldowns::SavedAura>,
     pub cooldowns: Vec<(u32, u32)>,
     pub category_cooldowns: Vec<(u32, u32)>,
+    /// Where those came from: (spell, the item's entry or 0, category).
+    pub cooldown_sources: Vec<(u32, u32, u32)>,
     /// Standings with factions, as offsets from the base.
     pub reputation: Vec<crate::game::map::reputation::Standing>,
     /// The reputation index watched on the experience bar.

@@ -203,6 +203,10 @@ pub struct Caster {
     /// own, for an engineer's Mechanical Dragonling): (spell, recovery,
     /// category, the category's recovery), milliseconds.
     pub pending_times: Vec<(u32, u32, u32, u32)>,
+    /// Where each cooldown came from, for the client at login: (spell,
+    /// (the item's entry or 0, the category it started)), as mangos's
+    /// cooldown entries keep their item and category.
+    pub cooldown_sources: AHashMap<u32, (u32, u32)>,
     /// Schools an interrupt locks out: (school mask, until).
     pub school_lockout: Vec<(u32, Instant)>,
     /// A next-swing ability waiting for the next melee swing.

@@ -35,12 +35,16 @@ fn charm_cooldown(map: &Map, caster: Guid, spell: u32) -> Option<u32> {
 pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Option<Guid>) {
     let now = map.now;
     let data = map.realm.data.clone();
-    let item_spell = item.and_then(|g| {
-        let p = map.players.get(&caster)?;
-        let i = p.item_by_guid(g)?;
-        let t = data.items.get(&p.items[i].entry)?;
-        t.spells.iter().find(|x| x.id == s.id).copied()
-    });
+    let item_entry = item
+        .and_then(|g| {
+            let p = map.players.get(&caster)?;
+            p.item_by_guid(g).map(|i| p.items[i].entry)
+        })
+        .unwrap_or(0);
+    let item_spell = data
+        .items
+        .get(&item_entry)
+        .and_then(|t| t.spells.iter().find(|x| x.id == s.id).copied());
     let (recovery, category, category_recovery) = match item_spell {
         Some(x) if x.cooldown > 0 || x.category_cooldown > 0 => (
             x.cooldown.max(0) as u32,
@@ -67,10 +71,12 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
             c.pending_cooldowns.push(s.id);
             c.pending_times.retain(|p| p.0 != s.id);
             c.pending_times.push((s.id, raw, category, raw_category));
+            c.cooldown_sources.insert(s.id, (item_entry, category));
         }
         return;
     }
     if let Some(c) = map.caster_mut(caster) {
+        c.cooldown_sources.insert(s.id, (item_entry, category));
         if recovery > 0 {
             c.cooldowns
                 .insert(s.id, now + Duration::from_millis(u64::from(recovery)));
@@ -343,37 +349,148 @@ pub fn saved_category_cooldowns(p: &Player, now: Instant) -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// A player's saved auras and cooldowns come back at login.
+/// Where the cooldowns a player keeps came from: (spell, the item's entry
+/// or 0, the category), for those still cooling.
+pub fn saved_sources(p: &Player, now: Instant) -> Vec<(u32, u32, u32)> {
+    let c = &p.caster;
+    let mut v: Vec<(u32, u32, u32)> = c
+        .cooldown_sources
+        .iter()
+        .filter(|(id, (_, category))| {
+            c.cooldowns.get(id).is_some_and(|t| *t > now)
+                || c.category_cooldowns.get(category).is_some_and(|t| *t > now)
+        })
+        .map(|(id, (item, category))| (*id, *item, *category))
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// The cooldowns a player saved come back into their caster, before the
+/// client is told of them in `SMSG_INITIAL_SPELLS`: with their items and
+/// categories, and a cooldown waiting for good for each saved aura of the
+/// player's own whose cooldown waits for it to go (mangos's
+/// `_LoadSpellCooldowns`, and `_LoadAuras`'s `AddCooldown(.., true)`).
+pub fn load(p: &mut Player, data: &crate::game::data::GameData, now: Instant) {
+    let cooldowns = std::mem::take(&mut p.row.state.cooldowns);
+    let categories = std::mem::take(&mut p.row.state.category_cooldowns);
+    let sources = std::mem::take(&mut p.row.state.cooldown_sources);
+    for (id, ms) in cooldowns {
+        p.caster
+            .cooldowns
+            .insert(id, now + Duration::from_millis(u64::from(ms)));
+    }
+    for (category, ms) in categories {
+        p.caster
+            .category_cooldowns
+            .insert(category, now + Duration::from_millis(u64::from(ms)));
+    }
+    for (id, item, category) in sources {
+        p.caster.cooldown_sources.insert(id, (item, category));
+    }
+    let own = p.guid.guid();
+    for a in &p.row.state.auras {
+        let Some(s) = data.spells.get(a.spell) else {
+            continue;
+        };
+        if s.attr(0, ATTR_COOLDOWN_ON_EVENT)
+            && (a.caster == 0 || a.caster == own)
+            && !p.caster.pending_cooldowns.contains(&s.id)
+        {
+            p.caster.pending_cooldowns.push(s.id);
+            p.caster.cooldown_sources.insert(s.id, (0, s.category));
+        }
+    }
+}
+
+/// `SMSG_INITIAL_SPELLS`'s cooldowns, as mangos's `SendInitialSpells` has
+/// them: one a spell (known or not: an item's), with the item that cast
+/// it, its category and what is left of each; one waiting for its event
+/// is a millisecond and the category's `0x80000000`. A category cooling
+/// with no spell here to carry it goes under a known spell of it.
+pub fn initial(p: &Player, data: &crate::game::data::GameData, now: Instant) -> Vec<CooldownSpell> {
+    const WAITING: u32 = 0x8000_0000;
+    let c = &p.caster;
+    let left = |t: Option<&Instant>| {
+        t.filter(|t| **t > now)
+            .map_or(0, |t| t.saturating_duration_since(now).as_millis() as u32)
+    };
+    let mut ids: Vec<u32> = c
+        .cooldowns
+        .keys()
+        .chain(c.cooldown_sources.keys())
+        .chain(c.pending_cooldowns.iter())
+        .copied()
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let entry = |id: u32, item: u32, category: u32, spell_ms: u32, category_ms: u32| {
+        Some(CooldownSpell {
+            spell_id: u16::try_from(id).ok()?,
+            item_id: u16::try_from(item).unwrap_or(0),
+            spell_category: u16::try_from(category).unwrap_or(0),
+            cooldown: Duration::from_millis(u64::from(spell_ms)),
+            category_cooldown: Duration::from_millis(u64::from(category_ms)),
+        })
+    };
+    let mut told: Vec<u32> = Vec::new();
+    let mut out = Vec::new();
+    for id in ids {
+        let (item, category) = c
+            .cooldown_sources
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| (0, data.spells.get(id).map_or(0, |s| s.category)));
+        let mut spell_ms = left(c.cooldowns.get(&id));
+        let mut category_ms = if category != 0 && !told.contains(&category) {
+            left(c.category_cooldowns.get(&category))
+        } else {
+            0
+        };
+        if category_ms > 0 {
+            told.push(category);
+        }
+        if c.pending_cooldowns.contains(&id) {
+            spell_ms = 1;
+            category_ms |= WAITING;
+        }
+        if spell_ms == 0 && category_ms == 0 {
+            continue;
+        }
+        out.extend(entry(id, item, category, spell_ms, category_ms));
+    }
+    let mut rest: Vec<(u32, u32)> = c
+        .category_cooldowns
+        .iter()
+        .filter(|(category, _)| !told.contains(category))
+        .map(|(category, t)| (*category, left(Some(t))))
+        .filter(|(_, ms)| *ms > 0)
+        .collect();
+    rest.sort_unstable();
+    for (category, ms) in rest {
+        if let Some(id) = p
+            .spells
+            .iter()
+            .copied()
+            .filter(|id| data.spells.get(*id).is_some_and(|s| s.category == category))
+            .min()
+        {
+            out.extend(entry(id, 0, category, 0, ms));
+        }
+    }
+    out
+}
+
+/// A player's saved auras and cooldowns come back at login (the client
+/// told of the cooldowns in `SMSG_INITIAL_SPELLS`, [`initial`]).
 pub fn restore(map: &mut Map, player: Guid) {
     let now = map.now;
     let data = map.realm.data.clone();
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
+    load(p, &data, now);
     let saved = std::mem::take(&mut p.row.state.auras);
-    let mut cooldowns = std::mem::take(&mut p.row.state.cooldowns);
-    let categories = std::mem::take(&mut p.row.state.category_cooldowns);
-    for (id, ms) in &cooldowns {
-        p.caster
-            .cooldowns
-            .insert(*id, now + Duration::from_millis(u64::from(*ms)));
-    }
-    for (category, ms) in &categories {
-        p.caster
-            .category_cooldowns
-            .insert(*category, now + Duration::from_millis(u64::from(*ms)));
-        // The client hears of each known spell in the category.
-        for id in &p.spells {
-            if data
-                .spells
-                .get(*id)
-                .is_some_and(|s| s.category == *category)
-                && !cooldowns.iter().any(|c| c.0 == *id)
-            {
-                cooldowns.push((*id, *ms));
-            }
-        }
-    }
     for a in saved {
         let Some(s) = data.spells.get(a.spell) else {
             continue;
@@ -415,7 +532,6 @@ pub fn restore(map: &mut Map, player: Guid) {
         // Its stacks, on its bar and in the stats.
         auras::set_stacks(map, player, a.spell, caster, item, a.stacks.max(1));
     }
-    send(map, player, &cooldowns);
 }
 
 #[cfg(test)]

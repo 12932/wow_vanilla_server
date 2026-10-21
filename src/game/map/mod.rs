@@ -1405,6 +1405,7 @@ impl Map {
             spells::interrupt(self, guid);
         }
         ai::forget(self, guid);
+        objects::owner_leaving(self, guid);
         captured::leaving(self, guid);
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);

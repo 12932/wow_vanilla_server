@@ -117,11 +117,13 @@ pub fn load(db: &Connection, data: &mut GameData) {
             s.quest_complete_script.insert(quest, complete);
         }
     }
-    for (menu, script) in rows(db, "SELECT entry, script_id FROM gossip_menu", |c| {
-        (c.u32("entry"), c.u32("script_id"))
-    }) {
+    for (menu, text, script) in rows(
+        db,
+        "SELECT entry, text_id, script_id FROM gossip_menu",
+        |c| (c.u32("entry"), c.u32("text_id"), c.u32("script_id")),
+    ) {
         if script != 0 {
-            s.gossip_menu_script.insert(menu, script);
+            s.gossip_menu_script.insert((menu, text), script);
         }
     }
     for (menu, option, script) in rows(

@@ -209,7 +209,7 @@ fn the_real_gossip_menus_load_as_thistle_tea_reads_them() {
     assert!(battlemaster.npc_flags & 2048 != 0);
     // The Tamed Kodo's greeting: credit, then its aura off, on the player.
     let kodo = template(11_627).gossip_menu_id;
-    let steps = &d.scripts.gossip[&d.scripts.gossip_menu_script[&kodo]];
+    let steps = &d.scripts.gossip[&d.scripts.gossip_menu_script[&(kodo, 4449)]];
     let kinds: Vec<(u32, u32)> = steps.iter().map(|s| (s.command, s.data_flags)).collect();
     assert_eq!(kinds, vec![(83, 1), (14, 1)]);
     assert!(steps[0].condition != 0);

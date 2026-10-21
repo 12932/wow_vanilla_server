@@ -276,8 +276,10 @@ pub struct ScriptData {
     /// Quests' `StartScript` and `CompleteScript`.
     pub quest_start_script: AHashMap<u32, u32>,
     pub quest_complete_script: AHashMap<u32, u32>,
-    /// Gossip menus' scripts, and their options': (menu, option) → script.
-    pub gossip_menu_script: AHashMap<u32, u32>,
+    /// Gossip menus' scripts, each its greeting's ((menu, text) → script,
+    /// as mangos's `gossip_menu` rows have them), and their options':
+    /// (menu, option) → script.
+    pub gossip_menu_script: AHashMap<(u32, u32), u32>,
     pub gossip_option_script: AHashMap<(u32, u32), u32>,
     /// Creature groups: leader → members, and member → leader.
     pub groups: AHashMap<u32, Vec<GroupMember>>,

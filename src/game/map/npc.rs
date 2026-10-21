@@ -287,7 +287,13 @@ pub fn greeting(map: &Map, menu_id: u32, npc: Guid, player: Guid) -> u32 {
 pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags: u32) {
     let data = map.realm.data.clone();
     let text = greeting(map, menu_id, npc, player);
-    if let Some(script) = data.scripts.gossip_menu_script.get(&menu_id).copied() {
+    // The script of the greeting shown (mangos's `GetGossipTextId`).
+    if let Some(script) = data
+        .scripts
+        .gossip_menu_script
+        .get(&(menu_id, text))
+        .copied()
+    {
         crate::game::map::scripts::start(
             map,
             crate::game::data::scripts::ScriptTable::Gossip,
