@@ -83,6 +83,10 @@ There is no world tick.
 
 ## Conventions
 
+- **Search with ripgrep** (`rg`), not `grep`: it skips `target/` and what `.gitignore` names, and is much faster on a
+  tree this size. `rg -n 'pattern' src/`, `rg -l` for files, `rg -t rust`; `rg --no-ignore` when you need ignored
+  files (`data/`, `target/`).
+
 - **Packets out are encoded once** and the frame shared: `conn::encode`, `Map::send_to_observers`. No per-viewer
   re-encoding.
 - **Only an answer naming no map object** (a pong, a name or item query's answer) may skip a hold, with
