@@ -457,6 +457,46 @@ async fn a_slots_object_goes_even_when_its_replacement_cant_be_made() {
     );
 }
 
+const FISH: u32 = 990_225;
+const WALKER: u32 = 990_226;
+
+/// A creature of the water may go after a player the terrain has in deep
+/// water though their client doesn't say it swims (one wading in, or
+/// standing on the bed), and a creature of the land may not; one on dry
+/// land is the walker's and not the fish's (mangos's
+/// `isInAccessablePlaceFor` by the terrain's `IsInWater`; Thistle Tea's
+/// "a swimming creature samples water only under units it could
+/// attack"). wvs went by the client's swimming flag alone.
+#[tokio::test]
+async fn a_creatures_reach_takes_the_water_the_terrain_has_a_player_in() {
+    let mut d = data();
+    for (entry, inhabit) in [(FISH, 2), (WALKER, 1)] {
+        let mut t = template(entry, "Habitat", 14, 1);
+        t.inhabit_type = inhabit;
+        d.creature_templates.insert(entry, t);
+    }
+    let realm = crate::game::harness::realm_with(d);
+    let (_a, me, map) = enter(&realm, "A", "Wader", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            let fish = crate::game::tests_pets::place_in(m, me, FISH, 0x70_0003, 3.0);
+            let walker = crate::game::tests_pets::place_in(m, me, WALKER, 0x70_0004, -3.0);
+            let reach = |m: &Map| {
+                (
+                    crate::game::map::creature_motion::may_reach(m, fish, me),
+                    crate::game::map::creature_motion::may_reach(m, walker, me),
+                )
+            };
+            let dry = reach(m);
+            m.players.get_mut(&me).unwrap().misc.in_water = true;
+            (dry, reach(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (false, true), "on land: the walker's");
+    assert_eq!(out.1, (true, false), "in the terrain's water: the fish's");
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
