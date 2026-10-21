@@ -48,9 +48,23 @@ pub const STAT_POSITION: u32 = 0x100;
 pub const STAT_AURAS: u32 = 0x200;
 pub const STAT_AURAS_2: u32 = 0x400;
 pub const STAT_PLAYER: u32 = 0x7FF;
+// A member's pet's (mangos's `GROUP_UPDATE_FLAG_PET_*`).
+pub const STAT_PET_GUID: u32 = 0x0800;
+pub const STAT_PET_NAME: u32 = 0x1000;
+pub const STAT_PET_MODEL: u32 = 0x2000;
+pub const STAT_PET_CUR_HP: u32 = 0x4000;
+pub const STAT_PET_MAX_HP: u32 = 0x8000;
+pub const STAT_PET_POWER_TYPE: u32 = 0x1_0000;
+pub const STAT_PET_CUR_POWER: u32 = 0x2_0000;
+pub const STAT_PET_MAX_POWER: u32 = 0x4_0000;
+pub const STAT_PET_AURAS: u32 = 0x8_0000;
+pub const STAT_PET_AURAS_2: u32 = 0x10_0000;
+pub const STAT_PET: u32 = 0x1F_F800;
 
 // Member status bits.
 pub const STATUS_ONLINE: u8 = 0x1;
+pub const STATUS_PVP: u8 = 0x2;
+pub const STATUS_PVP_FFA: u8 = 0x10;
 pub const STATUS_DEAD: u8 = 0x4;
 pub const STATUS_GHOST: u8 = 0x8;
 pub const STATUS_AFK: u8 = 0x40;
@@ -359,8 +373,23 @@ fn empty_list() -> SMSG_GROUP_LIST {
     }
 }
 
+/// A member's pet's stats (or the unit they charm), as mangos's
+/// `BuildPartyMemberStatsChangedPacket` sends them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PetStats {
+    pub guid: Guid,
+    pub name: Arc<str>,
+    pub model: u32,
+    pub health: u32,
+    pub max_health: u32,
+    pub power_type: u8,
+    pub power: u32,
+    pub max_power: u32,
+    pub auras: [u32; 48],
+}
+
 /// A member's stats as their map last sent them.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MemberStats {
     pub status: u8,
     pub health: u32,
@@ -373,9 +402,31 @@ pub struct MemberStats {
     pub x: f32,
     pub y: f32,
     pub auras: [u32; 48],
+    pub pet: Option<PetStats>,
+}
+
+/// An aura mask and its spells, as 1.12 lays them out: a `u32` mask of the
+/// first 32 slots, or a `u16` of the 16 past them, then each spell.
+fn write_auras(b: &mut Body, auras: &[u32], wide: bool) {
+    let bits = (0..auras.len())
+        .filter(|i| auras[*i] != 0)
+        .fold(0u32, |m, i| m | 1 << i);
+    if wide {
+        b.u32(bits);
+    } else {
+        b.u16(bits as u16);
+    }
+    for a in auras.iter().filter(|a| **a != 0) {
+        b.u16(*a as u16);
+    }
 }
 
 impl MemberStats {
+    /// Every stat it has: the player's, and its pet's if one is out.
+    pub fn all(&self) -> u32 {
+        STAT_PLAYER | if self.pet.is_some() { STAT_PET } else { 0 }
+    }
+
     /// What changed from `old`, as stats flags.
     pub fn changed(&self, old: &MemberStats) -> u32 {
         let mut mask = 0;
@@ -401,6 +452,25 @@ impl MemberStats {
         );
         set(self.auras[..32] != old.auras[..32], STAT_AURAS);
         set(self.auras[32..] != old.auras[32..], STAT_AURAS_2);
+        match (&self.pet, &old.pet) {
+            (Some(p), Some(o)) if p.guid == o.guid => {
+                set(p.name != o.name, STAT_PET_NAME);
+                set(p.model != o.model, STAT_PET_MODEL);
+                set(p.health != o.health, STAT_PET_CUR_HP);
+                set(p.max_health != o.max_health, STAT_PET_MAX_HP);
+                set(
+                    p.power_type != o.power_type,
+                    STAT_PET_POWER_TYPE | STAT_PET_CUR_POWER | STAT_PET_MAX_POWER,
+                );
+                set(p.power != o.power, STAT_PET_CUR_POWER);
+                set(p.max_power != o.max_power, STAT_PET_MAX_POWER);
+                set(p.auras[..32] != o.auras[..32], STAT_PET_AURAS);
+                set(p.auras[32..] != o.auras[32..], STAT_PET_AURAS_2);
+            }
+            (None, None) => {}
+            // A pet out, gone or another: all of it (zeros for none).
+            _ => mask |= STAT_PET,
+        }
         mask
     }
 
@@ -438,22 +508,44 @@ impl MemberStats {
             b.u16(self.x as i16 as u16).u16(self.y as i16 as u16);
         }
         if mask & STAT_AURAS != 0 {
-            let bits = (0..32)
-                .filter(|i| self.auras[*i] != 0)
-                .fold(0u32, |m, i| m | 1 << i);
-            b.u32(bits);
-            for a in self.auras[..32].iter().filter(|a| **a != 0) {
-                b.u16(*a as u16);
-            }
+            write_auras(&mut b, &self.auras[..32], true);
         }
         if mask & STAT_AURAS_2 != 0 {
-            let bits = (0..16)
-                .filter(|i| self.auras[32 + *i] != 0)
-                .fold(0u16, |m, i| m | 1 << i);
-            b.u16(bits);
-            for a in self.auras[32..].iter().filter(|a| **a != 0) {
-                b.u16(*a as u16);
-            }
+            write_auras(&mut b, &self.auras[32..], false);
+        }
+        // The pet's, zeros for none (mangos's: a pet gone is told so).
+        let pet = self.pet.as_ref();
+        let none = [0u32; 48];
+        if mask & STAT_PET_GUID != 0 {
+            b.u64(pet.map_or(0, |p| p.guid.guid()));
+        }
+        if mask & STAT_PET_NAME != 0 {
+            b.cstr(pet.map_or("", |p| &p.name));
+        }
+        if mask & STAT_PET_MODEL != 0 {
+            b.u16(pet.map_or(0, |p| p.model) as u16);
+        }
+        if mask & STAT_PET_CUR_HP != 0 {
+            b.u16(pet.map_or(0, |p| p.health.min(0xFFFF)) as u16);
+        }
+        if mask & STAT_PET_MAX_HP != 0 {
+            b.u16(pet.map_or(0, |p| p.max_health.min(0xFFFF)) as u16);
+        }
+        if mask & STAT_PET_POWER_TYPE != 0 {
+            b.u8(pet.map_or(0, |p| p.power_type));
+        }
+        if mask & STAT_PET_CUR_POWER != 0 {
+            b.u16(pet.map_or(0, |p| p.power.min(0xFFFF)) as u16);
+        }
+        if mask & STAT_PET_MAX_POWER != 0 {
+            b.u16(pet.map_or(0, |p| p.max_power.min(0xFFFF)) as u16);
+        }
+        let pet_auras = pet.map_or(&none, |p| &p.auras);
+        if mask & STAT_PET_AURAS != 0 {
+            write_auras(&mut b, &pet_auras[..32], true);
+        }
+        if mask & STAT_PET_AURAS_2 != 0 {
+            write_auras(&mut b, &pet_auras[32..], false);
         }
         b.frame(if full {
             SMSG_PARTY_MEMBER_STATS_FULL
@@ -872,7 +964,7 @@ pub fn accept(realm: &Realm, me: &Online) {
     let others = groups.others(me.guid);
     for o in others {
         if let Some(s) = groups.stats.get(&o) {
-            me.outbound.send_frame(s.packet(o, STAT_PLAYER, true));
+            me.outbound.send_frame(s.packet(o, s.all(), true));
         }
     }
     groups.stats.remove(&me.guid);
@@ -1444,7 +1536,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
 pub fn request_stats(realm: &Realm, me: &Online, of: Guid) {
     let groups = realm.social.groups.lock();
     let frame = match groups.stats.get(&of) {
-        Some(s) if realm.registry.online(of).is_some() => s.packet(of, STAT_PLAYER, true),
+        Some(s) if realm.registry.online(of).is_some() => s.packet(of, s.all(), true),
         _ => MemberStats::default().packet(of, STAT_STATUS, true),
     };
     me.outbound.send_frame(frame);
@@ -1464,6 +1556,7 @@ impl Default for MemberStats {
             x: 0.0,
             y: 0.0,
             auras: [0; 48],
+            pet: None,
         }
     }
 }

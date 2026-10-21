@@ -238,7 +238,7 @@ fn entrants(
             Some(gr) => gr
                 .members
                 .iter()
-                .map(|m| (m.guid, groups.stats.get(&m.guid).copied()))
+                .map(|m| (m.guid, groups.stats.get(&m.guid).cloned()))
                 .collect(),
         }
     };

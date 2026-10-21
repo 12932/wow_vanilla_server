@@ -384,3 +384,70 @@ async fn invite_bob(c: &mut Client) {
     c.clear();
     c.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
 }
+
+/// mangos's `HandleRequestPartyMemberStatsOpcode` and
+/// `GetGroupMemberStatus`: a member's stats carry their pet (its GUID,
+/// name, model, health, power and auras, `GROUP_UPDATE_FLAG_PET_*`) and
+/// their PvP flag (`MEMBER_STATUS_PVP`). Before, they stopped at the
+/// player's own, and the PvP icon never showed.
+#[tokio::test]
+async fn member_stats_carry_the_pet_and_the_pvp_flag() {
+    use crate::game::social::groups::{
+        SMSG_PARTY_MEMBER_STATS_FULL, STAT_PET, STAT_PLAYER, STATUS_PVP,
+    };
+    let realm = harness::realm_with(crate::game::tests_pets::data());
+    let (mut h, gh, map) =
+        crate::game::tests_pets::enter(&realm, "H", "Hunter", Race::Dwarf, Class::Hunter).await;
+    let mut b = player(&realm, "Bob").await;
+    joins(&mut h, &mut b, "Bob").await;
+    h.say(".pet").await;
+    h.system_message("Tamed").await;
+    // The hunter flags themselves for PvP, as /pvp does.
+    h.send(CMSG_TOGGLE_PVP { set: None }).await;
+    handled(&mut h).await;
+    let flagged = map
+        .query(move |m| {
+            m.players[&gh].fields.has_flag(
+                crate::game::fields::UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_PVP,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(flagged, "the hunter is flagged");
+    let pet = map
+        .query(move |m| m.players[&gh].owned.pet)
+        .await
+        .unwrap()
+        .expect("the boar out");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (mask, status, body) = loop {
+        b.clear();
+        b.send(CMSG_REQUEST_PARTY_MEMBER_STATS { guid: gh }).await;
+        let f = b
+            .wait_frame("the full stats", SMSG_PARTY_MEMBER_STATS_FULL, |_| true)
+            .await;
+        let at = 1 + f[0].count_ones() as usize;
+        let mask = u32::from_le_bytes(f[at..at + 4].try_into().unwrap());
+        let status = f[at + 4];
+        if mask & STAT_PET == STAT_PET && status & STATUS_PVP != 0 {
+            break (mask, status, f);
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no pet nor PvP in {mask:#x}, {status:#x}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(mask, STAT_PLAYER | STAT_PET);
+    assert_ne!(status & STATUS_PVP, 0);
+    let pet_guid = pet.guid().to_le_bytes();
+    let at = body
+        .windows(8)
+        .position(|w| w == pet_guid)
+        .expect("the pet's GUID");
+    assert!(
+        body[at + 8..].starts_with(b"Tame Boar\0"),
+        "its name after its GUID"
+    );
+}
