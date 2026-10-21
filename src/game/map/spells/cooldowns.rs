@@ -570,6 +570,7 @@ pub fn restore(map: &mut Map, player: Guid) {
                     m.flat[super::mods::OP_ACTIVATION_TIME],
                     m.pct[super::mods::OP_ACTIVATION_TIME],
                 ),
+                dr: None,
             },
         );
         // Its stacks, on its bar and in the stats.

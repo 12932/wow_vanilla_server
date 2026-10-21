@@ -184,10 +184,10 @@ async fn a_pets_attack_power_takes_its_melee_buffs_and_none_of_its_ranged_ones()
 /// reduced AP": an armed creature of 200 attack power striking for 100
 /// every three seconds, a hundred attack power down and disarmed, keeps its
 /// three seconds and strikes for 100 by seven tenths and three tenths of a
-/// half (85), by four tenths: 34.
+/// half (85), by half (mangos-classic's, not Thistle Tea's four tenths):
+/// 42, the half cut short as mangos's whole points are.
 #[tokio::test]
-async fn an_armed_creature_disarmed_on_lowered_attack_power_keeps_its_speed_and_strikes_for_four_tenths()
- {
+async fn an_armed_creature_disarmed_on_lowered_attack_power_keeps_its_speed_and_strikes_for_half() {
     let (_realm, _a, g, map) = setup_with(data(), Class::Warrior).await;
     let got = map
         .query(move |m| {
@@ -224,7 +224,7 @@ async fn an_armed_creature_disarmed_on_lowered_attack_power_keeps_its_speed_and_
         (min - 85.0).abs() < 0.01 && (max - 85.0).abs() < 0.01,
         "{min} {max}"
     );
-    assert_eq!((blow, struck), (34, 34));
+    assert_eq!((blow, struck), (42, 42));
     assert_eq!(next, Some(3_000), "the next blow three seconds on");
 }
 
