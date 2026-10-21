@@ -125,6 +125,8 @@ mod tests_p10_player;
 #[cfg(test)]
 mod tests_p10_player_items;
 #[cfg(test)]
+mod tests_p10_player_objects;
+#[cfg(test)]
 mod tests_p10_player_quests;
 #[cfg(test)]
 mod tests_p10_player_real;

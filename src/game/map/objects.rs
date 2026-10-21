@@ -1206,6 +1206,12 @@ fn show_readable(map: &mut Map, user: Guid, object: Guid, t: &GameObjectTemplate
     }
 }
 
+fn alive(map: &Map, player: Guid) -> bool {
+    map.players
+        .get(&player)
+        .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
+}
+
 fn in_reach(map: &Map, player: Guid, object: Guid) -> bool {
     map.players
         .get(&player)
@@ -1376,6 +1382,9 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
                 p.outbound.send(&SMSG_GAMEOBJECT_PAGETEXT { guid: object });
             }
         }
+        // Their spells are the user's to cast: not by the dead (mangos's
+        // `CheckCast` of the user's cast, Thistle Tea's living user).
+        GO_RITUAL | GO_SPELLCASTER if !alive(map, player) => {}
         GO_RITUAL => use_ritual(map, player, object, &t),
         GO_SPELLCASTER => use_spellcaster(map, player, object, &t),
         _ => return false,
