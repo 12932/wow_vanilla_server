@@ -84,6 +84,7 @@ pub fn remove(map: &mut Map, looter: Guid, target: Option<Guid>) {
         }
         _ => None,
     });
+    let released_here = body.is_some();
     if let Some(b) = body {
         if dist(b, at) > RANGE {
             return;
@@ -101,19 +102,31 @@ pub fn remove(map: &mut Map, looter: Guid, target: Option<Guid>) {
     if flags & CORPSE_INSIGNIA == 0 || flags & CORPSE_FLAG_BONES != 0 || dist(pos, at) > RANGE {
         return;
     }
-    let Some(p) = map.players.get_mut(&victim) else {
-        return;
-    };
-    let level = u32::from(p.level());
-    // Bones, where the corpse was: theirs no more (mangos's
-    // `ConvertCorpseForPlayer(guid, true)`, then the bones lootable).
-    p.row.state.corpse = None;
-    p.outbound.send(&SMSG_PLAYER_SKINNED {
-        spirit_released: true,
-    });
-    p.outbound.send(&MSG_CORPSE_QUERY_Server {
-        result: MSG_CORPSE_QUERY_Server_CorpseQueryResult::NotFound,
-    });
+    // The gold is of the fallen's level; one gone from the world, their
+    // corpse alone taken, is known by the registry's (mangos's
+    // `EffectSkinPlayerCorpse` converts the corpse whose owner isn't found).
+    let level = map.players.get(&victim).map_or_else(
+        || {
+            map.realm.registry.name(victim).map_or(1, |n| {
+                u32::from(n.level.load(std::sync::atomic::Ordering::Relaxed))
+            })
+        },
+        |p| u32::from(p.level()),
+    );
+    if let Some(p) = map.players.get_mut(&victim) {
+        // Bones, where the corpse was: theirs no more (mangos's
+        // `ConvertCorpseForPlayer(guid, true)`, then the bones lootable):
+        // no corpse to take back. `SMSG_PLAYER_SKINNED` says
+        // whether this released them (mangos's `RemovedInsignia`'s
+        // `repop`).
+        p.row.state.corpse = None;
+        p.outbound.send(&SMSG_PLAYER_SKINNED {
+            spirit_released: released_here,
+        });
+        p.outbound.send(&MSG_CORPSE_QUERY_Server {
+            result: MSG_CORPSE_QUERY_Server_CorpseQueryResult::NotFound,
+        });
+    }
     let Some(g) = bones::convert(map, victim, BONES_LIE, CORPSE_LOOTABLE) else {
         return;
     };

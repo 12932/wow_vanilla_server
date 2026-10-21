@@ -197,6 +197,18 @@ mod tests_p11e_summons;
 #[cfg(test)]
 mod tests_p11f_movement;
 #[cfg(test)]
+mod tests_p11g_cooldowns;
+#[cfg(test)]
+mod tests_p11g_gossip;
+#[cfg(test)]
+mod tests_p11g_insignia;
+#[cfg(test)]
+mod tests_p11g_items;
+#[cfg(test)]
+mod tests_p11g_login_items;
+#[cfg(test)]
+mod tests_p11g_zones;
+#[cfg(test)]
 mod tests_p11h_stones;
 #[cfg(test)]
 mod tests_p12_questions;

@@ -1291,6 +1291,7 @@ impl Map {
                 for item in mailed {
                     inventory::mail_back(&self.realm, guid, item);
                 }
+                item_rules::at_login(self, &mut p);
                 crate::game::transports::place_aboard(&self.realm, &mut p);
                 login::send_login(self, &mut p);
                 crate::game::instances::send_saved(&self.realm, p.guid, &p.outbound);
@@ -1405,6 +1406,7 @@ impl Map {
             spells::interrupt(self, guid);
         }
         ai::forget(self, guid);
+        objects::owner_leaving(self, guid);
         captured::leaving(self, guid);
         pets::owner_leaving(self, guid);
         spells::single_target::caster_gone(self, guid);

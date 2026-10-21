@@ -178,8 +178,21 @@ pub fn change_item(map: &mut Map, g: Guid, item: Guid, entry: u32) {
     };
     let old = &p.items[i];
     let at = (old.bag, old.slot);
-    let mut replacement =
-        crate::game::map::player::Item::new(&data, old.guid, g, entry, at.0, at.1, 1);
+    // A new item, of a GUID of its own (mangos's `ConvertItem`:
+    // `Item::CreateItem`, the old one destroyed).
+    let counter = map
+        .realm
+        .next_item
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut replacement = crate::game::map::player::Item::new(
+        &data,
+        crate::game::guid::item(counter),
+        g,
+        entry,
+        at.0,
+        at.1,
+        1,
+    );
     let property = enchant::roll_random_property(&data, entry, &mut rand::rng());
     if property != 0 {
         enchant::set_random_property(&data, &mut replacement, property);
@@ -254,6 +267,19 @@ pub fn change_item(map: &mut Map, g: Guid, item: Guid, entry: u32) {
     ));
     for frame in batch.finish() {
         p.outbound.send_frame(frame);
+    }
+    // A temporary enchantment kept, with its time and charges: its time
+    // told under the new GUID.
+    let kept = enchant::get(&replacement, enchant::TEMP_SLOT);
+    if kept.id != 0 && kept.duration_ms > 0 {
+        p.outbound.send(
+            &wow_world_messages::vanilla::SMSG_ITEM_ENCHANT_TIME_UPDATE {
+                item: replacement.guid,
+                slot: enchant::TEMP_SLOT as u32,
+                duration: kept.duration_ms / 1000,
+                player: g,
+            },
+        );
     }
     p.items.push(replacement);
     if let Some(it) = p.items.last_mut() {

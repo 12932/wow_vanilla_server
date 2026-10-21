@@ -95,6 +95,71 @@ fn zone_of(map: &mut Map, g: Guid) -> Option<u32> {
         .map(|_| data.zone_of(area))
 }
 
+/// At login, before the client hears of a thing: an item bound to another
+/// map or zone, the bank's too, is gone from a living character, with
+/// what is in it, never sent to be destroyed (mangos's `_LoadInventory`,
+/// `IsAlive() && IsLimitedToAnotherMapOrZone`: deleted as it loads;
+/// Thistle Tea's "login commits removal of a banked item before inventory
+/// is sent"). The zone is the navmesh's or terrain's where they stand,
+/// else the one they were saved in, if it is of this map.
+pub fn at_login(map: &mut Map, p: &mut crate::game::map::player::Player) {
+    let data = map.realm.data.clone();
+    if p.row.state.dead {
+        return;
+    }
+    let bound = |entry: u32| {
+        data.item(entry)
+            .map_or((0, 0), |t| (t.map_bound, t.area_bound))
+    };
+    if !p.items.iter().any(|i| bound(i.entry) != (0, 0)) {
+        return;
+    }
+    let here = map.key.map;
+    let zone = crate::game::map::world::zone_and_area(map, p.position())
+        .map(|(z, _)| z)
+        .filter(|z| *z != 0)
+        .or_else(|| {
+            data.area(p.zone)
+                .filter(|a| a.map == here)
+                .map(|_| data.zone_of(p.zone))
+        });
+    let gone: Vec<Guid> = p
+        .items
+        .iter()
+        .filter(|i| {
+            let (m, a) = bound(i.entry);
+            !allowed(m, a, here, zone)
+        })
+        .map(|i| i.guid)
+        .collect();
+    if gone.is_empty() {
+        return;
+    }
+    let bags: Vec<u8> = p
+        .items
+        .iter()
+        .filter(|i| gone.contains(&i.guid) && i.bag == BAG_PLAYER)
+        .filter(|i| {
+            (BAG_START..BAG_END).contains(&i.slot)
+                || (BANK_BAG_START..BANK_BAG_END).contains(&i.slot)
+        })
+        .map(|i| i.slot)
+        .collect();
+    let worn = p.items.iter().any(|i| {
+        gone.contains(&i.guid)
+            && i.bag == BAG_PLAYER
+            && i.slot < crate::game::map::inventory::EQUIPMENT_END
+    });
+    p.items
+        .retain(|i| !gone.contains(&i.guid) && !bags.contains(&i.bag));
+    p.refresh_inventory(&data);
+    if worn {
+        p.apply_stats(&data);
+    }
+    // Saved soon, as mangos deletes them at once.
+    p.save_at = map.now;
+}
+
 /// Every player's items, looked over each second.
 pub fn update(map: &mut Map) {
     let now = map.now;

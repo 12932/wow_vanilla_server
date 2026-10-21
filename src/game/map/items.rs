@@ -198,11 +198,16 @@ pub fn send_failure(map: &Map, player: Guid, spell: u32, code: u8) {
 pub const EQUIP_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// Item `item` was put on (Thistle Tea's `EquipmentTransitions`): each of
-/// its on-use spells waits thirty seconds, unless it already waits.
+/// its on-use spells waits thirty seconds, unless it already waits. One
+/// whose cooldown waits for its event starts now instead, with the times
+/// an item's cast left it (mangos's `ApplyEquipCooldown`: `AddCooldown`
+/// lets go of the waiting entry and picks the old item's cooldowns over
+/// the thirty seconds, with `SMSG_COOLDOWN_EVENT`; Thistle Tea's
+/// "activates a deferred item cooldown using its retained overrides").
 pub fn equipped(map: &mut Map, player: Guid, item: Guid) {
     let data = map.realm.data.clone();
     let now = map.now;
-    let Some(p) = map.players.get_mut(&player) else {
+    let Some(p) = map.players.get(&player) else {
         return;
     };
     let Some(t) = p
@@ -216,20 +221,52 @@ pub fn equipped(map: &mut Map, player: Guid, item: Guid) {
     if t.flags & 0x80 != 0 {
         return;
     }
-    for s in t.spells.iter().filter(|s| s.id != 0 && s.trigger == 0) {
-        let waiting = p.caster.cooldowns.get(&s.id).is_some_and(|t| *t > now)
-            || (s.category > 0
-                && p.caster
-                    .category_cooldowns
-                    .get(&s.category)
-                    .is_some_and(|t| *t > now));
-        if !waiting {
-            p.caster.cooldowns.insert(s.id, now + EQUIP_COOLDOWN);
+    let spells: Vec<_> = t
+        .spells
+        .iter()
+        .filter(|s| s.id != 0 && s.trigger == 0)
+        .copied()
+        .collect();
+    for s in spells {
+        let Some(p) = map.players.get_mut(&player) else {
+            return;
+        };
+        let c = &mut p.caster;
+        let pending = c.pending_cooldowns.contains(&s.id);
+        // An item's own times, kept by its cast: the thirty seconds give
+        // way to them. With none of its own (mangos's `SpellCooldown` of
+        // -1), the thirty seconds it is.
+        let from_item = c.cooldown_sources.get(&s.id).is_some_and(|x| x.0 != 0)
+            && (s.cooldown > 0 || s.category_cooldown > 0);
+        if pending && from_item {
+            crate::game::map::spells::cooldowns::release(map, player, s.id, true);
+        } else {
+            let waiting = !pending
+                && (c.cooldowns.get(&s.id).is_some_and(|t| *t > now)
+                    || (s.category > 0
+                        && c.category_cooldowns
+                            .get(&s.category)
+                            .is_some_and(|t| *t > now)));
+            if !waiting {
+                c.cooldowns.insert(s.id, now + EQUIP_COOLDOWN);
+                c.cooldown_sources.insert(s.id, (0, s.category));
+            }
+            if pending {
+                c.pending_cooldowns.retain(|x| *x != s.id);
+                c.pending_times.retain(|x| x.0 != s.id);
+                p.outbound
+                    .send(&wow_world_messages::vanilla::SMSG_COOLDOWN_EVENT {
+                        id: s.id,
+                        guid: player,
+                    });
+            }
         }
-        p.outbound.send(&SMSG_ITEM_COOLDOWN {
-            guid: item,
-            id: s.id,
-        });
+        if let Some(p) = map.players.get(&player) {
+            p.outbound.send(&SMSG_ITEM_COOLDOWN {
+                guid: item,
+                id: s.id,
+            });
+        }
     }
 }
 

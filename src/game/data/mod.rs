@@ -497,6 +497,10 @@ pub struct GameData {
     pub areas: AHashMap<u32, AreaInfo>,
     pub area_triggers: AHashMap<u32, AreaTrigger>,
     pub maps: AHashMap<u32, MapInfo>,
+    /// Each map's zone in the client's `Map.dbc` (`area_table`): an
+    /// instance's, for a map with no navmesh nor terrain to say.
+    #[cfg_attr(test, serde(default))]
+    pub map_zones: AHashMap<u32, u32>,
     pub tele: Vec<Tele>,
     pub start: AHashMap<(u8, u8), StartInfo>,
     /// `(race, class, level)` → strength, agility, stamina, intellect,

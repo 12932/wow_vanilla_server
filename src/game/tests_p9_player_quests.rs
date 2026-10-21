@@ -221,7 +221,9 @@ fn world() -> GameData {
             },
         );
     }
-    d.scripts.gossip_menu_script.insert(SCRIPTED_MENU, 9_962);
+    d.scripts
+        .gossip_menu_script
+        .insert((SCRIPTED_MENU, 3), 9_962);
     d
 }
 

@@ -1681,6 +1681,25 @@ pub fn channel_ended(map: &mut Map, g: Guid, spell: u32) {
     }
 }
 
+/// A player leaves the map (a logout, a teleport away): a cooldown waiting
+/// for an object of theirs starts now, while they are here to be saved
+/// with it, rather than as the object goes after them with no one to
+/// start it on (mangos-classic's `Unit::RemoveGameObject` at
+/// `RemoveFromWorld`, `AddCooldown` for `SPELL_ATTR_COOLDOWN_ON_EVENT`;
+/// Thistle Tea's "logout saves an activated object cooldown").
+pub fn owner_leaving(map: &mut Map, g: Guid) {
+    let spells: Vec<u32> = map
+        .objects
+        .summoned
+        .iter()
+        .filter(|s| s.owner == Some(g))
+        .map(|s| s.spell)
+        .collect();
+    for spell in spells {
+        crate::game::map::spells::cooldowns::release(map, g, spell, true);
+    }
+}
+
 /// Every update: summoned objects whose time is up or whose owner left
 /// go; doors and quest objects close; used-up spawns come back; quest
 /// objects' spells land; and, every so often, traps look about them.

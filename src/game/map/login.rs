@@ -49,6 +49,7 @@ pub fn send_login(map: &mut Map, p: &mut Player) {
         crate::game::map::combat::healthless(health, max),
     );
     crate::game::map::exploration::init(p);
+    crate::game::map::spells::cooldowns::load(p, &map.realm.data, map.now);
     send_world(map, p);
     if p.row.at_login & crate::game::store::AT_LOGIN_FIRST != 0
         && let Some(c) = map.realm.data.races.get(&p.row.race)
@@ -113,7 +114,7 @@ fn send_world(map: &Map, p: &mut Player) {
                 unknown1: 0,
             })
             .collect(),
-        cooldowns: Vec::new(),
+        cooldowns: crate::game::map::spells::cooldowns::initial(p, &data, map.now),
     });
     let mut buttons = [0u32; 120];
     for a in &p.row.actions {
