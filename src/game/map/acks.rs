@@ -160,7 +160,12 @@ fn root(map: &mut Map, g: Guid, unit: Guid, counter: u32, info: MovementInfo, ro
     } else {
         |player, info| encode(&MSG_MOVE_UNROOT_Server { player, info })
     };
-    movement::moved_self(map, g, info, relay);
+    let came = if root {
+        movement::Came::RootAck
+    } else {
+        movement::Came::Move
+    };
+    movement::moved_self_as(map, g, info, relay, came);
 }
 
 /// A forced speed taken, at the speed it was sent at. Those who see a unit
@@ -214,6 +219,12 @@ fn knock_back(map: &mut Map, g: Guid, unit: Guid, counter: u32, info: MovementIn
         return;
     }
     if unit == g {
+        // In its flight, it goes at the launch's speed (mangos's
+        // `IsLaunched`, until it lands).
+        let now = map.now;
+        if let Some(p) = map.players.get_mut(&g) {
+            crate::game::map::move_guard::launched(p, j.xy_speed, now);
+        }
         movement::moved_self(map, g, info, launched);
     } else if map
         .players

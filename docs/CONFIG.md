@@ -344,14 +344,14 @@ World events the server runs of itself.
 
 ### `[anticheat]`
 
-The movement check: a player who moves faster than they can is pulled back. GMs are never checked.
+The movement check: a player who moves faster than they can, over time, is pulled back. GMs are never checked.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `speed_check` | Check players' movement at all. | `true` |  | live |  |
 | `speed_tolerance` | How much faster than their speed a player may seem to go. | `1.25` | 1 to 10, clamped | live |  |
-| `latency_allowance_secs` | Seconds of lag a movement packet may carry. | `0.5` | 0 to 5, clamped | live |  |
-| `distance_allowance_yards` | Yards a move may go past what its speed and time allow. | `3.0` | 0 to 100, clamped | live |  |
+| `latency_allowance_secs` | Seconds of their speed a player may get ahead by: the lag their packets may bunch up by. Time earns it back; however many packets they send, they go no further. | `2.0` | 0 to 5, clamped | live |  |
+| `distance_allowance_yards` | Yards a player may get ahead by besides, once, not per packet; and how far a client under a root may say it is before it is put back. | `3.0` | 0 to 100, clamped | live |  |
 
 ### `[accounts]`
 

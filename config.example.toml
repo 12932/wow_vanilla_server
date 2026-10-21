@@ -711,8 +711,8 @@ elemental_invasion = true
 # Default false. Changes at a reload.
 scourge_invasion = false
 
-# The movement check: a player who moves faster than they can is
-# pulled back. GMs are never checked.
+# The movement check: a player who moves faster than they can, over
+# time, is pulled back. GMs are never checked.
 [anticheat]
 
 # Check players' movement at all.
@@ -723,11 +723,15 @@ speed_check = true
 # Default 1.25. Range 1 to 10, clamped. Changes at a reload.
 speed_tolerance = 1.25
 
-# Seconds of lag a movement packet may carry.
-# Default 0.5. Range 0 to 5, clamped. Changes at a reload.
-latency_allowance_secs = 0.5
+# Seconds of their speed a player may get ahead by: the lag their
+# packets may bunch up by. Time earns it back; however many
+# packets they send, they go no further.
+# Default 2.0. Range 0 to 5, clamped. Changes at a reload.
+latency_allowance_secs = 2.0
 
-# Yards a move may go past what its speed and time allow.
+# Yards a player may get ahead by besides, once, not per packet;
+# and how far a client under a root may say it is before it is put
+# back.
 # Default 3.0. Range 0 to 100, clamped. Changes at a reload.
 distance_allowance_yards = 3.0
 

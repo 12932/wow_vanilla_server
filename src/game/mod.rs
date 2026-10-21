@@ -270,6 +270,12 @@ mod tests_p12b_dead_logout;
 #[cfg(test)]
 mod tests_p12b_linger;
 #[cfg(test)]
+mod tests_p12c_flags;
+#[cfg(test)]
+mod tests_p12c_root;
+#[cfg(test)]
+mod tests_p12c_speed;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
