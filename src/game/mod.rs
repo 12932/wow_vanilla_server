@@ -189,6 +189,8 @@ mod tests_p10_world_system;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
+mod tests_p11i_views;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

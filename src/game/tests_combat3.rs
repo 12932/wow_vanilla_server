@@ -22,8 +22,8 @@ use crate::game::map::player_motion::{self, Mode};
 use crate::game::map::procs::{self, Event};
 use crate::game::map::{Map, MapHandle, MapKey};
 
-const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
-const DUMMY: (u32, u32) = (3200, 40);
+pub(crate) const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
+pub(crate) const DUMMY: (u32, u32) = (3200, 40);
 const PEASANT: (u32, u32) = (3201, 41);
 const GUARD: (u32, u32) = (3202, 42);
 const MAGE: (u32, u32) = (3203, 43);
@@ -34,7 +34,7 @@ const BOSS: u32 = 3205;
 const TOWN: u32 = 29;
 const HUMAN: u32 = 1;
 
-const SCARE: u32 = 92_001;
+pub(crate) const SCARE: u32 = 92_001;
 const DAZE: u32 = 92_002;
 const TWISTED_REFLECTION: u32 = 21063;
 const TWISTED_REFLECTION_HEAL: u32 = 21064;
@@ -89,7 +89,7 @@ fn creature(entry: u32, name: &str) -> CreatureTemplate {
     }
 }
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = GameData::empty();
     d.player_level_stats.insert((1, 1, 1), [23, 20, 22, 20, 21]);
     d.player_class_stats.insert((1, 1), (60, 0));
@@ -248,7 +248,7 @@ async fn setup_as(class: Class) -> (std::sync::Arc<crate::game::Realm>, Client, 
     (realm, a, ga, map)
 }
 
-fn unit(c: (u32, u32)) -> Guid {
+pub(crate) fn unit(c: (u32, u32)) -> Guid {
     guid::unit(c.0, c.1)
 }
 
@@ -264,7 +264,7 @@ fn health(m: &Map, g: Guid) -> u32 {
     m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
 }
 
-fn apply(m: &mut Map, caster: Guid, target: Guid, spell: u32, amount: i32) {
+pub(crate) fn apply(m: &mut Map, caster: Guid, target: Guid, spell: u32, amount: i32) {
     let data = m.realm.data.clone();
     auras::apply_spell(
         m,
@@ -290,7 +290,7 @@ fn next_walk(m: &mut Map, g: Guid) -> Option<(Mode, Vector3d, bool)> {
     Some((d.mode, w.destination(), w.run))
 }
 
-fn control(m: &ServerOpcodeMessage, g: Guid) -> Option<bool> {
+pub(crate) fn control(m: &ServerOpcodeMessage, g: Guid) -> Option<bool> {
     match m {
         ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(c) if c.guid == g => Some(c.allow_movement),
         _ => None,

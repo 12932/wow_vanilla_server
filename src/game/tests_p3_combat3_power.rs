@@ -31,17 +31,17 @@ const BURNING: u32 = 95_410;
 const BURNING_100: u32 = 95_411;
 const BURNING_HARMLESS: u32 = 95_412;
 /// Drain Mana's like: 200 of `misc`'s power, half of it back.
-const DRAIN: u32 = 95_420;
+pub(crate) const DRAIN: u32 = 95_420;
 const DRAIN_ENERGY: u32 = 95_421;
 const DRAIN_SELF: u32 = 95_422;
 const DRAIN_ONE: u32 = 95_423;
 const DRAIN_BAD: u32 = 95_424;
 /// Viper Sting's like: 100 a second for three, half of it back.
-const LEECHING: u32 = 95_430;
+pub(crate) const LEECHING: u32 = 95_430;
 const LEECHING_ENERGY: u32 = 95_431;
 const LEECHING_NONE: u32 = 95_432;
 /// Fifty of a power, on the target.
-const ENERGIZE: u32 = 95_440;
+pub(crate) const ENERGIZE: u32 = 95_440;
 const ENERGIZE_ENERGY: u32 = 95_441;
 const ENERGIZE_LESS: u32 = 95_442;
 const ENERGIZE_BAD: u32 = 95_443;
@@ -91,7 +91,7 @@ fn hit(effect: u32, aura: u32, points: i32, misc: i32, mult: f32, target_a: u32)
     }
 }
 
-fn data() -> GameData {
+pub(crate) fn data() -> GameData {
     let mut d = world();
     d.spells.durations.insert(
         900,
@@ -200,7 +200,7 @@ async fn player(class: Class) -> (Client, Guid, MapHandle) {
 
 /// A creature 5 yards ahead of `g`, of 1000 health and 150 mana, showing
 /// `power`.
-fn mana_user(m: &mut Map, g: Guid, power: u8) -> Guid {
+pub(crate) fn mana_user(m: &mut Map, g: Guid, power: u8) -> Guid {
     let c = spawn(m, g, BRUTE, 60, 5.0);
     let f = m.unit_fields_mut(c).unwrap();
     f.set_u32(UNIT_FIELD_MAXHEALTH, 1000);
@@ -223,14 +223,14 @@ fn pools(m: &Map, g: Guid) -> (u32, u32, u32) {
     )
 }
 
-fn set_pools(m: &mut Map, g: Guid, health: u32, mana: (u32, u32)) {
+pub(crate) fn set_pools(m: &mut Map, g: Guid, health: u32, mana: (u32, u32)) {
     let f = m.unit_fields_mut(g).unwrap();
     f.set_u32(UNIT_FIELD_HEALTH, health);
     f.set_u32(UNIT_FIELD_MAXPOWER1, mana.1);
     f.set_u32(UNIT_FIELD_POWER1, mana.0);
 }
 
-fn trigger(m: &mut Map, caster: Guid, spell: u32, target: Guid) {
+pub(crate) fn trigger(m: &mut Map, caster: Guid, spell: u32, target: Guid) {
     spells::cast_triggered(m, caster, spell, Some(target));
 }
 
