@@ -1337,31 +1337,29 @@ fn effect(
                     flags & crate::game::map::npc::NPC_FLAG_SPIRITHEALER != 0,
                 )
             });
-            let offered_at = map.position_of(caster);
-            if let Some(p) = map.players.get_mut(&target)
-                && p.death != crate::game::map::death::Death::Alive
-                && p.resurrect_offer.is_none()
+            let offer = Offer {
+                caster,
+                key: map.key,
+                at: map.position_of(caster),
+                new: e.effect == EFFECT_RESURRECT_NEW,
+                amount,
+                misc: e.misc_value,
+                name,
+                spirit_healer,
+                timer: !s.attr(3, sd::ATTR_EX3_NO_RES_TIMER),
+            };
+            if map.players.contains_key(&target) {
+                offer_resurrection(map, target, offer);
+            } else if crate::game::map::corpses::aimed_at(t)
+                .and_then(|c| crate::game::map::corpses::body(map, c))
+                .is_some_and(|(owner, _)| owner == target)
             {
-                // `RESURRECT` gives a share of health and mana; the newer
-                // effect, health and the misc value's mana (Thistle Tea's,
-                // mangos's).
-                let (health, mana) = if e.effect == EFFECT_RESURRECT_NEW {
-                    (amount.max(1) as u32, e.misc_value.max(0) as u32)
-                } else {
-                    let share = amount.max(0) as f32 / 100.0;
-                    (
-                        ((p.fields.get_u32(UNIT_FIELD_MAXHEALTH) as f32 * share) as u32).max(1),
-                        (p.fields.get_u32(UNIT_FIELD_MAXPOWER1) as f32 * share) as u32,
-                    )
-                };
-                p.resurrect_offer = Some((caster, health, mana));
-                p.resurrect_at = offered_at;
-                p.outbound.send_frame(resurrect_request(
-                    caster,
-                    &name,
-                    spirit_healer,
-                    !s.attr(3, sd::ATTR_EX3_NO_RES_TIMER),
-                ));
+                // Cast at the body of a ghost on another map: the offer goes
+                // after them, wherever they are (mangos's `EffectResurrect`,
+                // its "thread unsafe version" through the world's messager).
+                crate::game::map::call_player(&map.realm, target, move |m| {
+                    offer_resurrection(m, target, offer)
+                });
             }
         }
         // A step that isn't one teaches nothing (mangos's `EffectLearnSkill`
@@ -1688,6 +1686,55 @@ fn first_clear_by(map: &mut Map, from: Vector3d, to: Vector3d, grounded: bool) -
     }
     let length = ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt();
     ground(map, along((clear - 0.5 / length.max(0.001)).max(0.0)))
+}
+
+/// A resurrection offered: by whom, from where (their map and place as
+/// they cast it), its effect's amount and misc value, and how the request
+/// names its caster.
+#[derive(Debug, Clone)]
+pub(crate) struct Offer {
+    caster: Guid,
+    key: crate::game::map::MapKey,
+    at: Option<Vector3d>,
+    /// `RESURRECT_NEW`'s flat health and mana, not a share.
+    new: bool,
+    amount: i32,
+    misc: i32,
+    name: String,
+    spirit_healer: bool,
+    timer: bool,
+}
+
+/// `target`, if dead and offered nothing yet, is offered `o`: its health and
+/// mana worked out by their own (mangos's `AddResurrectRequest`, kept the
+/// first).
+fn offer_resurrection(map: &mut Map, target: Guid, o: Offer) {
+    let Some(p) = map.players.get_mut(&target) else {
+        return;
+    };
+    if p.death == crate::game::map::death::Death::Alive || p.resurrect_offer.is_some() {
+        return;
+    }
+    // `RESURRECT` gives a share of health and mana; the newer effect,
+    // health and the misc value's mana (Thistle Tea's, mangos's).
+    let (health, mana) = if o.new {
+        (o.amount.max(1) as u32, o.misc.max(0) as u32)
+    } else {
+        let share = o.amount.max(0) as f32 / 100.0;
+        (
+            ((p.fields.get_u32(UNIT_FIELD_MAXHEALTH) as f32 * share) as u32).max(1),
+            (p.fields.get_u32(UNIT_FIELD_MAXPOWER1) as f32 * share) as u32,
+        )
+    };
+    p.resurrect_offer = Some((o.caster, health, mana));
+    p.resurrect_at = o.at;
+    p.resurrect_map = Some(o.key);
+    p.outbound.send_frame(resurrect_request(
+        o.caster,
+        &o.name,
+        o.spirit_healer,
+        o.timer,
+    ));
 }
 
 /// `SMSG_RESURRECT_REQUEST`, as mangos-zero lays it out: the caster, its

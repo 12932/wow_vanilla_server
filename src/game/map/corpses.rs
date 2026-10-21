@@ -224,3 +224,37 @@ pub fn reckoned_from(data: &GameData, map: u32, graveyard_map: u32, pos: Vector3
         _ => pos,
     }
 }
+
+/// The corpse a cast names in place of a unit: the 1.12.1 client aims a
+/// resurrection at the body of one released (their ghost it can't see),
+/// with the corpse's GUID alone (`TARGET_FLAG_CORPSE_ALLY`).
+pub fn aimed_at(t: &crate::game::map::spells::Targets) -> Option<Guid> {
+    t.object
+        .filter(|g| t.unit.is_none() && crate::game::guid::is_corpse(*g))
+}
+
+/// A player's corpse lying in this map, not bones: its owner and where it
+/// lies (mangos's `GetCorpse`, a corpse in the world).
+pub fn body(map: &Map, corpse: Guid) -> Option<(Guid, Vector3d)> {
+    let c = map.corpses.get(&corpse)?;
+    let bones = c.fields.get_u32(crate::game::fields::CORPSE_FIELD_FLAGS)
+        & crate::game::map::bones::CORPSE_FLAG_BONES
+        != 0;
+    (corpse == crate::game::guid::corpse(crate::game::guid::counter(c.owner)) && !bones)
+        .then_some((c.owner, c.position))
+}
+
+/// `owner`'s corpse in the copy `key`, which they rose away from, bones
+/// now (mangos's `SpawnCorpseBones`, which finds the corpse in any map).
+pub fn bones_in(map: &Map, key: crate::game::map::MapKey, owner: Guid) {
+    if key == map.key {
+        return;
+    }
+    if let Some(h) = map.realm.maps.all().into_iter().find(|h| h.key == key) {
+        h.call(move |m| {
+            if !m.players.contains_key(&owner) {
+                crate::game::map::bones::at_rising(m, owner);
+            }
+        });
+    }
+}

@@ -217,7 +217,21 @@ async fn a_resurrection_is_the_first_casters_taken_from_them_once_and_a_declined
         "a declined offer"
     );
     offered(&realm, &mut a, gc).await;
+    a.clear();
     respond(&mut a, gc, 1).await;
+    // Sent to Carol, she rises as she lands (mangos's
+    // `DELAYED_RESURRECT_PLAYER`).
+    a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: a.teleport_order(),
+        time: Default::default(),
+    })
+    .await;
+    synced(&mut a).await;
     let risen = on_map(&realm, move |m| {
         let p = &m.players[&ga];
         (

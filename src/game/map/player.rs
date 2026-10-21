@@ -270,6 +270,12 @@ pub struct Player {
     /// Where the caster stood as they offered it: where it brings one
     /// (mangos's `setResurrectRequestData`).
     pub resurrect_at: Option<Vector3d>,
+    /// The map the caster was in as they offered it (the corpse's, for one
+    /// cast at a corpse from another map): where it brings one.
+    pub resurrect_map: Option<crate::game::map::MapKey>,
+    /// A resurrection taken, its health and mana, waiting for the teleport
+    /// to its caster to land (mangos's `DELAYED_RESURRECT_PLAYER`).
+    pub resurrect_on_arrival: Option<(u32, u32)>,
     pub trade: Option<crate::game::map::trade::Trade>,
     pub duel: Option<crate::game::map::duel::Duel>,
     /// Where a player in a battleground came from.
@@ -378,6 +384,8 @@ impl Player {
             caster: Default::default(),
             resurrect_offer: None,
             resurrect_at: None,
+            resurrect_map: None,
+            resurrect_on_arrival: None,
             trade: None,
             duel: None,
             bg_return: None,
