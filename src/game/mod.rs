@@ -265,6 +265,8 @@ mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p12e_casts;
 #[cfg(test)]
+mod tests_p12e_classes;
+#[cfg(test)]
 mod tests_p12e_sight;
 #[cfg(test)]
 mod tests_p12e_stacking;

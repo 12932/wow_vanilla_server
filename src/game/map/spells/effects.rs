@@ -40,6 +40,9 @@ pub(crate) enum Dr {
     Horror,
     /// A root an aura or a proc gave (Improved Wing Clip's, Entrapment's).
     TriggeredRoot,
+    /// Blind, a group of its own, for creatures too (mangos-classic's
+    /// `DIMINISHING_BLIND`, `DRTYPE_ALL`).
+    Blind,
 }
 
 /// A spell's diminishing returns group, as Thistle Tea follows vmangos: a
@@ -50,7 +53,7 @@ pub(crate) fn dr_group(s: &SpellTemplate, by_aura: bool) -> Option<Dr> {
     let flags = s.family_flags as u32;
     match (s.family_name, s.id) {
         (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),
-        (8, _) if flags & 0x100_0000 != 0 => return None,
+        (8, _) if flags & 0x100_0000 != 0 => return Some(Dr::Blind),
         (9, _) if flags & 0x8 != 0 => return Some(Dr::Freeze),
         (5, 6358) => return Some(Dr::WarlockFear),
         (5, _) if flags & 0x8000_0000 != 0 && s.mechanic == 5 => return Some(Dr::WarlockFear),
@@ -113,7 +116,7 @@ fn diminished(
     };
     let all = matches!(
         group,
-        Dr::ControlledStun | Dr::TriggeredStun | Dr::KidneyShot
+        Dr::ControlledStun | Dr::TriggeredStun | Dr::KidneyShot | Dr::Blind
     );
     // The rest only between players (and what players control), as
     // Thistle Tea's `DiminishingReturns.applicable?` has it.

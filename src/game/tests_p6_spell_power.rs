@@ -490,7 +490,12 @@ fn diminishing_groups_go_by_family_then_mechanic_in_order() {
         dr_group(&spell(8, 0x20_0000, 12, 0), false),
         Some(Dr::KidneyShot)
     );
-    assert_eq!(dr_group(&spell(8, 0x100_0000, 5, 0), false), None, "Blind");
+    // Blind its own group, as mangos-classic (round 12e; vmangos has none).
+    assert_eq!(
+        dr_group(&spell(8, 0x100_0000, 5, 0), false),
+        Some(Dr::Blind),
+        "Blind"
+    );
     let mut pounce = spell(3, 0, 12, 0);
     pounce.spell_visual = 4325;
     assert_eq!(dr_group(&pounce, false), None);
