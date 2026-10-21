@@ -394,6 +394,9 @@ pub struct CharacterRow {
 
 /// `at_login` flag: the character has never entered the world.
 pub const AT_LOGIN_FIRST: u32 = 0x1;
+/// `at_login` flag: the character must be given a new name before it
+/// enters the world (mangos's `AT_LOGIN_RENAME`, set by `.rename`).
+pub const AT_LOGIN_RENAME: u32 = 0x2;
 
 /// What the store knows at start-up: every character's name, and the
 /// highest GUIDs in use or ever handed out (the `counters`).

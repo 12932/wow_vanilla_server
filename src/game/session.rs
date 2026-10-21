@@ -25,7 +25,9 @@ use crate::game::guid;
 use crate::game::map::player::Player;
 use crate::game::map::{Arrival, ArrivalKind, MapEvent, MapHandle, MapKey};
 use crate::game::registry::{NameEntry, Online};
-use crate::game::store::{AT_LOGIN_FIRST, BAG_PLAYER, CharacterRow, CreateError, ItemRow};
+use crate::game::store::{
+    AT_LOGIN_FIRST, AT_LOGIN_RENAME, BAG_PLAYER, CharacterRow, CreateError, ItemRow,
+};
 
 /// What a map tells a session.
 pub enum Control {
@@ -377,6 +379,7 @@ impl Session {
             ClientOpcodeMessage::CMSG_CHAR_CREATE(c) => self.create(c).await,
             ClientOpcodeMessage::CMSG_CHAR_DELETE(c) => self.delete(c.guid).await,
             ClientOpcodeMessage::CMSG_PLAYER_LOGIN(c) => self.login(c.guid).await,
+            ClientOpcodeMessage::CMSG_CHAR_RENAME(c) => self.rename(c).await,
             other => debug!("{} on the character screen: {other}", self.account),
         }
     }
@@ -767,6 +770,75 @@ impl Session {
         self.outbound.send(&SMSG_CHAR_DELETE { result });
     }
 
+    /// `CMSG_CHAR_RENAME`: a character flagged for a new name (`.rename`)
+    /// takes one, as mangos's `HandleCharRenameOpcode`: a name a new
+    /// character could have, not taken, for one of this account's
+    /// characters that is flagged and not in the world. Everyone online
+    /// forgets the old name (`SMSG_INVALIDATE_PLAYER`).
+    async fn rename(&mut self, c: CMSG_CHAR_RENAME) {
+        let result = self.try_rename(&c).await;
+        self.outbound.send(&SMSG_CHAR_RENAME { result });
+    }
+
+    async fn try_rename(&mut self, c: &CMSG_CHAR_RENAME) -> SMSG_CHAR_RENAME_WorldResult {
+        type R = SMSG_CHAR_RENAME_WorldResult;
+        let name = match valid_name(&c.new_name) {
+            Ok(n) => n,
+            Err(WorldResult::CharNameTooShort) => return R::CharNameTooShort,
+            Err(WorldResult::CharNameTooLong) => return R::CharNameTooLong,
+            Err(WorldResult::CharNameOnlyLetters) => return R::CharNameOnlyLetters,
+            Err(WorldResult::CharNameReserved) => return R::CharNameReserved,
+            Err(_) => return R::CharNameNoName,
+        };
+        let g = c.character;
+        let Some(entry) = self
+            .realm
+            .registry
+            .name(g)
+            .filter(|e| guid::is_player(g) && *e.account == *self.account)
+        else {
+            return R::CharCreateError;
+        };
+        if self.realm.registry.online(g).is_some() {
+            return R::CharCreateError;
+        }
+        if self
+            .realm
+            .registry
+            .guid_by_name(&name)
+            .is_some_and(|other| other != g)
+        {
+            return R::CharCreateNameInUse;
+        }
+        let Some(mut row) = self.realm.store.load(guid::counter(g)).await else {
+            return R::CharCreateError;
+        };
+        if *row.account != *self.account || row.at_login & AT_LOGIN_RENAME == 0 {
+            return R::CharCreateError;
+        }
+        info!("{} renamed {} to {name}", self.account, row.name);
+        row.name = name.clone();
+        row.at_login &= !AT_LOGIN_RENAME;
+        self.realm.store.save(row);
+        self.realm.registry.remove_name(g);
+        self.realm.registry.add_name(NameEntry {
+            guid: g,
+            account: entry.account.clone(),
+            name: name.as_str().into(),
+            race: entry.race,
+            class: entry.class,
+            gender: entry.gender,
+            level: std::sync::atomic::AtomicU8::new(entry.level.load(Ordering::Relaxed)),
+        });
+        for o in self.realm.registry.all_online() {
+            o.outbound.send(&SMSG_INVALIDATE_PLAYER { guid: g });
+        }
+        R::ResponseSuccess {
+            character: g,
+            new_name: name,
+        }
+    }
+
     /// A cache the client uploads on the character screen, after a
     /// logout: the account's, or the character last logged in's, as
     /// Thistle Tea's `AccountCaches` files it.
@@ -893,6 +965,11 @@ impl Session {
         };
         if *row.account != *self.account {
             return fail(&self.outbound, WorldResult::CharLoginNoCharacter);
+        }
+        // One flagged for a new name takes it first: the client asks for
+        // it, and a client that logs in instead is refused.
+        if row.at_login & AT_LOGIN_RENAME != 0 {
+            return fail(&self.outbound, WorldResult::CharLoginFailed);
         }
         // A look made before it was checked, which would crash whoever saw
         // them: what the client has no texture for, back to what it has.
@@ -1266,6 +1343,11 @@ fn enum_flags(r: &CharacterRow) -> u32 {
     }
     if r.state.dead && r.state.corpse.is_some() {
         flags |= CharacterFlags::GHOST;
+    }
+    // The client asks for a new name before it logs in (mangos's
+    // `CHARACTER_FLAG_RENAME`).
+    if r.at_login & AT_LOGIN_RENAME != 0 {
+        flags |= CharacterFlags::RENAME;
     }
     flags
 }
