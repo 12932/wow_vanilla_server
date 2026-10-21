@@ -2161,7 +2161,7 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
     }) {
         s.cones.insert(id, degrees);
     }
-    for (id, kind, entry, condition) in rows(
+    for (id, kind, entry, condition, mask) in rows(
         db,
         &format!("SELECT * FROM spell_script_target {in_build}"),
         |c| {
@@ -2170,6 +2170,7 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
                 c.u32("type"),
                 c.u32("targetEntry"),
                 c.u32("conditionId"),
+                c.u32("inverseEffectMask"),
             )
         },
     ) {
@@ -2177,6 +2178,9 @@ fn load_spell_tables(db: &Connection, s: &mut super::spells::SpellData) {
         if condition != 0 {
             s.script_target_conditions
                 .insert((id, kind, entry), condition);
+        }
+        if mask != 0 {
+            s.script_target_masks.insert((id, kind, entry), mask);
         }
     }
     for (spell, learns) in rows(db, "SELECT * FROM spell_learn_spell", |c| {

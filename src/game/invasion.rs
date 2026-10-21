@@ -325,6 +325,43 @@ pub fn sweep(realm: &Realm) {
     }
 }
 
+/// Why the Scourge can't be sent to a zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttackRefused {
+    /// The invasion is off.
+    Disabled,
+    /// No zone the Scourge attack.
+    UnknownZone,
+    /// The zone is under attack already.
+    AlreadyAttacked,
+}
+
+/// `.invasion attack <zone>`: the Scourge fall on a zone at once, its rest
+/// and the controller's pass aside, its necropolises and its Mouth come
+/// (Thistle Tea's `ScourgeInvasion.attack`).
+pub fn attack(realm: &Realm, zone: u32) -> Result<(), AttackRefused> {
+    let z = {
+        let mut s = realm.social.invasion.lock();
+        if !s.enabled {
+            return Err(AttackRefused::Disabled);
+        }
+        let z = *ZONES
+            .iter()
+            .find(|z| z.zone == zone)
+            .ok_or(AttackRefused::UnknownZone)?;
+        if s.active.contains(&zone) {
+            return Err(AttackRefused::AlreadyAttacked);
+        }
+        s.remaining.insert(zone, z.necropolises);
+        s.bolts.remove(&zone);
+        s.active.insert(zone);
+        z
+    };
+    mouth(realm, z, true);
+    publish(realm);
+    Ok(())
+}
+
 /// A necropolis over `zone` has fallen.
 pub fn necropolis_fell(realm: &Realm, zone: u32) {
     {

@@ -523,6 +523,9 @@ pub struct Map {
     /// Formations whose leader died, by the leader's spawn: the member
     /// leading their patrol meanwhile.
     pub acting_leaders: AHashMap<u32, Guid>,
+    /// Formations a script made whose leader died on its walk, by the
+    /// leader: the member leading it on meanwhile.
+    pub script_acting: AHashMap<Guid, Guid>,
     /// Linked slaves' spawns held back by their master's life, to come in
     /// once it allows (vmangos's `CanSpawn`, Thistle Tea's `:held`).
     pub held_slaves: ahash::AHashSet<u32>,
@@ -1118,6 +1121,7 @@ impl Map {
             script_groups: AHashMap::new(),
             left_groups: Default::default(),
             acting_leaders: AHashMap::new(),
+            script_acting: AHashMap::new(),
             held_slaves: Default::default(),
             pools: AHashMap::new(),
             map_events: Default::default(),

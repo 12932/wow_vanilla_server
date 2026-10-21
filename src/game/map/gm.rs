@@ -438,7 +438,8 @@ fn target_or_self(map: &Map, guid: Guid) -> Guid {
         .unwrap_or(guid)
 }
 
-/// `.invasion [on|off|fell <zone>]`: drive the Scourge Invasion.
+/// `.invasion [on|off|fell <zone>|attack <zone>]`: drive the Scourge
+/// Invasion.
 fn invasion(map: &mut Map, args: &[&str]) -> String {
     let realm = map.realm.clone();
     match args {
@@ -456,6 +457,22 @@ fn invasion(map: &mut Map, args: &[&str]) -> String {
                 format!("A necropolis over zone {z} falls.")
             }
             Err(_) => "Usage: .invasion fell <zone id>".to_owned(),
+        },
+        ["attack", zone] => match zone.parse() {
+            Ok(z) => {
+                use crate::game::invasion::AttackRefused;
+                match crate::game::invasion::attack(&realm, z) {
+                    Ok(()) => format!("The Scourge fall on zone {z}."),
+                    Err(AttackRefused::Disabled) => "The invasion is off.".to_owned(),
+                    Err(AttackRefused::UnknownZone) => {
+                        format!("The Scourge don't attack zone {z}.")
+                    }
+                    Err(AttackRefused::AlreadyAttacked) => {
+                        format!("Zone {z} is under attack already.")
+                    }
+                }
+            }
+            Err(_) => "Usage: .invasion attack <zone id>".to_owned(),
         },
         _ => {
             let s = realm.social.invasion.lock();

@@ -86,6 +86,13 @@ pub fn tile_of(x: f32, y: f32) -> (i32, i32) {
     (tx.clamp(0, 63), ty.clamp(0, 63))
 }
 
+/// A zone and area the bake names, if it names an area: 0 and the
+/// unsigned sentinel `u32::MAX` name none (Thistle Tea's
+/// `get_zone_and_area`, which rejects both on Programmer Isle).
+pub fn known(ids: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    ids.filter(|&(_, area)| area != 0 && area != u32::MAX)
+}
+
 fn v(p: Vector3d) -> Vec3 {
     Vec3::new(p.x, p.y, p.z)
 }
@@ -345,8 +352,6 @@ impl Nav {
         if !self.ready(p.x, p.y) {
             return None;
         }
-        let known =
-            |ids: Option<(u32, u32)>| ids.filter(|&(_, area)| area != 0 && area != u32::MAX);
         if let Some(ids) = known(self.map.get_zone_and_area(p.x, p.y, p.z).ok()) {
             return Some(ids);
         }

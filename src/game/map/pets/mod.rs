@@ -480,9 +480,17 @@ pub fn effect(
             // own, a unit's), the first there and the rest about it within
             // the radius; else beside the caster (mangos-classic's
             // `EffectSummonGuardian` by `TARGET_FLAG_DEST_LOCATION`).
-            let place = matches!(e.target_a, 17 | 18 | 53 | 63)
-                .then(|| wild::destination(map, caster, s, index, t))
-                .flatten();
+            // A demon goes where its effect's target puts it, its spot about
+            // the caster or the place aimed at (mangos-classic's
+            // `EffectSummonDemon` at `m_destPos`: Inferno's infernal where
+            // it was aimed).
+            let place = if e.effect == EFFECT_SUMMON_DEMON {
+                wild::place(map, caster, s, index, t)
+            } else {
+                matches!(e.target_a, 17 | 18 | 53 | 63)
+                    .then(|| wild::destination(map, caster, s, index, t))
+                    .flatten()
+            };
             let radius = map.realm.data.spells.radius(e.radius_index);
             let at = |i: usize| place.map(|p| if i == 0 { p } else { wild::about(p, radius) });
             // A player's guardian: a second cast of their own sends those
@@ -511,8 +519,12 @@ pub fn effect(
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),
+        // Where its effect's target puts it (mangos-classic's
+        // `EffectSummonPossessed` at `m_destPos`): the Eye of Kilrogg at its
+        // minion's spot.
         EFFECT_SUMMON_POSSESSED => {
-            totems::summon_possessed(map, caster, e.misc_value.max(0) as u32, s)
+            let at = wild::place(map, caster, s, index, t);
+            totems::summon_possessed(map, caster, e.misc_value.max(0) as u32, s, at)
         }
         EFFECT_APPLY_AREA_AURA_PET => area_aura(map, caster, s, &[(index, amount)]),
         _ => {}

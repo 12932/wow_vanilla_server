@@ -131,6 +131,17 @@ pub fn join_with(map: &mut Map, g: Guid, leader: Guid, distance: f32, angle: f32
         .map_or(leader, |(l, _, _, _)| *l);
     map.script_groups
         .insert(g, (leader, distance, angle, flags));
+    // Joining a leader already dead, it hears of the death as its group
+    // tells of one, and a formation on its walk it leads on, none leading
+    // it yet (Thistle Tea's `catch_up_death`).
+    if map.creature(leader).is_some_and(|c| !c.alive()) {
+        if hears_death(map, g, leader) {
+            crate::game::map::event_ai::group_death_heard(map, g, leader);
+        }
+        if !map.script_acting.contains_key(&leader) {
+            script_lead_on(map, leader, leader, None);
+        }
+    }
 }
 
 /// A script takes `g` out of its group (vmangos's
@@ -140,6 +151,17 @@ pub fn join_with(map: &mut Map, g: Guid, leader: Guid, distance: f32, angle: f32
 /// database group, they stay out while the map is up, through their
 /// respawns.
 pub fn leave(map: &mut Map, g: Guid) {
+    // Whoever led its formation meanwhile, or it leading another's, stands.
+    let acting: Vec<Guid> = map
+        .script_acting
+        .iter()
+        .filter(|(l, a)| **l == g || **a == g)
+        .map(|(_, a)| *a)
+        .collect();
+    map.script_acting.retain(|l, a| *l != g && *a != g);
+    for a in acting {
+        stand(map, a);
+    }
     map.script_groups.remove(&g);
     map.script_groups.retain(|_, (l, _, _, _)| *l != g);
     let Some(spawn) = spawn_of(map, g) else {
@@ -172,7 +194,21 @@ pub fn leave(map: &mut Map, g: Guid) {
 /// leader's leave does ([`leave`]), where they were left pointing at it
 /// (in its group, a member of none here, and the next to join them with
 /// it). A database group keeps to its spawns, which come back.
+///
+/// One that died on its walk with a member leading its formation on
+/// meanwhile leaves the formation to that member, who leads it from then on
+/// (mangos-classic's `FormationData::OnDeath`, whose new master stays;
+/// Thistle Tea keeps the group, its acting leader leading).
 pub fn gone(map: &mut Map, g: Guid) {
+    map.script_acting.retain(|_, a| *a != g);
+    if let Some(acting) = map.script_acting.remove(&g) {
+        map.script_groups.remove(&acting);
+        for (l, _, _, _) in map.script_groups.values_mut() {
+            if *l == g {
+                *l = acting;
+            }
+        }
+    }
     map.script_groups.remove(&g);
     map.script_groups.retain(|_, (l, _, _, _)| *l != g);
 }
@@ -180,9 +216,13 @@ pub fn gone(map: &mut Map, g: Guid) {
 /// The member leading the formation of `leader`'s spawn meanwhile, if one
 /// is, leads it no more and stands.
 fn stop_acting(map: &mut Map, leader: u32) {
-    let Some(acting) = map.acting_leaders.remove(&leader) else {
-        return;
-    };
+    if let Some(acting) = map.acting_leaders.remove(&leader) {
+        stand(map, acting);
+    }
+}
+
+/// A member that led a formation meanwhile leads it no more and stands.
+fn stand(map: &mut Map, acting: Guid) {
     let Some(c) = map.creature_mut(acting) else {
         return;
     };
@@ -477,6 +517,15 @@ fn formation_of(map: &Map, leader: Guid) -> Vec<(Guid, f32, f32)> {
         .filter(|(_, (l, _, _, f))| *l == leader && f & GROUP_FORMATION != 0)
         .map(|(m, (_, d, a, _))| (*m, *d, *a))
         .collect();
+    // One a script made that it leads meanwhile.
+    for (key, _) in map.script_acting.iter().filter(|(_, a)| **a == leader) {
+        out.extend(
+            map.script_groups
+                .iter()
+                .filter(|(m, (l, _, _, f))| l == key && **m != leader && f & GROUP_FORMATION != 0)
+                .map(|(m, (_, d, a, _))| (*m, *d, *a)),
+        );
+    }
     let Some(key) = led_group(map, leader) else {
         return out;
     };
@@ -503,6 +552,17 @@ fn formation_of(map: &Map, leader: Guid) -> Vec<(Guid, f32, f32)> {
 /// second later (Thistle Tea's `CreatureGroup.on_death`).
 pub fn died(map: &mut Map, g: Guid) {
     release_held(map);
+    // A formation a script made, led by it or meanwhile by it.
+    if let Some(key) = map
+        .script_acting
+        .iter()
+        .find(|(_, a)| **a == g)
+        .map(|(l, _)| *l)
+    {
+        script_lead_on(map, key, g, Some(g));
+    } else if is_script_leader(map, g) {
+        script_lead_on(map, g, g, Some(g));
+    }
     let Some(key) = led_group(map, g) else {
         return;
     };
@@ -538,16 +598,28 @@ pub fn died(map: &mut Map, g: Guid) {
         return;
     };
     map.acting_leaders.insert(key, next);
+    let route = crate::game::map::event_ai::Route {
+        points: std::sync::Arc::new(path.clone()),
+        repeat: true,
+    };
+    lead_on(map, next, route, bound_for, last);
+}
+
+/// `next` leads a formation on along `route`, from the point bound for, a
+/// second later.
+fn lead_on(
+    map: &mut Map,
+    next: Guid,
+    route: crate::game::map::event_ai::Route,
+    bound_for: usize,
+    last: Option<usize>,
+) {
     let now = map.now;
-    let points = std::sync::Arc::new(path.clone());
     let Some(c) = map.creature_mut(next) else {
         return;
     };
     let s = c.scripted.get_or_insert_with(Default::default);
-    s.route = Some(crate::game::map::event_ai::Route {
-        points,
-        repeat: true,
-    });
+    s.route = Some(route);
     c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
     c.waypoint = bound_for;
     c.last_waypoint = last;
@@ -556,9 +628,68 @@ pub fn died(map: &mut Map, g: Guid) {
     }
 }
 
+/// The walk `g` is on: a script's route, or its path (its spawn's, else
+/// its entry's) while it walks one; with the point it is bound for and the
+/// last it reached.
+fn walk_of(
+    map: &Map,
+    g: Guid,
+) -> Option<(crate::game::map::event_ai::Route, usize, Option<usize>)> {
+    let c = map.creature(g)?;
+    let route = match c.scripted.as_deref().and_then(|s| s.route.clone()) {
+        Some(r) => r,
+        None if c.movement_type == crate::game::map::creature::MOVEMENT_WAYPOINT => {
+            let data = &map.realm.data;
+            let points = c
+                .spawn_guid
+                .and_then(|s| data.waypoints.get(&s))
+                .or_else(|| data.waypoints_by_entry.get(&c.entry))?;
+            crate::game::map::event_ai::Route {
+                points: std::sync::Arc::new(points.clone()),
+                repeat: true,
+            }
+        }
+        None => return None,
+    };
+    (!route.points.is_empty()).then_some((route, c.waypoint, c.last_waypoint))
+}
+
+/// A formation a script made under `key` lost the one leading it, `dead`
+/// (its leader, or the member leading meanwhile): its first member alive
+/// (by guid) but `but` leads it on along `dead`'s walk, from the point
+/// `dead` was bound for (Thistle Tea's `CreatureGroup.on_death` for a
+/// runtime group, mangos-classic's `FormationData::TrySetNewMaster`); none
+/// if it walked none, or none is left.
+fn script_lead_on(map: &mut Map, key: Guid, dead: Guid, but: Option<Guid>) {
+    if script_flags(map, key) & GROUP_FORMATION == 0 {
+        return;
+    }
+    let Some((route, bound_for, last)) = walk_of(map, dead) else {
+        map.script_acting.remove(&key);
+        return;
+    };
+    let mut candidates: Vec<Guid> = map
+        .script_groups
+        .iter()
+        .filter(|(m, (l, _, _, _))| *l == key && Some(**m) != but)
+        .map(|(m, _)| *m)
+        .filter(|m| map.creature(*m).is_some_and(|c| c.alive()))
+        .collect();
+    candidates.sort_by_key(|c| c.guid());
+    let Some(next) = candidates.first().copied() else {
+        map.script_acting.remove(&key);
+        return;
+    };
+    map.script_acting.insert(key, next);
+    lead_on(map, next, route, bound_for, last);
+}
+
 /// `g` came back: the formation it leads, led meanwhile by another, is its
 /// again, and the other falls in behind it.
 fn leader_back(map: &mut Map, g: Guid) {
+    if let Some(acting) = map.script_acting.remove(&g) {
+        stand(map, acting);
+    }
     let Some(spawn) = spawn_of(map, g) else {
         return;
     };
@@ -686,7 +817,13 @@ pub fn leader_walked(map: &mut Map, leader: Guid) {
 /// as the leader now stands (Thistle Tea's `Formation.home_position`).
 pub fn formation_home(map: &Map, g: Guid) -> Option<Vector3d> {
     let (leader, distance, angle) = match map.script_groups.get(&g) {
-        Some((l, d, a, f)) if f & GROUP_FORMATION != 0 => (*l, *d, *a),
+        Some((l, d, a, f)) if f & GROUP_FORMATION != 0 => {
+            let leads = map.script_acting.get(l).copied().unwrap_or(*l);
+            if leads == g {
+                return None;
+            }
+            (leads, *d, *a)
+        }
         _ => {
             let spawn = spawn_of(map, g)?;
             if !follows(&map.realm.data, Some(spawn)) || map.left_groups.contains(&spawn) {

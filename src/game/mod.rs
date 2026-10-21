@@ -121,6 +121,16 @@ mod tests_order;
 #[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
+mod tests_p10_world;
+#[cfg(test)]
+mod tests_p10_world_contact;
+#[cfg(test)]
+mod tests_p10_world_groups;
+#[cfg(test)]
+mod tests_p10_world_spells;
+#[cfg(test)]
+mod tests_p10_world_system;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

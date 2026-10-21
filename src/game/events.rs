@@ -26,7 +26,10 @@ pub fn active(data: &GameData, now: i64) -> AHashSet<u32> {
 }
 
 /// The events on at `now`: those their recurrence has on, the hardcoded
-/// ones their rules have on, and those the world drives.
+/// ones their rules have on, and those the world drives; one the world
+/// drives off is off whatever its recurrence says, through its turns
+/// (Thistle Tea's `GameEvent.drive`, where a driven event holds its state
+/// across the schedule's transitions).
 pub fn active_with(data: &GameData, now: i64, driven: &AHashMap<u32, bool>) -> AHashSet<u32> {
     let mut on: AHashSet<u32> = data
         .events
@@ -40,7 +43,9 @@ pub fn active_with(data: &GameData, now: i64, driven: &AHashMap<u32, bool>) -> A
         }
     }
     for (id, driven_on) in driven {
-        if *driven_on && data.events.contains_key(id) {
+        if !*driven_on {
+            on.remove(id);
+        } else if data.events.contains_key(id) {
             on.insert(*id);
         }
     }
