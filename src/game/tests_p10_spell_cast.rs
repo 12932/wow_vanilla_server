@@ -108,6 +108,10 @@ const MANA_TICKS: u32 = 998_444;
 const HIDING: u32 = 998_445;
 const DISTRACT: u32 = 998_446;
 const R10: u32 = 13;
+/// A two-second Stuck, and a two-second cast of a dummy, both broken by
+/// moving.
+const STUCK: u32 = 998_447;
+const MOVE_BREAKS: u32 = 998_448;
 
 fn proc_aura(id: u32, flags: u32) -> SpellTemplate {
     let mut s = bare(id, 0);
@@ -312,9 +316,26 @@ fn data(d: &mut GameData) {
             ..Default::default()
         },
     );
+    let two_seconds = |id: u32, effect_id: u32| {
+        let mut s = bare(id, 0);
+        s.casting_time_index = CAST_2S;
+        s.interrupt_flags = 1;
+        effect(
+            &mut s,
+            0,
+            SpellEffect {
+                effect: effect_id,
+                target_a: 1,
+                ..Default::default()
+            },
+        );
+        s
+    };
     insert(
         d,
         [
+            two_seconds(STUCK, spells::EFFECT_STUCK),
+            two_seconds(MOVE_BREAKS, spells::EFFECT_DUMMY),
             hiding,
             distract,
             give,
@@ -814,4 +835,37 @@ async fn a_distraction_from_stealth_keeps_it_and_starts_no_fight() {
         .await
         .unwrap();
     assert_eq!(out, (true, false, false, true));
+}
+
+/// A Stuck goes on as its caster moves in a long fall, and breaks as they
+/// move otherwise; another cast breaks in a long fall too (mangos-classic's
+/// `Spell::update`: `SPELL_EFFECT_STUCK` first and `MOVEFLAG_FALLINGFAR`;
+/// Thistle Tea's "only first-effect stuck recovery can finish during a
+/// long fall").
+#[tokio::test]
+async fn a_stuck_goes_on_through_a_long_fall() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10CB", "Faller", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[STUCK, MOVE_BREAKS]);
+            let mut out = Vec::new();
+            for (spell, falling) in [(STUCK, true), (STUCK, false), (MOVE_BREAKS, true)] {
+                cast_fresh(m, a, spell, Targets::default());
+                let p = m.players.get_mut(&a).unwrap();
+                p.movement.flags = if falling {
+                    p.movement.flags.set_fallingfar()
+                } else {
+                    p.movement.flags.clear_fallingfar()
+                };
+                p.movement.position.z -= 3.0;
+                spells::moved(m, a);
+                out.push(kit::casting(m, a));
+                spells::interrupt(m, a);
+            }
+            out
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, vec![Some(STUCK), None, None]);
 }

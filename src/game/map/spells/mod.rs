@@ -2747,8 +2747,16 @@ pub fn moved(map: &mut Map, g: Guid) {
     else {
         return;
     };
+    // A Stuck (its first effect) goes on through a long fall (mangos's
+    // `Spell::update`: `SPELL_EFFECT_STUCK` and `MOVEFLAG_FALLINGFAR`).
+    let falling = map
+        .players
+        .get(&g)
+        .is_some_and(|p| p.movement.flags.get_fallingfar());
     let breaks = map.realm.data.spells.get(spell).is_some_and(|s| {
-        if channel {
+        if falling && s.effects[0].effect == EFFECT_STUCK {
+            false
+        } else if channel {
             s.channel_interrupt_flags & 0x8 != 0 || s.interrupt_flags & 0x1 != 0
         } else {
             s.interrupt_flags & 0x1 != 0
