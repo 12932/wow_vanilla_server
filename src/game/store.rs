@@ -181,6 +181,11 @@ pub struct CharacterState {
     pub category_cooldowns: Vec<(u32, u32)>,
     /// Where those came from: (spell, the item's entry or 0, category).
     pub cooldown_sources: Vec<(u32, u32, u32)>,
+    /// When the auras and cooldowns above were saved (Unix milliseconds):
+    /// what of them runs while the character is away runs from then
+    /// (mangos's saved expiry times, and `_LoadAuras`' `timediff`). 0 in a
+    /// character saved before it was kept, whose logout time stands in.
+    pub saved_at_ms: i64,
     /// Standings with factions, as offsets from the base.
     pub reputation: Vec<crate::game::map::reputation::Standing>,
     /// The reputation index watched on the experience bar.

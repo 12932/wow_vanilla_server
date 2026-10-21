@@ -366,24 +366,63 @@ pub fn saved_sources(p: &Player, now: Instant) -> Vec<(u32, u32, u32)> {
     v
 }
 
+/// How long the player's saved auras and cooldowns were away, in
+/// milliseconds: since they were saved, else since the logout; never less
+/// than nothing, so that a clock put back lengthens nothing.
+pub fn away_ms(p: &Player) -> u64 {
+    let saved = match p.row.state.saved_at_ms {
+        0 => p.row.logout_time.saturating_mul(1000),
+        ms => ms,
+    };
+    if saved <= 0 {
+        return 0;
+    }
+    u64::try_from(chrono::Utc::now().timestamp_millis() - saved).unwrap_or(0)
+}
+
+/// What is left of a saved aura of `s` after `away` milliseconds away: a
+/// harmful aura's time runs while its player is away, as does one that
+/// says so (`SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE`); a helpful one waits
+/// (mangos's `_LoadAuras`). `None` if it has run out.
+pub fn left_after(s: &SpellTemplate, left: Option<u32>, away: u64) -> Option<Option<u32>> {
+    const ATTR_EX4_AURA_EXPIRES_OFFLINE: u32 = 0x4;
+    let Some(ms) = left else {
+        return Some(None);
+    };
+    if !s.attr(4, ATTR_EX4_AURA_EXPIRES_OFFLINE) && auras::positive(s) {
+        return Some(Some(ms));
+    }
+    let ms = u64::from(ms).saturating_sub(away);
+    (ms > 0).then(|| Some(ms as u32))
+}
+
 /// The cooldowns a player saved come back into their caster, before the
 /// client is told of them in `SMSG_INITIAL_SPELLS`: with their items and
 /// categories, and a cooldown waiting for good for each saved aura of the
 /// player's own whose cooldown waits for it to go (mangos's
 /// `_LoadSpellCooldowns`, and `_LoadAuras`'s `AddCooldown(.., true)`).
 pub fn load(p: &mut Player, data: &crate::game::data::GameData, now: Instant) {
+    let away = away_ms(p);
     let cooldowns = std::mem::take(&mut p.row.state.cooldowns);
     let categories = std::mem::take(&mut p.row.state.category_cooldowns);
     let sources = std::mem::take(&mut p.row.state.cooldown_sources);
+    // A cooldown's time runs while its player is away: mangos keeps when
+    // it ends (`_SaveSpellCooldowns`, `_LoadSpellCooldowns`).
     for (id, ms) in cooldowns {
-        p.caster
-            .cooldowns
-            .insert(id, now + Duration::from_millis(u64::from(ms)));
+        let ms = u64::from(ms).saturating_sub(away);
+        if ms > 0 {
+            p.caster
+                .cooldowns
+                .insert(id, now + Duration::from_millis(ms));
+        }
     }
     for (category, ms) in categories {
-        p.caster
-            .category_cooldowns
-            .insert(category, now + Duration::from_millis(u64::from(ms)));
+        let ms = u64::from(ms).saturating_sub(away);
+        if ms > 0 {
+            p.caster
+                .category_cooldowns
+                .insert(category, now + Duration::from_millis(ms));
+        }
     }
     for (id, item, category) in sources {
         p.caster.cooldown_sources.insert(id, (item, category));
@@ -490,9 +529,13 @@ pub fn restore(map: &mut Map, player: Guid) {
         return;
     };
     load(p, &data, now);
+    let away = away_ms(p);
     let saved = std::mem::take(&mut p.row.state.auras);
     for a in saved {
         let Some(s) = data.spells.get(a.spell) else {
+            continue;
+        };
+        let Some(left) = left_after(s, a.left, away) else {
             continue;
         };
         let effects: Vec<(usize, i32)> = a
@@ -519,7 +562,7 @@ pub fn restore(map: &mut Map, player: Guid) {
                 item,
                 equipped: false,
                 combo: a.combo,
-                duration: Some(a.left),
+                duration: Some(left),
                 charges: Some(a.charges),
                 triggered: a.triggered,
                 linked: false,
