@@ -1140,7 +1140,7 @@ const WALKER: u32 = 5003;
 /// A leader (spawn 90) and its follower (91) a pace behind, in formation
 /// with `flags`; a friend of theirs (92) by the follower; the walker
 /// neutral, the friend of the pack.
-fn group_world(flags: u32) -> GameData {
+pub(super) fn group_world(flags: u32) -> GameData {
     use crate::game::data::scripts::{GROUP_FORMATION, GroupMember};
     let mut d = wolf_world();
     let mut walker = template(WALKER, "Walker", PACK);
@@ -1165,11 +1165,11 @@ fn group_world(flags: u32) -> GameData {
     d
 }
 
-fn leader() -> Guid {
+pub(super) fn leader() -> Guid {
     guid::unit(WALKER, 90)
 }
 
-fn follower() -> Guid {
+pub(super) fn follower() -> Guid {
     guid::unit(WALKER, 91)
 }
 

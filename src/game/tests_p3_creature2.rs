@@ -1245,7 +1245,8 @@ async fn a_summons_despawn_type_decides_its_time_its_death_and_its_corpse() {
         (8, false, 'A', 'A', 'C', 'C', false),
         (9, true, 'G', 'G', 'C', 'G', false),
         (10, true, 'G', 'G', 'G', 'G', false),
-        (11, false, 'C', 'W', 'C', 'C', false),
+        // Its time from its summoning, as Thistle Tea's `schedule_summon_despawn`.
+        (11, true, 'C', 'W', 'C', 'C', false),
     ];
     for (row, want) in rows.iter().zip(expected) {
         assert_eq!(*row, want, "despawn type {}", want.0);

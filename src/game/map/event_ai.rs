@@ -1042,9 +1042,11 @@ fn when_due(kind: i32, alive: bool, fighting: bool) -> Due {
 }
 
 /// Whether a summon of despawn type `kind` starts its time when it is
-/// summoned (the rest from their death, or never).
+/// summoned (the rest from their death, or never): a timed death's too,
+/// summoned by a script as by a wild summon's spell (Thistle Tea's
+/// `Summon.build` with type 11).
 pub fn timer_at_spawn(kind: i32) -> bool {
-    kind <= 0 || TIMED_WHILE_ALIVE.contains(&kind)
+    kind <= 0 || kind == TIMED_DEATH || TIMED_WHILE_ALIVE.contains(&kind)
 }
 
 /// A summon died: one of a type that vanishes at death goes (the summoner
