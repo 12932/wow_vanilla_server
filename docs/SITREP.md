@@ -813,6 +813,19 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   13 rows stay `gap` (objects' casts, caps and masks; an item cast turned to its script's creature; a trap
   re-checked on its owner's PvP change), for phase 3. Merged without a second fast-suite run: the branch's code
   is master's, which the agent tested (master had moved by a docs commit only).
+- **10c, the loaders (0.1.60):** 21 of 24 rows settled (17 covered, 3 `wrong-for-1.12`, 1 accepted), five fixes:
+  a weapon enchantment procs from no weapon that can't be used (cat or bear form, a disarmed main hand: mangos's
+  `GetWeaponForAttack`); Prayer of Healing and the rest of Thistle Tea's area list spend no Ascendance charge; a
+  Silithyst turn-in gives the Cenarion Circle 20 (spell 31247's effect 122, unused in 1.12, read as reputation, 10
+  a cast, cast twice: mangos's `REPUTATION_REWARD_SILITHYST`); a pet spell wholly on the pet (Prowl) is its own,
+  for its autocast and its bar (mangos's caster-target-positive rule); Combat Range by the range index alone
+  (index 2, mangos's `SPELL_RANGE_FLAG_MELEE`): Taunt and Pick Pocket now refused at 7 yards, where they reached
+  8.5. Its `inverseEffectMask` copy dropped for 10e's. `wrong-for-1.12`: auction houses by mangos's
+  `GetAuctionHouseEntry`, `ATTR_EX2_ACTIVE_THREAT` unread (mangos's too), Beast Lore's flag seen by all (round 8).
+  Noted: a creature's flat physical bonus is added at the swing, not shown in its damage fields as mangos does.
+  **My call on its open row** (combat_control 31; wvs differs from both): a pet's attack after a harmful spell from
+  the bar follows mangos, for phase 3 (today the succubus attacks the target she has just seduced). Left `gap` for
+  phase 3: a periodic trigger's cast (Hellfire) procs ordinary auras; a hunter's untrained pet called back.
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -928,7 +941,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 8h, 8j, 8k and 8l: round 8 done | 87.8% | 0.1.31 |
 | Round 9 phase 1 (six areas) | 91.8% | 0.1.58 |
 | 10e: the world, round 10 | 92.2% | 0.1.59 |
+| 10c: the loaders, round 10 | 92.4% | 0.1.60 |
 
-**Running now:** round 10 (phase 2): 10a, 10b, 10c, 10f, 10h and 10m; 10d and 10l next (six at most).
+**Running now:** round 10 (phase 2): 10a, 10b, 10d (with 10l's rows), 10f, 10h and 10m (six at most).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

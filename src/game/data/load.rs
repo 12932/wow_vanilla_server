@@ -1787,6 +1787,18 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     s.spells = best.into_iter().map(|(k, (_, t))| (k, t)).collect();
     apply_spell_mods(db, &mut s.spells);
+    // The Silithyst capture's reward (31247) gives its Cenarion Circle
+    // reputation by an effect of a later client's numbering (122), which
+    // 1.12 leaves unused: it is read as the reputation effect (Thistle
+    // Tea's `effect_type(31_247, 122)`; mangos gives it from its Silithus
+    // script).
+    if let Some(e) = s
+        .spells
+        .get_mut(&SILITHYST_CAP_REWARD)
+        .and_then(|t| t.effects.iter_mut().find(|e| e.effect == 122))
+    {
+        e.effect = crate::game::map::extra_effects::EFFECT_REPUTATION;
+    }
     load_spell_tables(db, s);
     crate::game::map::spells::class_scripts::patch(s);
     for (id, map, x, y, z, o) in rows(
@@ -1915,6 +1927,8 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     s.inherit_groups();
     s.index_talent_lines();
 }
+
+const SILITHYST_CAP_REWARD: u32 = 31_247;
 
 /// vmangos's corrections to `spell_template` (`spell_mod` and
 /// `spell_effect_mod`): -1 leaves a value as it is.

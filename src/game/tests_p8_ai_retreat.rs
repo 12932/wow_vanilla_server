@@ -25,13 +25,14 @@ const STAYS: u32 = 95_802;
 
 fn world() -> GameData {
     let mut d = data();
-    d.spells.ranges.insert(2, (0.0, 40.0));
+    // A forty-yard range (index 4; index 2 is 1.12's melee "Combat Range").
+    d.spells.ranges.insert(4, (0.0, 40.0));
     d.spells.cast_times.insert(99, 3_000);
     for (id, interrupt_flags) in [(BREAKS, 0x1), (STAYS, 0x8)] {
         let mut s = SpellTemplate {
             id,
             name: format!("Bolt {id}"),
-            range_index: 2,
+            range_index: 4,
             casting_time_index: 99,
             interrupt_flags,
             equipped_item_class: -1,

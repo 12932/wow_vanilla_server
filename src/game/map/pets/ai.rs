@@ -463,7 +463,7 @@ fn pick_spell(map: &Map, g: Guid, victim: Guid) -> Option<(u32, f32)> {
     };
     s.autocast.iter().copied().find_map(|id| {
         let t = data.spells.get(id)?;
-        if crate::game::map::auras::positive(t) {
+        if helpful(t) {
             return None;
         }
         if caster.cooldowns.get(&id).is_some_and(|c| *c > now)
@@ -533,7 +533,7 @@ fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)
     let f = map.unit_fields(g)?;
     s.autocast.iter().copied().find_map(|id| {
         let t = data.spells.get(id)?;
-        if !crate::game::map::auras::positive(t)
+        if !helpful(t)
             || t.passive()
             || t.attr(1, ATTR_EX_NO_AUTOCAST_AI)
             || (victim.is_some() && t.attr(0, ATTR_STOPS_ATTACK))
@@ -567,6 +567,19 @@ fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)
             .find(|w| worth(map, g, t, *w, victim))
             .map(|w| (id, w))
     })
+}
+
+/// A spell a pet casts for itself or a friend, not at its victim: a
+/// helpful one, or one wholly on itself (Prowl, whose slow is its own), as
+/// mangos's `IsPositiveEffectTargetMode` takes an effect on the caster
+/// (Thistle Tea's Prowl among the self spells).
+pub(super) fn helpful(t: &crate::game::data::spells::SpellTemplate) -> bool {
+    crate::game::map::auras::positive(t)
+        || t.effects
+            .iter()
+            .filter(|e| e.effect != 0)
+            .all(|e| e.target_a == 1 && matches!(e.target_b, 0 | 1))
+            && t.effects.iter().any(|e| e.effect != 0)
 }
 
 /// `TARGET_MASTER`: a spell on the pet's master alone.
@@ -685,7 +698,7 @@ fn caster_range(map: &Map, g: Guid) -> Option<f32> {
     s.autocast
         .iter()
         .filter_map(|id| data.spells.get(*id))
-        .filter(|t| !crate::game::map::auras::positive(t))
+        .filter(|t| !helpful(t))
         .filter(|t| t.has_effect(2) && t.casting_time_index > 1)
         .filter(|t| f.get_u32(UNIT_FIELD_POWER1 + t.power_type.min(4) as u16) >= t.mana_cost)
         .map(|t| data.spells.range(t).1)
