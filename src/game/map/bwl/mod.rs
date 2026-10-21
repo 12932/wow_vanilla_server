@@ -19,6 +19,8 @@ use std::time::Duration;
 
 use wow_world_messages::Guid;
 
+pub mod razorgore;
+
 use super::instance_adapters::TIMERS;
 use super::instance_script::{
     DONE, Event, FAILED, IN_PROGRESS, NOT_STARTED, Open, get_data, schedule_for, store,
@@ -129,7 +131,50 @@ pub fn set_data(map: &mut Map, field: u32, value: u32) {
 }
 
 /// What a field's change brings.
-fn changed(_map: &mut Map, _field: u32, _old: u32, _new: u32) {}
+fn changed(map: &mut Map, field: u32, _old: u32, new: u32) {
+    if field == RAZORGORE {
+        razorgore::changed(map, new);
+    }
+}
+
+/// Whether the map is a copy of the lair.
+fn here(map: &Map) -> bool {
+    map.key.instance != 0
+        && map.instance.script == Some(super::instance_script::Script::BlackwingLair)
+}
+
+/// A dummy effect the lair's script owns: the Orb of Domination's.
+/// Whether it was one.
+pub fn dummy(
+    map: &mut Map,
+    caster: Guid,
+    _target: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+) -> bool {
+    if !here(map) {
+        return false;
+    }
+    match s.id {
+        razorgore::DRAGON_ORB => {
+            razorgore::orb_used(map, caster);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// An object a spell worked (effect 86) the lair's script owns: an egg
+/// Razorgore broke. Whether it was one.
+pub fn object_activated(map: &mut Map, caster: Guid, object: Guid, spell: u32) -> bool {
+    here(map) && razorgore::egg_broken(map, caster, object, spell)
+}
+
+/// A blow that would have killed `g`, whom a floor kept up.
+pub fn death_prevented(map: &mut Map, g: Guid) {
+    if here(map) {
+        razorgore::death_prevented(map, g);
+    }
+}
 
 /// The fields whose fight went with the copy (its summons, its timers), as
 /// it loads: back to the start, as mangos's `Load` puts what was under way.
@@ -160,13 +205,13 @@ pub fn creature_event(map: &mut Map, g: Guid, entry: u32, _spawn: Option<u32>, e
         match event {
             Event::Aggro => set_data(map, *field, IN_PROGRESS),
             Event::Death => set_data(map, *field, DONE),
-            Event::Evade => set_data(map, *field, FAILED),
             _ => {}
         }
     }
     if entry == NPC_LASHLAYER {
         lashlayer_event(map, g, event);
     }
+    razorgore::creature_event(map, g, entry, event);
 }
 
 // Broodlord Lashlayer: his yell at the pull, and his leash: below the
@@ -186,6 +231,9 @@ fn lashlayer_event(map: &mut Map, g: Guid, event: Event) {
 
 /// A timed step for one creature of the lair.
 pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
+    if razorgore::creature_timer(map, key, g) {
+        return;
+    }
     if key == T_LASHLAYER_LEASH {
         let Some(c) = map.creature(g).filter(|c| c.alive()) else {
             return;
@@ -207,10 +255,14 @@ pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
 }
 
 /// A timed step of the copy.
-pub fn timer(_map: &mut Map, _key: u32) {}
+pub fn timer(map: &mut Map, key: u32) {
+    razorgore::timer(map, key);
+}
 
 /// Objects as the copy's data leaves them, once its spawns are in.
-pub fn settle_spawns(_map: &mut Map) {}
+pub fn settle_spawns(map: &mut Map) {
+    razorgore::settle(map);
+}
 
 // The bosses' timed casts, as EventAI.
 
@@ -219,7 +271,7 @@ const BASE: u32 = 96_120_000;
 
 /// Where a cast goes.
 #[derive(Debug, Clone, Copy)]
-enum At {
+pub(super) enum At {
     /// Itself (mangos's `DoCastSpellIfCan(nullptr, ..)` of an area spell
     /// about it, or one on itself).
     Me,
@@ -227,8 +279,8 @@ enum At {
     Victim,
 }
 
-struct Build<'a> {
-    data: &'a mut GameData,
+pub(super) struct Build<'a> {
+    pub(super) data: &'a mut GameData,
     next: u32,
 }
 
@@ -271,13 +323,48 @@ impl Build<'_> {
     /// `spell` cast first `first` ms into the fight, then every `repeat`
     /// (from, to) ms after one that went; one that didn't is tried again.
     fn timer(&mut self, entry: u32, n: u32, spell: u32, at: At, first: u32, repeat: (u32, u32)) {
+        self.timer_between(entry, n, spell, at, (first, first), repeat);
+    }
+
+    /// [`Build::timer`], first between `first`'s two.
+    fn timer_between(
+        &mut self,
+        entry: u32,
+        n: u32,
+        spell: u32,
+        at: At,
+        first: (u32, u32),
+        repeat: (u32, u32),
+    ) {
         self.event(
             entry,
             n,
             EVENT_TIMER_IN_COMBAT,
             EF_REPEATABLE | EF_CHECK_RESULT,
-            [first as i32, first as i32, repeat.0 as i32, repeat.1 as i32],
+            [
+                first.0 as i32,
+                first.1 as i32,
+                repeat.0 as i32,
+                repeat.1 as i32,
+            ],
             vec![cast_step(spell, at)],
+        );
+    }
+
+    /// Home from a fight, its encounter failed (mangos's
+    /// `JustReachedHome`).
+    fn home_fails(&mut self, entry: u32, n: u32, field: u32) {
+        self.event(
+            entry,
+            n,
+            EVENT_REACHED_HOME,
+            EF_REPEATABLE,
+            [0; 4],
+            vec![ScriptStep {
+                command: 37,
+                datalong: [field, FAILED, 0, 0],
+                ..Default::default()
+            }],
         );
     }
 
@@ -399,4 +486,9 @@ pub fn install(data: &mut GameData) {
     b.timer(NPC_FLAMEGOR, 3, WING_BUFFET, At::Me, 30000, (30000, 35000));
     b.timer(NPC_FLAMEGOR, 4, THRASH, At::Me, 6000, (2000, 6000));
     b.buffet_threat(NPC_FLAMEGOR, 5);
+    for (entry, field) in PLAIN {
+        b.home_fails(entry, 90, field);
+    }
+    razorgore::install(&mut b);
+    b.home_fails(NPC_RAZORGORE, 90, RAZORGORE);
 }

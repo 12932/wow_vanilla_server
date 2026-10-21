@@ -389,10 +389,10 @@ async fn ebonroc_fights_as_mangos_classic() {
     .await;
     timed_cast(&mut c, &map, g, e(4), 3391, (6.0, 6.0), (2.0, 6.0), None).await;
     buffet_halves_threat(&mut c, &map, g, me, bwl::NPC_EBONROC).await;
-    map.query(move |m| crate::game::map::event_ai::evade(m, g))
-        .await;
+    // Home from his fight, it failed.
+    map.query(move |m| ai::enter_evade(m, g)).await;
     assert!(
-        until(&map, 2000, |m| field(m, bwl::EBONROC)
+        until(&map, 15000, |m| field(m, bwl::EBONROC)
             == instance_script::FAILED)
         .await
     );
@@ -438,4 +438,250 @@ async fn flamegor_fights_as_mangos_classic() {
     .await;
     timed_cast(&mut c, &map, g, e(4), 3391, (6.0, 6.0), (2.0, 6.0), None).await;
     buffet_halves_threat(&mut c, &map, g, me, bwl::NPC_FLAMEGOR).await;
+}
+
+// Razorgore the Untamed.
+
+use crate::game::map::bwl::razorgore as rz;
+
+/// At the Orb of Domination.
+const ORB: Vector3d = Vector3d {
+    x: -7612.0,
+    y: -1028.0,
+    z: 413.4,
+};
+
+fn object_flags(m: &Map, entry: u32) -> u32 {
+    m.gameobjects
+        .iter()
+        .find(|(_, o)| o.entry == entry)
+        .map_or(0, |(_, o)| o.fields.get_u32(GAMEOBJECT_FLAGS))
+}
+
+fn eggs(m: &Map) -> Vec<Guid> {
+    m.gameobjects
+        .iter()
+        .filter(|(_, o)| o.entry == rz::GO_EGG)
+        .map(|(_, o)| o.guid)
+        .collect()
+}
+
+fn defenders(m: &Map) -> Vec<Guid> {
+    m.creatures
+        .iter()
+        .filter(|(_, c)| {
+            c.alive()
+                && c.spawn_guid.is_none()
+                && matches!(
+                    c.entry,
+                    rz::NPC_LEGIONNAIRE | rz::NPC_MAGE | rz::NPC_DRAGONSPAWN
+                )
+        })
+        .map(|(_, c)| c.guid)
+        .collect()
+}
+
+/// Razorgore: Grethok's pull starts it and brings the defenders forty
+/// seconds on, four at a time; Grethok dead, the orb is used, and its user
+/// takes Razorgore over, exhausted; Razorgore breaks an egg at his
+/// controller's word; the last egg broken, he is free, healed, and fights
+/// to the death; his death opens the way on.
+#[tokio::test]
+#[ignore = "extended"]
+async fn razorgore_is_taken_over_breaks_the_eggs_and_falls() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero_in(&realm, "Orbholder", BWL, ORB, 0.0, &[]).await;
+    not_gm(&map, me).await;
+    let raz = boss(&map, bwl::NPC_RAZORGORE).await;
+    let grethok = boss(&map, rz::NPC_GRETHOK).await;
+    c.sees(raz).await;
+    assert!(
+        map.query(|m| object_flags(m, rz::GO_ORB) & 0x10 != 0)
+            .await
+            .unwrap(),
+        "the orb is dark while Grethok lives"
+    );
+    map.query(move |m| {
+        tough(m, grethok);
+        ai::attacked(m, grethok, me);
+    })
+    .await;
+    assert!(
+        until(&map, 2000, |m| field(m, bwl::RAZORGORE)
+            == instance_script::IN_PROGRESS
+            && door_state(m, bwl::DOOR_RAZORGORE_ENTER) == Some(1))
+        .await,
+        "Grethok's pull starts it, the gate shuts"
+    );
+    // Forty seconds on, four defenders.
+    map.query(|m| hurry_copy(m, Duration::from_secs(41))).await;
+    assert!(
+        until(&map, 2000, |m| defenders(m).len() == 4).await,
+        "four defenders from the corners"
+    );
+    map.query(|m| hurry_copy(m, Duration::from_secs(16))).await;
+    assert!(
+        until(&map, 2000, |m| defenders(m).len() == 8).await,
+        "and four more fifteen seconds on"
+    );
+    map.query(move |m| kill(m, me, grethok)).await;
+    assert!(
+        until(&map, 2000, |m| object_flags(m, rz::GO_ORB) & 0x10 == 0).await,
+        "Grethok dead, the orb may be used"
+    );
+    let orb = map
+        .query(|m| door_guid(m, rz::GO_ORB))
+        .await
+        .flatten()
+        .unwrap();
+    c.send(CMSG_GAMEOBJ_USE { guid: orb }).await;
+    assert!(
+        until(&map, 3000, move |m| m.creature(raz).and_then(|c| c.owner)
+            == Some(me))
+        .await,
+        "the orb's user takes Razorgore over"
+    );
+    assert!(
+        map.query(move |m| has(m, me, rz::MIND_EXHAUSTION))
+            .await
+            .unwrap(),
+        "exhausted"
+    );
+    // At his controller's word he breaks an egg by him.
+    let egg = map.query(|m| eggs(m)[0]).await.unwrap();
+    map.query(move |m| {
+        let at = m.gameobject(egg).unwrap().position;
+        crate::game::map::scripts::place(m, raz, off(at, 2.0, 0.0), 0.0);
+    })
+    .await;
+    c.send(CMSG_PET_CAST_SPELL {
+        guid: raz,
+        id: rz::DESTROY_EGG,
+        targets: crate::game::map::spells::wire_targets(&crate::game::map::spells::Targets {
+            object: Some(egg),
+            ..Default::default()
+        }),
+    })
+    .await;
+    assert!(
+        until(&map, 6000, move |m| m.gameobject(egg).is_none()).await,
+        "the egg broken"
+    );
+    assert_eq!(
+        map.query(|m| field(m, bwl::RAZORGORE)).await,
+        Some(instance_script::IN_PROGRESS)
+    );
+    // The rest broken: the second stage.
+    map.query(move |m| {
+        for e in eggs(m) {
+            crate::game::map::spells::cast_triggered_with(
+                m,
+                raz,
+                rz::DESTROY_EGG,
+                crate::game::map::spells::Targets {
+                    object: Some(e),
+                    ..Default::default()
+                },
+            );
+        }
+    })
+    .await;
+    assert!(
+        until(&map, 2000, |m| field(m, bwl::RAZORGORE) == bwl::SPECIAL).await,
+        "every egg broken, the second stage"
+    );
+    assert!(
+        until(&map, 2000, move |m| m
+            .creature(raz)
+            .is_some_and(|c| c.owner.is_none())
+            && object_flags(m, rz::GO_ORB) & 0x10 != 0)
+        .await,
+        "Razorgore is free, the orb dark"
+    );
+    let (hp, max) = map.query(move |m| health(m, raz)).await.unwrap();
+    assert_eq!(hp, max, "healed");
+    assert!(
+        until(&map, 13000, |m| defenders(m).is_empty()).await,
+        "the defenders flee and go"
+    );
+    map.query(move |m| kill(m, me, raz)).await;
+    assert!(
+        until(&map, 2000, |m| field(m, bwl::RAZORGORE)
+            == instance_script::DONE
+            && door_state(m, bwl::DOOR_RAZORGORE_EXIT) == Some(0)
+            && door_state(m, bwl::DOOR_RAZORGORE_ENTER) == Some(0))
+        .await,
+        "dead, the way on opens"
+    );
+}
+
+/// Razorgore brought to death before the eggs are broken: the encounter
+/// fails; he says so and goes, and thirty seconds on he and his eggs are
+/// back, and Grethok to start it again.
+#[tokio::test]
+#[ignore = "extended"]
+async fn razorgore_brought_down_too_soon_fails_and_comes_back() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero_in(&realm, "Toosoon", BWL, ORB, 0.0, &[]).await;
+    not_gm(&map, me).await;
+    let raz = boss(&map, bwl::NPC_RAZORGORE).await;
+    let grethok = boss(&map, rz::NPC_GRETHOK).await;
+    c.sees(raz).await;
+    map.query(move |m| {
+        tough(m, grethok);
+        ai::attacked(m, grethok, me);
+    })
+    .await;
+    map.query(|m| hurry_copy(m, Duration::from_secs(41))).await;
+    assert!(until(&map, 2000, |m| defenders(m).len() == 4).await);
+    map.query(move |m| kill(m, me, grethok)).await;
+    let egg = map.query(|m| eggs(m)[0]).await.unwrap();
+    map.query(move |m| {
+        crate::game::map::spells::cast_triggered_with(
+            m,
+            raz,
+            rz::DESTROY_EGG,
+            crate::game::map::spells::Targets {
+                object: Some(egg),
+                ..Default::default()
+            },
+        );
+    })
+    .await;
+    assert!(until(&map, 2000, move |m| m.gameobject(egg).is_none()).await);
+    // Brought to death: he doesn't die, and the try fails.
+    map.query(move |m| kill(m, me, raz)).await;
+    assert!(
+        until(&map, 2000, |m| field(m, bwl::RAZORGORE)
+            == instance_script::FAILED)
+        .await,
+        "failed"
+    );
+    assert!(
+        heard(&mut c, raz, Duration::from_secs(2)).await.is_some(),
+        "his last words"
+    );
+    assert!(
+        until(&map, 2000, |m| defenders(m).is_empty()).await,
+        "the defenders gone"
+    );
+    assert!(
+        until(&map, 7000, move |m| m
+            .creature(raz)
+            .is_none_or(|c| !c.alive()))
+        .await,
+        "he goes"
+    );
+    map.query(|m| hurry_copy(m, Duration::from_secs(31))).await;
+    assert!(
+        until(&map, 3000, move |m| first(m, bwl::NPC_RAZORGORE).is_some()
+            && first(m, rz::NPC_GRETHOK).is_some()
+            && eggs(m).len() == 30)
+        .await,
+        "Razorgore, his eggs and Grethok back"
+    );
 }
