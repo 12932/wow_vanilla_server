@@ -542,6 +542,7 @@ pub fn teleport_ack(map: &mut Map, guid: Guid) {
     if let Some(p) = map.players.get_mut(&guid) {
         p.teleport = None;
     }
+    crate::game::map::spells::resurrect_on_arrival(map, guid);
     crate::game::map::pvp::arrived(map, guid);
 }
 
@@ -572,6 +573,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
         crate::game::map::pets::send_spells(map, guid);
     }
     crate::game::map::death::resend_water_walk(map, guid);
+    crate::game::map::spells::resurrect_on_arrival(map, guid);
     crate::game::map::login::arrived(map, guid);
     map.visibility_dirty.insert(guid);
     crate::game::map::battleground::arrived(map, guid);

@@ -343,7 +343,7 @@ fn raising(d: &mut GameData) {
 #[tokio::test]
 async fn a_resurrection_taken_brings_the_dead_where_its_caster_stood_as_they_cast() {
     let realm = fast_realm(raising);
-    let (a, alice, map) = human(&realm, "P7C5", "Fallen", Class::Warrior).await;
+    let (mut a, alice, map) = human(&realm, "P7C5", "Fallen", Class::Warrior).await;
     let (_b, bob, _) = human(&realm, "P7C6", "Raiser", Class::Priest).await;
     let (_c, cid, _) = human(&realm, "P7C7", "Other", Class::Priest).await;
     let cast_at = on(&map, move |m| {
@@ -363,6 +363,22 @@ async fn a_resurrection_taken_brings_the_dead_where_its_caster_stood_as_they_cas
     a.send(CMSG_RESURRECT_RESPONSE {
         guid: bob,
         status: 1,
+    })
+    .await;
+    // Sent to the caster, the dead rise as they land (mangos's
+    // `DELAYED_RESURRECT_PLAYER`).
+    a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)
+        )
+        .then_some(())
+    })
+    .await;
+    a.send(wow_world_messages::vanilla::MSG_MOVE_TELEPORT_ACK_Client {
+        guid: alice,
+        movement_counter: a.teleport_order(),
+        time: Default::default(),
     })
     .await;
     until(&map, "Alice up where Bob cast", move |m| {

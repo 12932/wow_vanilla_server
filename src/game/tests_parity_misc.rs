@@ -878,6 +878,22 @@ async fn a_resurrection_offers_its_health_and_mana_and_is_spent_by_rising() {
         status: 1,
     })
     .await;
+    // Sent to the caster, the dead rise as they land (mangos's
+    // `DELAYED_RESURRECT_PLAYER`).
+    a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)
+        )
+        .then_some(())
+    })
+    .await;
+    a.send(wow_world_messages::vanilla::MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: a.teleport_order(),
+        time: Default::default(),
+    })
+    .await;
     fence(&mut a).await;
     let (health, mana) = on_map(&realm, move |m| {
         let f = &m.players[&ga].fields;
@@ -904,6 +920,22 @@ async fn a_resurrection_offers_its_health_and_mana_and_is_spent_by_rising() {
     a.send(CMSG_RESURRECT_RESPONSE {
         guid: gb,
         status: 1,
+    })
+    .await;
+    // Sent to the caster, the dead rise as they land (mangos's
+    // `DELAYED_RESURRECT_PLAYER`).
+    a.wait_for("MSG_MOVE_TELEPORT_ACK", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)
+        )
+        .then_some(())
+    })
+    .await;
+    a.send(wow_world_messages::vanilla::MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: a.teleport_order(),
+        time: Default::default(),
     })
     .await;
     fence(&mut a).await;

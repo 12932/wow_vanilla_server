@@ -966,7 +966,12 @@ pub fn cast(
         send_cast_result(map, caster, spell, Some(r));
         return false;
     }
-    if targets.unit.is_none() && auras::positive(s) {
+    // At oneself, unless aimed at a body to raise.
+    if targets.unit.is_none()
+        && auras::positive(s)
+        && !((s.has_effect(EFFECT_RESURRECT) || s.has_effect(EFFECT_RESURRECT_NEW))
+            && crate::game::map::corpses::aimed_at(&targets).is_some())
+    {
         targets.unit = Some(caster);
     }
     // A next-swing spell waits for the swing; an auto-repeat one repeats.
@@ -3131,6 +3136,13 @@ fn channel_costs(map: &mut Map) {
 }
 
 /// `CMSG_RESURRECT_RESPONSE`: a resurrection offered is taken.
+///
+/// Taken from a player, it brings the dead to where its caster stood as
+/// they cast it, and they rise as they land: at the teleport's
+/// acknowledgement, or the new map's (mangos's
+/// `ResurrectUsingRequestDataInit`, `DELAYED_RESURRECT_PLAYER`). One who
+/// can't go there (a raid's copy, for a raid group only) rises where they
+/// are. A creature's raises them where they are.
 pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -3138,7 +3150,6 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
     let Some((caster, health, mana)) = p.resurrect_offer else {
         return;
     };
-    let offered_at = p.resurrect_at;
     // Declined, it is gone; accepted, it must be the one offered (Thistle
     // Tea's `Resurrection.respond`).
     if !accept {
@@ -3149,12 +3160,48 @@ pub fn resurrect_response(map: &mut Map, player: Guid, from: Guid, accept: bool)
         return;
     }
     // Where the caster stood as they cast it, not where they are now
-    // (mangos's `ResurrectUsingRequestData`, Thistle Tea's offer).
-    let to = offered_at.or_else(|| map.position_of(caster));
-    if crate::game::map::death::resurrect_with(map, player, health, mana)
-        && let Some(pos) = to
+    // (mangos's `ResurrectUsingRequestData`, Thistle Tea's offer), in the
+    // map they were in.
+    let key = p.resurrect_map.take().unwrap_or(map.key);
+    let offered_at = p.resurrect_at.take();
+    let orientation = p.movement.orientation;
+    p.resurrect_offer = None;
+    let to = offered_at.or_else(|| (key == map.key).then(|| map.position_of(caster)).flatten());
+    let Some(to) = to.filter(|_| guid::is_player(caster)) else {
+        crate::game::map::death::resurrect_with(map, player, health, mana);
+        return;
+    };
+    if let Some(p) = map.players.get_mut(&player) {
+        p.resurrect_on_arrival = Some((health, mana));
+    }
+    // Another map by its id: the player's own copy of it, if they may
+    // enter (mangos's `TeleportTo` by the map, `CanEnter`).
+    let far = key.map != map.key.map;
+    let dest = if far {
+        crate::game::map::MapKey::world(key.map)
+    } else {
+        map.key
+    };
+    map.teleport(player, dest, to, orientation);
+    // Refused (the copy turned them away and said why): risen where they
+    // are, their corpse there bones.
+    if far
+        && let Some(p) = map.players.get_mut(&player)
+        && let Some((health, mana)) = p.resurrect_on_arrival.take()
     {
-        map.teleport(player, map.key, pos, 0.0);
+        crate::game::map::death::resurrect_with(map, player, health, mana);
+        crate::game::map::corpses::bones_in(map, key, player);
+    }
+}
+
+/// A resurrection taken waiting for its teleport to land: risen now.
+pub fn resurrect_on_arrival(map: &mut Map, player: Guid) {
+    if let Some((health, mana)) = map
+        .players
+        .get_mut(&player)
+        .and_then(|p| p.resurrect_on_arrival.take())
+    {
+        crate::game::map::death::resurrect_with(map, player, health, mana);
     }
 }
 

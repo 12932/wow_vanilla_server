@@ -229,6 +229,16 @@ pub fn effect_targets(
 ) -> Vec<Guid> {
     use Implicit::*;
     let e = &s.effects[index];
+    // A resurrection cast at a body lands on its owner, here or on another
+    // map (mangos's corpse target, its owner found by `EffectResurrect`).
+    if matches!(e.effect, 18 | 113)
+        && let Some(corpse) = crate::game::map::corpses::aimed_at(t)
+    {
+        return crate::game::map::corpses::body(map, corpse)
+            .map(|(owner, _)| owner)
+            .into_iter()
+            .collect();
+    }
     let (a, b) = (implicit(e.target_a), implicit(e.target_b));
     let r = radius(map, s, index, m).max(if e.radius_index == 0 { 0.0 } else { 1.0 });
     // A summon or a ground's effect at a script area's place is the

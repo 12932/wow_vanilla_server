@@ -360,6 +360,8 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     // An offer from before is spent.
     p.resurrect_offer = None;
     p.resurrect_at = None;
+    p.resurrect_map = None;
+    p.resurrect_on_arrival = None;
     p.fields.set_flag(
         UNIT_FIELD_FLAGS,
         crate::game::map::battleground::insignia::UNIT_FLAG_SKINNABLE,
