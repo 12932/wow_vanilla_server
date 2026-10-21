@@ -609,3 +609,86 @@ async fn a_controlled_creature_heals_by_its_kind_as_mangos_has_it() {
         "a hunter's pet, a demon, a guardian, a charmed creature"
     );
 }
+
+// #8: a failed opening.
+
+/// mangos-classic rolls a gathering's, a lockpicking's or a skinning's
+/// chance to fail in `CheckCast(false)`, which `Spell::cast` runs before
+/// its costs and `SendSpellGo`: a missed roll is `SPELL_FAILED_TRY_AGAIN`
+/// by `StopCast` (the cast result and `SMSG_SPELL_FAILURE`), and no go is
+/// sent, as Thistle Tea has it too. wvs rolled in the effect, after the go.
+#[tokio::test]
+async fn a_gathering_that_misses_its_roll_fails_before_its_go() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use crate::game::map::professions::FORCED_ATTEMPT;
+    use crate::game::map::spells::{self, Targets};
+    const VEIN: u32 = 1731;
+    const MINING: u32 = 2575;
+    let (_realm, mut a, map) = crate::game::tests_loot::alone("Miner", Class::Warrior).await;
+    let g = a.guid;
+    a.sees(crate::game::guid::game_object(VEIN, 50)).await;
+    let mut results = Vec::new();
+    for takes in [false, true] {
+        a.clear();
+        let looting = on(&map, move |m| {
+            crate::game::tests_loot::learn(m, g, MINING, 186);
+            let _ = crate::game::map::inventory::add_item(m, g, 2901, 1, false);
+            let t = m.realm.data.gameobject_templates[&VEIN].clone();
+            let here = m.players[&g].position();
+            let counter = m.object_counter();
+            let go = crate::game::map::gameobject::GameObject::from_spawn(
+                &t,
+                &GameObjectSpawn {
+                    guid: counter,
+                    entry: VEIN,
+                    map: 0,
+                    x: here.x + 2.0,
+                    y: here.y,
+                    z: here.z,
+                    state: 1,
+                    ..Default::default()
+                },
+            );
+            let vein = m.add_gameobject(go);
+            let p = m.players.get_mut(&g).unwrap();
+            p.caster.gcd_until = None;
+            p.looting = None;
+            FORCED_ATTEMPT.with(|f| f.set(Some(takes)));
+            spells::cast(
+                m,
+                g,
+                MINING,
+                Targets {
+                    object: Some(vein),
+                    ..Default::default()
+                },
+                None,
+            );
+            FORCED_ATTEMPT.with(|f| f.set(None));
+            m.players[&g].looting == Some(vein)
+        })
+        .await;
+        let mut go = false;
+        let mut failed = false;
+        while let Some(m) = a
+            .gets(std::time::Duration::from_millis(200), |m| match m {
+                ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == MINING => Some(true),
+                ServerOpcodeMessage::SMSG_SPELL_FAILURE(f) if f.spell == MINING => Some(false),
+                _ => None,
+            })
+            .await
+        {
+            if m {
+                go = true;
+            } else {
+                failed = true;
+            }
+        }
+        results.push((looting, go, failed));
+    }
+    assert_eq!(
+        results,
+        vec![(false, false, true), (true, true, false)],
+        "missed: failed with no go; taken: its go and the vein"
+    );
+}

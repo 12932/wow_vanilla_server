@@ -228,6 +228,9 @@ pub struct MapSpells {
     pub outdoors_override: AHashMap<Guid, bool>,
     /// Spirits of redemption dying, whom the talent doesn't save again.
     pub redeemed: ahash::AHashSet<Guid>,
+    /// Casters whose gathering, lockpicking or skinning took its roll as
+    /// the cast ended, before its go: its effect doesn't roll again.
+    pub openings_rolled: ahash::AHashSet<Guid>,
     /// Override for spells' travel time; `None` takes the realm's setting.
     pub travel: Option<bool>,
     /// Missiles and bolts on their way.
@@ -1000,7 +1003,16 @@ pub fn cast(
         }
     }
     if time == 0 {
+        // An instant's launch is its end: its gathering's roll too, before
+        // its go (mangos's `CheckCast(false)` in `Spell::cast`).
+        if let Some(code) =
+            crate::game::map::professions::roll_at_finish(map, caster, s, &targets, item)
+        {
+            launch_failed(map, caster, spell, code);
+            return false;
+        }
         execute(map, caster, s, targets, item, false);
+        map.spells.openings_rolled.remove(&caster);
         return true;
     }
     // Beginning a cast breaks what an action breaks at once; 1.12's Stealth
@@ -2859,7 +2871,21 @@ pub fn update(map: &mut Map) {
             launch_failed(map, g, casting.spell, checks::fail::LOWLEVEL);
             continue;
         }
+        // A gathering, lockpicking or skinning that misses its roll fails
+        // here, before its go and its costs (mangos's `CheckCast(false)` at
+        // `Spell::cast`: `SPELL_FAILED_TRY_AGAIN`, then `StopCast`).
+        if let Some(code) = crate::game::map::professions::roll_at_finish(
+            map,
+            g,
+            s,
+            &casting.targets,
+            casting.item,
+        ) {
+            launch_failed(map, g, casting.spell, code);
+            continue;
+        }
         execute(map, g, s, casting.targets, casting.item, false);
+        map.spells.openings_rolled.remove(&g);
     }
     effects::refresh_area_auras(map);
     land_arrivals(map);

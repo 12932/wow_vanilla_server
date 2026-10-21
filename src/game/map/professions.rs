@@ -260,6 +260,85 @@ fn attempt_takes(o: &Opening) -> bool {
     (matches!(skill, SKILL_HERBALISM | SKILL_MINING) && o.value >= 300) || o.required as i32 <= roll
 }
 
+/// Whether a skinning at `skill` takes a corpse of `level`: the skill
+/// rolled from 25 below to 37 above must reach its need, short of the most
+/// (Thistle Tea's `Skinning.attempt?`, mangos's `CheckCast`).
+fn skin_takes(skill: u32, level: u32) -> bool {
+    let roll = skill as i32 - 25 + rand::rng().random_range(0..=62);
+    skill >= 300 || skinning_required(level, skill) as i32 <= roll
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's outcome for the next roll at a cast's end, in place of the
+    /// dice.
+    pub static FORCED_ATTEMPT: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The roll of a gathering, a lockpicking or a skinning, as its cast ends
+/// and before its go (mangos's `CheckCast(false)` in `Spell::cast`, the
+/// "chance for fail at orange" checks): a miss is `FAIL_TRY_AGAIN`, the
+/// cast failing before it costs; one that takes is noted, so its effect
+/// doesn't roll again (`MapSpells::openings_rolled`).
+pub fn roll_at_finish(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    cast_item: Option<Guid>,
+) -> Option<u8> {
+    let data = map.realm.data.clone();
+    let p = map.players.get(&caster)?;
+    let cast_item = entry_of(p, cast_item);
+    let mut rolled = false;
+    let mut takes = true;
+    for (index, e) in s.effects.iter().enumerate() {
+        let opening = match e.effect {
+            EFFECT_OPEN_LOCK | EFFECT_OPEN_LOCK_ITEM => {
+                let lock = match (t.object, t.item) {
+                    (Some(o), _) => map.gameobject(o).map(|o| object_lock(&data, o.entry)),
+                    (None, Some(i)) => p
+                        .items
+                        .iter()
+                        .find(|x| x.guid == i)
+                        .map(|x| data.item(x.entry).map_or(0, |it| it.lock_id)),
+                    _ => None,
+                };
+                lock.and_then(|l| resolve_lock(&data, p, s, index, l, cast_item).ok())
+            }
+            _ => None,
+        };
+        if let Some(o) = opening
+            && o.skill.is_some_and(|sk| {
+                matches!(sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING)
+            })
+        {
+            rolled = true;
+            takes &= attempt_takes(&o);
+        }
+        if e.effect == EFFECT_SKINNING
+            && let Some(c) = t.unit.and_then(|u| map.creature(u))
+        {
+            rolled = true;
+            takes &= skin_takes(
+                skill_value(p, SKILL_SKINNING),
+                c.fields.get_u32(UNIT_FIELD_LEVEL),
+            );
+        }
+    }
+    if !rolled {
+        return None;
+    }
+    #[cfg(test)]
+    let takes = FORCED_ATTEMPT.with(|f| f.get()).unwrap_or(takes);
+    if !takes {
+        return Some(FAIL_TRY_AGAIN);
+    }
+    map.spells.openings_rolled.insert(caster);
+    None
+}
+
 /// A lock's skill raised, by the learned skill against the need.
 fn lock_skill_up(map: &mut Map, caster: Guid, o: &Opening) -> bool {
     let Some(skill) = o.skill.filter(|_| o.gain) else {
@@ -738,7 +817,7 @@ fn open_lock(
             return;
         }
     };
-    if !attempt_takes(&opening) {
+    if !map.spells.openings_rolled.contains(&caster) && !attempt_takes(&opening) {
         send_failure(map, caster, s.id, FAIL_TRY_AGAIN);
         return;
     }
@@ -811,7 +890,7 @@ fn open_lock_item(
     let Ok(opening) = resolve_lock(&data, p, s, index, lock, cast_item) else {
         return;
     };
-    if !attempt_takes(&opening) {
+    if !map.spells.openings_rolled.contains(&caster) && !attempt_takes(&opening) {
         send_failure(map, caster, s.id, FAIL_TRY_AGAIN);
         return;
     }
@@ -856,8 +935,7 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
         .players
         .get(&caster)
         .map_or(0, |p| skill_value(p, SKILL_SKINNING));
-    let roll = skill as i32 - 25 + rand::rng().random_range(0..=62);
-    if skill < 300 && skinning_required(level, skill) as i32 > roll {
+    if !map.spells.openings_rolled.contains(&caster) && !skin_takes(skill, level) {
         send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
     }
