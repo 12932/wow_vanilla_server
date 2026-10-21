@@ -1291,6 +1291,7 @@ impl Map {
                 for item in mailed {
                     inventory::mail_back(&self.realm, guid, item);
                 }
+                item_rules::at_login(self, &mut p);
                 crate::game::transports::place_aboard(&self.realm, &mut p);
                 login::send_login(self, &mut p);
                 crate::game::instances::send_saved(&self.realm, p.guid, &p.outbound);
