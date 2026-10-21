@@ -225,7 +225,13 @@ async fn an_items_spell_costs_no_power() {
             kit::ready(m, a, 60, &[]);
             set_power(m, a, 0, 0);
             let s = m.realm.data.spells.get(HEAL).cloned().unwrap();
-            let item = crate::game::guid::item(4242);
+            // One of what they carry, still carried as the cast ends.
+            let item = m.players[&a]
+                .items
+                .iter()
+                .find(|i| i.carried())
+                .map(|i| i.guid)
+                .expect("an item");
             let checked = (
                 checks::check(m, a, &s, &self_at(a), None, false, &Mods::default()),
                 checks::check(m, a, &s, &self_at(a), Some(item), false, &Mods::default()),

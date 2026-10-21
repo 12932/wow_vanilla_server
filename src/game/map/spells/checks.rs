@@ -18,6 +18,9 @@ use super::mods::{self, Mods};
 use super::targets::{self, Implicit};
 use super::{Targets, spell_cost, unpayable};
 
+/// `UNIT_FLAG_UNTARGETABLE`: not targetable by attack or spell.
+pub const UNIT_FLAG_UNTARGETABLE: u32 = 0x1_0000;
+
 /// `SpellCastResult` codes.
 pub mod fail {
     pub const AFFECTING_COMBAT: u8 = 0x00;
@@ -36,6 +39,7 @@ pub mod fail {
     pub const IMMUNE: u8 = 0x22;
     pub const INTERRUPTED: u8 = 0x23;
     pub const ITEM_GONE: u8 = 0x26;
+    pub const ITEM_NOT_READY: u8 = 0x28;
     pub const LINE_OF_SIGHT: u8 = 0x2a;
     pub const LOWLEVEL: u8 = 0x2b;
     pub const MOVING: u8 = 0x2e;
@@ -651,6 +655,17 @@ pub fn check(
     check_target(map, caster, s, t, triggered, m)
 }
 
+/// Why a triggered cast of `s` doesn't go, if it doesn't: a player's
+/// spell focus not by them (mangos-classic's `CheckCast`, which a
+/// triggered spell runs too; Thistle Tea's "checks the original player
+/// before projecting triggered effects").
+pub fn triggered(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
+    (s.requires_spell_focus != 0
+        && map.players.contains_key(&caster)
+        && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus))
+    .then_some(fail::REQUIRES_SPELL_FOCUS)
+}
+
 /// What a cast pays for, checked again as it goes off (mangos's
 /// `CheckCast` at the cast, Thistle Tea's launch): the power it costs (a
 /// caster drained while casting has none to pay), its reagents (carried,
@@ -695,6 +710,60 @@ fn room_for_made(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<u8> {
     None
 }
 
+/// How far past its range a cast may reach, as Thistle Tea's
+/// `Range.allowance` (vmangos's) has it, the user's call (2026-10-21): a
+/// player 1.25 yards as it begins and 6.25 as it goes off, a creature none
+/// and 2.25; at a unit (beyond both reaches) and at a place alike.
+pub fn leeway(caster: Guid, launch: bool) -> f32 {
+    match (guid::is_player(caster), launch) {
+        (true, false) => 1.25,
+        (true, true) => 6.25,
+        (false, false) => 0.0,
+        (false, true) => 2.25,
+    }
+}
+
+/// A unit's bounding radius (none below nothing).
+fn bounding_radius(map: &Map, g: Guid) -> f32 {
+    map.unit_fields(g)
+        .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+}
+
+/// Whether a place, a destination or an object, is beyond `s`'s range
+/// from `caster` (as it begins, or as it goes off): the distance past the
+/// caster's bounding radius, against the range with its modifiers and
+/// [`leeway`], or within its minimum (Thistle Tea's `Destination`).
+fn place_range(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    at: Vector3d,
+    m: &Mods,
+    launch: bool,
+) -> Option<u8> {
+    let me = map.unit_view(caster)?;
+    let (min, base) = map.realm.data.spells.range(s);
+    let max = m.apply(mods::OP_RANGE, base).max(0.0);
+    let far = (dist(me.position, at) - bounding_radius(map, caster)).max(0.0);
+    if base > 0.0 && far > max + leeway(caster, launch) {
+        return Some(fail::OUT_OF_RANGE);
+    }
+    if min > 0.0 && far < min {
+        return Some(fail::TOO_CLOSE);
+    }
+    None
+}
+
+/// Whether a spell's effects are at a place.
+fn at_a_place(s: &SpellTemplate) -> bool {
+    s.effects.iter().any(|e| {
+        matches!(
+            targets::implicit(e.target_a),
+            Implicit::AoeEnemyAtDest | Implicit::AoeAllyAtDest | Implicit::Location
+        )
+    })
+}
+
 /// Whether `s` brings back the dead.
 /// A player's cast at a unit as it ends, before it costs anything: the
 /// unit is still there, alive (unless the spell is for the dead), still a
@@ -707,9 +776,22 @@ pub fn at_finish(
     caster: Guid,
     s: &SpellTemplate,
     t: &Targets,
+    item: Option<Guid>,
     m: &Mods,
 ) -> Option<u8> {
     if let Some(code) = caster_at_finish(map, caster, s) {
+        return Some(code);
+    }
+    if let Some(code) = items_at_finish(map, caster, t, item) {
+        return Some(code);
+    }
+    // A place still in range as it goes off, with the launch's leeway
+    // (mangos's `CheckRange(false)`, Thistle Tea's launch phase).
+    if t.unit.filter(|u| *u != caster).is_none()
+        && let Some(d) = t.dest
+        && at_a_place(s)
+        && let Some(code) = place_range(map, caster, s, d, m, true)
+    {
         return Some(code);
     }
     // A player's weapon still in hand as it ends, not disarmed of it
@@ -753,14 +835,9 @@ pub fn at_finish(
     if harmful && !combat::can_attack(map, caster, target) && !s.has_effect(95) {
         return Some(fail::TARGET_FRIENDLY);
     }
-    if !map.players.contains_key(&caster) {
-        return None;
-    }
-    // A player's side gone from sight meanwhile (into stealth), as mangos's
-    // `CheckCast(false)` has it "since the time of cast start".
-    if harmful && player_side(map, target) && !super::stealth::sees(map, caster, target) {
-        return Some(fail::BAD_TARGETS);
-    }
+    // Still in range: past both reaches, with the launch's leeway, a
+    // player's 6.25 yards and a creature's 2.25 (Thistle Tea's `Range`,
+    // the user's call); a swing's reach a yard.
     let me = map.unit_view(caster)?;
     let (_, base) = map.realm.data.spells.range(s);
     let max = m.apply(mods::OP_RANGE, base).max(0.0);
@@ -769,10 +846,18 @@ pub fn at_finish(
     let reach = if melee {
         combat::melee_range(&me, &u) + 1.0
     } else {
-        max + me.combat_reach + u.combat_reach + (max * 0.1).min(3.0)
+        max + me.combat_reach + u.combat_reach + leeway(caster, true)
     } + moving_leeway(&me, &u, melee, target);
-    if base > 0.0 && d > reach {
+    if base > 0.0 && !s.on_next_swing() && d > reach {
         return Some(fail::OUT_OF_RANGE);
+    }
+    if !map.players.contains_key(&caster) {
+        return None;
+    }
+    // A player's side gone from sight meanwhile (into stealth), as mangos's
+    // `CheckCast(false)` has it "since the time of cast start".
+    if harmful && player_side(map, target) && !super::stealth::sees(map, caster, target) {
+        return Some(fail::BAD_TARGETS);
     }
     let forward = !s.on_next_swing()
         && (s.range_index == RANGE_MELEE || s.custom(sd::CUSTOM_FACE_TARGET) || s.auto_repeat());
@@ -814,12 +899,45 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
     if !super::area::allows(map, caster, s.id) {
         return Some(fail::REQUIRES_AREA);
     }
+    // Still indoors or out as the spell wants (mangos's `CheckCast(false)`
+    // at `Spell::cast`, Thistle Tea's `Casting.complete`).
+    if let Some(code) = super::environment::check(map, caster, s) {
+        return Some(code);
+    }
     // Its focus still by them (a campfire burnt out meanwhile), as mangos's
     // `CheckCast(false)` and Thistle Tea's launch revalidation have it.
     if s.requires_spell_focus != 0
         && !crate::game::map::professions::focus_near(map, caster, s.requires_spell_focus)
     {
         return Some(fail::REQUIRES_SPELL_FOCUS);
+    }
+    None
+}
+
+/// A player's items as their cast ends, before it costs anything (mangos's
+/// `CheckItems` at `Spell::cast`): the item cast from still carried (not
+/// banked or gone: `ITEM_NOT_READY`) and still theirs to use (a book's
+/// skill fallen short: Thistle Tea's `Teaching` recheck), and the item
+/// cast at still there (`ITEM_GONE`).
+fn items_at_finish(map: &Map, caster: Guid, t: &Targets, item: Option<Guid>) -> Option<u8> {
+    let p = map.players.get(&caster)?;
+    if let Some(g) = item {
+        let Some(i) = p.items.iter().find(|i| i.guid == g && i.carried()) else {
+            return Some(fail::ITEM_NOT_READY);
+        };
+        if let Some(template) = map.realm.data.item(i.entry)
+            && let Err(why) = crate::game::map::inventory::can_use(p, &map.realm.data, template)
+        {
+            crate::game::map::inventory::send_fail(p, why, g);
+            return Some(fail::DONT_REPORT);
+        }
+    }
+    // The item at, the caster's or (in a trade's window) another's.
+    if let Some(g) = t.item
+        && p.item_by_guid(g).is_none()
+        && !map.players.values().any(|o| o.item_by_guid(g).is_some())
+    {
+        return Some(fail::ITEM_GONE);
     }
     None
 }
@@ -917,28 +1035,37 @@ fn check_target(
     if !wants_unit {
         // A destination's range.
         if let (Some(d), Some(me)) = (t.dest, map.unit_view(caster))
-            && s.effects.iter().any(|e| {
-                matches!(
-                    targets::implicit(e.target_a),
-                    Implicit::AoeEnemyAtDest | Implicit::AoeAllyAtDest | Implicit::Location
-                )
-            })
+            && at_a_place(s)
             && !triggered
         {
             // Within range (a modifier can't take it below nothing), not too
-            // close, and in sight, as mangos's `CheckRange` has a
-            // destination: no combat reach.
-            let (min, base) = map.realm.data.spells.range(s);
-            let max = m.apply(mods::OP_RANGE, base).max(0.0);
-            let far = dist(me.position, d);
-            if base > 0.0 && far > max + 2.0 {
-                return Some(fail::OUT_OF_RANGE);
-            }
-            if min > 0.0 && far < min {
-                return Some(fail::TOO_CLOSE);
+            // close, and in sight: no combat reach, the caster's bounding
+            // radius and the leeway (Thistle Tea's `Destination`, the
+            // user's call).
+            if let Some(code) = place_range(map, caster, s, d, m, false) {
+                return Some(code);
             }
             if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, d) {
                 return Some(fail::LINE_OF_SIGHT);
+            }
+        }
+        // An object aimed at is here, in this copy, and within the range
+        // (mangos's strict `CheckRange` at a spell's game object target,
+        // Thistle Tea's `SpellObjects.explicit`: no reach, no leeway); a
+        // lock's reach is its own (`professions::check`).
+        if !triggered
+            && let Some(o) = t.object
+            && !crate::game::map::objects::opens_lock(s)
+        {
+            let (Some(at), Some(me)) =
+                (map.gameobject(o).map(|o| o.position), map.unit_view(caster))
+            else {
+                return Some(fail::BAD_TARGETS);
+            };
+            let (_, base) = map.realm.data.spells.range(s);
+            let max = m.apply(mods::OP_RANGE, base).max(0.0);
+            if base > 0.0 && dist(me.position, at) > max {
+                return Some(fail::OUT_OF_RANGE);
             }
         }
         // A spell at the caster's pet wants it out, alive, in range and in
@@ -1048,6 +1175,18 @@ fn check_target(
         // filter: one can't attack oneself).
         return Some(fail::BAD_TARGETS);
     }
+    // One that can't be targeted (`UNIT_FLAG_UNTARGETABLE`) isn't, by a
+    // spell that doesn't ignore its target's restrictions (mangos-classic's
+    // `CheckCast` at an explicit target, a heal's as a blow's).
+    if target != caster
+        && !triggered
+        && !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS)
+        && map
+            .unit_fields(target)
+            .is_some_and(|f| f.has_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNTARGETABLE))
+    {
+        return Some(fail::BAD_TARGETS);
+    }
     // A creature by its template; a player a humanoid, but a beast in a
     // druid's animal forms (mangos's `GetCreatureType`).
     if (map.creature(target).is_some() || map.players.contains_key(&target))
@@ -1153,7 +1292,15 @@ fn check_target(
         } else {
             max + me.combat_reach + u.combat_reach
         };
-        if d > reach + 1.0 + moving_leeway(&me, &u, melee, target) {
+        // Past both reaches, a player 1.25 yards beyond its range, a
+        // creature none (Thistle Tea's `Range`, the user's call); a swing's
+        // reach a yard (round 3's kobold).
+        let leeway = if melee || s.on_next_swing() {
+            1.0
+        } else {
+            leeway(caster, false)
+        };
+        if d > reach + leeway + moving_leeway(&me, &u, melee, target) {
             return Some(fail::OUT_OF_RANGE);
         }
         // The minimum beyond both reaches, as the maximum is (mangos's

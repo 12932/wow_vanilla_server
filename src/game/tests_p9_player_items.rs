@@ -501,10 +501,13 @@ async fn a_change_without_its_reagents_item_or_charges_changes_nothing() {
 }
 
 /// Thistle Tea's "revalidates the current position and preserves broken
-/// items": a broken item moved to the bank while its change is cast is
-/// changed where it lies then, still broken, and gives nothing.
+/// items", as mangos-classic has it (round 11c): a broken item moved to the
+/// bank while its change is cast isn't carried as the cast ends, so it
+/// isn't changed (`CheckItems`: `HasItemCount` of the cast item, not
+/// counting the bank, `SPELL_FAILED_ITEM_NOT_READY`); it stays as it was,
+/// broken, and gives nothing. Thistle Tea changes it in the bank.
 #[tokio::test]
-async fn a_broken_item_banked_mid_change_is_changed_there_still_broken() {
+async fn a_broken_item_banked_mid_change_is_not_changed() {
     let (_realm, _a, g, map) = setup().await;
     let bank = (BAG_PLAYER, BANK_START);
     let stamina = on(&map, move |m| {
@@ -548,7 +551,7 @@ async fn a_broken_item_banked_mid_change_is_changed_there_still_broken() {
         )
     })
     .await;
-    assert_eq!(changed, (NEW, 0, 50, true, stamina));
+    assert_eq!(changed, (OLD, 0, 100, false, stamina));
 }
 
 /// Thistle Tea's "preserves rolled loot through full bags and retries": a

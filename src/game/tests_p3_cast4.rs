@@ -385,7 +385,8 @@ async fn range_takes_its_modifiers_and_the_reaches_and_a_triggered_spell_none() 
             let reach = {
                 let a = m.unit_view(mage).unwrap().combat_reach;
                 let b = m.unit_view(k).unwrap().combat_reach;
-                a + b + 1.0
+                // A player's 1.25 yards as a cast begins (round 11c).
+                a + b + 1.25
             };
             let mut s = bolt(990_472, 1);
             s.family_name = 3;
@@ -434,7 +435,7 @@ async fn range_takes_its_modifiers_and_the_reaches_and_a_triggered_spell_none() 
             // The minimum range, beyond both reaches (round 6).
             let mut far = bolt(990_474, 1);
             far.range_index = RANGE_8_TO_30;
-            for d in [8.0 + reach - 1.1, 8.0 + reach - 0.9] {
+            for d in [8.0 + reach - 1.35, 8.0 + reach - 1.15] {
                 place(m, d);
                 seen.push(check(m, mage, &far, at(k)));
             }

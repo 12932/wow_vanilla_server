@@ -1387,6 +1387,15 @@ fn execute(
 ) {
     // An aura's cast, or a proc's; what it casts in turn is its own.
     let by_aura = BY_AURA.replace(false) || crate::game::map::procs::in_proc();
+    // What a triggered cast is checked for still (mangos-classic's
+    // `CheckCast` and `CheckScriptTargeting` for a triggered spell too):
+    // told its caster unless an aura set it off.
+    if triggered && let Some(code) = checks::triggered(map, caster, s) {
+        if !by_aura {
+            send_cast_result(map, caster, s.id, Some(code));
+        }
+        return;
+    }
     let Some(_deeper) = Deeper::enter() else {
         tracing::debug!("spell {} not cast: {MAX_DEPTH} spells deep", s.id);
         return;
@@ -1540,8 +1549,11 @@ fn execute(
     // run on their own and are skipped below).
     crate::game::map::pets::before_effects(map, caster, s, &targets);
     let professions = crate::game::map::professions::execute(map, caster, s, &targets, cast_entry);
-    // The objects the cast is at, for the quests asking for it there.
-    let at_objects = if triggered || crate::game::map::objects::opens_lock(s) {
+    // The objects the cast is at, for the quests asking for it there: a
+    // lock's too, credited once it is opened, after the effects (mangos's
+    // `DoAllEffectOnTarget(GOTargetInfo*)` and `RewardPlayerAndGroupAtCast`
+    // for every cast not a channel's; Thistle Tea's deferred credit).
+    let at_objects = if triggered {
         Vec::new()
     } else {
         crate::game::map::objects::cast_at(map, caster, s, &targets)
@@ -3060,9 +3072,10 @@ pub fn update(map: &mut Map) {
         // reach, nobody else's and not beyond the skill, its tools and
         // focus by (mangos's `CheckCast(false)` at `Spell::cast`, Thistle
         // Tea's launch recheck), failed before it costs or spends a charge.
-        let at_finish = checks::at_finish(map, g, s, &casting.targets, &m).or_else(|| {
-            crate::game::map::professions::check(map, g, s, &casting.targets, casting.item)
-        });
+        let at_finish =
+            checks::at_finish(map, g, s, &casting.targets, casting.item, &m).or_else(|| {
+                crate::game::map::professions::check(map, g, s, &casting.targets, casting.item)
+            });
         if let Some(code) = at_finish {
             if code == checks::fail::BAD_TARGETS {
                 if let Some(p) = map.players.get(&g) {

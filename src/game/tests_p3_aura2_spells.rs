@@ -113,8 +113,8 @@ async fn failure(c: &mut Client) -> u8 {
 }
 
 /// Thistle Tea's launch checks, and mangos's `CheckCast(false)` as a cast
-/// ends: a target gone beyond the range and its tolerance (a tenth of it,
-/// at most three yards) fails the cast as out of range, costing no mana
+/// ends: a target gone beyond the range and a player's launch leeway (6.25
+/// yards, Thistle Tea's `Range`, round 11c) fails the cast as out of range, costing no mana
 /// and starting no cooldown; one just within it is hit, the cast paid
 /// for. A caster turned away from a target it must face fails as not in
 /// front, and the same cast facing it again goes; a target dead fails as
@@ -126,7 +126,7 @@ async fn a_cast_ends_only_on_a_target_still_in_range_in_front_and_alive() {
     let gone = map
         .query(move |m| {
             let brute = spawn(m, ga, BRUTE, 1, 20.0);
-            let edge = 30.0 + reaches(m, ga, brute) + 3.0;
+            let edge = 30.0 + reaches(m, ga, brute) + 6.25;
             finish(m, ga, brute, |m| put_ahead(m, ga, brute, edge + 0.05))
         })
         .await
@@ -136,7 +136,7 @@ async fn a_cast_ends_only_on_a_target_still_in_range_in_front_and_alive() {
     let (within, turned, faced) = map
         .query(move |m| {
             let brute = spawn(m, ga, BRUTE, 1, 20.0);
-            let edge = 30.0 + reaches(m, ga, brute) + 3.0;
+            let edge = 30.0 + reaches(m, ga, brute) + 6.25;
             let within = finish(m, ga, brute, |m| put_ahead(m, ga, brute, edge - 0.05));
             put_ahead(m, ga, brute, 20.0);
             let turned = finish(m, ga, brute, |m| {

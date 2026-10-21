@@ -711,14 +711,26 @@ fn object_targets(
         let at_dest = area == 52 && e.target_a != 18;
         let at = crate::game::map::spells::targets::center(map, caster, t, at_dest);
         let r = map.realm.data.spells.radius(e.radius_index);
-        return map
+        let mut found: Vec<(f32, Guid)> = map
             .grid
             .around(at.x, at.y, r)
             .filter(|g| guid::is_game_object(*g))
             .filter_map(|g| map.gameobject(g))
             .filter(|o| named(o) && dist(o.position, at) <= r)
-            .map(|o| o.guid)
+            .map(|o| (dist(o.position, at), o.guid))
             .collect();
+        found.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // At most the spell's count of them, each effect its own (mangos's
+        // `m_affectedTargetCount` on an effect's object list, after its
+        // filter; Thistle Tea's "caps each object's effect").
+        let mut out: Vec<Guid> = found.into_iter().map(|(_, g)| g).collect();
+        crate::game::map::spells::targets::limit(
+            map,
+            &mut out,
+            s.max_affected_targets as usize,
+            None,
+        );
+        return out;
     }
     // The object aimed at, unless a condition its row puts on it fails or
     // the row isn't for this effect.
