@@ -265,6 +265,8 @@ mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p12f_auras;
 #[cfg(test)]
+mod tests_p12f_real;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

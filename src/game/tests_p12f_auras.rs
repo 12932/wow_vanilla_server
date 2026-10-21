@@ -210,3 +210,129 @@ async fn seal_of_the_crusader_cuts_the_main_hands_damage_a_hit() {
     );
     assert_eq!(after, bare, "back when it goes");
 }
+
+// ---- a charm dispelled off a charmed friend --------------------------------
+
+const DOMINATE: u32 = 995_130;
+const WEAKNESS: u32 = 995_131;
+const DISPEL_MAGIC: u32 = 995_132;
+
+fn charm_kit(d: &mut GameData) {
+    // Dominate Mind's shape: harmful magic that charms.
+    let mut dominate = bare(DOMINATE, 5);
+    dominate.duration_index = LASTS_15S;
+    dominate.dispel = 1;
+    effect(&mut dominate, 0, aura(auras::AURA_MOD_CHARM, 0, 0, 6));
+    // Harmful magic that doesn't.
+    let mut weakness = bare(WEAKNESS, 5);
+    weakness.duration_index = LASTS_15S;
+    weakness.dispel = 1;
+    effect(
+        &mut weakness,
+        0,
+        aura(auras::AURA_MOD_DECREASE_SPEED, 0, -50, 6),
+    );
+    // Dispel Magic, two tries, at a unit.
+    let mut dispel = bare(DISPEL_MAGIC, 1);
+    effect(
+        &mut dispel,
+        0,
+        crate::game::data::spells::SpellEffect {
+            effect: 38,
+            misc_value: 1,
+            base_points: 1,
+            base_dice: 1,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
+    insert(d, [dominate, weakness, dispel]);
+}
+
+/// A priest's dispel takes the magic charm off a charmed friend, now an
+/// enemy (mangos-classic's `IsDispellableByMask`: a harmful aura on a unit
+/// it can't assist stays only if it isn't a charm), and leaves the other
+/// harmful magic on them, as it would on any enemy.
+#[tokio::test]
+async fn a_charm_is_dispelled_off_a_charmed_friend() {
+    let realm = fast_realm(charm_kit);
+    let (_a, priest, map) = human(&realm, "P12FDISA", "Dispeller", Class::Priest).await;
+    let (_b, friend, _) = human(&realm, "P12FDISB", "Dominated", Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            ready(m, priest, 60, &[]);
+            ready(m, friend, 60, &[]);
+            let k = dummy(m, friend, 60, 5.0);
+            for spell in [WEAKNESS, DOMINATE] {
+                let s = m.realm.data.spells.get(spell).cloned().unwrap();
+                auras::apply_spell(m, k, friend, &s, &[(0, 0)], auras::Context::default())
+                    .expect("it takes");
+            }
+            let charmed = crate::game::map::combat::can_attack(m, priest, friend);
+            spells::cast_triggered(m, priest, DISPEL_MAGIC, Some(friend));
+            let on =
+                |m: &Map, spell: u32| auras::auras(m, friend).is_some_and(|a| a.has_spell(spell));
+            (charmed, on(m, DOMINATE), on(m, WEAKNESS))
+        })
+        .await
+        .unwrap();
+    assert!(got.0, "the charmed friend is an enemy");
+    assert!(!got.1, "the charm dispelled");
+    assert!(got.2, "the other harmful magic kept");
+}
+
+// ---- the Onyxia Scale Cloak against Shadow Flame ---------------------------
+
+const SHADOW_FLAME: u32 = 22539;
+const SHADOW_FLAME_BURN: u32 = 22682;
+const ONYXIA_SCALE_CLOAK: u32 = 22683;
+
+fn flame_kit(d: &mut GameData) {
+    // As vmangos has them, at one target: the flame's damage and script
+    // effect, the burn's periodic damage, the cloak's dummy on its wearer.
+    let mut flame = bare(SHADOW_FLAME, 5);
+    effect(&mut flame, 0, damage(10));
+    effect(
+        &mut flame,
+        1,
+        crate::game::data::spells::SpellEffect {
+            effect: 77,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
+    let mut burn = bare(SHADOW_FLAME_BURN, 5);
+    burn.duration_index = LASTS_15S;
+    let mut tick = aura(auras::AURA_PERIODIC_DAMAGE, 0, 10, 6);
+    tick.amplitude = 1000;
+    effect(&mut burn, 0, tick);
+    let mut cloak = bare(ONYXIA_SCALE_CLOAK, 0);
+    cloak.duration_index = super::tests_p3_cast_kit::LASTS_LONG;
+    effect(&mut cloak, 0, aura(auras::AURA_DUMMY, 0, 0, 1));
+    insert(d, [flame, burn, cloak]);
+}
+
+/// Shadow Flame burns whom it hits (its script effect casts 22682), unless
+/// they wear the Onyxia Scale Cloak (its dummy aura 22683), as
+/// mangos-classic's `EffectScriptEffect` has it.
+#[tokio::test]
+async fn the_onyxia_scale_cloak_keeps_off_shadow_flames_burn() {
+    let realm = fast_realm(flame_kit);
+    let (_a, bare_one, map) = human(&realm, "P12FFLA", "Unclad", Class::Warrior).await;
+    let (_b, cloaked, _) = human(&realm, "P12FFLB", "Cloaked", Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            ready(m, bare_one, 60, &[]);
+            ready(m, cloaked, 60, &[]);
+            spells::cast_triggered(m, cloaked, ONYXIA_SCALE_CLOAK, Some(cloaked));
+            let k = dummy(m, bare_one, 60, 5.0);
+            let burnt = |m: &mut Map, g| {
+                spells::cast_triggered(m, k, SHADOW_FLAME, Some(g));
+                auras::auras(m, g).is_some_and(|a| a.has_spell(SHADOW_FLAME_BURN))
+            };
+            (burnt(m, bare_one), burnt(m, cloaked))
+        })
+        .await
+        .unwrap();
+    assert_eq!(got, (true, false), "the bare burnt, the cloaked not");
+}

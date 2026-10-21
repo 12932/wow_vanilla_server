@@ -33,6 +33,14 @@ use crate::game::map::Map;
 use crate::game::map::auras::{self, Aura, Holder};
 use crate::game::map::combat::dist;
 
+/// Shadow Flame's spells (Ebonroc's, Firemaw's, Flamegor's and Nefarian's
+/// 22539, and the others mangos-classic scripts alike), the burn they put
+/// on, and the cloak's dummy aura that keeps it off.
+const SHADOW_FLAMES: [u32; 13] = [
+    22539, 22972, 22975, 22976, 22977, 22978, 22979, 22980, 22981, 22982, 22983, 22984, 22985,
+];
+const SHADOW_FLAME_BURN: u32 = 22682;
+pub const ONYXIA_SCALE_CLOAK: u32 = 22683;
 const GOLEMAGGS_TRUST: u32 = 20556;
 const GOLEMAGGS_TRUST_BUFF: u32 = 20553;
 const CORE_RAGER: u32 = 11672;
@@ -196,6 +204,22 @@ pub fn dummy(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate) -> bo
         SHADOW_PORTAL => {
             let room = SHADOW_PORTAL_ROOMS[rand::rng().random_range(0..SHADOW_PORTAL_ROOMS.len())];
             threat_wipe_cast(map, caster, target, room);
+            true
+        }
+        // Shadow Flame's script effects: its burn on the living, unless
+        // they wear the Onyxia Scale Cloak (mangos-classic's
+        // `EffectScriptEffect`, `GetDummyAura(22683)`).
+        id if SHADOW_FLAMES.contains(&id) => {
+            let cloaked =
+                auras::auras(map, target).is_some_and(|a| a.has_spell(ONYXIA_SCALE_CLOAK));
+            if map.unit_view(target).is_some_and(|u| u.alive) && !cloaked {
+                crate::game::map::spells::cast_triggered(
+                    map,
+                    caster,
+                    SHADOW_FLAME_BURN,
+                    Some(target),
+                );
+            }
             true
         }
         _ => false,

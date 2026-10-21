@@ -1505,7 +1505,7 @@ fn dispel(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, kind: i3
 /// What a dispel of `kind` from `caster` may take off `target`: each aura
 /// (its spell, caster and stacks) of the dispel type, or any of the four
 /// for all (7, or below 0); magic and poison only an enemy's buffs or a
-/// friend's afflictions.
+/// friend's afflictions, and the magic charm that made a friend an enemy.
 pub(crate) fn dispellable(
     map: &Map,
     caster: Guid,
@@ -1514,23 +1514,39 @@ pub(crate) fn dispellable(
 ) -> Vec<(u32, Guid, u32)> {
     // An enemy's buffs, a friend's afflictions.
     let positive = combat::can_attack(map, caster, target);
-    let matches = |dispel: u32, holder_positive: bool| {
+    let matches = |h: &auras::Holder| {
+        let dispel = h.dispel;
         let kind_ok = if kind == 7 || kind < 0 {
             matches!(dispel, 1..=4)
         } else {
             dispel == kind as u32
         };
-        kind_ok && (!matches!(dispel, 1 | 4) || holder_positive == positive)
+        // A harmful magic charm on an enemy is taken too: a charmed
+        // friend's Mind Control or Dominate Mind (mangos-classic's
+        // `IsDispellableByMask`, `positive || !IsCharm()`, as it means it:
+        // its `IsCharmAura` has the test the wrong way round).
+        let charm = dispel == 1 && positive && !h.positive && charmed_by(h);
+        kind_ok && (!matches!(dispel, 1 | 4) || h.positive == positive || charm)
     };
     auras::auras(map, target)
         .map(|a| {
             a.holders
                 .iter()
-                .filter(|h| h.dispel != 0 && matches(h.dispel, h.positive))
+                .filter(|h| h.dispel != 0 && matches(h))
                 .map(|h| (h.spell, h.caster, h.stacks.max(1)))
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether a holder charms or possesses its bearer.
+fn charmed_by(h: &auras::Holder) -> bool {
+    h.effects.iter().any(|x| {
+        matches!(
+            x.kind,
+            auras::AURA_MOD_CHARM | auras::AURA_MOD_POSSESS | auras::AURA_AOE_CHARM
+        )
+    })
 }
 
 /// Who a create-item effect gives its item to, as Thistle Tea and mangos
