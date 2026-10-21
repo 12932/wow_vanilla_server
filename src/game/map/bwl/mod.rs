@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use wow_world_messages::Guid;
 
+pub mod chromaggus;
 pub mod razorgore;
 pub mod vael;
 
@@ -163,7 +164,7 @@ pub fn dummy(
             razorgore::orb_used(map, caster);
             true
         }
-        _ => false,
+        id => chromaggus::dummy(map, caster, id),
     }
 }
 
@@ -217,6 +218,7 @@ pub fn creature_event(map: &mut Map, g: Guid, entry: u32, _spawn: Option<u32>, e
     }
     razorgore::creature_event(map, g, entry, event);
     vael::creature_event(map, g, entry, event);
+    chromaggus::creature_event(map, g, entry, event);
 }
 
 /// A living player into area trigger `id` here.
@@ -241,7 +243,10 @@ fn lashlayer_event(map: &mut Map, g: Guid, event: Event) {
 
 /// A timed step for one creature of the lair.
 pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
-    if razorgore::creature_timer(map, key, g) || vael::creature_timer(map, key, g) {
+    if razorgore::creature_timer(map, key, g)
+        || vael::creature_timer(map, key, g)
+        || chromaggus::creature_timer(map, key, g)
+    {
         return;
     }
     if key == T_LASHLAYER_LEASH {
@@ -266,7 +271,7 @@ pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
 
 /// A timed step of the copy.
 pub fn timer(map: &mut Map, key: u32) {
-    let _ = razorgore::timer(map, key) || vael::timer(map, key);
+    let _ = razorgore::timer(map, key) || vael::timer(map, key) || chromaggus::timer(map, key);
 }
 
 /// Objects as the copy's data leaves them, once its spawns are in.
@@ -516,5 +521,6 @@ pub fn install(data: &mut GameData) {
     }
     razorgore::install(&mut b);
     vael::install(&mut b);
+    chromaggus::install(&mut b);
     b.home_fails(NPC_RAZORGORE, 90, RAZORGORE);
 }
