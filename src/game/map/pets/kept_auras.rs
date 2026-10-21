@@ -105,6 +105,7 @@ pub fn restore(map: &mut Map, pet: Guid, kept: &[SavedAura], away_ms: u64) {
                     m.flat[crate::game::map::spells::mods::OP_ACTIVATION_TIME],
                     m.pct[crate::game::map::spells::mods::OP_ACTIVATION_TIME],
                 ),
+                dr: None,
             },
         );
         auras::set_stacks(map, pet, a.spell, caster, item, a.stacks.max(1));

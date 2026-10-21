@@ -497,6 +497,12 @@ fn apply_auras(
                 l.mods.flat[mods::OP_ACTIVATION_TIME],
                 l.mods.pct[mods::OP_ACTIVATION_TIME],
             ),
+            // A harmful aura's group, whoever its target (mangos-classic's
+            // `setDiminishGroup`, its group whether its levels count or not).
+            dr: (!auras::positive(s))
+                .then(|| dr_group(s, l.by_aura))
+                .flatten()
+                .map(|g| g as u8),
         };
         if auras::apply_spell(map, caster, target, s, aura_effects, ctx).is_err()
             && caster != target
@@ -2376,6 +2382,7 @@ fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
         triggered: false,
         applied: None,
         source: None,
+        dr: None,
     }
 }
 

@@ -1,7 +1,8 @@
 //! Phase 3's diminishing returns, Thistle Tea's `DiminishingReturnsTest`
 //! and `DiminishingReturnsAuraTest` ported: stuns halved across casters,
-//! the groups apart, recovery once the last of a group is gone, and what
-//! spends no step.
+//! each taking the last one's place (mangos-classic's, where Thistle Tea
+//! has them stand together), the groups apart, recovery once the last of a
+//! group is gone, and what spends no step.
 
 use std::time::Duration;
 
@@ -96,6 +97,17 @@ fn lasts(m: &Map, g: Guid, spell: u32) -> Option<u32> {
         .and_then(|h| h.duration)
 }
 
+/// The stuns on `g`.
+fn stuns(m: &Map, g: Guid) -> Vec<u32> {
+    auras::auras(m, g).map_or_else(Vec::new, |a| {
+        a.holders
+            .iter()
+            .filter(|h| h.has(AURA_MOD_STUN))
+            .map(|h| h.spell)
+            .collect()
+    })
+}
+
 /// `g`'s stuns' returns: how many have gone on, and when they recover.
 fn returns(m: &Map, g: Guid) -> Vec<(u8, Option<Duration>)> {
     let now = m.now;
@@ -109,7 +121,9 @@ fn returns(m: &Map, g: Guid) -> Vec<(u8, Option<Duration>)> {
 
 /// Thistle Tea's stuns: shared across casters, eight seconds, then four,
 /// then two, the player's client told each; the fourth is immune. A spell
-/// of a stun and a root counts once.
+/// of a stun and a root counts once. Each takes the last one's place, of
+/// another spell or caster (mangos-classic's), and the immune one leaves
+/// the last on.
 #[tokio::test]
 async fn stuns_halve_across_casters_and_the_fourth_is_immune() {
     let (_realm, mut a, ga, map) = setup_with(data(), Class::Warrior).await;
@@ -119,17 +133,33 @@ async fn stuns_halve_across_casters_and_the_fourth_is_immune() {
             let one = spawn(m, ga, BRUTE, 20, 5.0);
             let two = spawn(m, ga, BRUTE, 20, 5.0);
             let mut out = Vec::new();
+            let mut on = Vec::new();
             for (by, spell) in [(one, STUN_ROOT), (two, STUN), (one, STUN)] {
                 spells::cast_triggered(m, by, spell, Some(ga));
                 out.push(lasts(m, ga, spell));
+                on.push(stuns(m, ga));
             }
             spells::cast_triggered(m, two, STUN_2, Some(ga));
             out.push(lasts(m, ga, STUN_2));
-            out
+            on.push(stuns(m, ga));
+            let caster = auras::auras(m, ga).and_then(|a| {
+                a.holders
+                    .iter()
+                    .find(|h| h.spell == STUN)
+                    .map(|h| h.caster == one)
+            });
+            (out, on, caster)
         })
         .await
         .unwrap();
+    let (got, on, caster) = got;
     assert_eq!(got, [Some(8_000), Some(4_000), Some(2_000), None]);
+    assert_eq!(
+        on,
+        [vec![STUN_ROOT], vec![STUN], vec![STUN], vec![STUN]],
+        "one stun at a time"
+    );
+    assert_eq!(caster, Some(true), "the last caster's");
     let mut told = Vec::new();
     for _ in 0..3 {
         told.push(
@@ -146,9 +176,10 @@ async fn stuns_halve_across_casters_and_the_fourth_is_immune() {
     assert_eq!(missed(&mut a, STUN_2).await, 7, "immune");
 }
 
-/// Thistle Tea's recovery: it waits for every stun on to go, then fifteen
-/// seconds; a stun cast on one immune in that time doesn't put it off. A
-/// dispel starts it as an ending does.
+/// Thistle Tea's recovery: it waits for the stun on to go, then fifteen
+/// seconds; one replaced by the next doesn't start it (mangos-classic's: the
+/// group is still on); a stun cast on one immune in that time doesn't put
+/// it off. A dispel starts it as an ending does.
 #[tokio::test]
 async fn recovery_starts_as_the_last_stun_goes_and_immunity_doesnt_extend_it() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
@@ -158,10 +189,12 @@ async fn recovery_starts_as_the_last_stun_goes_and_immunity_doesnt_extend_it() {
             let two = spawn(m, ga, BRUTE, 20, 5.0);
             spells::cast_triggered(m, one, STUN, Some(ga));
             pass(m, 1_000);
+            // Four seconds of the second in the first's place.
             spells::cast_triggered(m, two, STUN_2, Some(ga));
-            pass(m, 4_000);
-            let one_left = returns(m, ga);
+            let replaced = (stuns(m, ga), returns(m, ga));
             pass(m, 3_000);
+            let one_left = returns(m, ga);
+            pass(m, 1_000);
             let both_gone = returns(m, ga);
             pass(m, 14_999);
             spells::cast_triggered(m, one, STUN, Some(ga));
@@ -192,10 +225,16 @@ async fn recovery_starts_as_the_last_stun_goes_and_immunity_doesnt_extend_it() {
                 tried,
                 recovered,
                 returns(m, brute),
+                replaced,
             )
         })
         .await
         .unwrap();
+    assert_eq!(
+        got.6,
+        (vec![STUN_2], vec![(2, None)]),
+        "the first replaced, no clock for it"
+    );
     assert_eq!(got.0, [(2, None)], "no clock while one is on");
     assert_eq!(got.1, [(2, Some(Duration::from_secs(15)))]);
     assert_eq!(got.2, Some(2_000), "a millisecond early: the third");
@@ -205,9 +244,10 @@ async fn recovery_starts_as_the_last_stun_goes_and_immunity_doesnt_extend_it() {
 }
 
 /// Thistle Tea's groups and exemptions: Impact's triggered stun and Kidney
-/// Shot are groups of their own, each eight seconds after a stun; a stun
-/// kept off by a mechanic immunity spends no step; death forgets them; a
-/// stun refused for its returns still deals the damage beside it.
+/// Shot are groups of their own, each eight seconds after a stun and
+/// standing beside it; a stun kept off by a mechanic immunity spends no
+/// step; death forgets them; a stun refused for its returns still deals the
+/// damage beside it.
 #[tokio::test]
 async fn the_stun_groups_stand_apart_and_what_spends_no_step() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
@@ -219,6 +259,7 @@ async fn the_stun_groups_stand_apart_and_what_spends_no_step() {
                 spells::cast_triggered(m, one, s, Some(ga));
                 groups.push(lasts(m, ga, s));
             }
+            let apart = stuns(m, ga);
             let brute = spawn(m, ga, BRUTE, 20, 5.0);
             put(m, brute, brute, STUN_IMMUNE, &[0]).unwrap();
             spells::cast_triggered(m, ga, STUN, Some(brute));
@@ -240,11 +281,13 @@ async fn the_stun_groups_stand_apart_and_what_spends_no_step() {
                 dead,
                 before - health(m, other),
                 lasts(m, other, STUN_HURTS),
+                apart,
             )
         })
         .await
         .unwrap();
     assert_eq!(got.0, [Some(8_000); 3], "three groups");
+    assert_eq!(got.5, [STUN, IMPACT, KIDNEY], "standing together");
     assert_eq!(got.1, [], "no step for the immune");
     assert_eq!(got.2, [], "death forgets");
     assert_eq!((got.3, got.4), (10, None), "the damage dealt, the stun not");
