@@ -240,6 +240,7 @@ pub fn update(map: &mut Map) {
     crate::game::map::cinematic::update(map);
     crate::game::map::environment::update(map);
     crate::game::map::item_rules::update(map);
+    crate::game::map::death::auto_release(map);
     let now = map.now;
     let mut detectable = Vec::new();
     for p in map.players.values_mut() {

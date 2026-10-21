@@ -177,6 +177,17 @@ pub fn kill(map: &mut Map, g: Guid) {
         return;
     }
     p.death = Death::Dead { since: now };
+    // The client counts down to the release it makes itself, out of a copy
+    // (mangos's `KillPlayer`: `PLAYER_FIELD_BYTE_RELEASE_TIMER` unless the
+    // map is instanceable).
+    if crate::game::instances::instance_type(&map.realm, map.key.map) == 0 {
+        let flags = p.fields.get_byte(PLAYER_FIELD_BYTES, 0);
+        p.fields.set_byte(
+            PLAYER_FIELD_BYTES,
+            0,
+            flags | PLAYER_FIELD_BYTE_RELEASE_TIMER,
+        );
+    }
     // The dead lie where they fell until they release or rise: rooted,
     // as mangos's `KillPlayer` roots them (`SendMoveRoot`).
     crate::game::map::movement::root_to(&p.outbound, g, true);
@@ -225,6 +236,87 @@ pub fn kill(map: &mut Map, g: Guid) {
         g,
         wow_world_messages::vanilla::SMSG_TRADE_STATUS_TradeStatus::TargetDead,
     );
+}
+
+/// `PLAYER_FIELD_BYTES`' first byte's flag: the client shows the time to
+/// the release it makes by itself.
+pub const PLAYER_FIELD_BYTE_RELEASE_TIMER: u8 = 0x08;
+
+/// How long the dead lie before their spirit is released for them, out of
+/// a copy (mangos's `KillPlayer`'s `m_deathTimer`).
+pub const AUTO_RELEASE: std::time::Duration = std::time::Duration::from_secs(6 * 60);
+
+/// The dead who have lain six minutes outside a dungeon, raid or
+/// battleground released to their graveyard (mangos's `Player::Update`:
+/// `BuildPlayerRepop`, `RepopAtGraveyard`; "not auto-free ghost from body
+/// in instances").
+pub fn auto_release(map: &mut Map) {
+    if crate::game::instances::instance_type(&map.realm, map.key.map) != 0 {
+        return;
+    }
+    let now = map.now;
+    let due: Vec<Guid> = map
+        .players
+        .values()
+        .filter(|p| {
+            matches!(p.death, Death::Dead { since } if now.saturating_duration_since(since) >= AUTO_RELEASE)
+        })
+        .map(|p| p.guid)
+        .collect();
+    for g in due {
+        release(map, g);
+    }
+}
+
+/// How deep a player may fall: below it, the void (mangos's
+/// `HandleMovementOpcodes`, z under -500).
+pub const VOID_Z: f32 = -500.0;
+
+/// A player fallen below the world: the living take their whole health
+/// as a fall (`DAMAGE_FALL_TO_VOID`, logged as a fall) and are released,
+/// and the dead, a ghost too, are put at their graveyard (mangos's
+/// `EnvironmentalDamage`, `KillPlayer`, `BuildPlayerRepop`,
+/// `RepopAtGraveyard`).
+pub fn below_world(map: &mut Map, g: Guid) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    if p.position().z >= VOID_Z
+        || p.flight.is_some()
+        || p.movement.flags.get_on_transport().is_some()
+    {
+        return;
+    }
+    if p.death == Death::Alive {
+        let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        crate::game::map::environment::damage(
+            map,
+            g,
+            wow_world_messages::vanilla::EnvironmentalDamageType::Fall,
+            max,
+        );
+    }
+    match map.players.get(&g).map(|p| p.death) {
+        Some(Death::Dead { .. }) => release(map, g),
+        Some(Death::Ghost { .. }) => repop_at_graveyard(map, g),
+        _ => {}
+    }
+}
+
+/// A ghost put at the graveyard it would be released to (mangos's
+/// `RepopAtGraveyard`).
+fn repop_at_graveyard(map: &mut Map, g: Guid) {
+    let Some((pos, zone, team)) = map.players.get(&g).map(|p| (p.position(), p.zone, p.team))
+    else {
+        return;
+    };
+    if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
+        map.teleport(g, map.key, at, facing);
+        return;
+    }
+    let zone = crate::game::map::corpses::graveyard_zone(map, zone);
+    let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
+    map.teleport(g, to, at, facing);
 }
 
 /// `CMSG_REPOP_REQUEST`: release the spirit to the nearest graveyard.
@@ -386,6 +478,12 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) -> bool {
     }
     p.fields.set_u32(UNIT_FIELD_POWER1 + 1, 0);
     p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST, false);
+    let flags = p.fields.get_byte(PLAYER_FIELD_BYTES, 0);
+    p.fields.set_byte(
+        PLAYER_FIELD_BYTES,
+        0,
+        flags & !PLAYER_FIELD_BYTE_RELEASE_TIMER,
+    );
     if p.fields.get_u32(UNIT_FIELD_AURA) == SPELL_GHOST {
         p.fields.set_u32(UNIT_FIELD_AURA, 0);
     }
@@ -606,10 +704,43 @@ pub fn spirit_healer_activate(map: &mut Map, g: Guid, healer: Guid) {
     {
         return;
     }
+    // The graveyard nearest the corpse, if it isn't the one nearest the
+    // ghost: the risen are put there (mangos's `SendSpiritResurrect`), so a
+    // ghost's run is no journey. A corpse on another map is left be.
+    let corpse_grave = map.players.get(&g).and_then(|p| {
+        let c = p
+            .row
+            .state
+            .corpse
+            .as_ref()
+            .filter(|c| c.map == map.key.map)?;
+        Some((
+            Vector3d {
+                x: c.x,
+                y: c.y,
+                z: c.z,
+            },
+            p.position(),
+            p.zone,
+            p.team,
+        ))
+    });
     if resurrect(map, g, 0.5) {
         // Everything carried wears a quarter (Thistle Tea's `SpiritHealer`).
         crate::game::map::vendor::wear_carried(map, g, 0.25);
         resurrection_sickness(map, g);
+        if let Some((corpse, ghost, zone, team)) = corpse_grave {
+            let corpse_zone =
+                crate::game::map::world::zone_and_area(map, corpse).map_or(zone, |(z, _)| z);
+            let corpse_zone = crate::game::map::corpses::graveyard_zone(map, corpse_zone);
+            let ghost_zone = crate::game::map::corpses::graveyard_zone(map, zone);
+            let (to, at, facing) = nearest_graveyard(map, corpse_zone, team, corpse);
+            let (_, ghost_at, _) = nearest_graveyard(map, ghost_zone, team, ghost);
+            // (No graveyard for the corpse leaves them where they stand.)
+            if at != corpse && (to != map.key || at != ghost_at) {
+                map.teleport(g, to, at, facing);
+            }
+        }
     }
 }
 
