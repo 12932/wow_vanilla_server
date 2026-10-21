@@ -143,6 +143,18 @@ mod tests_p10_loader_pets;
 #[cfg(test)]
 mod tests_p10_movement_views;
 #[cfg(test)]
+mod tests_p10_player;
+#[cfg(test)]
+mod tests_p10_player_casts;
+#[cfg(test)]
+mod tests_p10_player_items;
+#[cfg(test)]
+mod tests_p10_player_objects;
+#[cfg(test)]
+mod tests_p10_player_quests;
+#[cfg(test)]
+mod tests_p10_player_real;
+#[cfg(test)]
 mod tests_p10_world;
 #[cfg(test)]
 mod tests_p10_world_contact;

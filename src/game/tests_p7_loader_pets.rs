@@ -96,9 +96,10 @@ fn a_wolfs_passives_are_its_familys_and_great_stamina_is_trained() {
 
 /// Thistle Tea's hidden passives (`passive_spell_vmangos_test.exs`) and
 /// mangos's `spell_learn_spell`: Feline Swiftness's ranks (17002, 24866)
-/// bring their hidden passives (24867, 24864) as they are learned; a
-/// spell that brings another to the spellbook (Poisons, 2842, Instant
-/// Poison 8681) brings it too.
+/// bring their hidden passives (24867, 24864) as they are learned, the
+/// second rank's taking the first's place (mangos's `removeSpell` takes a
+/// rank's dependents); a spell that brings another to the spellbook
+/// (Poisons, 2842, Instant Poison 8681) brings it too.
 #[tokio::test]
 #[ignore = "extended"]
 async fn feline_swiftness_brings_its_hidden_passive() {
@@ -116,7 +117,7 @@ async fn feline_swiftness_brings_its_hidden_passive() {
         [24_867, 24_864, 8681].map(|s| p.spells.contains(&s))
     })
     .await;
-    assert_eq!(out, [true, true, true]);
+    assert_eq!(out, [false, true, true]);
 }
 
 /// Thistle Tea's controlled summons (`controlled_pet_dbc_test.exs`): the

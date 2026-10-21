@@ -33,6 +33,10 @@ pub struct Charge {
     pub attack: Option<Guid>,
     /// A player's run (a creature's is its motion).
     pub walk: Option<Walk>,
+    /// What the player had selected as they set off: changed or cleared
+    /// on the way, there is no swing on arriving (Thistle Tea's
+    /// `start_selected`, the client's selection then).
+    pub selection: Guid,
 }
 
 /// Thistle Tea's `Charge.approach_path`: `path` (after `origin`) as far as
@@ -140,11 +144,13 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
         // clears tracked height").
         p.fall_from = None;
         p.misc.fall_far = false;
+        let selection = p.fields.get_guid(crate::game::fields::UNIT_FIELD_TARGET);
         p.charge = Some(Charge {
             arrives_at,
             spline_id,
             attack,
             walk: Some(walk),
+            selection,
         });
         if let Some(frame) = frame {
             map.send_to_observers(caster, &frame, true);
@@ -162,6 +168,7 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
         spline_id,
         attack,
         walk: None,
+        selection: Guid::zero(),
     });
     if let Some(frame) = frame {
         map.send_to_observers(caster, &frame, false);
@@ -204,12 +211,16 @@ pub fn update(map: &mut Map) {
         .collect();
     for g in players {
         // One who fell on the way lies where they fell (Thistle Tea's
-        // "death ends the charge without moving the corpse").
-        if map
-            .players
-            .get(&g)
-            .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
-        {
+        // "death ends the charge without moving the corpse"); one taken
+        // over (feared, teleported) stays where that put them, the run
+        // stopped there (Thistle Tea's `ServerMovement.cancel`).
+        if map.players.get(&g).is_some_and(|p| {
+            p.death == crate::game::map::death::Death::Alive
+                && p.driven.is_none()
+                && p.owned.possessed_by.is_none()
+                && p.teleport.is_none()
+                && !p.awaiting_worldport
+        }) {
             advance(map, g);
         }
         let Some(p) = map.players.get(&g) else {
@@ -218,8 +229,13 @@ pub fn update(map: &mut Map) {
         let Some(charge) = p.charge.as_ref() else {
             continue;
         };
-        // Fear, confusion, a charm or a teleport take it over.
-        let taken = p.driven.is_some() || p.teleport.is_some() || p.awaiting_worldport;
+        // Fear, confusion, a charm, a possession or a teleport take it
+        // over (Thistle Tea's "incoming control invalidates an old charge
+        // arrival").
+        let taken = p.driven.is_some()
+            || p.owned.possessed_by.is_some()
+            || p.teleport.is_some()
+            || p.awaiting_worldport;
         let alive = p.death == crate::game::map::death::Death::Alive;
         if now >= charge.arrives_at || taken || !alive {
             finish(map, g, !taken && alive);
@@ -278,7 +294,10 @@ fn finish(map: &mut Map, g: Guid, arrived: bool) {
             let charge = p.charge.take();
             let at = p.position();
             p.move_check = Some((at, now));
-            charge
+            // Another selected on the way, or none: no swing at the one
+            // charged.
+            let selected = p.fields.get_guid(crate::game::fields::UNIT_FIELD_TARGET);
+            charge.filter(|c| c.selection == selected)
         }
         None => map.creature_mut(g).and_then(|c| c.engagement.charge.take()),
     };

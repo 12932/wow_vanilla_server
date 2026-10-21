@@ -1338,6 +1338,7 @@ async fn ancient_core_hound_bite(realm: &Arc<Realm>) {
                 pushbacks: 0,
                 channel_until: None,
                 duration: 3000,
+                at: None,
             });
         }
         due(m, hound, 1167305);

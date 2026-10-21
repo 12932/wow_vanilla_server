@@ -265,6 +265,7 @@ async fn what_prevents_fleeing_holds_a_fear_back_until_it_goes() {
                 pushbacks: 0,
                 channel_until: None,
                 duration: 3000,
+                at: None,
             });
             motion::apply(m, ga, g, FEAR);
             let casting = m.caster(g).unwrap().casting.is_some();

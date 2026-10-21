@@ -550,8 +550,10 @@ async fn real_start_casts_stuck_to_where_its_caster_last_stood() {
     })
     .await;
     c.say(".start").await;
+    // Up to the harness's wait: under load, the command takes its time.
     let mut began = None;
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + crate::game::harness::WAIT;
+    while tokio::time::Instant::now() < deadline {
         began = on(&map, move |m| {
             m.caster(g)
                 .and_then(|c| c.casting.as_ref())

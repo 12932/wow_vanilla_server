@@ -199,6 +199,10 @@ pub struct CharacterState {
     /// the level and the spells. None for a character saved before skills
     /// were, whose weapon skills stay at their caps (`skills::init`).
     pub skills: Option<Vec<(u32, u32)>>,
+    /// The weapon skills a forgotten spell took (skill, value), each back
+    /// at its value when the spell is learned again (mangos's
+    /// `m_forgottenSkills`, 1.11's rule for Two-Handed Axes and Maces).
+    pub forgotten_skills: Vec<(u32, u32)>,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

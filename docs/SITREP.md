@@ -865,6 +865,24 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   `wrong-for-1.12` (wvs is mangos's): a creature with no path runs straight to its helper; procs take the damage
   after armor; a create, then a values block; object updates at the end of the map's update. New flake logged:
   `tests_review5_social::what_a_service_asks_of_a_player_changing_maps_follows_them` (once in a full run).
+- **10a, the player (0.1.64):** 58 rows settled (40 covered, 18 `wrong-for-1.12`), about 18 fixes: a charge swings
+  on arrival only at what is still selected and stops where a teleport cut it; **a talent reset takes the weapon
+  skills its spells gave and keeps their values** (`CharacterState::forgotten_skills`, mangos's
+  `m_forgottenSkills`; no migration, the field defaults); Feline Swiftness's hidden dodge applies in cat form
+  (mangos's `IsNeedCastSpellAtFormApply`); a skill step keeps a value over its new cap (mangos's `SetSkillStep`); a
+  lesson naming no spell teaches nothing; `SMSG_QUESTUPDATE_ADD_ITEM` before the item's create (mangos's
+  `StoreNewItem`; the client check passes); an Alterac Valley NPC's quest hello shows its match menu; using an
+  object dismounts (mangos's `IsUsableMounted`); a creature quest giver casts its reward spell where mangos's
+  `RewardQuest` has it; flag quests (0x400) pay out once, silently; a party-accept quest in a raid asks the
+  starter's subgroup, a raid quest the raid; weapon procs need a living wielder (10c's check widened); a
+  disenchant's leftovers go to the bags on release (mangos's `AutoStore`); a lower buff rank on a friend with a
+  higher one bounces before anything is spent; a script-unlocked chest opens by hand; **cast movement measured from
+  where the cast began** (mangos's `m_castPosition`; a channel's turn breaks it past 0.10 rad); a flaky `.start`
+  test waits the harness's time. **Its calls:** an item-making reward spell aimed at its caster stays the player's
+  cast (mangos would have the giver make it for itself); a party-accept prompt isn't sent to other subgroups
+  (Thistle Tea; mangos sends it and refuses); cast movement's tolerance 0.01 yd (mangos exact, Thistle Tea 0.5);
+  hidden spells stay in the spellbook (mangos). Left `gap`: cross-map resurrection, Map.dbc's linked zone, a
+  map-bound item at login, a converted item's new guid, and a few more (a second pass).
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -984,7 +1002,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10h: entities, round 10 | 92.8% | 0.1.61 |
 | 10f: creature AI, round 10 | 93.0% | 0.1.62 |
 | 10d: combat and movement, round 10 | 93.1% | 0.1.63 |
+| 10a: the player, round 10 | 93.5% | 0.1.64 |
 
-**Running now:** 10b, 10m, 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
+**Running now:** 10m, 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

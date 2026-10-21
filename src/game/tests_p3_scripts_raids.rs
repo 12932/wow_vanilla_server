@@ -191,6 +191,7 @@ async fn onyxia(realm: &Arc<Realm>) {
                     pushbacks: 0,
                     channel_until: None,
                     duration: 5000,
+                    at: None,
                 });
             }
             event_ai::script_event(m, ony, 3, 0, Some(ony));

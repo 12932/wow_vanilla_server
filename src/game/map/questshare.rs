@@ -52,6 +52,26 @@ fn others(map: &Map, g: Guid) -> Vec<Guid> {
         .unwrap_or_default()
 }
 
+/// Whether `a` and `b` may share a quest every member must accept: in
+/// one party, or in one raid for a raid quest (mangos's
+/// `HandleQuestConfirmAccept`: `IsAllowedInRaid`, else `IsInParty`, the
+/// same subgroup; Thistle Tea's "enforces ordinary subgroups and allows
+/// raid quest confirmations").
+fn in_party_for(map: &Map, a: Guid, b: Guid, quest: u32) -> bool {
+    let raid_quest = map
+        .realm
+        .data
+        .npc
+        .quests
+        .get(&quest)
+        .is_some_and(|q| q.kind == 62);
+    let groups = map.realm.social.groups.lock();
+    groups.group_of(a).is_some_and(|gr| {
+        let sub = |g: Guid| gr.members.iter().find(|m| m.guid == g).map(|m| m.subgroup);
+        sub(b).is_some() && (!gr.raid || raid_quest || sub(a) == sub(b))
+    })
+}
+
 /// `CMSG_PUSHQUESTTOPARTY`: a shareable quest under way in the sharer's
 /// log (mangos's `CanShareQuest`, Thistle Tea's `shareable?`) offered to
 /// each member, the sharer told of each first (mangos's
@@ -222,6 +242,9 @@ pub fn accepted(map: &mut Map, g: Guid, giver: Guid, quest: u32) {
         return;
     };
     for m in others(map, g) {
+        if !in_party_for(map, g, m, quest) {
+            continue;
+        }
         let Some(p) = map.players.get_mut(&m) else {
             continue;
         };
@@ -257,6 +280,9 @@ fn confirm(map: &mut Map, g: Guid, quest: u32) {
     else {
         return;
     };
+    if !in_party_for(map, g, by, quest) {
+        return;
+    }
     quests::accept_asked(map, g, by, quest);
 }
 

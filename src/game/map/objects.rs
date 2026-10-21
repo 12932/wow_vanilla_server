@@ -1117,8 +1117,31 @@ pub fn use_goober(map: &mut Map, player: Guid, object: Guid) -> bool {
     {
         return true;
     }
+    dismount_on_use(map, player, object);
     goober(map, player, object, &t, false);
     true
+}
+
+/// A player using an object by hand comes off their mount, but at a trap
+/// or an object one may use mounted: a mailbox, or a quest giver, page,
+/// quest object or spell caster whose template says so (mangos's
+/// `GameObject::Use` and `IsUsableMounted`, Thistle Tea's "dismounts
+/// through the shared aura lifecycle unless the template permits mounts").
+pub fn dismount_on_use(map: &mut Map, player: Guid, object: Guid) {
+    let Some(t) = template(map, object) else {
+        return;
+    };
+    let mounted_ok = match t.kind {
+        19 => true,
+        crate::game::map::world::GO_QUESTGIVER => t.data[8] != 0,
+        GO_TEXT => t.data[3] != 0,
+        GO_GOOBER => t.data[17] != 0,
+        GO_SPELLCASTER => t.data[3] != 0,
+        _ => false,
+    };
+    if t.kind != GO_TRAP && !mounted_ok && map.players.contains_key(&player) {
+        crate::game::map::mounts::dismount(map, player);
+    }
 }
 
 /// A quest giver, a page or a quest object about to be used (Thistle
@@ -1244,6 +1267,13 @@ fn show_readable(map: &mut Map, user: Guid, object: Guid, t: &GameObjectTemplate
     } else if t.data[19] > 0 && map.realm.data.npc.gossip_menus.contains_key(&t.data[19]) {
         crate::game::map::npc::show_menu(map, user, object, t.data[19], 0);
     }
+}
+
+/// A player on the map who isn't alive.
+fn dead(map: &Map, player: Guid) -> bool {
+    map.players
+        .get(&player)
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
 }
 
 fn in_reach(map: &Map, player: Guid, object: Guid) -> bool {
@@ -1416,6 +1446,9 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
                 p.outbound.send(&SMSG_GAMEOBJECT_PAGETEXT { guid: object });
             }
         }
+        // Their spells are the user's to cast: not by the dead (mangos's
+        // `CheckCast` of the user's cast, Thistle Tea's living user).
+        GO_RITUAL | GO_SPELLCASTER if dead(map, player) => {}
         GO_RITUAL => use_ritual(map, player, object, &t),
         GO_SPELLCASTER => use_spellcaster(map, player, object, &t),
         _ => return false,
@@ -1567,6 +1600,7 @@ fn complete_ritual(map: &mut Map, object: Guid) {
 fn start_channel(map: &mut Map, g: Guid, object: Guid, spell: u32, ms: u32) {
     let now = map.now;
     let until = now + Duration::from_millis(u64::from(ms));
+    let at = crate::game::map::spells::stance(map, g);
     if let Some(c) = map.caster_mut(g) {
         c.casting = Some(Casting {
             spell,
@@ -1579,6 +1613,7 @@ fn start_channel(map: &mut Map, g: Guid, object: Guid, spell: u32, ms: u32) {
             pushbacks: 0,
             channel_until: Some(until),
             duration: ms,
+            at,
         });
     }
     if let Some(f) = map.unit_fields_mut(g) {

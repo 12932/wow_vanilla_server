@@ -482,16 +482,19 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
     let Some(p) = map.players.get(&e.actor) else {
         return;
     };
-    // No weapon is struck with in cat or bear form, nor a disarmed main
-    // hand (mangos's `GetWeaponForAttack` of a usable one and
-    // `CanUseEquippedWeapon`; Thistle Tea's `weapon_procs`, "excludes
-    // feral weapon procs").
-    if matches!(
-        p.fields.get_byte(UNIT_FIELD_BYTES_1, 2),
-        crate::game::map::auras::FORM_CAT
-            | crate::game::map::auras::FORM_BEAR
-            | crate::game::map::auras::FORM_DIREBEAR
-    ) || (slot == 15 && p.auras.has(crate::game::map::auras::AURA_MOD_DISARM))
+    // A weapon struck with: not by the dead, nor in cat or bear form, nor
+    // a disarmed main hand (mangos's `GetWeaponForAttack` of a usable one,
+    // `CanUseEquippedWeapon`; Thistle Tea's "equipment usability and live
+    // combatants are checked").
+    use crate::game::map::auras::{AURA_MOD_DISARM, FORM_BEAR, FORM_CAT, FORM_DIREBEAR};
+    let feral = matches!(
+        p.fields
+            .get_byte(crate::game::fields::UNIT_FIELD_BYTES_1, 2),
+        FORM_CAT | FORM_BEAR | FORM_DIREBEAR
+    );
+    if p.death != crate::game::map::death::Death::Alive
+        || feral
+        || (slot == 15 && p.auras.has(AURA_MOD_DISARM))
     {
         return;
     }

@@ -689,16 +689,21 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if !crate::game::map::objects::prepare_use(map, player, object) {
         return;
     }
-    // A locked chest opens by its spell, not by a hand.
+    // A locked chest opens by its spell, not by a hand; one a script
+    // unlocked opens by hand, one it locked doesn't (mangos's `CanUseNow`
+    // of `GO_FLAG_LOCKED`, Thistle Tea's "runtime unlock and relock
+    // control key checks").
     let gm = map.players.get(&player).is_some_and(|p| p.gm);
+    let script_lock = map.objects.lock_overrides.get(&object).copied();
     let locked_chest = map.gameobject(object).is_some_and(|o| {
         o.kind == GO_CHEST
-            && map
-                .realm
-                .data
-                .gameobject_templates
-                .get(&o.entry)
-                .is_some_and(|t| t.data[0] != 0)
+            && script_lock.unwrap_or_else(|| {
+                map.realm
+                    .data
+                    .gameobject_templates
+                    .get(&o.entry)
+                    .is_some_and(|t| t.data[0] != 0)
+            })
     });
     if locked_chest && !gm {
         return;
@@ -707,6 +712,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if !gm && !crate::game::map::objects::hand_opens(map, player, object) {
         return;
     }
+    crate::game::map::objects::dismount_on_use(map, player, object);
     crate::game::map::scripts::object_used(map, player, object);
     // A launcher by Elune's lake counts its fireworks; it launches them too.
     crate::game::omen::use_object(map, object);
@@ -739,7 +745,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
         GO_CHEST => {
             // A locked chest needs its key or skill (Phase 7); an open one
             // just opens.
-            if lock == 0 || gm {
+            if lock == 0 || gm || script_lock == Some(false) {
                 crate::game::map::loot::open_object(map, player, object);
             }
         }

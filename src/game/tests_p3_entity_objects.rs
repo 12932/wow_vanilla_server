@@ -321,6 +321,7 @@ async fn a_lasting_ritual_left_short_is_done_again() {
                 pushbacks: 0,
                 channel_until: Some(now + std::time::Duration::from_secs(10)),
                 duration: 10_000,
+                at: None,
             });
         }
         crate::game::map::spells::interrupt(m, gb);
