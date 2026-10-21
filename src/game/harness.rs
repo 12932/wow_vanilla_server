@@ -165,6 +165,7 @@ pub fn test_config() -> RealmConfig {
         spell_travel: false,
         tiles_in_background: false,
         bg_cast_deserter: true,
+        bg_premature_finish: Duration::from_secs(300),
         min_honor_kills: crate::game::honor::MINIMUM_KILLS,
         max_who_list_returns: crate::game::map::social::WHO_LIMIT,
         weather: true,

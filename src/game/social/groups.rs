@@ -69,6 +69,13 @@ pub struct Group {
     pub icons: [Guid; 8],
     /// Round robin's last looter.
     pub round_robin: Guid,
+    /// A battleground side's raid (mangos's `IsBattleGroup`): its members
+    /// keep their own group apart, for party and raid chat.
+    pub battleground: bool,
+    /// Members in a battleground's raid meanwhile: their roster is the
+    /// raid's (mangos's `SendUpdate` passes one whose `GetGroup` isn't
+    /// this).
+    pub away: Vec<Guid>,
 }
 
 impl Group {
@@ -90,6 +97,32 @@ impl Group {
             threshold: ItemQuality::Uncommon,
             icons: [Guid::zero(); 8],
             round_robin: Guid::zero(),
+            battleground: false,
+            away: Vec::new(),
+        }
+    }
+
+    /// A battleground side's raid, `g` its first member and leader.
+    fn battleground(id: u32, g: Guid, name: Arc<str>) -> Self {
+        Self {
+            id,
+            raid: true,
+            leader: g,
+            members: vec![Slot {
+                guid: g,
+                name,
+                subgroup: 0,
+                assistant: false,
+            }],
+            formed: true,
+            invited: Vec::new(),
+            loot_method: GroupLootSetting::GroupLoot,
+            looter: g,
+            threshold: ItemQuality::Uncommon,
+            icons: [Guid::zero(); 8],
+            round_robin: Guid::zero(),
+            battleground: true,
+            away: Vec::new(),
         }
     }
 
@@ -130,7 +163,7 @@ impl Group {
     /// and the loot rules.
     fn send_update(&self, realm: &Realm) {
         for me in &self.members {
-            if realm.registry.online(me.guid).is_none() {
+            if self.away.contains(&me.guid) || realm.registry.online(me.guid).is_none() {
                 continue;
             }
             set_leader_flag(realm, me.guid, me.guid == self.leader);
@@ -341,6 +374,11 @@ pub struct Groups {
     /// The members who could see each member at the last push: one who
     /// no longer can gets all of the stats.
     pub seen_by: AHashMap<Guid, Vec<Guid>>,
+    /// The members of a battleground's raid, to their own group, kept for
+    /// them while they are in it (mangos's `m_originalGroup`).
+    original: AHashMap<Guid, u32>,
+    /// The battleground raids, by match and side.
+    bg_raids: AHashMap<(u32, u8), u32>,
 }
 
 impl Groups {
@@ -383,6 +421,51 @@ impl Groups {
             .unwrap_or_default()
     }
 
+    /// Whether `g` is in a battleground's raid.
+    pub fn in_bg_raid(&self, g: Guid) -> bool {
+        self.of
+            .get(&g)
+            .and_then(|id| self.groups.get(id))
+            .is_some_and(|gr| gr.battleground)
+    }
+
+    /// `g`'s own group: the one kept for them while they are in a
+    /// battleground's raid (mangos's `GetOriginalGroup`), else the one
+    /// they are in.
+    pub fn original_of(&self, g: Guid) -> Option<&Group> {
+        if self.in_bg_raid(g) {
+            self.original.get(&g).and_then(|id| self.get(*id))
+        } else {
+            self.group_of(g)
+        }
+    }
+
+    /// The id of `g`'s own group (or the one they lead, not yet formed),
+    /// whatever raid of a battleground they are in.
+    fn home(&self, g: Guid) -> Option<u32> {
+        if self.in_bg_raid(g) {
+            self.original.get(&g).copied()
+        } else {
+            self.of.get(&g).copied()
+        }
+    }
+
+    fn set_home(&mut self, g: Guid, id: u32) {
+        if self.in_bg_raid(g) {
+            self.original.insert(g, id);
+        } else {
+            self.of.insert(g, id);
+        }
+    }
+
+    fn clear_home(&mut self, g: Guid) {
+        if self.in_bg_raid(g) {
+            self.original.remove(&g);
+        } else {
+            self.of.remove(&g);
+        }
+    }
+
     fn mine(&mut self, g: Guid) -> Option<&mut Group> {
         let id = *self.of.get(&g)?;
         self.groups.get_mut(&id).filter(|gr| gr.formed)
@@ -400,7 +483,7 @@ impl Groups {
         if !gr.formed && gr.invited.is_empty() {
             let leader = gr.leader;
             self.groups.remove(&id);
-            self.of.remove(&leader);
+            self.clear_home(leader);
         }
     }
 
@@ -408,9 +491,12 @@ impl Groups {
     /// of it, once the lock is let go (`Left::tell`).
     #[must_use]
     fn remove(&mut self, realm: &Realm, g: Guid, kicked: bool) -> Left {
-        let Some(&id) = self.of.get(&g) else {
+        let Some(id) = self.home(g) else {
             return Left::Nothing;
         };
+        // Out of their own group from a battleground's raid: the raid's
+        // roster stays theirs.
+        let away = self.in_bg_raid(g);
         let Some(gr) = self.groups.get_mut(&id) else {
             return Left::Nothing;
         };
@@ -420,13 +506,18 @@ impl Groups {
             return Left::Disbanded { id, members };
         }
         gr.members.retain(|m| m.guid != g);
-        self.of.remove(&g);
-        self.stats.remove(&g);
-        self.seen_by.remove(&g);
         if kicked {
             send_to(realm, g, &SMSG_GROUP_UNINVITE {});
         }
-        leave_roster(realm, g);
+        if away {
+            self.original.remove(&g);
+            gr.away.retain(|a| *a != g);
+        } else {
+            self.of.remove(&g);
+            self.stats.remove(&g);
+            self.seen_by.remove(&g);
+            leave_roster(realm, g);
+        }
         let gr = &mut self.groups.get_mut(&id).unwrap();
         let leader_left = gr.leader == g;
         if leader_left {
@@ -459,6 +550,13 @@ impl Groups {
             crate::game::instances::group_changed(realm, Some((id, gr.leader)), None);
         }
         for m in &gr.members {
+            // One in a battleground's raid has their own group no more.
+            if self.of.get(&m.guid) != Some(&id) {
+                if self.original.get(&m.guid) == Some(&id) {
+                    self.original.remove(&m.guid);
+                }
+                continue;
+            }
             self.of.remove(&m.guid);
             self.stats.remove(&m.guid);
             self.seen_by.remove(&m.guid);
@@ -553,7 +651,9 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
         return;
     }
     let mut groups = realm.social.groups.lock();
-    if groups.of.contains_key(&them.guid) || groups.invites.contains_key(&them.guid) {
+    // A battleground's raid is no group of one's own (mangos's
+    // `GetOriginalGroup` for both).
+    if groups.home(them.guid).is_some() || groups.invites.contains_key(&them.guid) {
         result(
             realm,
             me.guid,
@@ -563,7 +663,7 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
         );
         return;
     }
-    let id = match groups.of.get(&me.guid).copied() {
+    let id = match groups.home(me.guid) {
         Some(id) => {
             let gr = &groups.groups[&id];
             if gr.formed && !gr.can_lead(me.guid) {
@@ -614,7 +714,7 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
             groups.next_id += 1;
             let id = groups.next_id;
             groups.groups.insert(id, Group::new(id, me));
-            groups.of.insert(me.guid, id);
+            groups.set_home(me.guid, id);
             id
         }
     };
@@ -672,9 +772,14 @@ pub fn accept(realm: &Realm, me: &Online) {
     if forms {
         crate::game::instances::group_changed(realm, None, Some((id, gr.leader)));
     }
-    groups.of.insert(me.guid, id);
+    groups.set_home(me.guid, id);
     // The newcomer's stats go to everyone at the next push; theirs to them.
-    let others = groups.others(me.guid);
+    let others: Vec<Guid> = groups.groups[&id]
+        .members
+        .iter()
+        .map(|m| m.guid)
+        .filter(|m| *m != me.guid)
+        .collect();
     for o in others {
         if let Some(s) = groups.stats.get(&o) {
             me.outbound.send_frame(s.packet(o, STAT_PLAYER, true));
@@ -721,7 +826,8 @@ pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
         return;
     };
     let gr = &groups.groups[&id];
-    if !gr.can_lead(me.guid) {
+    // A battleground's raid is the match's: no one is put out of it.
+    if !gr.can_lead(me.guid) || gr.battleground {
         result(
             realm,
             me.guid,
@@ -792,6 +898,19 @@ pub fn leave(realm: &Realm, me: &Online) {
     if groups.group_of(me.guid).is_none() {
         return;
     }
+    // Not from a battleground (mangos's `HandleGroupDisbandOpcode`, with
+    // its "not leader").
+    if groups.in_bg_raid(me.guid) {
+        drop(groups);
+        result(
+            realm,
+            me.guid,
+            PartyOperation::Invite,
+            "",
+            PartyResult::NotLeader,
+        );
+        return;
+    }
     result(
         realm,
         me.guid,
@@ -854,7 +973,7 @@ pub fn convert_to_raid(realm: &Realm, me: &Online) {
     let Some(gr) = groups.mine(me.guid) else {
         return;
     };
-    if gr.leader != me.guid || gr.members.len() < 2 || gr.raid {
+    if gr.leader != me.guid || gr.members.len() < 2 || gr.raid || gr.battleground {
         return;
     }
     result(
@@ -921,16 +1040,16 @@ pub fn swap_subgroups(realm: &Realm, me: &Online, a: &str, b: &str) {
 /// making one if the leader has none. False if either can't.
 pub fn join_directly(realm: &Realm, leader: &Online, member: &Online) -> bool {
     let mut groups = realm.social.groups.lock();
-    if groups.of.contains_key(&member.guid) || groups.invites.contains_key(&member.guid) {
+    if groups.home(member.guid).is_some() || groups.invites.contains_key(&member.guid) {
         return false;
     }
-    let id = match groups.of.get(&leader.guid).copied() {
+    let id = match groups.home(leader.guid) {
         Some(id) => id,
         None => {
             groups.next_id += 1;
             let id = groups.next_id;
             groups.groups.insert(id, Group::new(id, leader));
-            groups.of.insert(leader.guid, id);
+            groups.set_home(leader.guid, id);
             id
         }
     };
@@ -956,7 +1075,7 @@ pub fn join_directly(realm: &Realm, leader: &Online, member: &Online) -> bool {
     if forms {
         crate::game::instances::group_changed(realm, None, Some((id, gr.leader)));
     }
-    groups.of.insert(member.guid, id);
+    groups.set_home(member.guid, id);
     groups.stats.remove(&member.guid);
     true
 }
@@ -1104,10 +1223,25 @@ pub fn chat(
     tag: PlayerChatTag,
 ) {
     let groups = realm.social.groups.lock();
-    let Some(gr) = groups.group_of(me.guid) else {
+    // In a battleground, /bg and raid warnings go to its raid, party and
+    // raid chat to one's own group (mangos's `HandleMessagechatOpcode`).
+    let gr = match kind {
+        CMSG_MESSAGECHAT_ChatType::Battleground | CMSG_MESSAGECHAT_ChatType::BattlegroundLeader => {
+            groups.group_of(me.guid).filter(|gr| gr.battleground)
+        }
+        CMSG_MESSAGECHAT_ChatType::RaidWarning => groups.group_of(me.guid),
+        _ => groups.original_of(me.guid),
+    };
+    let Some(gr) = gr else {
         return;
     };
     let chat_type = match kind {
+        CMSG_MESSAGECHAT_ChatType::Battleground => {
+            SMSG_MESSAGECHAT_ChatType::Battleground { sender2: me.guid }
+        }
+        CMSG_MESSAGECHAT_ChatType::BattlegroundLeader if gr.leader == me.guid => {
+            SMSG_MESSAGECHAT_ChatType::BattlegroundLeader { sender2: me.guid }
+        }
         CMSG_MESSAGECHAT_ChatType::Party => SMSG_MESSAGECHAT_ChatType::Party {
             chat_credit: me.guid,
             speech_bubble_credit: me.guid,
@@ -1168,14 +1302,14 @@ pub fn logged_out(realm: &Realm, g: Guid) {
     let mut groups = realm.social.groups.lock();
     groups.drop_invite(g);
     // A group never formed, led by the one going, goes with them.
-    if let Some(&id) = groups.of.get(&g)
+    if let Some(id) = groups.home(g)
         && groups.groups.get(&id).is_some_and(|gr| !gr.formed)
     {
         let invited = groups.groups[&id].invited.clone();
         for i in invited {
             groups.drop_invite(i);
         }
-        groups.of.remove(&g);
+        groups.clear_home(g);
         groups.groups.remove(&id);
     }
     groups.stats.remove(&g);
@@ -1184,6 +1318,155 @@ pub fn logged_out(realm: &Realm, g: Guid) {
         gr.send_update(realm);
         let offline = MemberStats::default();
         gr.broadcast(realm, &offline.packet(g, STAT_STATUS, false), Some(g));
+    }
+    // And their own group, kept while they're in a battleground's raid.
+    if groups.in_bg_raid(g)
+        && let Some(gr) = groups.original_of(g)
+    {
+        gr.send_update(realm);
+    }
+}
+
+/// `g` arrives in their match: into their side's raid (mangos's
+/// `AddOrSetPlayerToCorrectBgGroup`), made for them if they're the first,
+/// their own group kept apart for them. The leader of their own group
+/// leads the raid.
+pub fn bg_joined(realm: &Realm, g: Guid, name: Arc<str>, instance: u32, side: u8) {
+    let mut groups = realm.social.groups.lock();
+    let key = (instance, side);
+    let id = match groups
+        .bg_raids
+        .get(&key)
+        .copied()
+        .filter(|id| groups.groups.contains_key(id))
+    {
+        Some(id) => id,
+        None => {
+            groups.next_id += 1;
+            let id = groups.next_id;
+            groups
+                .groups
+                .insert(id, Group::battleground(id, g, name.clone()));
+            groups.bg_raids.insert(key, id);
+            id
+        }
+    };
+    if groups.of.get(&g) != Some(&id) {
+        // Out of another match's raid, if still in one.
+        if groups.in_bg_raid(g) {
+            drop(groups);
+            bg_left(realm, g);
+            groups = realm.social.groups.lock();
+        }
+        if let Some(own) = groups.of.get(&g).copied() {
+            groups.original.insert(g, own);
+            if let Some(o) = groups.groups.get_mut(&own) {
+                o.away.push(g);
+            }
+        }
+        let leads_own = groups
+            .original
+            .get(&g)
+            .and_then(|o| groups.groups.get(o))
+            .is_some_and(|o| o.formed && o.leader == g);
+        let Some(gr) = groups.groups.get_mut(&id) else {
+            return;
+        };
+        if !gr.is_member(g) {
+            if gr.full() {
+                return;
+            }
+            let subgroup = gr.free_subgroup();
+            gr.members.push(Slot {
+                guid: g,
+                name: name.clone(),
+                subgroup,
+                assistant: false,
+            });
+        }
+        if leads_own && gr.leader != g {
+            gr.leader = g;
+            if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER {
+                name: name.to_string(),
+            }) {
+                gr.broadcast(realm, &frame, None);
+            }
+        }
+        groups.of.insert(g, id);
+        groups.stats.remove(&g);
+        groups.seen_by.remove(&g);
+    }
+    if let Some(gr) = groups.groups.get(&id) {
+        gr.send_update(realm);
+    }
+}
+
+/// `g` is out of their match: out of its raid (gone with its last
+/// member), and back in their own group (mangos's
+/// `RemoveFromBattleGroundRaid`).
+pub fn bg_left(realm: &Realm, g: Guid) {
+    let mut groups = realm.social.groups.lock();
+    if !groups.in_bg_raid(g) {
+        return;
+    }
+    let Some(id) = groups.of.remove(&g) else {
+        return;
+    };
+    groups.stats.remove(&g);
+    groups.seen_by.remove(&g);
+    let empty = match groups.groups.get_mut(&id) {
+        Some(gr) => {
+            gr.members.retain(|m| m.guid != g);
+            if !gr.members.is_empty() && gr.leader == g {
+                gr.leader = gr.members[0].guid;
+                if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER {
+                    name: gr.members[0].name.to_string(),
+                }) {
+                    gr.broadcast(realm, &frame, None);
+                }
+            }
+            if gr.looter == g {
+                gr.looter = gr.leader;
+            }
+            gr.members.is_empty()
+        }
+        None => true,
+    };
+    if empty {
+        groups.groups.remove(&id);
+        groups.bg_raids.retain(|_, v| *v != id);
+    } else if let Some(gr) = groups.groups.get(&id) {
+        gr.send_update(realm);
+    }
+    if let Some(own) = groups.original.remove(&g)
+        && let Some(o) = groups.groups.get_mut(&own)
+    {
+        o.away.retain(|a| *a != g);
+        if o.is_member(g) {
+            groups.of.insert(g, own);
+        }
+    }
+    match groups.group_of(g) {
+        Some(own) => own.send_update(realm),
+        None => leave_roster(realm, g),
+    }
+}
+
+/// The match `instance` is gone: so are its raids.
+pub fn bg_closed(realm: &Realm, instance: u32) {
+    let members: Vec<Guid> = {
+        let mut groups = realm.social.groups.lock();
+        let ids: Vec<u32> = [0u8, 1]
+            .iter()
+            .filter_map(|s| groups.bg_raids.remove(&(instance, *s)))
+            .collect();
+        ids.iter()
+            .filter_map(|id| groups.groups.get(id))
+            .flat_map(|gr| gr.members.iter().map(|m| m.guid))
+            .collect()
+    };
+    for g in members {
+        bg_left(realm, g);
     }
 }
 

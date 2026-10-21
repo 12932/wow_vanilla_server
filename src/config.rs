@@ -622,6 +622,9 @@ settings! {
         /// A player who leaves a match before its end is a Deserter, kept
         /// out of battlegrounds for a while.
         cast_deserter: bool = true, Any, Live, "Battleground.CastDeserter";
+        /// Seconds a match goes on with a side short of players before it
+        /// ends, the side ahead (or the larger) winning; 0 never ends it.
+        premature_finish_secs: u64 = 300, Clamp(0.0, 3600.0), Live, "BattleGround.PrematureFinishTimer";
     }
 }
 

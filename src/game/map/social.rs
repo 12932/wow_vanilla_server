@@ -59,7 +59,9 @@ pub fn message(map: &mut Map, g: Guid, m: CMSG_MESSAGECHAT) {
         kind @ (CMSG_MESSAGECHAT_ChatType::Party
         | CMSG_MESSAGECHAT_ChatType::Raid
         | CMSG_MESSAGECHAT_ChatType::RaidLeader
-        | CMSG_MESSAGECHAT_ChatType::RaidWarning) => {
+        | CMSG_MESSAGECHAT_ChatType::RaidWarning
+        | CMSG_MESSAGECHAT_ChatType::Battleground
+        | CMSG_MESSAGECHAT_ChatType::BattlegroundLeader) => {
             if !m.message.trim().is_empty() {
                 groups::chat(&realm, &me, kind, &m.message, m.language, tag);
             }
@@ -167,6 +169,19 @@ fn away(map: &mut Map, g: Guid, flag: u32, text: &str) {
     }
     let flags = p.fields.get_u32(PLAYER_FLAGS) & (PLAYER_FLAGS_AFK | PLAYER_FLAGS_DND);
     p.online.flags.store(flags, Ordering::Relaxed);
+    // No one AFK in a battleground: out of it, a deserter (mangos's
+    // `ToggleAFK`, game masters aside).
+    let gm = p
+        .fields
+        .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM);
+    if flag == PLAYER_FLAGS_AFK
+        && !was
+        && flags & PLAYER_FLAGS_AFK != 0
+        && !gm
+        && map.battleground.is_some()
+    {
+        crate::game::battlegrounds::leave(map, g);
+    }
 }
 
 /// `CMSG_WHO`: those online on the same side, by level, name, race, class,
@@ -508,6 +523,7 @@ pub fn logged_in(map: &mut Map, g: Guid) {
         crate::game::weather::tell(&map.realm, &p.online, p.zone);
     }
     groups::logged_in(&map.realm, g);
+    crate::game::battlegrounds::logged_in(map, g);
 }
 
 /// A player has gone from the world, however they went (a logout, their

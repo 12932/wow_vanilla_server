@@ -1344,8 +1344,12 @@ fn auto_reward(map: &mut Map, player: Guid, q: &Quest) {
 
 /// Whether `player` is in a raid group: only raid quests count there.
 pub fn in_raid(map: &Map, player: Guid) -> bool {
+    // A battleground side's raid is none: its quests count in it, as
+    // mangos's `HasQuestForItem` lets them (`!InBattleGround()`).
     let groups = map.realm.social.groups.lock();
-    groups.group_of(player).is_some_and(|g| g.raid)
+    groups
+        .group_of(player)
+        .is_some_and(|g| g.raid && !g.battleground)
 }
 
 /// The quest items `player`'s quests still need: they drop for them; in a

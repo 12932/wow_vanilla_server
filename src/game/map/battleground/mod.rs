@@ -39,6 +39,8 @@ pub const SPELL_DESERTER: u32 = 26013;
 /// Waiting to Resurrect: a ghost in the match, for the next wave.
 pub const SPELL_WAITING_TO_RESURRECT: u32 = 2584;
 pub const RESURRECT_EVERY: Duration = Duration::from_secs(30);
+/// The winner of a match that ended even (mangos's `WINNER_NONE`).
+pub const NO_WINNER: usize = 2;
 
 /// Battlegrounds, by `battleground_template` id.
 pub const BG_AV: u32 = 1;
@@ -148,6 +150,10 @@ pub struct Match {
     pub ab: Option<ab::Ab>,
     pub av: Option<av::Av>,
     pub buffs: Vec<BuffSlot>,
+    /// A side short of players: when the match ends for it, and what was
+    /// left of that at the last update (mangos's premature finish).
+    pub premature: Option<Instant>,
+    pub premature_left: Duration,
 }
 
 impl Match {
@@ -169,6 +175,8 @@ impl Match {
             ab: (bg == BG_AB).then(ab::Ab::default),
             av: (bg == BG_AV).then(av::Av::new),
             buffs: Vec::new(),
+            premature: None,
+            premature_left: Duration::ZERO,
         }
     }
 
@@ -527,6 +535,28 @@ pub fn arrived(map: &mut Map, g: Guid) {
         crate::game::map::player::UNIT_FLAG_PVP,
         true,
     );
+    // No longer AFK (mangos's `AddPlayer`), and into their side's raid.
+    use crate::game::map::player::PLAYER_FLAGS_AFK;
+    if p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_AFK) {
+        p.fields.set_flag(PLAYER_FLAGS, PLAYER_FLAGS_AFK, false);
+        p.online
+            .flags
+            .fetch_and(!PLAYER_FLAGS_AFK, std::sync::atomic::Ordering::Relaxed);
+    }
+    let name = p.online.name.clone();
+    if realm
+        .social
+        .battlegrounds
+        .lock()
+        .matches
+        .get(&key.instance)
+        .is_some_and(|b| b.members.contains_key(&g))
+    {
+        crate::game::social::groups::bg_joined(&realm, g, name, key.instance, team as u8);
+    }
+    let Some(p) = map.players.get_mut(&g) else {
+        return;
+    };
     p.outbound.send(&SMSG_INIT_WORLD_STATES {
         map: crate::game::map::movement::map_enum(key.map),
         area: Area::try_from(p.zone).unwrap_or_default(),
@@ -598,7 +628,89 @@ pub fn update(map: &mut Map) {
         }
         buffs(map);
     }
+    premature(map);
     resurrect_wave(map);
+}
+
+/// A side short of players while the battle is on (mangos's
+/// `BattleGround::Update`, its balance system): told each minute, then
+/// each 15 seconds, and at `[battleground] premature_finish_secs` the
+/// match ends, won by the side ahead, else the larger, else no one.
+fn premature(map: &mut Map) {
+    let now = map.now;
+    let after = map.cfg.bg_premature_finish;
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
+    let bg = m.bg;
+    let short = m.playing() && !after.is_zero() && {
+        let min = battlegrounds::min_players(&map.realm, bg) as usize;
+        battlegrounds::sides(&map.realm, map.key)
+            .iter()
+            .any(|n| *n < min)
+    };
+    let Some(m) = map.battleground.as_mut() else {
+        return;
+    };
+    if !short {
+        m.premature = None;
+        return;
+    }
+    let Some(at) = m.premature else {
+        m.premature = Some(now + after);
+        m.premature_left = after;
+        return;
+    };
+    if at <= now {
+        m.premature = None;
+        let sides = battlegrounds::sides(&map.realm, map.key);
+        let winner = premature_winner(map.battleground.as_ref().expect("above"), sides);
+        match winner {
+            0 => announce(map, None, "The Alliance wins!"),
+            1 => announce(map, None, "The Horde wins!"),
+            _ => {}
+        }
+        finish(map, winner);
+        return;
+    }
+    let (old, new) = (m.premature_left.as_millis(), (at - now).as_millis());
+    m.premature_left = at - now;
+    let text = if new > 60_000 {
+        (new / 60_000 != old / 60_000).then(|| {
+            format!(
+                "Not enough players. This game will close in {} mins.",
+                old / 60_000
+            )
+        })
+    } else {
+        (new / 15_000 != old / 15_000).then(|| {
+            format!(
+                "Not enough players. This game will close in {} seconds.",
+                old / 1000
+            )
+        })
+    };
+    if let Some(text) = text {
+        for p in map.players.values() {
+            crate::game::map::chat::send_system(&p.outbound, &text);
+        }
+    }
+}
+
+/// Who wins a match ended early: the side ahead (Warsong Gulch's
+/// captures, Arathi Basin's resources; Alterac Valley keeps no score),
+/// else the side with more players, else no one (mangos's
+/// `GetPrematureWinner`).
+fn premature_winner(m: &Match, sides: [usize; 2]) -> usize {
+    let [a, h] = if m.bg == BG_AV { [0, 0] } else { m.score };
+    if a != h {
+        return usize::from(h > a);
+    }
+    match sides[0].cmp(&sides[1]) {
+        std::cmp::Ordering::Greater => 0,
+        std::cmp::Ordering::Less => 1,
+        std::cmp::Ordering::Equal => NO_WINNER,
+    }
 }
 
 /// The countdown's announcements, a minute and half a minute before.
@@ -1074,10 +1186,10 @@ fn scoreboard_frame(map: &Map) -> Option<std::sync::Arc<[u8]>> {
     };
     let status = match m.phase {
         Phase::Ended { winner, .. } => MSG_PVP_LOG_DATA_Server_BattlegroundEndStatus::Ended {
-            winner: if winner == 0 {
-                BattlegroundWinner::Alliance
-            } else {
-                BattlegroundWinner::Horde
+            winner: match winner {
+                0 => BattlegroundWinner::Alliance,
+                1 => BattlegroundWinner::Horde,
+                _ => BattlegroundWinner::None,
             },
         },
         _ => MSG_PVP_LOG_DATA_Server_BattlegroundEndStatus::NotEnded,
@@ -1101,8 +1213,9 @@ fn scoreboard_frame(map: &Map) -> Option<std::sync::Arc<[u8]>> {
     crate::game::conn::encode(&MSG_PVP_LOG_DATA_Server { status, players })
 }
 
-/// The match is won: the end's announcement, the win and loss spells, the
-/// scoreboard, and two minutes until everyone goes home.
+/// The match is won (by [`NO_WINNER`], ended even): the end's
+/// announcement, the win and loss spells, the scoreboard, and two minutes
+/// until everyone goes home.
 pub fn finish(map: &mut Map, winner: usize) {
     let now = map.now;
     let bg = map.battleground.as_ref().map_or(BG_WSG, |m| m.bg);

@@ -323,6 +323,7 @@ Battlegrounds' queues and matches.
 | `auto_leave_secs` | Seconds after a match ends before everyone is sent home. | `120` | 10 to 600, clamped | live |  |
 | `invitation_secs` | Seconds an invitation to a match stands. | `120` | 10 to 600, clamped | live |  |
 | `cast_deserter` | A player who leaves a match before its end is a Deserter, kept out of battlegrounds for a while. | `true` |  | live | `Battleground.CastDeserter` |
+| `premature_finish_secs` | Seconds a match goes on with a side short of players before it ends, the side ahead (or the larger) winning; 0 never ends it. | `300` | 0 to 3600, clamped | live | `BattleGround.PrematureFinishTimer` |
 
 ### `[outdoor_pvp]`
 
