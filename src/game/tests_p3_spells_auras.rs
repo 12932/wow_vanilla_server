@@ -65,7 +65,7 @@ async fn wards_take_a_tenth_of_their_schools_power_and_mana_shield_none() {
             buff(m, mage, 990_202, auras::AURA_MOD_DAMAGE_DONE, 16, 300);
             buff(m, mage, 990_203, auras::AURA_MOD_DAMAGE_DONE, 32, 400);
             buff(m, mage, 990_204, auras::AURA_MOD_DAMAGE_DONE, 64, 500);
-            buff(m, mage, 990_205, auras::AURA_MOD_HEALING_DONE, 0, 1000);
+            buff(m, mage, 990_205, auras::AURA_MOD_HEALING_DONE, -1, 1000);
             let powered: Vec<i32> = [FIRE_WARD, FROST_WARD, SHADOW_WARD, MANA_SHIELD]
                 .into_iter()
                 .map(|s| cast(m, s))
@@ -121,13 +121,13 @@ async fn a_shield_holds_what_it_had_when_cast_and_goes_as_auras_go() {
                 absorb_left(m, priest, POWER_WORD_SHIELD_10).unwrap_or(-1)
             };
             let base = shield(m);
-            buff(m, priest, 990_211, auras::AURA_MOD_HEALING_DONE, 0, 500);
+            buff(m, priest, 990_211, auras::AURA_MOD_HEALING_DONE, -1, 500);
             let full = shield(m);
             // Shadow takes all but 25 of it.
             let _ = auras::absorb(m, priest, (full - 25) as u32, 32);
             let left = absorb_left(m, priest, POWER_WORD_SHIELD_10);
             // More healing power after doesn't fill it again.
-            buff(m, priest, 990_212, auras::AURA_MOD_HEALING_DONE, 0, 500);
+            buff(m, priest, 990_212, auras::AURA_MOD_HEALING_DONE, -1, 500);
             let after_buff = absorb_left(m, priest, POWER_WORD_SHIELD_10);
             auras::remove_spell(m, priest, 990_211, None);
             auras::remove_spell(m, priest, 990_212, None);

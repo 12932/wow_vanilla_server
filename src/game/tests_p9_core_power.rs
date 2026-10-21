@@ -292,9 +292,10 @@ async fn spells_cast_under_a_buff_keep_it_once_it_is_gone() {
             level(m, ga, 60);
             // Gear's ten holy and twenty healing; a buff's sixty and 120.
             aura_of(m, ga, 97_930, AURA_MOD_DAMAGE_DONE, 1 << HOLY, 10);
-            aura_of(m, ga, 97_931, AURA_MOD_HEALING_DONE, 0, 20);
+            // (Healing of every school, -1, as the data's gear has it.)
+            aura_of(m, ga, 97_931, AURA_MOD_HEALING_DONE, -1, 20);
             aura_of(m, ga, 97_932, AURA_MOD_DAMAGE_DONE, 1 << HOLY, 60);
-            aura_of(m, ga, 97_933, AURA_MOD_HEALING_DONE, 0, 120);
+            aura_of(m, ga, 97_933, AURA_MOD_HEALING_DONE, -1, 120);
             derive::unit(m, ga);
             let beast = spawn(m, ga, BEAST, 60, 3.0);
             spells::cast_triggered(m, ga, DOT, Some(beast));
