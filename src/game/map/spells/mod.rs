@@ -36,6 +36,7 @@ pub mod mods;
 pub mod outcome;
 pub mod redemption;
 pub mod righteousness;
+pub mod script_checks;
 pub mod scripts;
 pub mod sight;
 pub mod single_target;

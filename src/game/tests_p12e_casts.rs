@@ -231,3 +231,134 @@ async fn a_mana_burn_is_refused_at_a_unit_without_mana() {
         "one of mana: it goes"
     );
 }
+
+/// Curse of Doom and Divine Intervention (their real ids, made up here),
+/// a carried flag's aura, and what stands for the Doomguard's summon: a
+/// mark on the warlock.
+const DOOM: u32 = 603;
+const INTERVENTION: u32 = 19752;
+const FLAG: u32 = 23333;
+const DOOMGUARD: u32 = 18662;
+
+fn scripts(d: &mut GameData) {
+    data(d);
+    let mut doom = bare(DOOM, 5);
+    doom.range_index = RANGE_8_25;
+    doom.duration_index = LASTS_LONG;
+    effect(
+        &mut doom,
+        0,
+        aura(crate::game::map::auras::AURA_PERIODIC_DAMAGE, 0, 1, 6),
+    );
+    doom.effects[0].amplitude = 60_000;
+    let mut intervention = bare(INTERVENTION, 1);
+    intervention.range_index = RANGE_8_25;
+    intervention.duration_index = LASTS_LONG;
+    effect(
+        &mut intervention,
+        0,
+        aura(crate::game::map::auras::AURA_SCHOOL_IMMUNITY, 127, 0, 21),
+    );
+    let mut flag = bare(FLAG, 0);
+    flag.duration_index = LASTS_LONG;
+    effect(
+        &mut flag,
+        0,
+        aura(crate::game::map::auras::AURA_DUMMY, 0, 0, 1),
+    );
+    let mut guard = bare(DOOMGUARD, 0);
+    guard.duration_index = LASTS_LONG;
+    effect(
+        &mut guard,
+        0,
+        aura(crate::game::map::auras::AURA_DUMMY, 0, 0, 1),
+    );
+    insert(d, [doom, intervention, flag, guard]);
+}
+
+/// Curse of Doom at a player is refused (bad targets), at a kobold it
+/// goes; the kobold dying under it with the roll in the curse's 5 in 101
+/// brings the Doomguard. Divine Intervention at a friend carrying a flag
+/// is refused (target aura state), at one without it goes. Before, both
+/// went at either, and the curse brought nothing.
+#[tokio::test]
+async fn curse_of_doom_and_divine_intervention_refuse_their_scripts_targets() {
+    let realm = fast_realm(scripts);
+    let (mut c, w, map) = human(&realm, "P12ED", "Dooming", Class::Warlock).await;
+    let (_d, x, _) = human(&realm, "P12EE", "Doomed", Class::Warrior).await;
+    let kobold = map
+        .query(move |m| {
+            kit::ready(m, w, 60, &[DOOM, INTERVENTION]);
+            let me = m.position_of(w).unwrap();
+            let p = m.players.get_mut(&x).unwrap();
+            p.movement.position = wow_world_messages::vanilla::Vector3d {
+                x: me.x + 12.0,
+                ..me
+            };
+            // Both free for all, so only the script stands in the way.
+            for g in [w, x] {
+                let p = m.players.get_mut(&g).unwrap();
+                p.fields.set_flag(
+                    crate::game::fields::PLAYER_FLAGS,
+                    crate::game::map::player::PLAYER_FLAGS_FFA_PVP,
+                    true,
+                );
+            }
+            kit::dummy(m, w, 60, 15.0)
+        })
+        .await
+        .unwrap();
+    c.sees(kobold).await;
+    c.clear();
+    map.query(move |m| kit::cast_fresh(m, w, DOOM, at(x)))
+        .await
+        .unwrap();
+    assert_eq!(
+        cast_result(&mut c, DOOM).await,
+        Some(crate::game::map::spells::fail::BAD_TARGETS),
+        "refused at a player"
+    );
+    let doomguard = map
+        .query(move |m| {
+            kit::cast_fresh(m, w, DOOM, at(kobold));
+            m.spells.queued_rolls.lock().unwrap().push_back(0);
+            assert!(kit::has(m, kobold, DOOM), "cursed");
+            let hp = kit::health(m, kobold);
+            crate::game::map::combat::deal_damage_by(m, w, kobold, hp, 1, None);
+            kit::has(m, w, DOOMGUARD)
+        })
+        .await
+        .unwrap();
+    assert_eq!(cast_result(&mut c, DOOM).await, None, "at a kobold it goes");
+    assert!(doomguard, "and its death brought the Doomguard");
+    map.query(move |m| {
+        for g in [w, x] {
+            let p = m.players.get_mut(&g).unwrap();
+            p.fields.set_flag(
+                crate::game::fields::PLAYER_FLAGS,
+                crate::game::map::player::PLAYER_FLAGS_FFA_PVP,
+                false,
+            );
+        }
+        kit::apply(m, x, x, FLAG);
+        kit::cast_fresh(m, w, INTERVENTION, at(x))
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        cast_result(&mut c, INTERVENTION).await,
+        Some(crate::game::map::spells::fail::TARGET_AURASTATE),
+        "not at a flag's carrier"
+    );
+    map.query(move |m| {
+        crate::game::map::auras::remove_spell(m, x, FLAG, None);
+        kit::cast_fresh(m, w, INTERVENTION, at(x))
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        cast_result(&mut c, INTERVENTION).await,
+        None,
+        "at one without it goes"
+    );
+}

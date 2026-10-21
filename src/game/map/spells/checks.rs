@@ -1187,6 +1187,9 @@ fn check_target(
     {
         return Some(fail::BAD_TARGETS);
     }
+    if let Some(code) = super::script_checks::check(map, s, target) {
+        return Some(code);
+    }
     // A party member's spell is for the caster's party and pets, not the
     // caster (Thistle Tea's `validate_party_unit_query`).
     if s.effects

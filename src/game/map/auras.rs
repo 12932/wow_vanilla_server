@@ -3704,6 +3704,7 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
     }
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
+    let doomed = crate::game::map::spells::script_checks::doomed(map, g);
     remove_where(map, g, |h| {
         !h.passive
             && !data
@@ -3712,6 +3713,7 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
                 .is_some_and(|s| s.attr(3, sd::ATTR_EX3_DEATH_PERSISTENT))
     });
     crate::game::map::boss_mechanics::cast_on_death(map, g, death_casts);
+    crate::game::map::spells::script_checks::doom(map, &doomed);
 }
 
 /// The holders a dispel of `dispel` can take, helpful (`friendly` target)

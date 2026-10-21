@@ -119,7 +119,7 @@ pub fn rolling(map: &Map) -> bool {
 }
 
 /// A roll from 0 to 9,999, hundredths of a percent.
-fn roll(map: &Map) -> i32 {
+pub(crate) fn roll(map: &Map) -> i32 {
     #[cfg(test)]
     if let Some(r) = map
         .spells
