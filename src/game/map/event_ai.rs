@@ -170,6 +170,10 @@ pub struct Feign {
 pub struct Route {
     pub points: std::sync::Arc<Vec<crate::game::data::Waypoint>>,
     pub repeat: bool,
+    /// Walked over the navmesh, its points on the ground; a special path
+    /// (`creature_movement_special`) goes straight, at its points' own
+    /// heights (vmangos's, Thistle Tea's `pathfind?: false`).
+    pub pathfind: bool,
 }
 
 /// A move a script started: its spline, where it ends, the point its

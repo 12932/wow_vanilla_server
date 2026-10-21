@@ -547,6 +547,7 @@ pub fn died(map: &mut Map, g: Guid) {
     s.route = Some(crate::game::map::event_ai::Route {
         points,
         repeat: true,
+        pathfind: true,
     });
     c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
     c.waypoint = bound_for;

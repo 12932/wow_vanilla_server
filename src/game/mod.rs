@@ -123,6 +123,8 @@ mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_ai_autocast;
 #[cfg(test)]
+mod tests_p10_ai_nav;
+#[cfg(test)]
 mod tests_p10_ai_owned;
 #[cfg(test)]
 mod tests_p10_ai_pet_combat;
