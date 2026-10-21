@@ -191,6 +191,8 @@ mod tests_p11g_cooldowns;
 #[cfg(test)]
 mod tests_p11g_gossip;
 #[cfg(test)]
+mod tests_p11g_insignia;
+#[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p3_ai_commands;
