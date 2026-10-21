@@ -15,6 +15,7 @@ pub mod battleground;
 pub mod bench_probe;
 pub mod bones;
 pub mod boss_mechanics;
+pub mod bwl;
 pub mod captured;
 pub mod charge;
 pub mod chat;

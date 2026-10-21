@@ -320,6 +320,7 @@ pub fn load(dir: &Path) -> GameData {
             let _ = super::tt_scripts::install(&mut data);
             crate::game::wind_stones::install(&mut data);
             crate::game::map::ubrs_stadium::install(&mut data);
+            crate::game::map::bwl::install(&mut data);
         }
         // Alterac Valley's NPCs as the battleground drives them, over the
         // general import.

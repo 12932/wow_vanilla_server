@@ -195,6 +195,7 @@ fn door_entries(s: Script) -> &'static [u32] {
             175244, 175153, 164725, 175946, 175947, 175197, 175199, 175195, 175200, 175198, 175196,
             175194, 164726, 175185, 175186,
         ],
+        Script::BlackwingLair => &super::bwl::DOOR_ENTRIES,
         Script::DireMaul => &[
             179503, 179506, 177220, 179502, 177259, 177257, 177258, 179504, 179505,
         ],
@@ -398,6 +399,7 @@ fn demote(data: &mut BTreeMap<u32, u32>, s: Script) {
                 };
             }
         }
+        Script::BlackwingLair => super::bwl::demote(data),
         // Majordomo called but not beaten: he is called again.
         Script::MoltenCore if data.get(&MC_MAJORDOMO_FIELD) != Some(&DONE) => {
             data.remove(&MC_MAJORDOMO_SUMMONED);
