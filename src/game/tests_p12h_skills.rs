@@ -322,3 +322,58 @@ async fn a_node_is_rolled_once() {
     .await;
     assert_eq!(got, (250, 150, 150));
 }
+
+const FISHING: u32 = 356;
+
+/// `g`'s bobber in `area`, a fish on it, used: what the hook comes to.
+fn hook(m: &mut Map, g: Guid, area: u32) {
+    let counter = m.next_creature_counter;
+    m.next_creature_counter += 1;
+    let bobber = guid::game_object(35_591, 0x70_0000 | counter);
+    let now = m.now;
+    m.loot_state.bobbers.push(professions::Bobber {
+        guid: bobber,
+        owner: g,
+        spell: 0,
+        bite_at: now,
+        gone_at: now + std::time::Duration::from_secs(20),
+        bitten: true,
+        zone: 0,
+        area,
+    });
+    professions::use_object(m, g, bobber);
+    loot::release(m, g, bobber);
+}
+
+/// mangos's `UpdateFishingSkill`, called by `GameObject::Use` on a hooked
+/// bobber before the catch is told: a fish that escapes counts as one
+/// landed, and the skill rises by steps (`value / 44` hooks a point up to
+/// 300, two steps at a chance), where wvs rose only on a catch, by 2500 /
+/// (value - 50) percent.
+#[tokio::test]
+async fn fishing_rises_by_steps_on_every_hooked_fish() {
+    let mut d = data();
+    // Area 1's fish always get away; area 2's are always landed.
+    d.crafts.fishing_skill.insert(1, 500);
+    d.crafts.fishing_skill.insert(2, -100);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let got = on_map(&realm, move |m| {
+        learn_at(m, g, FISHING, 1, 50);
+        for _ in 0..3 {
+            hook(m, g, 1);
+        }
+        let escaped = value(m, g, FISHING);
+        learn_at(m, g, FISHING, 4, 150);
+        m.players.get_mut(&g).unwrap().row.state.fishing_steps = 0;
+        for _ in 0..9 {
+            hook(m, g, 2);
+        }
+        (escaped, value(m, g, FISHING))
+    })
+    .await;
+    assert_eq!(got.0, 53, "a point an escape below 75");
+    // Three steps a point at 150 to 153, one or two a hook.
+    assert!((153..=156).contains(&got.1), "{}", got.1);
+}

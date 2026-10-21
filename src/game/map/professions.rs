@@ -1264,13 +1264,45 @@ pub fn line_ended(map: &mut Map, player: Guid) {
     }
 }
 
-/// The fishing skill's chance to rise, in percent.
-pub fn fishing_gain_chance(value: u32) -> u32 {
+/// The hooks fishing at `value` takes to rise a point (mangos's
+/// `GetFishingStepsNeededToLevelUp`).
+pub fn fishing_steps_needed(value: u32) -> u32 {
     if value < 75 {
-        100
+        1
+    } else if value <= 300 {
+        value / 44
     } else {
-        2500 / value.saturating_sub(50).max(1)
+        value / 31
     }
+}
+
+/// A fish hooked, landed or not: a step toward fishing's next point, two
+/// at a chance of one in the steps needed and one, and the point once the
+/// steps are enough (mangos's `UpdateFishingSkill`, from `GameObject::Use`
+/// before the catch is told).
+fn fishing_step(map: &mut Map, player: Guid) {
+    let Some(p) = map.players.get_mut(&player) else {
+        return;
+    };
+    let (Some(value), Some(max)) = (
+        skills::value(p, SKILL_FISHING),
+        skills::max_value(p, SKILL_FISHING),
+    ) else {
+        return;
+    };
+    if value >= max {
+        return;
+    }
+    let needed = fishing_steps_needed(value);
+    let mut steps = p.row.state.fishing_steps + 1;
+    if rand::rng().random_range(0..=needed) == 0 {
+        steps += 1;
+    }
+    if steps >= needed {
+        steps -= needed;
+        skills::raise(p, SKILL_FISHING, 1);
+    }
+    p.row.state.fishing_steps = steps;
 }
 
 /// Whether a catch is landed: the zone's skill and a roll of 1 to 100.
@@ -1309,6 +1341,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         .map_or(0, |p| skill_value(p, SKILL_FISHING));
     let zone_skill = fishing_skill_at(&data, b.area, b.zone);
     let roll = rand::rng().random_range(1..=100);
+    fishing_step(map, player);
     if !catch_landed(skill, zone_skill, roll) {
         if let Some(p) = map.players.get(&player) {
             p.outbound.send(&SMSG_FISH_ESCAPED {});
@@ -1316,17 +1349,6 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         map.remove_gameobject(object);
         return true;
     }
-    let learned = map
-        .players
-        .get(&player)
-        .and_then(|p| skills::value(p, SKILL_FISHING))
-        .unwrap_or(0);
-    try_raise(
-        map,
-        player,
-        SKILL_FISHING,
-        f64::from(fishing_gain_chance(learned)),
-    );
     let wanted = crate::game::map::quests::wanted(map, player);
     let loot = match hole_near(map, object) {
         Some((hole, table)) => {
@@ -1651,7 +1673,8 @@ mod tests {
         assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1, &rates), 25.0);
         assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1, &rates), 25.0);
         assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1, &steps), 12.5);
-        assert_eq!(fishing_gain_chance(150), 25);
+        assert_eq!(fishing_steps_needed(150), 3);
+        assert_eq!(fishing_steps_needed(74), 1);
         assert!(catch_landed(100, 0, 100));
         assert!(!catch_landed(30, 50, 1));
         assert_eq!(skinning_required(30, 150), 150);

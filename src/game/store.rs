@@ -155,6 +155,9 @@ pub struct CharacterState {
     pub action_bar_toggles: u8,
     /// The bank's bag slots bought (`PLAYER_BYTES_2`'s third byte).
     pub bank_bag_slots: u8,
+    /// Fishing's steps toward its next point (mangos's `m_fishingSteps`,
+    /// saved).
+    pub fishing_steps: u32,
     pub explored_zones: Vec<u32>,
     pub taxi_mask: Vec<u32>,
     pub bind: Option<Bind>,
