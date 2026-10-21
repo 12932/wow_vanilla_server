@@ -812,10 +812,8 @@ pub fn at_finish(
         return Some(fail::BAD_TARGETS);
     }
     // A body gone meanwhile (reclaimed, its owner risen, bones), or out of
-    // reach, fails before it costs, with mangos's tolerance (a tenth of the
-    // range, at most three yards).
-    let tolerance = (map.realm.data.spells.range(s).1 * 0.1).min(3.0);
-    if let Some(refused) = corpse_target(map, caster, s, t, m, tolerance) {
+    // reach, fails before it costs, with the launch's [`leeway`].
+    if let Some(refused) = corpse_target(map, caster, s, t, m, true) {
         return refused;
     }
     let target = t.unit.filter(|u| *u != caster)?;
@@ -969,15 +967,15 @@ fn moving_leeway(me: &combat::UnitView, u: &combat::UnitView, melee: bool, targe
 /// A resurrection aimed at a body (`None` for any other cast): a player's
 /// corpse lying in the caster's map, not bones (mangos's `GetCorpse`); its
 /// owner not risen, if they are here to tell (one on another map is offered
-/// it only if dead, as it reaches them); in range, `tolerance` beyond it,
-/// and in sight (mangos's corpse branch of `CheckTarget`). Why not, if not.
+/// it only if dead, as it reaches them); in range, with [`leeway`] as it
+/// begins or as it goes off (`launch`), and in sight (mangos's corpse branch of `CheckTarget`). Why not, if not.
 fn corpse_target(
     map: &mut Map,
     caster: Guid,
     s: &SpellTemplate,
     t: &Targets,
     m: &Mods,
-    tolerance: f32,
+    launch: bool,
 ) -> Option<Option<u8>> {
     if !resurrects(s) {
         return None;
@@ -998,7 +996,7 @@ fn corpse_target(
     };
     let (_, base) = map.realm.data.spells.range(s);
     let max = m.apply(mods::OP_RANGE, base).max(0.0);
-    if base > 0.0 && dist(me.position, at) > max + me.combat_reach + tolerance {
+    if base > 0.0 && dist(me.position, at) > max + me.combat_reach + leeway(caster, launch) {
         return Some(Some(fail::OUT_OF_RANGE));
     }
     if !s.attr(2, sd::ATTR_EX2_IGNORE_LOS) && !line_of_sight(map, me.position, at) {
@@ -1076,7 +1074,7 @@ fn check_target(
     triggered: bool,
     m: &Mods,
 ) -> Option<u8> {
-    if let Some(refused) = corpse_target(map, caster, s, t, m, 0.0) {
+    if let Some(refused) = corpse_target(map, caster, s, t, m, false) {
         return refused;
     }
     let harmful = !auras::positive(s);
