@@ -88,3 +88,69 @@ async fn one_claim_of_a_corpses_insignia_makes_bones_and_its_gold_is_taken_once(
         "taken once"
     );
 }
+
+/// Thistle Tea's "replaces ranks and clears rewards at death, exit, and a
+/// new login": Alice in the Plaguelands with one tower her side's has its
+/// first rank (11413); a second tower taken, the second rank (11414) in
+/// its place; dead, none; alive again, the second; out of the zone, none;
+/// back, and logged out and in there, the second alone again
+/// (`outdoor_pvp::reconcile_buffs`, each second; mangos's
+/// `OutdoorPvP::HandlePlayerEnterZone` and `HandlePlayerLeaveZone`).
+#[tokio::test]
+async fn a_towers_buff_is_its_rank_now_and_off_the_dead_and_those_gone() {
+    use crate::game::tests_p3_world_pvp::{AT, in_the_plaguelands, stand, tick};
+    const RANKS: [u32; 4] = [11413, 11414, 11415, 1386];
+    let (_realm, mut clients, map) = in_the_plaguelands(&[("Alice", Race::Human)]).await;
+    let alice = clients[0].guid;
+    let ranks = move |m: &mut crate::game::map::Map| {
+        RANKS
+            .into_iter()
+            .filter(|r| m.players[&alice].auras.has_spell(*r))
+            .collect::<Vec<_>>()
+    };
+    on(&map, move |m| {
+        stand(m, alice, AT[2]);
+        m.outdoor.as_mut().unwrap().towers[2].meter.progress = 240_000;
+    })
+    .await;
+    tick(&map).await;
+    assert_eq!(on(&map, ranks).await, vec![11413], "one tower");
+    on(&map, move |m| {
+        m.outdoor.as_mut().unwrap().towers[3].meter.progress = 240_000;
+    })
+    .await;
+    tick(&map).await;
+    assert_eq!(on(&map, ranks).await, vec![11414], "two: the next rank alone");
+    on(&map, move |m| crate::game::map::death::kill(m, alice)).await;
+    tick(&map).await;
+    assert_eq!(on(&map, ranks).await, Vec::<u32>::new(), "dead");
+    on(&map, move |m| {
+        crate::game::map::death::resurrect(m, alice, 1.0);
+    })
+    .await;
+    tick(&map).await;
+    assert_eq!(on(&map, ranks).await, vec![11414], "alive again");
+    on(&map, move |m| m.players.get_mut(&alice).unwrap().zone = 12).await;
+    tick(&map).await;
+    assert_eq!(on(&map, ranks).await, Vec::<u32>::new(), "out of the zone");
+    on(&map, move |m| stand(m, alice, AT[2])).await;
+    tick(&map).await;
+    let c = &mut clients[0];
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE
+        )
+        .then_some(())
+    })
+    .await;
+    c.clear();
+    c.login(alice).await;
+    on(&map, move |m| {
+        m.players.get_mut(&alice).unwrap().pvp.desired = true;
+    })
+    .await;
+    tick(&map).await;
+    assert_eq!(on(&map, ranks).await, vec![11414], "a new login: the rank now");
+}
