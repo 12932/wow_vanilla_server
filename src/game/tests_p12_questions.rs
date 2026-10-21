@@ -243,3 +243,96 @@ async fn stay_from_the_bar_stops_the_pets_cast_and_its_target_too() {
     .await;
     assert_eq!(got, (false, Guid::zero(), false, Some(COMMAND_STAY)));
 }
+
+// #9: a battleground's creatures and the leash.
+
+/// mangos-classic's `CombatManager::Update` leashes everywhere but a
+/// dungeon ("disabled in instances", `IsDungeon`: an instance or a raid):
+/// a battleground is no dungeon, so its creatures leash as the open
+/// world's do, 30 yards from where the fight began (no 60-yard home guard
+/// of their own). wvs let every copy's creatures fight on, battlegrounds'
+/// too.
+#[tokio::test]
+async fn a_battlegrounds_creature_leashes_as_the_open_worlds_and_a_dungeons_doesnt() {
+    use std::time::Duration;
+    use crate::game::guid;
+    use crate::game::map::creature::Creature;
+    use crate::game::map::creature_combat::should_evade;
+    use crate::game::map::{MapKey, ai};
+    let mut d = crate::game::tests_p3_combat::data();
+    for (id, kind) in [(489u32, 3u32), (36, 1)] {
+        d.maps.insert(
+            id,
+            MapInfo {
+                id,
+                internal_name: format!("Map{id}"),
+                name: format!("Map {id}"),
+                instance_type: kind,
+                player_limit: 10,
+            },
+        );
+    }
+    let realm = harness::realm_with(d);
+    let mut out = Vec::new();
+    for map in [489u32, 36] {
+        let handle = realm.maps.get(&realm, MapKey { map, instance: 7 });
+        let evades = on(&handle, move |m| {
+            let t = m.realm.data.creature_template(BRUTE).cloned().unwrap();
+            let at = Vector3d {
+                x: 100.0,
+                y: 100.0,
+                z: 0.0,
+            };
+            let mut add = |m: &mut crate::game::map::Map, n: u32| {
+                let c = Creature::new(guid::unit(BRUTE, 0x70_0000 + n), &t, 10, at, 0.0);
+                m.add_creature(c.with_base())
+            };
+            let (brute, foe) = (add(m, 1), add(m, 2));
+            ai::attacked(m, brute, foe);
+            // Both 80 yards from where it began, nothing done for 13
+            // seconds.
+            let far = Vector3d { x: 180.0, ..at };
+            m.creature_mut(brute).unwrap().position = far;
+            m.creature_mut(foe).unwrap().position = far;
+            m.now += Duration::from_secs(13);
+            should_evade(m, brute, foe)
+        })
+        .await;
+        out.push(evades);
+    }
+    assert_eq!(out, vec![true, false], "Warsong Gulch, Deadmines");
+}
+
+// #16: an unreachable victim, for one that doesn't move in its fight.
+
+/// mangos-classic's `Unit::SelectHostileTarget` starts the evade timer for
+/// an unreachable victim only `if (AI()->IsCombatMovement())`: a creature
+/// whose combat movement is off (Eranikus, whose `boss_eranikusAI` and
+/// Thistle Tea's script set it so on aggro) fights on whatever its reach.
+/// wvs sent it home after 24 seconds out of reach, which failed The
+/// Nightmare Manifests.
+#[tokio::test]
+async fn one_that_doesnt_move_in_its_fight_doesnt_evade_for_an_unreachable_victim() {
+    use std::time::Duration;
+    use crate::game::map::creature_combat::should_evade;
+    use crate::game::map::{ai, event_ai};
+    let (_realm, _a, ga, map) = setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    let got = on(&map, move |m| {
+        let mut out = Vec::new();
+        for still in [false, true] {
+            let brute = spawn(m, ga, BRUTE, 1, 5.0);
+            ai::attacked(m, brute, ga);
+            if still {
+                event_ai::scripted_mut(m, brute).unwrap().no_combat_movement = true;
+            }
+            let long_ago = m.now;
+            m.creature_mut(brute).unwrap().engagement.unreachable_since = Some(long_ago);
+            m.now += Duration::from_secs(25);
+            m.creature_mut(brute).unwrap().engagement.last_hostile = Some(m.now);
+            out.push(should_evade(m, brute, ga));
+        }
+        out
+    })
+    .await;
+    assert_eq!(got, vec![true, false], "a chaser, one that stands");
+}
