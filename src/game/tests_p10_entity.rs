@@ -750,6 +750,52 @@ async fn a_battleground_kills_honor_is_shared_by_the_side_near() {
     assert_eq!(today, vec![each, each, each, 0]);
 }
 
+/// The Deviate Fish's Party Time!
+const PARTY_TIME: u32 = 8067;
+
+/// Party Time!'s dance is played once a turn for its dancer and once for
+/// each who sees them (Thistle Tea's "a selected periodic animation
+/// reaches the owner and same-world observers once").
+#[tokio::test]
+async fn a_party_times_dance_reaches_its_dancer_and_each_watcher_once() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let mut d = data();
+    let none = SpellEffect::default();
+    let mut dummy = effect(6, 0, 1);
+    dummy.aura = 4;
+    let mut party = spell(PARTY_TIME, "Party Time!", [dummy, none, none]);
+    party.duration_index = 4;
+    d.spells.spells.insert(PARTY_TIME, party);
+    let realm = crate::game::harness::realm_with(d);
+    let (mut a, ga, map) = enter(&realm, "A", "Dancer", Race::Human, Class::Warrior).await;
+    let (mut b, _gb, _) = enter(&realm, "B", "Watcher", Race::Human, Class::Warrior).await;
+    b.sees(ga).await;
+    a.clear();
+    b.clear();
+    map.query(move |m| {
+        crate::game::map::spells::cast_triggered(m, ga, PARTY_TIME, Some(ga));
+        crate::game::map::item_scripts::update(m);
+        let now = m.now;
+        m.players.get_mut(&ga).unwrap().gadgets.party_at = Some(now);
+        crate::game::map::item_scripts::update(m);
+    })
+    .await
+    .unwrap();
+    crate::game::harness::an_update(&map).await;
+    let emotes = |c: &mut crate::game::harness::Client| {
+        c.captured()
+            .iter()
+            .filter_map(|f| ServerOpcodeMessage::read_unencrypted(&f[..]).ok())
+            .filter(|m| matches!(m, ServerOpcodeMessage::SMSG_EMOTE(e) if e.guid == ga))
+            .count()
+    };
+    let deadline = tokio::time::Instant::now() + crate::game::harness::WAIT;
+    while emotes(&mut b) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!((emotes(&mut a), emotes(&mut b)), (1, 1), "once each");
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
