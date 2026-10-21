@@ -284,3 +284,70 @@ async fn mining_unlearned_takes_its_spells_and_tracking_and_starts_again_at_one(
     );
     assert_eq!(after.1, Some((1, 75)), "from 1 again");
 }
+
+/// Thistle Tea's "a recently bandaged player keeps the item and never
+/// starts a channel" and "the recipient's live immunity prevents another
+/// player's item consumption", as mangos's `CheckCast` refuses a helpful
+/// spell to a target immune to its mechanic (TARGET_AURASTATE): a Linen
+/// Bandage (1251) used on oneself, or on a friend, under Recently Bandaged
+/// (11196) is refused before it channels, the bandage kept.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_bandage_on_one_recently_bandaged_is_refused_and_kept() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Medic", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Patient", Race::Human, Class::Warrior).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let at = on(&map, move |m| {
+        let here = m.players[&ga].position();
+        m.players.get_mut(&gb).unwrap().movement.position = here;
+        spells::learn(m, ga, 3273);
+        crate::game::map::inventory::add_item(m, ga, 1251, 3, false).unwrap();
+        for g in [ga, gb] {
+            spells::cast_triggered(m, g, 11_196, Some(g));
+        }
+        let p = &m.players[&ga];
+        let i = p.items.iter().find(|i| i.entry == 1251).unwrap();
+        (i.bag, i.slot)
+    })
+    .await;
+    for target in [ga, gb] {
+        a.clear();
+        a.send(CMSG_USE_ITEM {
+            bag_index: at.0,
+            bag_slot: at.1,
+            spell_index: 0,
+            targets: SpellCastTargets {
+                target_flags: SpellCastTargets_SpellCastTargetFlags::empty().set_unit(
+                    SpellCastTargets_SpellCastTargetFlags_Unit::Unit {
+                        unit_target: target,
+                    },
+                ),
+            },
+        })
+        .await;
+        let refused = a
+            .wait_frame("SMSG_CAST_RESULT", spells::SMSG_CAST_RESULT, |f| {
+                u32::from_le_bytes(f[0..4].try_into().unwrap()) == 746
+            })
+            .await;
+        assert_eq!(
+            refused[4..6],
+            [2, spells::checks::fail::TARGET_AURASTATE],
+            "{target:?}"
+        );
+        let after = on(&map, move |m| {
+            (
+                m.players[&ga].count_of(1251),
+                m.players[&ga].caster.casting.is_some(),
+            )
+        })
+        .await;
+        assert_eq!(after, (3, false), "kept, no channel");
+    }
+}

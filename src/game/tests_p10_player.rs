@@ -350,3 +350,72 @@ async fn a_launch_acknowledged_after_death_moves_no_body() {
     assert!(dist(at, here) < 0.01, "the body stays: {at:?}");
     assert!(!waiting, "the order settled");
 }
+
+const PARTY_BUFF: u32 = 97_962;
+
+/// Thistle Tea's "rejects a party-only cast before spending resources when
+/// its target is invalid", as mangos's `CheckCast` for a party member's
+/// spell (target 35): with no target, at the caster, or at one not in the
+/// party, it is refused (BAD_TARGETS), nothing spent; at a party member it
+/// lands.
+#[tokio::test]
+async fn a_party_members_spell_is_for_a_party_member() {
+    let mut d = charge_world();
+    let mut buff = spell(
+        PARTY_BUFF,
+        &[crate::game::tests_p3_entity::aura_effect(
+            crate::game::map::auras::AURA_DUMMY,
+            1,
+            0,
+            35,
+        )],
+    );
+    buff.mana_cost = 50;
+    d.spells.spells.insert(PARTY_BUFF, buff);
+    let realm = harness::realm_with(d);
+    let (a, ga, map) =
+        crate::game::tests_pets::enter(&realm, "A", "Alice", Race::Human, Class::Priest).await;
+    let (_b, gb, _) =
+        crate::game::tests_pets::enter(&realm, "B", "Bob", Race::Human, Class::Priest).await;
+    let mut a = a;
+    crate::game::tests_pets::learn(&map, ga, &[PARTY_BUFF]);
+    let mana = move |m: &Map| {
+        m.players[&ga]
+            .fields
+            .get_u32(crate::game::fields::UNIT_FIELD_POWER1)
+    };
+    for target in [None, Some(ga), Some(gb)] {
+        harness::an_update(&map).await;
+        let before = on(&map, move |m| mana(m)).await;
+        a.clear();
+        crate::game::tests_pets::cast(&a, PARTY_BUFF, target).await;
+        let refused = a
+            .wait_frame(
+                "SMSG_CAST_RESULT",
+                crate::game::map::spells::SMSG_CAST_RESULT,
+                |f| u32::from_le_bytes(f[0..4].try_into().unwrap()) == PARTY_BUFF,
+            )
+            .await;
+        assert_eq!(
+            refused[4..6],
+            [2, crate::game::map::spells::checks::fail::BAD_TARGETS],
+            "{target:?}"
+        );
+        assert_eq!(on(&map, move |m| mana(m)).await, before, "nothing spent");
+    }
+    let (oa, ob) = (
+        realm.registry.online(ga).unwrap(),
+        realm.registry.online(gb).unwrap(),
+    );
+    assert!(crate::game::social::groups::join_directly(&realm, &oa, &ob));
+    crate::game::tests_pets::cast(&a, PARTY_BUFF, Some(gb)).await;
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while !on(&map, move |m| {
+        crate::game::map::auras::auras(m, gb).is_some_and(|x| x.has_spell(PARTY_BUFF))
+    })
+    .await
+    {
+        assert!(tokio::time::Instant::now() < deadline, "it lands on Bob");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
