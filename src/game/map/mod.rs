@@ -82,6 +82,7 @@ pub mod ranged;
 pub mod reputation;
 pub mod rest;
 pub mod scripts;
+pub mod set_procs;
 pub mod skills;
 pub mod social;
 pub mod spawn_auras;

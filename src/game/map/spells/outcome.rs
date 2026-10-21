@@ -626,6 +626,14 @@ pub fn roll_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &M
     } else {
         d.spell_crit[school_index(s)]
     } + m.flat[mods::OP_CRITICAL_CHANCE] as f32;
+    // The target's auras on harmful magic of their schools at it (Winter's
+    // Chill: mangos-classic's `GetCritTakenChance`, from
+    // `CalculateSpellCritChance` for a spell not positive).
+    if s.dmg_class == 1 && !auras::positive(s) {
+        c += auras::auras(map, target).map_or(0, |a| {
+            a.sum_mask(AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE, 1 << school_index(s))
+        }) as f32;
+    }
     // Shatter: more against the frozen.
     if !physical(s) && frozen(map, target) {
         c += shatter(map, caster, s);

@@ -575,19 +575,32 @@ pub fn from_record(map: &mut Map, owner: Guid, r: &PetRecord) -> Option<Guid> {
         apply_passive(map, g, spell);
     }
     inherit::sync(map, g);
+    // The auras it kept while away, less the time it was (mangos's
+    // `_LoadAuras`).
+    if !r.auras.is_empty() {
+        let away = (chrono::Utc::now().timestamp_millis() - r.auras_at).max(0) as u64;
+        super::kept_auras::restore(map, g, &r.auras, away);
+    }
     // A new pet comes at its full health and power, with what its passives
     // and its master give it (mangos-zero's `EffectSummonPet` fills them
     // after `InitPetCreateSpells`; Thistle Tea's after the pet's
-    // passives): one called back keeps what it had.
+    // passives): one called back keeps what it had, up to what its auras
+    // give it again.
     if let Some(c) = map.creature_mut(g) {
-        if r.health == 0 {
-            let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
-            c.fields.set_u32(UNIT_FIELD_HEALTH, max);
-        }
-        if r.power == 0 {
-            let max = c.fields.get_u32(UNIT_FIELD_MAXPOWER1 + power_index);
-            c.fields.set_u32(UNIT_FIELD_POWER1 + power_index, max);
-        }
+        let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
+        c.fields.set_u32(
+            UNIT_FIELD_HEALTH,
+            if r.health == 0 {
+                max
+            } else {
+                r.health.min(max)
+            },
+        );
+        let max = c.fields.get_u32(UNIT_FIELD_MAXPOWER1 + power_index);
+        c.fields.set_u32(
+            UNIT_FIELD_POWER1 + power_index,
+            if r.power == 0 { max } else { r.power.min(max) },
+        );
     }
     Some(g)
 }
@@ -774,6 +787,8 @@ pub fn record_of(map: &Map, pet: Guid) -> Option<PetRecord> {
                 .map(|(spell, t)| (*spell, unix + t.duration_since(now).as_millis() as i64))
                 .collect()
         },
+        auras: super::kept_auras::saved(map, pet),
+        auras_at: chrono::Utc::now().timestamp_millis(),
     })
 }
 

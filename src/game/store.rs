@@ -239,6 +239,10 @@ pub struct PetRecord {
     pub family: u32,
     /// Spells still cooling down, and until when (Unix milliseconds).
     pub cooldowns: Vec<(u32, i64)>,
+    /// Its auras kept while it is away (mangos's `pet_aura`), and when they
+    /// were kept (Unix milliseconds): their time runs on meanwhile.
+    pub auras: Vec<crate::game::map::spells::cooldowns::SavedAura>,
+    pub auras_at: i64,
 }
 
 /// A character's pets.

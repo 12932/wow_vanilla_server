@@ -1412,8 +1412,10 @@ async fn a_shapeshift_frees_from_roots_and_snares_and_a_stance_doesnt() {
             let kobold = dummy(m, druid, 60, 5.0);
             let held = |m: &mut Map, form: u32| {
                 clear(m, druid);
+                // The snare without the bolt's damage, which may break the
+                // root (mangos's `HandleRemoveByDamageChanceProc`).
                 apply(m, kobold, druid, ENTANGLING_ROOTS);
-                spells::cast_triggered(m, kobold, FROSTBOLT, Some(druid));
+                apply(m, kobold, druid, FROSTBOLT);
                 apply(m, druid, druid, WATER_WALKING);
                 let before = held_down(m, druid);
                 spells::cast_triggered(m, druid, form, None);

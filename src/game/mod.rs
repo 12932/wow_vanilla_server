@@ -278,6 +278,14 @@ mod tests_p12c_speed;
 #[cfg(test)]
 mod tests_p12d_group_loot;
 #[cfg(test)]
+mod tests_p12f_auras;
+#[cfg(test)]
+mod tests_p12f_pets;
+#[cfg(test)]
+mod tests_p12f_real;
+#[cfg(test)]
+mod tests_p12f_sets;
+#[cfg(test)]
 mod tests_p12g_skills;
 #[cfg(test)]
 mod tests_p12g_table;
