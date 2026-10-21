@@ -159,7 +159,12 @@ pub struct PetState {
     pub totem_slot: Option<usize>,
     pub totem_spell: u32,
     pub next_think: Instant,
+    /// Its power's next tick (every two seconds).
     pub regen_at: Instant,
+    /// Its health's next tick, out of a fight: every four seconds for a
+    /// pet or a guardian (mangos's `Pet::RegenerateAll`), five for a
+    /// charmed creature (`Creature::RegenerateAll`).
+    pub health_at: Instant,
     pub happiness_at: Instant,
     pub loyalty_at: Instant,
     pub loyalty_points: i32,
@@ -211,6 +216,7 @@ impl PetState {
             totem_spell: 0,
             next_think: now,
             regen_at: now + Duration::from_secs(2),
+            health_at: now + ai::health_interval(kind),
             happiness_at: now + hunter::HAPPINESS_TICK,
             loyalty_at: now + hunter::LOYALTY_TICK,
             loyalty_points: 0,

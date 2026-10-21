@@ -560,3 +560,52 @@ async fn a_mounted_player_comes_off_the_mount_and_takes_the_warsong_flag() {
     .await;
     assert_eq!(got, (true, true, true, false), "mounted, then on foot with it");
 }
+
+// #40: how a creature a player controls heals.
+
+/// mangos-classic heals a player's creature out of a fight by its kind: a
+/// hunter's or a summoned pet four times its spirit's due every four
+/// seconds (`Pet::RegenerateHealth`, `OCTRegenHPPerSpirit` by its class: a
+/// warrior's 1.26 a point less 22.6), a guardian a twentieth every four, a
+/// charmed creature 13% every five (`Creature::RegenerateHealth`, player
+/// controlled). wvs healed them all a twentieth every two seconds.
+#[tokio::test]
+async fn a_controlled_creature_heals_by_its_kind_as_mangos_has_it() {
+    use std::time::Duration;
+    use crate::game::map::pets::{Kind, state, testing};
+    let (_realm, _a, ga, map) = setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    let got = on(&map, move |m| {
+        let at = m.players[&ga].position();
+        let mut out = Vec::new();
+        for kind in [Kind::Hunter, Kind::Demon, Kind::Guardian, Kind::Charmed] {
+            let pet = testing::spawn(m, ga, BRUTE, kind, 20, at, 0.0);
+            let c = m.creature_mut(pet).unwrap();
+            c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000);
+            c.fields.set_u32(UNIT_FIELD_HEALTH, 100);
+            c.fields.set_u32(UNIT_FIELD_STAT0 + 4, 50);
+            c.fields.set_byte(UNIT_FIELD_BYTES_0, 1, 1);
+            c.fields
+                .set_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT, false);
+            let now = m.now;
+            let health = |m: &crate::game::map::Map| {
+                m.unit_fields(pet).unwrap().get_u32(UNIT_FIELD_HEALTH)
+            };
+            // Its tick due now, and once more two seconds on (none then).
+            m.creature_mut(pet).unwrap().pet.as_deref_mut().unwrap().health_at = now;
+            testing::regen(m, pet, now);
+            let first = health(m);
+            testing::regen(m, pet, now + Duration::from_secs(2));
+            let between = health(m);
+            let next = state(m, pet).unwrap().health_at - now;
+            out.push((first, between, next.as_secs()));
+        }
+        out
+    })
+    .await;
+    // Spirit 50, a warrior's: 40.4 a tick, four times over.
+    assert_eq!(
+        got,
+        vec![(261, 261, 4), (261, 261, 4), (150, 150, 4), (230, 230, 5)],
+        "a hunter's pet, a demon, a guardian, a charmed creature"
+    );
+}

@@ -977,20 +977,76 @@ fn jump(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
     map.send_to_observers(g, &frame, false);
 }
 
-/// Health and power come back: health out of a fight, a demon's mana out
-/// of a fight, a hunter's pet's focus all the time.
-pub fn regen(map: &mut Map, g: Guid, now: Instant) {
-    let due = state(map, g).is_some_and(|s| s.regen_at <= now);
-    if !due {
-        return;
+/// How often a controlled creature's health comes back: every four
+/// seconds for a pet or a guardian (mangos's `Pet::RegenerateAll`), five
+/// for a charmed creature (`Creature::RegenerateAll`, `REGEN_TIME_FULL_UNIT`).
+pub fn health_interval(kind: Kind) -> Duration {
+    match kind {
+        Kind::Charmed | Kind::Possessed => Duration::from_secs(5),
+        _ => Duration::from_secs(4),
     }
-    let kind = state(map, g).map(|s| s.kind);
+}
+
+/// Health a spirit gives a unit of `class` a tick out of a fight (mangos's
+/// `Unit::OCTRegenHPPerSpirit`), none below nothing.
+pub fn health_per_spirit(class: u8, spirit: f32) -> f32 {
+    let regen = match class {
+        1 => spirit * 1.26 - 22.6,
+        2 => spirit * 0.25,
+        3 => spirit * 0.43 - 5.5,
+        4 => spirit * 0.84 - 13.0,
+        5 => spirit * 0.15 + 1.4,
+        7 => spirit * 0.28 - 3.6,
+        8 | 11 => spirit * 0.11 + 1.0,
+        9 => spirit * 0.12 + 1.5,
+        _ => 0.0,
+    };
+    regen.max(0.0)
+}
+
+/// Health and power come back: health out of a fight, a demon's mana out
+/// of a fight, a hunter's pet's focus all the time. Health by its kind, as
+/// mangos's: a hunter's or a summoned pet's four times its spirit's due
+/// (`Pet::RegenerateHealth`), a guardian a twentieth, a charmed creature
+/// 13% (`Creature::RegenerateHealth`, player controlled).
+pub fn regen(map: &mut Map, g: Guid, now: Instant) {
     let in_combat = map.unit_fields(g).is_some_and(|f| {
         f.has_flag(
             UNIT_FIELD_FLAGS,
             crate::game::map::player::UNIT_FLAG_IN_COMBAT,
         )
     });
+    let health_due = state(map, g).filter(|s| s.health_at <= now).map(|s| s.kind);
+    if let Some(kind) = health_due {
+        let rate = map.cfg.rates.health;
+        if let Some(c) = map.creature_mut(g) {
+            if let Some(s) = c.pet.as_deref_mut() {
+                s.health_at = now + health_interval(kind);
+            }
+            let f = &mut c.fields;
+            let (h, max) = (
+                f.get_u32(UNIT_FIELD_HEALTH),
+                f.get_u32(UNIT_FIELD_MAXHEALTH),
+            );
+            if !in_combat && h < max {
+                let add = match kind {
+                    Kind::Hunter | Kind::Demon => {
+                        let class = f.get_byte(UNIT_FIELD_BYTES_0, 1);
+                        let spirit = f.get_u32(UNIT_FIELD_STAT0 + 4) as f32;
+                        (health_per_spirit(class, spirit) * rate * 4.0) as u32
+                    }
+                    Kind::Charmed | Kind::Possessed => (max as f32 * 0.13) as u32,
+                    _ => max / 20,
+                };
+                f.set_u32(UNIT_FIELD_HEALTH, (h + add).min(max));
+            }
+        }
+    }
+    let due = state(map, g).is_some_and(|s| s.regen_at <= now);
+    if !due {
+        return;
+    }
+    let kind = state(map, g).map(|s| s.kind);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
@@ -999,9 +1055,6 @@ pub fn regen(map: &mut Map, g: Guid, now: Instant) {
     }
     let f = &mut c.fields;
     if !in_combat {
-        let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
-        let h = f.get_u32(UNIT_FIELD_HEALTH);
-        f.set_u32(UNIT_FIELD_HEALTH, (h + (max / 20).max(1)).min(max));
         let mana_max = f.get_u32(UNIT_FIELD_MAXPOWER1);
         let mana = f.get_u32(UNIT_FIELD_POWER1);
         f.set_u32(

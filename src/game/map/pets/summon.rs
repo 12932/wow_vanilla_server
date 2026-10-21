@@ -1036,6 +1036,7 @@ pub fn resurrect(map: &mut Map, g: Guid, fraction: f32) {
     if let Some(s) = c.pet.as_deref_mut() {
         s.dead_at = None;
         s.regen_at = now + Duration::from_secs(2);
+        s.health_at = now + super::ai::health_interval(s.kind);
         s.happiness_at = now + hunter::HAPPINESS_TICK;
         s.loyalty_at = now + hunter::LOYALTY_TICK;
     }
