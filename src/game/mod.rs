@@ -123,6 +123,8 @@ mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_combat_pets;
 #[cfg(test)]
+mod tests_p10_movement_views;
+#[cfg(test)]
 mod tests_p10_world;
 #[cfg(test)]
 mod tests_p10_world_contact;
