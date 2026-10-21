@@ -569,6 +569,12 @@ fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)
         {
             return None;
         }
+        // A dispel (Devour Magic) goes only where it has something to
+        // take, and gives way to the next spell where it hasn't.
+        if dispels(t) {
+            let range = data.spells.range(t).1;
+            return dispel_target(map, g, s.owner, t, victim, range).map(|w| (id, w));
+        }
         let effects = || t.effects.iter().filter(|e| e.effect != 0);
         let on_self = effects().all(|e| matches!(e.target_a, 0 | 1 | 20 | 22));
         let on_master = effects().all(|e| e.target_a == TARGET_MASTER);
@@ -589,6 +595,63 @@ fn pick_positive(map: &Map, g: Guid, victim: Option<Guid>) -> Option<(u32, Guid)
 
 /// `TARGET_MASTER`: a spell on the pet's master alone.
 const TARGET_MASTER: u32 = 27;
+
+/// `SPELL_EFFECT_DISPEL`.
+const EFFECT_DISPEL: u32 = 38;
+
+/// Whether every effect of `t` is a dispel (Devour Magic).
+fn dispels(t: &crate::game::data::spells::SpellTemplate) -> bool {
+    let mut effects = t.effects.iter().filter(|e| e.effect != 0).peekable();
+    effects.peek().is_some() && effects.all(|e| e.effect == EFFECT_DISPEL)
+}
+
+/// Whom a pet's dispel goes on, of those within `range` and in its sight:
+/// an enemy with a buff it takes (its victim, its master's, then those
+/// fighting either, the lower guid first), else a friend with an
+/// affliction it takes (its master, then their party), as Thistle Tea's
+/// `Autocast.candidates` has it for a spell at any unit, by the dispel
+/// options it observes (mangos's `PetAI` tries its victim first, its
+/// `CheckCast` refusing one with nothing to take). Never itself: Devour
+/// Magic takes nothing of its caster's own (mangos's `DevourMagic`
+/// script).
+fn dispel_target(
+    map: &Map,
+    g: Guid,
+    owner: Guid,
+    t: &crate::game::data::spells::SpellTemplate,
+    victim: Option<Guid>,
+    range: f32,
+) -> Option<Guid> {
+    let me = map.position_of(g)?;
+    let victim_of = |u: Guid| map.combat(u).filter(|c| c.attacking).map(|c| c.victim);
+    let mut attackers: Vec<Guid> = [g, owner]
+        .iter()
+        .filter_map(|u| map.combat(*u))
+        .flat_map(|c| c.attackers.iter().copied())
+        .collect();
+    attackers.sort_by_key(|a| a.guid());
+    let near = |w: &Guid| {
+        map.unit_view(*w).is_some_and(|u| {
+            u.alive
+                && dist(u.position, me) <= range + 2.0
+                && crate::game::map::spells::checks::sight(map, me, u.position)
+        })
+    };
+    let enemies = victim
+        .or_else(|| victim_of(g))
+        .into_iter()
+        .chain(victim_of(owner))
+        .chain(attackers)
+        .filter(|e| !e.is_zero() && *e != g && combat::can_attack(map, g, *e) && near(e));
+    let friends = allies(map, g, owner, range).into_iter();
+    let takes = |w: &Guid| {
+        t.effects
+            .iter()
+            .filter(|e| e.effect == EFFECT_DISPEL)
+            .any(|e| !crate::game::map::spells::dispellable(map, g, *w, e.misc_value).is_empty())
+    };
+    enemies.chain(friends).find(|w| takes(w))
+}
 
 /// Whom of its master's a pet's spell for a friend may go on, as mangos's
 /// `PetAI::UpdateAllies` and Thistle Tea's `pet_allies`: its master, then
@@ -673,18 +736,28 @@ fn worth(
     if t.has_effect(2) {
         return true;
     }
-    let held = auras(map, whom).is_some_and(|a| a.has_spell(t.id));
+    // An effect held is judged by its index: one a holder of the spell
+    // has lost (taken off alone) is worth putting back (mangos's
+    // `PetAI::CanAutoCast`, `HasAura(id, index)`; Thistle Tea's
+    // `held?` by spell and effect).
+    let held = |i: usize| {
+        auras(map, whom).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == t.id && h.effects.iter().any(|x| usize::from(x.effect) == i))
+        })
+    };
     let in_reach = victim
         .and_then(|v| map.unit_view(v))
         .zip(map.unit_view(g))
         .is_some_and(|(v, me)| combat::in_melee_range(&me, &v));
-    t.effects.iter().all(|e| match e.effect {
+    t.effects.iter().enumerate().all(|(i, e)| match e.effect {
         6 if t.stack_amount <= 1 => {
-            !held
+            !held(i)
                 && !(e.aura == AURA_MOD_INCREASE_SPEED && in_reach)
                 && !(e.aura == AURA_MOD_STUN && stunned(map, whom))
         }
-        35 => !held,
+        35 => !held(i),
         _ => true,
     })
 }

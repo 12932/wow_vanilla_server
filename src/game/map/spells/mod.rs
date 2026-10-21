@@ -12,6 +12,7 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 
+pub(crate) use effects::dispellable;
 #[cfg(test)]
 pub(crate) use effects::{Dr, dr_group};
 pub use effects::{
