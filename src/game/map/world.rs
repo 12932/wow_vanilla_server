@@ -408,10 +408,11 @@ fn random_point(center: Vector3d, radius: f32, rng: &mut impl rand::Rng) -> Vect
 
 /// The zone and area at a point, as Thistle Tea works them out: the
 /// navmesh's; else those of the terrain tile's area bit; else the map's
-/// only zone. With neither a navmesh nor terrain tiles, a continent's
-/// `None`, another map's its only zone (a dungeon's, as mangos's
-/// `GetAreaFlagByMapId` names it "for instances without generated *.map
-/// files", continents skipped). Inside a city neither knows
+/// only zone; else its zone in `Map.dbc`. With neither a navmesh nor
+/// terrain tiles, a continent's `None`, another map's its only zone (a
+/// dungeon's, as mangos's `GetAreaFlagByMapId` names it "for instances
+/// without generated *.map files", continents skipped), or the one
+/// `Map.dbc` links it to. Inside a city neither knows
 /// ([`crate::game::cities::indoors`], Ironforge in its mountain, which
 /// both read as Dun Morogh), the city's, with or without them.
 pub fn zone_and_area(map: &mut Map, pos: Vector3d) -> Option<(u32, u32)> {
@@ -441,6 +442,14 @@ pub fn zone_and_area(map: &mut Map, pos: Vector3d) -> Option<(u32, u32)> {
                 (Some(z), None) => Some((z.id, z.id)),
                 _ => None,
             }
+        })
+        // With none of its own (Blackrock Depths and Spire, Onyxia's Lair,
+        // whose zones are on the continents), the map's in `Map.dbc`
+        // (Thistle Tea's "uses the DBC linked zone for maps without
+        // navigation data").
+        .or_else(|| {
+            let zone = *data.map_zones.get(&id)?;
+            Some((data.zone_of(zone), zone))
         })
 }
 

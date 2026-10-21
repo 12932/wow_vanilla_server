@@ -486,13 +486,21 @@ fn load_dbc(dbc: &Connection, data: &mut GameData) {
         data.faction_templates.insert(f.id, f);
     }
     load_durability(dbc, data);
-    for m in rows(dbc, "SELECT * FROM Map", |c| MapInfo {
-        id: c.u32("id"),
-        internal_name: c.string("internal_name"),
-        name: c.string("map_name_en_gb"),
-        instance_type: c.u32("instance_type"),
-        player_limit: c.u32("max_players"),
+    for (m, zone) in rows(dbc, "SELECT * FROM Map", |c| {
+        (
+            MapInfo {
+                id: c.u32("id"),
+                internal_name: c.string("internal_name"),
+                name: c.string("map_name_en_gb"),
+                instance_type: c.u32("instance_type"),
+                player_limit: c.u32("max_players"),
+            },
+            c.u32("area_table"),
+        )
     }) {
+        if zone != 0 {
+            data.map_zones.insert(m.id, zone);
+        }
         data.maps.insert(m.id, m);
     }
 }
