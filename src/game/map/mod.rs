@@ -821,6 +821,8 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
         world::populate(m)
     });
     let mut report_at = Instant::now() + REPORT_EVERY;
+    // `WVS_STATS_FILE`'s numbers, if it is on.
+    let mut sampler = crate::game::stats::Sampler::default();
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -828,6 +830,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             event = rx.recv() => {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
+                let sampled = crate::game::stats::on().then_some(map.now);
                 if handle_guarded(&mut map, event) {
                     break;
                 }
@@ -837,9 +840,11 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved.
                 let mut stop = false;
+                let mut handled = 1;
                 for _ in 0..512 {
                     match rx.try_recv() {
                         Ok(event) => {
+                            handled += 1;
                             if handle_guarded(&mut map, event) {
                                 stop = true;
                                 break;
@@ -848,6 +853,9 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                         }
                         Err(_) => break,
                     }
+                }
+                if let Some(at) = sampled {
+                    sampler.events(handled, at.elapsed());
                 }
                 if stop {
                     break;
@@ -869,6 +877,9 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     map.report(rx.len());
                 }
                 map.plot(rx.len());
+                if crate::game::stats::on() {
+                    sampler.update(&map, rx.len());
+                }
             }
         }
     }

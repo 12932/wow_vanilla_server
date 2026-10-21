@@ -25,6 +25,7 @@ pub mod registry;
 pub mod respawns;
 pub mod session;
 pub mod social;
+pub mod stats;
 pub mod store;
 pub mod supervisor;
 #[cfg(test)]
@@ -1792,6 +1793,7 @@ pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
     if crate::tracy::on() {
         tokio::spawn(plot_realm(realm.clone()));
     }
+    stats::start(&realm);
     info!("wow_vanilla_server {}", crate::VERSION);
     info!("world: listening on {WORLD_ADDRESS}");
     let accept = {
