@@ -776,7 +776,7 @@ async fn fire_all_soaked_still_breaks_stealth_and_sitting_but_not_feign_death() 
 }
 
 #[tokio::test]
-async fn a_lethal_burn_kills_once_and_wears_the_gear() {
+async fn a_lethal_burn_kills_once_and_wears_no_gear() {
     let realm = harness::realm_with(world());
     let (mut a, g) = alice(&realm, Class::Warrior).await;
     a.clear();
@@ -790,24 +790,25 @@ async fn a_lethal_burn_kills_once_and_wears_the_gear() {
     .await;
     assert!(matches!(dead, crate::game::map::death::Death::Dead { .. }));
     assert_eq!(again, 0);
-    a.wait_for("the gear worn", |m| {
-        matches!(m, ServerOpcodeMessage::SMSG_DURABILITY_DAMAGE_DEATH).then_some(())
-    })
-    .await;
-    let logs = {
-        let mut n = 0;
-        while a
-            .gets(Duration::from_millis(100), |m| {
-                matches!(m, ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(_)).then_some(())
-            })
-            .await
-            .is_some()
-        {
-            n += 1;
+    // The world's fire wears nothing at death: mangos's
+    // `EnvironmentalDamage` deals it as her own harm (question #1).
+    let (mut logs, mut worn) = (0, 0);
+    while let Some(m) = a
+        .gets(Duration::from_millis(100), |m| match m {
+            ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(_) => Some(true),
+            ServerOpcodeMessage::SMSG_DURABILITY_DAMAGE_DEATH => Some(false),
+            _ => None,
+        })
+        .await
+    {
+        if m {
+            logs += 1;
+        } else {
+            worn += 1;
         }
-        n
-    };
+    }
     assert_eq!(logs, 1, "the second burn finds her dead");
+    assert_eq!(worn, 0, "no wear");
 }
 
 #[tokio::test]

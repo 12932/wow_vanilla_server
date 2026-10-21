@@ -213,9 +213,9 @@ async fn a_stanceless_warrior_logs_in_in_battle_stance() {
 }
 
 /// A chest piece of fifty durability.
-const CHEST: u32 = 64_600;
+pub(crate) const CHEST: u32 = 64_600;
 
-fn wear_world() -> crate::game::data::GameData {
+pub(crate) fn wear_world() -> crate::game::data::GameData {
     let mut d = crate::game::tests_p3_combat::data();
     d.items.insert(
         CHEST,

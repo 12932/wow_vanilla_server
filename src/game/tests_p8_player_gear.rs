@@ -472,8 +472,8 @@ async fn a_weapon_talents_crit_stops_while_the_weapon_is_broken() {
 /// Thistle Tea's durability_test "one lethal transition wears equipment
 /// once and resurrection permits the next penalty": a death wears the gear
 /// a tenth once, however much more harm the dead take; risen, the next
-/// death (the world's: lava) wears it again, as mangos's
-/// `EnvironmentalDamage` does with `DurabilityLossAll`.
+/// death wears it again. The world's lava wears nothing, as mangos's
+/// `EnvironmentalDamage` has it (a fall's alone does: question #1).
 #[tokio::test]
 async fn a_death_wears_gear_once_and_the_next_again() {
     use wow_world_messages::vanilla::EnvironmentalDamageType;
@@ -506,11 +506,18 @@ async fn a_death_wears_gear_once_and_the_next_again() {
     })
     .await
     .unwrap();
+    assert_eq!(durability(&map, g, helm).await, 90, "the lava's death, nothing");
+    map.query(move |m| {
+        crate::game::map::death::resurrect(m, g, 1.0);
+        crate::game::map::combat::kill(m, wolf, g);
+    })
+    .await
+    .unwrap();
     a.wait_for("SMSG_DURABILITY_DAMAGE_DEATH", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_DURABILITY_DAMAGE_DEATH).then_some(())
     })
     .await;
-    assert_eq!(durability(&map, g, helm).await, 80, "the lava's death too");
+    assert_eq!(durability(&map, g, helm).await, 80, "the next death, again");
 }
 
 /// Thistle Tea's durability_test "debug wear parses whitespace and rejects

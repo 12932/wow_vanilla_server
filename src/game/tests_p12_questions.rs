@@ -410,3 +410,123 @@ async fn a_dead_hunters_pet_lies_as_long_as_a_creature_of_its_rank() {
     .await;
     assert_eq!(got, (300, vec![true, true, false]));
 }
+
+// #1: death's wear.
+
+/// The worn chest's durability (of 50), in slot 4.
+fn chest(m: &crate::game::map::Map, g: Guid) -> u32 {
+    let p = &m.players[&g];
+    let i = p.item_at(crate::game::store::BAG_PLAYER, 4).unwrap();
+    p.items[i].fields.get_u32(ITEM_FIELD_DURABILITY)
+}
+
+/// Alice in a chest of 50, hardy.
+fn chested(m: &mut crate::game::map::Map, g: Guid) {
+    use crate::game::tests_p5_player_misc::CHEST;
+    crate::game::tests_p3_combat::equip(m, g, CHEST, 4);
+    let f = &mut m.players.get_mut(&g).unwrap().fields;
+    f.set_u32(UNIT_FIELD_MAXHEALTH, 100_000);
+    f.set_u32(UNIT_FIELD_HEALTH, 100_000);
+}
+
+/// mangos-classic's `Unit::Kill` wears a dead player's gear a tenth only
+/// if no player was behind the blow (`responsiblePlayer`): their own hand
+/// is a player's, so a death by it wears nothing; and the world's harm
+/// (`EnvironmentalDamage`, dealt as their own) wears only for a fall
+/// ("DealDamage not apply item durability loss at self damage"). wvs wore
+/// gear at every death by one's own hand.
+#[tokio::test]
+async fn a_death_by_ones_own_hand_wears_nothing_but_a_falls() {
+    use crate::game::map::{combat, death, movement};
+    use crate::game::tests_p5_player_misc::wear_world;
+    let (_realm, _a, ga, map) = setup_with(wear_world(), Class::Warrior).await;
+    let worn = on(&map, move |m| {
+        chested(m, ga);
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        let mut out = Vec::new();
+        combat::kill_by(m, ga, ga, None);
+        out.push(chest(m, ga));
+        death::resurrect(m, ga, 1.0);
+        movement::fall_damage(m, ga, 200.0);
+        out.push((m.players[&ga].death != death::Death::Alive) as u32 * chest(m, ga));
+        death::resurrect(m, ga, 1.0);
+        combat::kill(m, brute, ga);
+        out.push(chest(m, ga));
+        out
+    })
+    .await;
+    assert_eq!(worn, vec![50, 45, 40], "her own hand, a fall, a creature");
+}
+
+/// mangos-classic's `Unit::DealDamage` rolls a blow's one-in-200 wear in
+/// `HandleDamageDealt`, which a killing blow's `Kill` takes the place of:
+/// the blow that kills wears no point off either side, the victim's
+/// death's tenth aside. wvs rolled every blow.
+#[tokio::test]
+async fn a_killing_blow_rolls_no_wear_of_its_own() {
+    use crate::game::map::combat;
+    use crate::game::map::vendor::FORCED_WEAR;
+    use crate::game::tests_p5_player_misc::wear_world;
+    let (_realm, _a, ga, map) = setup_with(wear_world(), Class::Warrior).await;
+    let worn = on(&map, move |m| {
+        chested(m, ga);
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        FORCED_WEAR.with(|f| f.set(Some((0.1, 4))));
+        let mut out = Vec::new();
+        // Her blow, then her killing blow.
+        combat::deal_damage(m, ga, brute, 10);
+        out.push(chest(m, ga));
+        combat::deal_damage(m, ga, brute, 1_000_000);
+        out.push(chest(m, ga));
+        // A creature's killing blow on her: the death's five alone.
+        let other = spawn(m, ga, BRUTE, 20, 5.0);
+        combat::deal_damage(m, other, ga, 1_000_000);
+        out.push(chest(m, ga));
+        FORCED_WEAR.with(|f| f.set(None));
+        out
+    })
+    .await;
+    assert_eq!(worn, vec![49, 49, 44], "a blow; the kill; her death");
+}
+
+/// mangos-classic's `Unit::Kill` wears a priest's gear at the fatal blow
+/// that a Spirit of Redemption saves her from (its durability branch isn't
+/// gated by the spirit), if no player struck it; the spirit's end, its
+/// Suicide, is her own hand and wears nothing. wvs wore it at the end.
+#[tokio::test]
+async fn a_spirit_of_redemption_wears_at_the_fatal_blow_and_not_at_its_end() {
+    use crate::game::map::spells::redemption;
+    use crate::game::map::{combat, death};
+    use crate::game::tests_p5_player_misc::wear_world;
+    let mut d = wear_world();
+    for id in std::iter::once(redemption::FORM).chain(redemption::STATE) {
+        let mut s = spell(
+            id,
+            &[SpellEffect {
+                effect: 6,
+                aura: auras::AURA_DUMMY,
+                target_a: 1,
+                ..Default::default()
+            }],
+        );
+        s.name = "Spirit of Redemption".into();
+        d.spells.spells.insert(id, s);
+    }
+    let (_realm, _a, ga, map) = setup_with(d, Class::Priest).await;
+    let worn = on(&map, move |m| {
+        chested(m, ga);
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .spells
+            .push(redemption::TALENT);
+        let brute = spawn(m, ga, BRUTE, 20, 5.0);
+        combat::deal_damage(m, brute, ga, 1_000_000);
+        let saved = (redemption::spirit(m, ga), chest(m, ga));
+        redemption::aura_gone(m, ga, redemption::STATE[1], true);
+        let dead = (m.players[&ga].death != death::Death::Alive, chest(m, ga));
+        (saved, dead)
+    })
+    .await;
+    assert_eq!(worn, ((true, 45), (true, 45)), "at the blow; not again");
+}
