@@ -4,7 +4,7 @@
 //! of their death and going). A wild summon is of its template's faction
 //! and level, and dies at the spell's duration once out of a fight; a
 //! guardian is of its summoner's, at its level less the effect's offset,
-//! follows it, goes at the spell's duration once out of a fight or with
+//! follows it, goes at the spell's duration (in a fight or not) or with
 //! its summoner, and drops no loot. Script command 56 takes a unit's
 //! guardians away.
 
@@ -32,10 +32,11 @@ const SPOTS: [(u32, f32); 9] = [
     (50, -0.5),
 ];
 
-/// The despawn types of a creature's summons: a guardian's time waits out
-/// its fights (vmangos's timed-or-dead); a wild summon with no time lies
-/// as a corpse when it dies (dead despawn).
-const GUARDIAN_DESPAWN: i32 = 1;
+/// The despawn types of a creature's summons: a guardian goes at its time,
+/// mid-fight too, and dead lies as a corpse (mangos-classic's
+/// `Pet::Update`); a wild summon with no time lies as a corpse when it
+/// dies (dead despawn).
+const GUARDIAN_DESPAWN: i32 = event_ai::TIMED_PET;
 const DEAD_DESPAWN: i32 = 7;
 /// How far behind its summoner a guardian follows.
 const GUARDIAN_FOLLOW: f32 = 2.0;
@@ -290,11 +291,13 @@ pub(super) fn guardians_of(map: &Map, owner: Guid, entry: u32) -> Vec<Guid> {
     let summoned = event_ai::scripted(map, owner)
         .map(|s| s.summoned.clone())
         .unwrap_or_default();
+    let owned = out.clone();
     out.extend(summoned.into_iter().filter(of_entry).filter(|g| {
-        map.creature(*g).is_some_and(|c| {
-            c.scripted.as_deref().and_then(|s| s.summoner) == Some(owner)
-                && guardian_spell(map, c.fields.get_u32(UNIT_CREATED_BY_SPELL))
-        })
+        !owned.contains(g)
+            && map.creature(*g).is_some_and(|c| {
+                c.scripted.as_deref().and_then(|s| s.summoner) == Some(owner)
+                    && guardian_spell(map, c.fields.get_u32(UNIT_CREATED_BY_SPELL))
+            })
     }));
     out
 }

@@ -605,8 +605,18 @@ pub fn effect_by(
 pub fn area_aura(map: &mut Map, caster: Guid, s: &SpellTemplate, effects: &[(usize, i32)]) {
     let owner = master(map, caster);
     if owner != caster {
+        // Its master within its reach (`refresh_area_auras` then keeps it
+        // so).
+        let at = map.position_of(caster);
+        let radius = pet_aura_radius(map, s);
         for target in [caster, owner] {
-            if map.unit_view(target).is_some_and(|u| u.alive) {
+            if map.unit_view(target).is_some_and(|u| {
+                u.alive
+                    && (target == caster
+                        || at.is_some_and(|at| {
+                            crate::game::map::combat::dist(u.position, at) <= radius
+                        }))
+            }) {
                 let _ = crate::game::map::auras::apply_spell(
                     map,
                     caster,
@@ -630,6 +640,125 @@ pub fn area_aura(map: &mut Map, caster: Guid, s: &SpellTemplate, effects: &[(usi
             effects,
             crate::game::map::auras::Context::default(),
         );
+    }
+}
+
+/// The reach of `s`'s pet area auras: its effects' widest radius.
+fn pet_aura_radius(map: &Map, s: &SpellTemplate) -> f32 {
+    s.effects
+        .iter()
+        .filter(|e| e.effect == EFFECT_APPLY_AREA_AURA_PET)
+        .map(|e| map.realm.data.spells.radius(e.radius_index))
+        .fold(0.0f32, f32::max)
+}
+
+/// Pet area auras follow their caster: a pet (a demon, a companion)
+/// holding one of its own puts it on its master while they are alive and
+/// within its radius, and takes it off them out of it, or once the pet
+/// has lost it or gone (mangos-classic's `AreaAura::Update` for
+/// `AREA_AURA_PET`, its caster's side adding the owner, the owner's
+/// removing it). With the party auras, each second.
+pub fn refresh_area_auras(map: &mut Map) {
+    let data = map.realm.data.clone();
+    let pet_spell = |spell: u32| {
+        data.spells.get(spell).is_some_and(|s| {
+            s.effects
+                .iter()
+                .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PET)
+        })
+    };
+    type Source = (Guid, Guid, u32, Vec<(usize, i32)>, Option<Instant>);
+    let sources: Vec<Source> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive() && !c.auras.is_empty())
+        .filter_map(|(_, c)| Some((c, c.owner?)))
+        .flat_map(|(c, _)| {
+            c.auras
+                .holders
+                .iter()
+                .filter(|h| h.caster == c.guid && pet_spell(h.spell))
+                .map(|h| {
+                    (
+                        c.guid,
+                        h.spell,
+                        h.effects
+                            .iter()
+                            .map(|x| (x.effect as usize, x.amount))
+                            .collect::<Vec<_>>(),
+                        h.expires,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .map(|(g, spell, effects, expires)| (g, master(map, g), spell, effects, expires))
+        .filter(|(g, owner, ..)| owner != g)
+        .collect();
+    let now = map.now;
+    for (pet, owner, spell, effects, expires) in sources {
+        let Some(s) = data.spells.get(spell) else {
+            continue;
+        };
+        let Some(at) = map.position_of(pet) else {
+            continue;
+        };
+        let near = map.unit_view(owner).is_some_and(|u| {
+            u.alive && crate::game::map::combat::dist(u.position, at) <= pet_aura_radius(map, s)
+        });
+        let has = crate::game::map::auras::auras(map, owner).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == pet)
+        });
+        if has && !near {
+            crate::game::map::auras::remove_spell(map, owner, spell, Some(pet));
+        } else if near && !has {
+            let effects: Vec<(usize, i32)> = effects
+                .into_iter()
+                .filter(|(i, _)| {
+                    s.effects
+                        .get(*i)
+                        .is_some_and(|e| e.effect == EFFECT_APPLY_AREA_AURA_PET)
+                })
+                .collect();
+            let left = expires.map(|t| t.saturating_duration_since(now).as_millis() as u32);
+            let _ = crate::game::map::auras::apply_spell(
+                map,
+                pet,
+                owner,
+                s,
+                &effects,
+                crate::game::map::auras::Context {
+                    duration: Some(left),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    // A master's whose pet has lost it, or is gone or dead.
+    let orphans: Vec<(Guid, u32, Guid)> = map
+        .players
+        .values()
+        .flat_map(|p| {
+            p.auras
+                .holders
+                .iter()
+                .filter(|h| h.caster != p.guid && pet_spell(h.spell))
+                .map(|h| (p.guid, h.spell, h.caster))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (owner, spell, pet) in orphans {
+        let held = map.creature(pet).is_some_and(|c| {
+            c.alive()
+                && c.auras
+                    .holders
+                    .iter()
+                    .any(|h| h.spell == spell && h.caster == pet)
+        });
+        if !held {
+            crate::game::map::auras::remove_spell(map, owner, spell, Some(pet));
+        }
     }
 }
 
@@ -899,6 +1028,14 @@ pub fn died(map: &mut Map, killer: Guid, victim: Guid) -> bool {
                 }
             }
             summon::die(map, victim);
+            // A creature's summon: its summoner hears of its death.
+            if map
+                .creature(victim)
+                .and_then(|c| c.scripted.as_deref())
+                .is_some_and(|s| s.summoner.is_some())
+            {
+                crate::game::map::event_ai::death_heard(map, victim);
+            }
             true
         }
     }

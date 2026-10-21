@@ -988,7 +988,7 @@ pub fn tick(map: &mut Map, g: Guid) {
 // vmangos's `TempSummonType`s, as Thistle Tea's `SummonDespawn` runs them:
 // which time from the summoning, run on after a death, wait out a fight
 // (and start again after it), vanish at death, or time from it.
-const TIMED_WHILE_ALIVE: [i32; 6] = [1, 2, 3, 4, 9, 10];
+const TIMED_WHILE_ALIVE: [i32; 7] = [1, 2, 3, 4, 9, 10, TIMED_PET];
 const TIMED_WHILE_DEAD: [i32; 5] = [3, 4, 6, 9, 10];
 const WAITS_OUT_COMBAT: [i32; 3] = [1, 2, 4];
 const GONE_AT_DEATH: [i32; 3] = [2, 5, 10];
@@ -1001,6 +1001,11 @@ const TIMED_DEATH_RECHECK: Duration = Duration::from_millis(100);
 /// with a duration: at its time, out of a fight, it dies (`TemporarySummon`),
 /// its corpse left as any's.
 pub const TIMED_DEATH: i32 = 11;
+/// wvs's own type for a creature's guardian (spell effects 42 and 56): it
+/// goes at its time, in a fight or not, and dead it lies as a corpse does
+/// (mangos-classic's `Pet::Update`: its `m_duration` runs out while it is
+/// alive, its corpse goes as it expires).
+pub const TIMED_PET: i32 = 12;
 
 /// What a summon whose time has come does.
 enum Due {
