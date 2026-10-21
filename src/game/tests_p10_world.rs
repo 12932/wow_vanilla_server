@@ -299,7 +299,7 @@ async fn a_battlegrounds_corpse_is_taken_up_only_once_the_battle_is_on() {
     let reclaim = CMSG_RECLAIM_CORPSE {
         guid: crate::game::guid::corpse(crate::game::guid::counter(ga)),
     };
-    a.send(reclaim.clone()).await;
+    a.send(reclaim).await;
     fence(&mut a).await;
     let waiting = map
         .query(move |m| m.players[&ga].death == Death::Alive)
