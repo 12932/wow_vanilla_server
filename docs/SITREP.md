@@ -892,6 +892,10 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   merged first, is kept; the others' copies go at their merges.
 
 ## Answered
+- **Round 11's triage** (2026-10-21, decision 71): a pet's bar spell as mangos-classic's opener; spell range on a
+  unit and a destination by Thistle Tea's leeway, alike; the three object spells as mangos-classic; casts on a
+  ship measured on deck (Thistle Tea); #51 reopened and answered by mangos-classic's whole rule (no XP for a pet,
+  reputation and quest credit kept).
 - **The open questions, by mangos-classic** (12q, 2026-10-21, 0.1.67; each with a test in `tests_p12_questions`):
   - **changed to mangos's:** #1 death's wear (one's own hand and the world's harm wear nothing but a fall's; a
     killing blow no per-blow wear: `Unit::Kill`); #8 a gathering, lockpicking or skinning that misses its roll

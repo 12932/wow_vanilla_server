@@ -1107,4 +1107,22 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **A fix to Alterac Valley:** the warmasters' second Whirlwind went off with the first (an EventAI action's
       delay is ignored); it is now a timed sub-script, and their scripts stop at an evade, as Thistle Tea.
 
+71. **Round 11's calls** (2026-10-21, your answers to the triage of the last 178 gap rows; stages `parity/11a` to
+    `11j`):
+    - **A pet's harmful bar spell:** mangos-classic's `HandlePetAction`. In range and sight, the pet casts it and
+      starts no attack; out of range or sight, it runs to the target, attacks, and casts it in range (the spell
+      opener). wvs had started a melee attack after every harmful cast, and failed one out of range.
+    - **Spell range, on a unit and on a destination alike:** Thistle Tea's (vmangos's) leeway: players 1.25 yards
+      at the start and 6.25 at launch, creatures 0 and 2.25, with the bounding radii. It replaces decision 35's
+      mangos tolerance at the end of a cast; you wanted ground and unit spells to match.
+    - **Spells 15958, 16447 and 24973 without their object** (Collect Rookery Egg, Spawn Challenge to Urok, Clean
+      Up Stink Bomb): mangos-classic, unchanged; the script target is optional, and they go without it.
+    - **Casting on a transport:** Thistle Tea's: a cast's movement is measured on deck while its caster is aboard,
+      so a turn on a moving ship no longer breaks it. mangos compares world positions and has the same bug wvs had.
+    - **A creature's pet as a kill** (question 51, reopened): mangos-classic's whole rule: no XP (`XP::Gain`'s
+      `IsPet()`), but reputation and quest credit (`RewardSinglePlayerAtKill`). wvs had given a pet nothing and a
+      wild guardian full XP.
+    - **The meeting stones:** a player's queue goes at logout, as mangos-classic (`m_offlinePlayers` is never filled);
+      Thistle Tea's offline tickets are `wrong-for-1.12`.
+
 ## Left for later, and why
