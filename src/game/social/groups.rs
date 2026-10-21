@@ -718,6 +718,24 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
         );
         return;
     }
+    // In two copies of one dungeon: refused, as mangos's
+    // `HandleGroupInviteOpcode` refuses it ("not so appropriated but no
+    // other option for classic").
+    let (mine, theirs) = (me.map().key, them.map().key);
+    if mine.instance != 0
+        && theirs.instance != 0
+        && mine.instance != theirs.instance
+        && mine.map == theirs.map
+    {
+        result(
+            realm,
+            me.guid,
+            PartyOperation::Invite,
+            name,
+            PartyResult::AlreadyInGroup,
+        );
+        return;
+    }
     if realm.social.lists.lock().ignores(them.guid, me.guid) {
         result(
             realm,

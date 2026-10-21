@@ -306,3 +306,81 @@ async fn a_loot_threshold_is_uncommon_at_least() {
     }
     let _ = Duration::ZERO;
 }
+
+const DUNGEON: u32 = 36;
+
+/// Send `c` into `map`'s copy (or the open world), and wait for it to land.
+async fn go(realm: &Arc<Realm>, c: &mut Client, map: u32) {
+    use crate::game::map::MapKey;
+    let g = c.guid;
+    let from = realm.registry.online(g).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            g,
+            MapKey::world(map),
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    });
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    c.sees(g).await;
+}
+
+/// mangos's `HandleGroupInviteOpcode`: two players in different copies of
+/// one dungeon can't group (`ERR_ALREADY_IN_GROUP_S`); one out of it can
+/// be invited.
+#[tokio::test]
+async fn no_invite_across_two_copies_of_a_dungeon() {
+    let mut d = crate::game::data::GameData::empty();
+    d.maps.insert(
+        DUNGEON,
+        crate::game::data::MapInfo {
+            id: DUNGEON,
+            internal_name: "DeadminesInstance".into(),
+            name: "The Deadmines".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    cfg.instance_unload = Duration::from_secs(600);
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = Realm::new(cfg, store, startup, d, None);
+    let mut a = player(&realm, "Alice").await;
+    let mut b = player(&realm, "Bob").await;
+    go(&realm, &mut a, DUNGEON).await;
+    go(&realm, &mut b, DUNGEON).await;
+    let key = |c: &Client| realm.registry.online(c.guid).unwrap().map().key;
+    assert_ne!(key(&a), key(&b), "two copies");
+    invite_bob(&mut a).await;
+    let told = a
+        .wait_for("SMSG_PARTY_COMMAND_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => Some(r.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(told, PartyResult::AlreadyInGroup);
+    go(&realm, &mut b, 0).await;
+    invite_bob(&mut a).await;
+    let told = a
+        .wait_for("SMSG_PARTY_COMMAND_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => Some(r.result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(told, PartyResult::Success);
+}
+
+async fn invite_bob(c: &mut Client) {
+    c.clear();
+    c.send(CMSG_GROUP_INVITE { name: "Bob".into() }).await;
+}
