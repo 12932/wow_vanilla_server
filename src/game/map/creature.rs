@@ -749,6 +749,7 @@ impl Creature {
                         id: w.spline_id,
                         nodes: w.points.clone(),
                         final_node: w.destination(),
+                        final_angle: w.face.filter(|_| w.face_target.is_none() && !w.falling),
                     }),
                 )
             }

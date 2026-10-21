@@ -236,3 +236,144 @@ async fn a_scripted_walks_facing_is_told_with_the_walk() {
         other => panic!("a walk with no facing: {other:?}"),
     }
 }
+
+/// The final angle of `g`'s spline in a create `m` carries of it: `None`
+/// for no create of it, `Some(None)` for one with no final angle.
+fn created_final_angle(
+    m: &wow_world_messages::vanilla::opcodes::ServerOpcodeMessage,
+    g: Guid,
+) -> Option<Option<f32>> {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let objects = match m {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+        ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+        _ => return None,
+    };
+    objects.iter().find_map(|o| match &o.update_type {
+        Object_UpdateType::CreateObject {
+            guid3, movement2, ..
+        }
+        | Object_UpdateType::CreateObject2 {
+            guid3, movement2, ..
+        } if *guid3 == g => match movement2.update_flag.get_living()? {
+            MovementBlock_UpdateFlag_Living::Living { flags, .. } => {
+                Some(flags.get_spline_enabled().and_then(
+                    |s| match s.spline_flags.get_final_angle() {
+                        Some(MovementBlock_SplineFlag_FinalAngle::FinalAngle { angle }) => {
+                            Some(*angle)
+                        }
+                        _ => None,
+                    },
+                ))
+            }
+            _ => Some(None),
+        },
+        _ => None,
+    })
+}
+
+/// The rest of Thistle Tea's "an observer arriving during the move
+/// retains its final facing" (mob/movement_inform_test.exs:27): one who
+/// comes to see a creature on a scripted walk to a facing of 1.5 is shown
+/// its walk with that facing at its end, in the create's spline
+/// (mangos-classic's `PacketBuilder::WriteCreate`, the final angle after
+/// the flags), where the create dropped it.
+#[tokio::test]
+async fn a_late_watcher_is_shown_a_scripted_walks_facing() {
+    use crate::game::harness::Client;
+    use crate::game::map::scripts;
+    use crate::game::tests_p3_combat::{BRUTE, data, setup_with, spawn};
+    let (realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let brute = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 8.0);
+            let at = m.creature(brute).unwrap().position;
+            let to = Vector3d {
+                x: at.x + 20.0,
+                ..at
+            };
+            scripts::move_with(
+                m,
+                brute,
+                to,
+                scripts::Move {
+                    face: Some(1.5),
+                    ..Default::default()
+                },
+            );
+            brute
+        })
+        .await
+        .unwrap();
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let angle = b
+        .wait_for("the brute's create", |m| created_final_angle(m, brute))
+        .await;
+    let walking = map
+        .query(move |m| {
+            matches!(
+                m.creature(brute).unwrap().motion,
+                crate::game::map::creature::Motion::Moving(_)
+            )
+        })
+        .await
+        .unwrap();
+    assert!(walking, "still on its way");
+    assert!(
+        angle.is_some_and(|a| (a - 1.5).abs() < 0.001),
+        "its facing at the end: {angle:?}"
+    );
+}
+
+/// The client check of a create whose spline ends on a facing: Bob, come
+/// to see a brute on a scripted walk to a facing, is sent its create with
+/// the final angle, which `WoW.exe`'s own parser reads.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_create_with_a_walks_final_facing_passes_the_client() {
+    use crate::game::harness::Client;
+    use crate::game::map::scripts;
+    use crate::game::tests_client_emu::{capture, checker, run_checker};
+    use crate::game::tests_p3_combat::{BRUTE, data, setup_with, spawn};
+    let (check_py, wow_exe) = checker()
+        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let brute = map
+        .query(move |m| {
+            let brute = spawn(m, ga, BRUTE, 20, 8.0);
+            let at = m.creature(brute).unwrap().position;
+            let to = Vector3d {
+                x: at.x + 20.0,
+                ..at
+            };
+            scripts::move_with(
+                m,
+                brute,
+                to,
+                scripts::Move {
+                    face: Some(1.5),
+                    ..Default::default()
+                },
+            );
+            brute
+        })
+        .await
+        .unwrap();
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let angle = b
+        .wait_for("the brute's create", |m| created_final_angle(m, brute))
+        .await;
+    assert!(angle.is_some(), "a create with its facing");
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        b.captured();
+    }
+    let (capture, counts) = capture(vec![&mut b]);
+    assert!(
+        counts.get(&0x0A9).copied().unwrap_or(0) + counts.get(&0x1F6).copied().unwrap_or(0) > 0,
+        "its create was captured"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
+}

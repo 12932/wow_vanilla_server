@@ -649,6 +649,7 @@ impl Player {
                 id: f.walk.spline_id,
                 nodes: f.walk.points.clone(),
                 final_node: f.walk.destination(),
+                final_angle: None,
             });
         }
         create
