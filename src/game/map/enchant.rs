@@ -600,7 +600,16 @@ pub fn weapon_procs(map: &mut Map, e: &crate::game::map::procs::Event) {
         {
             continue;
         }
-        crate::game::map::spells::cast_triggered(map, e.actor, spell, Some(target));
+        // Cast from the weapon (mangos's `CastItemCombatSpell`:
+        // `CastSpell(.., TRIGGERED_OLD_TRIGGERED, item)`), so each weapon's
+        // aura is its own: two Crusaders give two Holy Strengths.
+        crate::game::map::spells::cast_triggered_from(
+            map,
+            e.actor,
+            spell,
+            Some(target),
+            Some(item_guid),
+        );
         if let Some(slot) = charge {
             spend_charge(map, e.actor, item_guid, slot);
         }

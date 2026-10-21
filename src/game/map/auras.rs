@@ -3307,21 +3307,20 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     map, target, h,
                 ) => {}
         AURA_PERIODIC_TRIGGER_SPELL if a.trigger != 0 => {
-            // A reagent-less aura's trigger pays its own reagents, and
-            // without them doesn't go.
-            let data = map.realm.data.clone();
-            if let Some(by) = data.spells.get(h.spell)
-                && !crate::game::map::spells::trigger_reagents(map, h.caster, by, a.trigger)
-            {
-                return;
-            }
-            crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
             // A spell aimed at a unit the client picks goes at the unit the
-            // aura is on, or a channel's at the channel's target. Anything
-            // else (an area, a group, a place, the caster) is about the unit
-            // the aura is on, as mangos's `PickTargetsForSpellTrigger` has
-            // it: Hellfire's flames are about the warlock, not the warlock's
-            // target, and Plague's about the one it is on.
+            // aura is on, or a channel's at the channel's target, cast by
+            // the aura's caster. Anything else (an area, a group, a place,
+            // the caster, a friend) is cast by the unit the aura is on,
+            // about itself, as mangos's `Aura::TriggerSpell` and
+            // `PickTargetsForSpellTrigger` have it (`triggerCaster` the
+            // aura's target but for `TARGET_UNIT_ENEMY` and `TARGET_UNIT`):
+            // Hellfire's flames are about the warlock, not the warlock's
+            // target, and Plague's about the one it is on, and a self heal
+            // an enemy's aura triggers heals its bearer. An object's aura's
+            // trigger is its bearer's whatever its target, an object being
+            // no unit to cast it (mangos's `GetCaster`; Thistle Tea's "the
+            // bearer of an aura from an object resolves its object targets
+            // itself").
             use crate::game::map::spells::targets::{Implicit, implicit};
             let picked = map.realm.data.spells.get(a.trigger).is_some_and(|t| {
                 matches!(
@@ -3329,6 +3328,22 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     Implicit::Enemy | Implicit::AnyUnit
                 )
             });
+            let caster_is_unit = crate::game::guid::is_unit(h.caster)
+                || crate::game::guid::is_player(h.caster);
+            let by = if picked && caster_is_unit {
+                h.caster
+            } else {
+                target
+            };
+            // A reagent-less aura's trigger pays its own reagents, and
+            // without them doesn't go.
+            let data = map.realm.data.clone();
+            if let Some(spell) = data.spells.get(h.spell)
+                && !crate::game::map::spells::trigger_reagents(map, by, spell, a.trigger)
+            {
+                return;
+            }
+            crate::game::map::spells::class_scripts::periodic_triggered(map, target, h);
             if !picked {
                 let targets = crate::game::map::spells::Targets {
                     unit: Some(target),
@@ -3336,11 +3351,11 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     origin: Some(target),
                     ..Default::default()
                 };
-                crate::game::map::spells::cast_by_aura_with(map, h.caster, a.trigger, targets);
+                crate::game::map::spells::cast_by_aura_with(map, by, a.trigger, targets);
                 return;
             }
-            let aim = if h.caster == target {
-                map.caster(h.caster)
+            let aim = if by == target {
+                map.caster(by)
                     .and_then(|c| c.casting.as_ref())
                     .and_then(|c| c.targets.unit)
                     .filter(|u| *u != target)
@@ -3362,10 +3377,10 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 .spells
                 .get(a.trigger)
                 .is_some_and(|t| implicit(t.effects[0].target_a) == Implicit::Enemy);
-            if at_enemy && aim == h.caster {
+            if at_enemy && aim == by {
                 return;
             }
-            crate::game::map::spells::cast_by_aura(map, h.caster, a.trigger, Some(aim));
+            crate::game::map::spells::cast_by_aura(map, by, a.trigger, Some(aim));
         }
         _ => {}
     }

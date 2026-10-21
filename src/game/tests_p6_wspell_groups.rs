@@ -354,8 +354,10 @@ async fn a_pets_raid_spell_is_its_masters_and_a_duel_spares_the_other_side() {
 }
 
 /// Plague on a carrier ticks its effect about the carrier: on the
-/// carrier's raid in its radius, not the carrier, the damage its caster's;
-/// gone, it ticks no more (Thistle Tea's periodic raid triggers; mangos's
+/// carrier's raid in its radius, not the carrier, cast by the carrier
+/// (mangos's `Aura::TriggerSpell`, whose trigger of no unit target is its
+/// bearer's, round 11's 11b; Thistle Tea's periodic raid triggers have it
+/// Plague's caster's); gone, it ticks no more (mangos's
 /// `PickTargetsForSpellTrigger`).
 #[tokio::test]
 async fn plague_ticks_about_its_carrier_on_the_carriers_raid() {
@@ -385,7 +387,7 @@ async fn plague_ticks_about_its_carrier_on_the_carriers_raid() {
         })
         .await
         .unwrap();
-    let (before, after, anubisath, later) = out;
+    let (before, after, _anubisath, later) = out;
     let attacker = d
         .wait_for("Plague's damage", |m| match m {
             ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(l)
@@ -398,7 +400,7 @@ async fn plague_ticks_about_its_carrier_on_the_carriers_raid() {
         .await;
     assert_eq!(after.0, before.0, "the carrier spared");
     assert_eq!(after.1, before.1 - 100, "the raid member hit");
-    assert_eq!(attacker, anubisath, "by Plague's caster");
+    assert_eq!(attacker, a, "by its carrier");
     assert_eq!(later, after.1, "gone, no more ticks");
 }
 
