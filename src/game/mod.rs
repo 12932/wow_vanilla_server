@@ -266,6 +266,10 @@ mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p12a_restarts;
 #[cfg(test)]
+mod tests_p12b_dead_logout;
+#[cfg(test)]
+mod tests_p12b_linger;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
@@ -1267,6 +1271,9 @@ pub struct RealmConfig {
     pub instance_unload: Duration,
     /// How long a logout outside an inn or flight takes (tests shorten it).
     pub logout_delay: Duration,
+    /// How long a player whose client has gone stays in the world, for it
+    /// to come back (`login::DISCONNECT_LINGER`; tests shorten it).
+    pub disconnect_linger: Duration,
     /// Players a side needs for a match, over the template's.
     pub bg_min_players: Option<u32>,
     pub bg_start_delay: Duration,
@@ -1340,6 +1347,7 @@ impl RealmConfig {
             mail_delay: Duration::from_secs(c.world.mail_delay_secs),
             instance_unload: Duration::from_secs(c.instances.unload_delay_secs),
             logout_delay: crate::game::map::login::LOGOUT_DELAY,
+            disconnect_linger: crate::game::map::login::DISCONNECT_LINGER,
             bg_min_players: (b.min_players > 0).then_some(b.min_players),
             bg_start_delay: Duration::from_secs(b.start_delay_secs),
             bg_auto_leave: Duration::from_secs(b.auto_leave_secs),
@@ -1379,6 +1387,7 @@ impl RealmConfig {
     pub fn reloaded(&self, applied: &crate::config::ServerConfig) -> Self {
         Self {
             logout_delay: self.logout_delay,
+            disconnect_linger: self.disconnect_linger,
             spell_rolls: self.spell_rolls,
             spell_travel: self.spell_travel,
             ..Self::from_config(applied)

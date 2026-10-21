@@ -207,7 +207,7 @@ pub fn send_to_screen(map: &mut Map, g: Guid) {
 /// they were last saved), and the rest of the map's are made.
 pub fn save_at_shutdown(map: &mut Map, g: Guid) {
     let saved = catch(|| {
-        if let Some(p) = map.take_player(g) {
+        if let Some(p) = map.depart(g) {
             map.save_and_go_offline(p);
         }
     });

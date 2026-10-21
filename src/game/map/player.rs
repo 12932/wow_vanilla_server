@@ -231,6 +231,9 @@ pub struct Player {
     pub vis_anchor: Vector3d,
     pub cell: CellKey,
     pub logout_at: Option<Instant>,
+    /// Their client gone, they stay in the world until then, for it to
+    /// come back and take them over (`Map::handle_disconnect`).
+    pub linger_until: Option<Instant>,
     pub teleport: Option<PendingTeleport>,
     /// Arrived from another map and waiting for the client's worldport
     /// acknowledgement before anything is sent about the world.
@@ -363,6 +366,7 @@ impl Player {
             vis_anchor: position,
             cell: cell_of(position.x, position.y),
             logout_at: None,
+            linger_until: None,
             teleport: None,
             awaiting_worldport: false,
             played_at: now,

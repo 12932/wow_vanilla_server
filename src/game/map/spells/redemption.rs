@@ -86,8 +86,13 @@ pub fn aura_gone(map: &mut Map, g: Guid, spell: u32, expired: bool) {
     if spell != STATE[1] || !expired {
         return;
     }
-    // The spirit dies (the talent doesn't save them twice); death takes
-    // whatever of the spirit's auras are left.
+    dies(map, g);
+}
+
+/// The spirit dies (the talent doesn't save them twice); death takes
+/// whatever of the spirit's auras are left. At its end, or at a logout
+/// (mangos's `LogoutPlayer` kills a spirit).
+pub fn dies(map: &mut Map, g: Guid) {
     map.spells.redeemed.insert(g);
     let health = map
         .unit_fields(g)

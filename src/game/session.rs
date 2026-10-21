@@ -88,6 +88,10 @@ pub struct Session {
     /// The digest of each cache this session wrote on the character
     /// screen, by its key and kind: the same again isn't written.
     screen_caches: ahash::AHashMap<(String, u8), [u8; 16]>,
+    /// Ended by the server (a kick, a ban, a flood), not by the client's
+    /// going: the player leaves the world at once, as mangos's
+    /// `KickPlayer` logs them out, rather than lingering in it.
+    kicked: bool,
 }
 
 /// However a session ends (the client goes, the task panics or is
@@ -262,6 +266,7 @@ pub fn run(
         state: State::Screen,
         last_character: None,
         screen_caches: ahash::AHashMap::new(),
+        kicked: false,
     };
     s.serve(inbound, replaced)
 }
@@ -323,6 +328,7 @@ impl Session {
                             if query { "queries" } else { "packets" },
                             recent.summary(now)
                         );
+                        self.kicked = true;
                         break;
                     }
                     if !cooldowns.allow(now, &msg) {
@@ -496,16 +502,30 @@ impl Session {
                 self.outbound.send(&SMSG_LOGOUT_COMPLETE {});
                 true
             }
-            Control::Kick => false,
+            Control::Kick => {
+                self.kicked = true;
+                false
+            }
             // The player is another session's now, or the account's new
             // session's to take: they stay in the world, and this
             // connection goes without taking them out of it.
+            // Replaced, their linger starts (mangos's `SetOffline` as a
+            // new socket takes the session): the new session has its
+            // minute to take them over.
             Control::TakenOver | Control::Replaced => {
-                if let State::InWorld { guid, .. } = self.state {
+                if let State::InWorld { guid, map } = &self.state {
                     debug!(
                         "{guid} left in the world for {}'s new session",
                         self.account
                     );
+                    if matches!(ctl, Control::Replaced) {
+                        let (g, from) = (*guid, self.control.clone());
+                        map.call(move |m| {
+                            if m.from_their_session(g, &from) {
+                                m.start_linger(g)
+                            }
+                        });
+                    }
                     self.state = State::Left;
                 }
                 false
@@ -533,9 +553,20 @@ impl Session {
                 // copy that stopped is let go by the copy that has them, as
                 // it finds the session gone (`Map::handed_on`). Before, they
                 // went offline here, unsaved, still in that copy.
-                if !map.send(MapEvent::Disconnect(guid, self.control.clone()))
-                    && self.lost_with(guid, &map)
-                {
+                // A client gone leaves its player lingering in the world
+                // (`Map::handle_disconnect`); one the server sent away
+                // takes them out of it now.
+                let from = self.control.clone();
+                let told = if self.kicked {
+                    map.send(MapEvent::Call(Box::new(move |m| {
+                        if m.from_their_session(guid, &from) {
+                            m.leave_now(guid)
+                        }
+                    })))
+                } else {
+                    map.send(MapEvent::Disconnect(guid, from))
+                };
+                if !told && self.lost_with(guid, &map) {
                     warn!(
                         "{}'s map has gone; {guid} is lost since their last save",
                         self.account
@@ -555,7 +586,8 @@ impl Session {
                         self.realm.registry.go_offline(o.guid);
                     } else if current && o.session.is_closed() {
                         // Left in the world by the session this one
-                        // replaced, and not taken over: they go now, saved.
+                        // replaced, and not taken over: they go, saved, at
+                        // their linger's end.
                         reap(&self.realm, o);
                     }
                 }
@@ -1049,7 +1081,10 @@ pub fn transfer(
 }
 
 /// An online entry whose session has gone (a ghost): its player, if their
-/// map still has them, leaves it saved; else the entry goes.
+/// map still has them, leaves it saved once their linger is out
+/// (`Map::handle_disconnect`; one lingering already lingers on, so that a
+/// login of another character can't take them out of a fight early); else
+/// the entry goes.
 fn reap(realm: &Arc<Realm>, ghost: Arc<Online>) {
     warn!("{} was online with no session; letting them go", ghost.name);
     let registry_realm = realm.clone();

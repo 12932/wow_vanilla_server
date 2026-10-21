@@ -229,12 +229,32 @@ pub fn kill(map: &mut Map, g: Guid) {
 
 /// `CMSG_REPOP_REQUEST`: release the spirit to the nearest graveyard.
 pub fn release(map: &mut Map, g: Guid) {
-    let now = map.now;
-    let Some(p) = map.players.get_mut(&g) else {
+    let Some((pos, zone, team)) = repop(map, g) else {
         return;
     };
-    if !matches!(p.death, Death::Dead { .. }) {
+    // In a battleground, the fallen wait at their side's start.
+    if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
+        crate::game::map::battleground::released(map, g);
+        map.teleport(g, map.key, at, facing);
         return;
+    }
+    // A fighter fallen in Gurubashi Arena watches from the stands.
+    if crate::game::map::arena::release_to_stands(map, g) {
+        return;
+    }
+    let zone = crate::game::map::corpses::graveyard_zone(map, zone);
+    let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
+    map.teleport(g, to, at, facing);
+}
+
+/// The release itself, where the player lies (mangos's `BuildPlayerRepop`):
+/// a corpse left, and they a ghost. Where they stood, their zone and side,
+/// or `None` if they aren't dead and unreleased.
+fn repop(map: &mut Map, g: Guid) -> Option<(Vector3d, u32, Team)> {
+    let now = map.now;
+    let p = map.players.get_mut(&g)?;
+    if !matches!(p.death, Death::Dead { .. }) {
+        return None;
     }
     // A ghost walks (mangos's `BuildPlayerRepop` unroots).
     crate::game::map::movement::root_to(&p.outbound, g, false);
@@ -256,19 +276,39 @@ pub fn release(map: &mut Map, g: Guid) {
     let (pos, zone, team) = (p.position(), p.zone, p.team);
     map.add_corpse(corpse);
     speeds_to_observers(map, g);
-    // In a battleground, the fallen wait at their side's start.
-    if let Some((at, facing)) = crate::game::map::battleground::graveyard(map, g) {
-        crate::game::map::battleground::released(map, g);
-        map.teleport(g, map.key, at, facing);
-        return;
+    Some((pos, zone, team))
+}
+
+/// A player leaving the world (a logout, the end of a disconnect's
+/// linger, a shutdown) dead and not released is released first: a ghost,
+/// put at the graveyard their release would take them to, a corpse left
+/// where they fell (mangos's `LogoutPlayer`: `BuildPlayerRepop` and
+/// `RepopAtGraveyard` while the death timer runs). So they come back a
+/// ghost, not risen where they fell. A spirit of redemption dies first, as
+/// mangos's `LogoutPlayer` kills one. Before, they were saved dead and
+/// unreleased, and rose at their next login at full health.
+pub fn release_at_logout(map: &mut Map, g: Guid) {
+    if crate::game::map::spells::redemption::spirit(map, g) {
+        crate::game::map::spells::redemption::dies(map, g);
     }
-    // A fighter fallen in Gurubashi Arena watches from the stands.
-    if crate::game::map::arena::release_to_stands(map, g) {
+    let Some((pos, zone, team)) = repop(map, g) else {
         return;
+    };
+    let (to, at, facing) = match crate::game::map::battleground::graveyard(map, g) {
+        Some((at, facing)) => (map.key.map, at, facing),
+        None => {
+            let zone = crate::game::map::corpses::graveyard_zone(map, zone);
+            let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
+            (to.map, at, facing)
+        }
+    };
+    if let Some(p) = map.players.get_mut(&g) {
+        p.movement.position = at;
+        p.movement.orientation = facing;
+        p.movement.flags = MovementInfo_MovementFlags::empty();
+        p.flight = None;
+        p.row.map = to;
     }
-    let zone = crate::game::map::corpses::graveyard_zone(map, zone);
-    let (to, at, facing) = nearest_graveyard(map, zone, team, pos);
-    map.teleport(g, to, at, facing);
 }
 
 /// Make a player a ghost: one health point, the ghost aura, and speed. A

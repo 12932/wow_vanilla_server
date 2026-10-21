@@ -263,6 +263,17 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     }
 }
 
+/// The player's client has gone, they lingering in the world: those with
+/// them as a friend are told they are offline (mangos's `SetOffline`), and
+/// told again as they leave it ([`logged_out`]), as mangos's
+/// `LogoutPlayer` tells them; back first, they are told online again.
+pub fn told_offline(realm: &Realm, g: Guid) {
+    let watchers = realm.social.lists.lock().watchers(g);
+    for w in watchers {
+        status(realm, w, OFFLINE, g);
+    }
+}
+
 /// Going offline: those with the player as a friend are told.
 pub fn logged_out(realm: &Realm, g: Guid) {
     let watchers = {

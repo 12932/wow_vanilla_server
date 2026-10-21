@@ -200,16 +200,17 @@ async fn a_saved_pet_returns_at_login_unless_dismissed_dead_or_its_hunter_a_ghos
 }
 
 /// Thistle Tea's "does not resummon the saved pet while the character is
-/// dead" can't arise at a 1.12 login: a player who logged out dead and
-/// unreleased rises at login (mangos's `ResurrectPlayer(0.5f)` in
-/// `LoadFromDB`), and so does their pet.
+/// dead", as 1.12 has it: a player who logged out dead and unreleased is
+/// released at the logout (mangos's `LogoutPlayer`: `BuildPlayerRepop`,
+/// `RepopAtGraveyard`), and comes back a ghost, without the pet. Before,
+/// they rose at login, with it.
 #[tokio::test]
-async fn one_who_logged_out_dead_and_unreleased_rises_at_login_with_the_pet() {
+async fn one_who_logged_out_dead_and_unreleased_comes_back_a_ghost_without_the_pet() {
     let (realm, mut a, h, _) = hunter_and_wolf().await;
     on(&map_of(&realm, h), move |m| death::kill(m, h)).await;
-    assert!(relogged_with_pet(&realm, &mut a).await);
+    assert!(!relogged_with_pet(&realm, &mut a).await);
     let death = on(&map_of(&realm, h), move |m| m.players[&h].death).await;
-    assert_eq!(death, Death::Alive);
+    assert!(matches!(death, Death::Ghost { .. }), "a ghost: {death:?}");
 }
 
 /// Cast `spell` on oneself and wait for it to be handled.
