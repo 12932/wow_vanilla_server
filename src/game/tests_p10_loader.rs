@@ -732,3 +732,60 @@ async fn a_combat_range_spell_reaches_as_far_as_a_swing_and_no_further() {
     assert_eq!(out[1], (355, 4.0, None), "Taunt at four");
     assert_eq!(out[2], (6253, 7.0, None), "Backhand at seven");
 }
+
+/// Thistle Tea's "Beast Lore grants temporary caster access and only
+/// targets beasts" (`empathy_dbc_test.exs`): Beast Lore (1462) lasts thirty
+/// seconds and is for beasts alone (a wolf, 299, not a kobold, 6); on the
+/// wolf it raises `UNIT_DYNFLAG_SPECIALINFO` (0x10), gone when it ends.
+/// (Thistle Tea shows the flag to the caster alone; wvs, as mangos's
+/// `HandleAuraEmpathy`, sets the field, which every viewer sees.)
+#[tokio::test]
+#[ignore = "extended"]
+async fn beast_lore_is_for_beasts_and_its_flag_goes_with_its_thirty_seconds() {
+    if !have_data() {
+        return;
+    }
+    use crate::game::map::spells::checks;
+    const BEAST_LORE: u32 = 1462;
+    const SPECIAL_INFO: u32 = 0x10;
+    let realm = realm();
+    let lore = realm.data.spells.get(BEAST_LORE).unwrap();
+    assert_eq!(realm.data.spells.duration(lore, 60), Some(30_000));
+    let (_c, g, map) = player(&realm, "P10LD", "Lorist", Race::Dwarf, Class::Hunter).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[BEAST_LORE]);
+            let data = m.realm.data.clone();
+            let s = data.spells.get(BEAST_LORE).unwrap();
+            let wolf = spawn(m, g, 299, 60, 10.0);
+            let kobold = dummy(m, g, 60, 10.0);
+            let mods = spells::mods::for_spell(m, g, s);
+            let on_kobold = checks::check(m, g, s, &at(kobold), None, false, &mods);
+            let flag = |m: &Map| {
+                m.unit_fields(wolf)
+                    .map_or(0, |f| f.get_u32(UNIT_DYNAMIC_FLAGS) & SPECIAL_INFO)
+            };
+            let cast = cast_fresh(m, g, BEAST_LORE, at(wolf));
+            pass(m, 3000);
+            let on = (has(m, wolf, BEAST_LORE), flag(m));
+            pass(m, 26_000);
+            let still = has(m, wolf, BEAST_LORE);
+            pass(m, 2000);
+            (
+                on_kobold,
+                cast,
+                on,
+                still,
+                has(m, wolf, BEAST_LORE),
+                flag(m),
+            )
+        })
+        .await
+        .unwrap();
+    let (on_kobold, cast, on, still, after, flag) = out;
+    assert!(on_kobold.is_some(), "not at a kobold");
+    assert!(cast, "at the wolf");
+    assert_eq!(on, (true, SPECIAL_INFO), "its flag on");
+    assert!(still && !after, "for thirty seconds");
+    assert_eq!(flag, 0, "and its flag with it");
+}
