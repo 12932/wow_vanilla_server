@@ -692,3 +692,43 @@ async fn a_gathering_that_misses_its_roll_fails_before_its_go() {
         "missed: failed with no go; taken: its go and the vein"
     );
 }
+
+// #52: `.honor week`.
+
+/// mangos-classic has no command to rank a week early: its maintenance
+/// keeps its calendar (`World::ServerMaintenanceStart` sets the next by
+/// the maintenance day, whatever ran it). So a GM's `.honor week` ranks
+/// the week so far, and the week still turns on its day, ranking what was
+/// earned since then (the rank points decaying a second time: the GM's
+/// doing); wvs lost it, the week's end skipping a week already ranked.
+#[test]
+fn the_honor_earned_after_an_early_ranking_is_ranked_at_the_weeks_end() {
+    use crate::game::honor::{Award, AwardKind, Ledger};
+    let kill = |i: u64| Award {
+        kind: AwardKind::Honorable,
+        points: 188.0,
+        victim: Some(i),
+        victim_rank: 0,
+    };
+    let mut l = Ledger::new(100, 4);
+    let start = l.week_start;
+    l.day = start;
+    l.register(1, 0, 60);
+    for i in 0..15 {
+        l.award(1, kill(i));
+    }
+    l.settle_now();
+    let early = (l.entries[&1].last_week.honorable_kills, l.week_start);
+    l.on(start + 2);
+    for i in 100..116 {
+        l.award(1, kill(i));
+    }
+    l.advance(start + 7);
+    let e = &l.entries[&1];
+    assert_eq!(early, (15, start), "ranked early, the calendar kept");
+    assert_eq!(
+        (e.last_week.honorable_kills, l.week_start),
+        (16, start + 7),
+        "the rest of the week ranked at its end"
+    );
+}
