@@ -298,15 +298,25 @@ async fn a_charmed_creature_swings_without_its_scripts_melee_spell() {
                 event_ai::scripted_mut(m, g).unwrap().melee_spell = Some(MARK);
             }
             pets::charmed(m, gh, held, false);
+            // Swings until one lands: a charmed creature rolls on a
+            // player's side of the table since 12g, so one may miss, be
+            // dodged or parried.
             let swing = |m: &mut Map, g: Guid, victim: Guid| {
-                m.now += Duration::from_secs(3);
-                combat::start_attack(m, g, victim);
-                combat::try_swing(m, g);
-                let f = m.unit_fields(victim).unwrap();
-                (
-                    m.creature(victim).unwrap().auras.has_spell(MARK),
-                    f.get_u32(UNIT_FIELD_HEALTH) < f.get_u32(UNIT_FIELD_MAXHEALTH),
-                )
+                let mut out = (false, false);
+                for _ in 0..20 {
+                    m.now += Duration::from_secs(3);
+                    combat::start_attack(m, g, victim);
+                    combat::try_swing(m, g);
+                    let f = m.unit_fields(victim).unwrap();
+                    out = (
+                        m.creature(victim).unwrap().auras.has_spell(MARK),
+                        f.get_u32(UNIT_FIELD_HEALTH) < f.get_u32(UNIT_FIELD_MAXHEALTH),
+                    );
+                    if out.0 || out.1 {
+                        break;
+                    }
+                }
+                out
             };
             (swing(m, own, theirs), swing(m, held, its))
         })
