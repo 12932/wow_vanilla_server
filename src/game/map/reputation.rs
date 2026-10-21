@@ -699,29 +699,44 @@ fn standing_reaction(p: &Player, data: &GameData, faction: u32, of_faction: bool
 
 /// A vendor's price for a player: a tenth off from honored up.
 pub fn price(map: &Map, player: Guid, vendor: Guid, amount: u32) -> u32 {
-    let (Some(p), Some(f)) = (map.players.get(&player), faction_of(map, vendor)) else {
-        return amount;
-    };
-    let data = &map.realm.data;
-    if data.misc.faction(f).is_some() && rank(p, data, f) >= misc::RANK_HONORED {
-        (amount * 9 + 5) / 10
-    } else {
-        amount
+    match percent(map, player, vendor) {
+        100 => amount,
+        pct => ((u64::from(amount) * u64::from(pct) + 50) / 100) as u32,
     }
 }
 
 /// The discount `vendor` gives `player` as a factor: a tenth off from
-/// Honored.
+/// Honored, and another from the PvP rank of Sergeant at a friendly NPC.
 pub fn discount(map: &Map, player: Guid, vendor: Guid) -> f32 {
+    percent(map, player, vendor) as f32 / 100.0
+}
+
+/// What of a price `vendor` asks of `player`, in percent, as mangos's
+/// `GetReputationPriceDiscount`: 10 off from Honored with its faction, and
+/// 10 more from a PvP rank of Sergeant (the client's rank 3) at one whose
+/// faction is friendly to the player's.
+fn percent(map: &Map, player: Guid, vendor: Guid) -> u32 {
     let (Some(p), Some(f)) = (map.players.get(&player), faction_of(map, vendor)) else {
-        return 1.0;
+        return 100;
     };
     let data = &map.realm.data;
+    let mut pct = 100;
     if data.misc.faction(f).is_some() && rank(p, data, f) >= misc::RANK_HONORED {
-        0.9
-    } else {
-        1.0
+        pct -= 10;
     }
+    let template = |g: Guid| {
+        map.unit_fields(g)
+            .and_then(|x| data.faction_templates.get(&x.get_u32(UNIT_FIELD_FACTIONTEMPLATE)))
+    };
+    const SERGEANT: u8 = 3;
+    let visual = crate::game::map::pvp::current_rank(p).saturating_sub(4);
+    if visual >= SERGEANT
+        && let (Some(ours), Some(theirs)) = (template(player), template(vendor))
+        && ours.friendly_to(theirs)
+    {
+        pct -= 10;
+    }
+    pct
 }
 
 /// Whether a player's standing meets an item's reputation requirement.

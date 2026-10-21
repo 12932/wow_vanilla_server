@@ -621,7 +621,10 @@ async fn repairing_everything_is_all_or_nothing_and_a_damaged_sale_pays_its_repa
         .query(move |m| {
             let gloves = give(m, ga, GLOVES, 1, Some(40));
             let helm = give(m, ga, HELM, 1, Some(5));
-            // Ten points and five at ten copper each: 150.
+            // Ten points and five at ten copper each: 150. Short of it, the
+            // gloves (first in the backpack) are mended and the helm waits:
+            // item by item, as mangos's `DurabilityRepairAll` (Thistle Tea
+            // mends nothing).
             m.players.get_mut(&ga).unwrap().set_money(149);
             vendor::repair(m, ga, npc, Guid::zero());
             let wear = |m: &Map, g: Guid| {
@@ -631,7 +634,7 @@ async fn repairing_everything_is_all_or_nothing_and_a_damaged_sale_pays_its_repa
                     .get_u32(ITEM_FIELD_DURABILITY)
             };
             let short = (wear(m, gloves), wear(m, helm), m.players[&ga].money());
-            m.players.get_mut(&ga).unwrap().set_money(150);
+            m.players.get_mut(&ga).unwrap().set_money(100);
             vendor::repair(m, ga, npc, Guid::zero());
             let repaired = (wear(m, gloves), wear(m, helm), m.players[&ga].money());
             // A worn helm sells for its price less its mending.
@@ -659,12 +662,8 @@ async fn repairing_everything_is_all_or_nothing_and_a_damaged_sale_pays_its_repa
         })
         .await
         .unwrap();
-    assert_eq!(
-        short,
-        (40, 5, 149),
-        "nothing mended short of the whole price"
-    );
-    assert_eq!(repaired, (50, 10, 0));
+    assert_eq!(short, (50, 5, 49), "what the money pays for, in turn");
+    assert_eq!(repaired, (50, 10, 50));
     assert_eq!(sale, 50, "a hundred less fifty to mend");
     let (left, sold, stamp) = partial;
     assert_eq!(left, 3);

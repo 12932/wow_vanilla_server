@@ -269,6 +269,8 @@ mod tests_p12k_offline;
 #[cfg(test)]
 mod tests_p12k_rename;
 #[cfg(test)]
+mod tests_p12k_vendor;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
