@@ -843,7 +843,7 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   tap, a creature's teleport told by `MSG_MOVE_TELEPORT` (two rows; wvs sends a stop `SMSG_MONSTER_MOVE`, mangos a
   heartbeat). 33 rows not reached (cast-end procs, hit at launch, formations, vein refills, ritual owners, command
   76's owner, Blackrock's lava, a feared player's spline): a second pass.
-- **10f, creature AI (0.1.62):** 20 of 22 rows settled, six fixes: a creature's guardians, companions and pets run
+- **10f, creature AI (0.1.62):** 24 of 26 rows settled, six fixes: a creature's guardians, companions and pets run
   their own EventAI (mangos-classic's GuardianAI: spawned, timed, aggro, evade, death), a companion told to stay
   stays, a charmed creature swings without its script's melee spell; a pet autocasts Devour Magic (an enemy's buff,
   else a friend's affliction, else nothing and the next spell goes) and a held effect is judged by its index
@@ -857,6 +857,14 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   a pet's regen ticks (wvs every 2 s at mangos's rate), a partial path's point. Two `gap` (an aquatic route the
   navmesh half reaches, two points with no route: no test place found). **Merge:** Onyxia's Eruption and the wind
   stones both kept in the activate effect; 10e's formation routes given 10f's new `pathfind` (on).
+- **10d, combat with movement's rows (0.1.63):** all 10 settled (6 covered, 4 `wrong-for-1.12`). Its one fix, when
+  a pet's fight ends, was 10f's too (the same four rows): 10f's kept (your #20), 10d's tests kept on it, and they
+  found one more case, now fixed: a creature out of its own fight (alive, with the pet still on its list) held the
+  pet's fight on; now only one in a fight of its own does (mangos's references go with its combat). Beast Lore's
+  fields go to its caster alone (covered, the note was stale); its flag still goes to everyone, as mangos.
+  `wrong-for-1.12` (wvs is mangos's): a creature with no path runs straight to its helper; procs take the damage
+  after armor; a create, then a values block; object updates at the end of the map's update. New flake logged:
+  `tests_review5_social::what_a_service_asks_of_a_player_changing_maps_follows_them` (once in a full run).
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -975,7 +983,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10c: the loaders, round 10 | 92.4% | 0.1.60 |
 | 10h: entities, round 10 | 92.8% | 0.1.61 |
 | 10f: creature AI, round 10 | 93.0% | 0.1.62 |
+| 10d: combat and movement, round 10 | 93.1% | 0.1.63 |
 
-**Running now:** round 10 (phase 2): 10a, 10b, 10d (with 10l's rows), 10m; 11h (entities, a second pass); 12q (phase 4's open questions, by mangos-classic, started early in a free slot). Six at most.
+**Running now:** 10b, 10m, 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

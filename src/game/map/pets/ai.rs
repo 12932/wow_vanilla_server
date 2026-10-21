@@ -947,8 +947,14 @@ fn calm(map: &mut Map, g: Guid, now: Instant) {
     let held = !map
         .awake_where(
             |c| {
+                // In a fight of its own: one out of it holds nothing
+                // (mangos's references go with its combat; p10d's test).
                 c.alive()
                     && !c.evading
+                    && c.fields.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    )
                     && ((c.combat.attacking && c.combat.victim == g)
                         || c.threat.iter().any(|(t, _)| *t == g))
             },

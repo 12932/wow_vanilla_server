@@ -131,6 +131,8 @@ mod tests_p10_ai_pet_combat;
 #[cfg(test)]
 mod tests_p10_ai_real;
 #[cfg(test)]
+mod tests_p10_combat_pets;
+#[cfg(test)]
 mod tests_p10_entity;
 #[cfg(test)]
 mod tests_p10_entity_real;
@@ -138,6 +140,8 @@ mod tests_p10_entity_real;
 mod tests_p10_loader;
 #[cfg(test)]
 mod tests_p10_loader_pets;
+#[cfg(test)]
+mod tests_p10_movement_views;
 #[cfg(test)]
 mod tests_p10_world;
 #[cfg(test)]
