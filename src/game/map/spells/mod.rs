@@ -25,6 +25,7 @@ pub use effects::{
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
+pub mod held_item;
 mod holiday;
 pub mod immunity;
 pub mod interrupts;
@@ -255,6 +256,9 @@ pub struct MapSpells {
     pub queued_rolls: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i32>>>,
     /// Walls that block line of sight, beside the navmesh's (for tests).
     pub walls: Vec<(Vector3d, Vector3d)>,
+    /// Items' temporary enchantments' modifiers (Improved Weapon Totems'
+    /// on a weapon totem's): item to the enchantment and its percent.
+    pub enchant_modifiers: AHashMap<Guid, (u32, i32)>,
     /// Persistent area auras: Blizzard, Rain of Fire, Consecration.
     pub areas: Vec<Area>,
     pub area_auras_at: Option<Instant>,
@@ -1185,6 +1189,17 @@ pub fn cast_triggered_from(
     let Some(s) = data.spells.get(spell) else {
         return;
     };
+    cast_template_from(map, caster, s, target, item);
+}
+
+/// [`cast_triggered_from`] of a template a script made.
+pub fn cast_template_from(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    target: Option<Guid>,
+    item: Option<Guid>,
+) {
     let dest = target.and_then(|t| map.position_of(t));
     let targets = Targets {
         unit: target.or(Some(caster)),

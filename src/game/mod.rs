@@ -265,6 +265,8 @@ mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p12e_sight;
 #[cfg(test)]
+mod tests_p12e_totems;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

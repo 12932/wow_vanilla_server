@@ -1435,6 +1435,11 @@ fn effect(
                 p.gear_dirty = true;
             }
         }
+        super::held_item::EFFECT_ENCHANT_HELD_ITEM => {
+            super::held_item::enchant(map, caster, target, s, index, amount)
+        }
+        EFFECT_DUMMY
+            if super::held_item::flametongue_totem(map, caster, target, s, amount, item) => {}
         EFFECT_DUMMY if crate::game::map::pets::pet_aura_dummy(map, caster, target, s) => {}
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
             if !super::class_scripts::dummy(map, caster, target, s, index, amount)
