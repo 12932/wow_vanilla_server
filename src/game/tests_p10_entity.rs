@@ -672,6 +672,84 @@ async fn a_script_targets_row_spares_the_effects_its_mask_names() {
     assert_eq!(out, (true, true), "each stone by the effect its row allows");
 }
 
+/// In a battleground a kill's honor is shared by the killer's whole side,
+/// its battleground raid, near the victim and alive, at the raid's rate:
+/// Alice's blow on Grim shares it with Bob and Carol, of no group of
+/// theirs, a third each at three's rate, and Dave, far off, has none
+/// (mangos's battleground raid, `SetBattleGroundRaid`, rewarded as a
+/// group; Thistle Tea's "shares battleground team damage with the nearby
+/// living roster using raid scaling"). wvs shared it by social group
+/// alone, so Alice had it all.
+#[tokio::test]
+async fn a_battleground_kills_honor_is_shared_by_the_side_near() {
+    let realm = crate::game::harness::realm();
+    let mut clients = Vec::new();
+    let mut guids = Vec::new();
+    for (name, race) in [
+        ("Alice", Race::Human),
+        ("Bob", Race::Human),
+        ("Carol", Race::Human),
+        ("Dave", Race::Human),
+        ("Grim", Race::Undead),
+    ] {
+        let mut c = crate::game::harness::Client::connect(&realm, name);
+        guids.push(c.enter(name, race, Class::Warrior).await);
+        clients.push(c);
+    }
+    let [alice, bob, carol, dave, grim] = guids[..] else {
+        unreachable!()
+    };
+    let map = realm.registry.online(alice).unwrap().map();
+    map.query(move |m| {
+        let data = m.realm.data.clone();
+        let here = m.position_of(alice).unwrap();
+        for g in [alice, bob, carol, dave, grim] {
+            let p = m.players.get_mut(&g).unwrap();
+            crate::game::map::stats::set_level(p, &data, 60);
+            p.movement.position = if g == dave {
+                Vector3d {
+                    x: here.x + 300.0,
+                    ..here
+                }
+            } else {
+                here
+            };
+        }
+        let mut bg = crate::game::map::battleground::Match::new(2, m.now);
+        for (g, team) in [(alice, 0), (bob, 0), (carol, 0), (dave, 0), (grim, 1)] {
+            bg.scores.insert(
+                g,
+                crate::game::map::battleground::Score {
+                    team,
+                    ..Default::default()
+                },
+            );
+        }
+        m.battleground = Some(bg);
+        crate::game::map::pvp::damaged(m, alice, grim, 100);
+        crate::game::map::pvp::player_killed(m, alice, grim);
+        m.battleground = None;
+    })
+    .await
+    .unwrap();
+    let ledger = realm.social.honor.lock();
+    let today: Vec<u32> = [alice, bob, carol, dave]
+        .iter()
+        .map(|g| {
+            ledger
+                .entries
+                .get(&crate::game::guid::counter(*g))
+                .and_then(|e| e.days.get(&ledger.day))
+                .map_or(0, |d| d.contribution as u32)
+        })
+        .collect();
+    let each = (crate::game::honor::kill_points(60, 60, 0, 0) * crate::game::honor::group_rate(3)
+        / 3.0)
+        .trunc() as u32;
+    assert!(each > 0);
+    assert_eq!(today, vec![each, each, each, 0]);
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
