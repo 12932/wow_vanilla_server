@@ -23,6 +23,7 @@ mod control;
 pub mod eyes;
 mod hunter;
 mod inherit;
+mod kept_auras;
 pub(crate) mod possess;
 pub mod rods;
 mod summon;
