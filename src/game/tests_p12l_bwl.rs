@@ -97,6 +97,15 @@ async fn blackwing_lairs_doors_follow_its_encounters() {
     );
     let lash = boss(&map, bwl::NPC_LASHLAYER).await;
     c.sees(lash).await;
+    assert!(
+        map.query(|m| m
+            .gameobjects
+            .iter()
+            .any(|(_, o)| o.entry == bwl::GO_SUPPRESSION_DEVICE))
+            .await
+            .unwrap(),
+        "the suppression devices while he lives"
+    );
     map.query(move |m| {
         tough(m, lash);
         ai::attacked(m, lash, me);
@@ -121,6 +130,14 @@ async fn blackwing_lairs_doors_follow_its_encounters() {
             && door_state(m, bwl::DOOR_RAZORGORE_ENTER) == Some(0))
         .await,
         "his door opens, and the main gate again"
+    );
+    assert!(
+        until(&map, 2000, |m| !m
+            .gameobjects
+            .iter()
+            .any(|(_, o)| o.entry == bwl::GO_SUPPRESSION_DEVICE))
+        .await,
+        "his suppression devices gone with him"
     );
 }
 

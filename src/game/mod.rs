@@ -269,6 +269,8 @@ mod tests_p12l_bwl2;
 #[cfg(test)]
 mod tests_p12l_bwl3;
 #[cfg(test)]
+mod tests_p12l_nefarian;
+#[cfg(test)]
 mod tests_p12l_stadium;
 #[cfg(test)]
 mod tests_p3_ai_commands;

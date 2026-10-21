@@ -20,6 +20,7 @@ use std::time::Duration;
 use wow_world_messages::Guid;
 
 pub mod chromaggus;
+pub mod nefarian;
 pub mod razorgore;
 pub mod vael;
 
@@ -121,7 +122,7 @@ pub fn doors() -> &'static [(u32, Open)] {
 /// A field set, as `instance_blackwing_lair::SetData` has it: a boss's
 /// field won stays won; the doors follow the data.
 pub fn set_data(map: &mut Map, field: u32, value: u32) {
-    if vael::hook(map, field) {
+    if vael::hook(map, field) || nefarian::hook(map, field) {
         return;
     }
     let old = get_data(map, field);
@@ -137,8 +138,27 @@ pub fn set_data(map: &mut Map, field: u32, value: u32) {
 
 /// What a field's change brings.
 fn changed(map: &mut Map, field: u32, _old: u32, new: u32) {
-    if field == RAZORGORE {
-        razorgore::changed(map, new);
+    match field {
+        RAZORGORE => razorgore::changed(map, new),
+        NEFARIAN => nefarian::changed(map, new),
+        LASHLAYER if new == DONE => suppression_off(map),
+        _ => {}
+    }
+}
+
+/// The suppression room's devices, with Broodlord Lashlayer dead: gone for
+/// the copy's life (mangos's `OnObjectCreate`, `go_suppression`).
+pub const GO_SUPPRESSION_DEVICE: u32 = 179784;
+
+fn suppression_off(map: &mut Map) {
+    let devices: Vec<Guid> = map
+        .gameobjects
+        .iter()
+        .filter(|(_, o)| o.entry == GO_SUPPRESSION_DEVICE)
+        .map(|(_, o)| o.guid)
+        .collect();
+    for d in devices {
+        crate::game::map::objects::despawn_then(map, d, None);
     }
 }
 
@@ -219,6 +239,13 @@ pub fn creature_event(map: &mut Map, g: Guid, entry: u32, _spawn: Option<u32>, e
     razorgore::creature_event(map, g, entry, event);
     vael::creature_event(map, g, entry, event);
     chromaggus::creature_event(map, g, entry, event);
+    nefarian::creature_event(map, g, entry, event);
+}
+
+/// Whether spell `spell` of the lair may land on `g` (a class call, on its
+/// class alone).
+pub fn target_allowed(map: &Map, spell: u32, g: Guid) -> bool {
+    !here(map) || nefarian::class_call_reaches(map, spell, g)
 }
 
 /// A living player into area trigger `id` here.
@@ -246,6 +273,7 @@ pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
     if razorgore::creature_timer(map, key, g)
         || vael::creature_timer(map, key, g)
         || chromaggus::creature_timer(map, key, g)
+        || nefarian::creature_timer(map, key, g)
     {
         return;
     }
@@ -271,12 +299,18 @@ pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
 
 /// A timed step of the copy.
 pub fn timer(map: &mut Map, key: u32) {
-    let _ = razorgore::timer(map, key) || vael::timer(map, key) || chromaggus::timer(map, key);
+    let _ = razorgore::timer(map, key)
+        || vael::timer(map, key)
+        || chromaggus::timer(map, key)
+        || nefarian::timer(map, key);
 }
 
 /// Objects as the copy's data leaves them, once its spawns are in.
 pub fn settle_spawns(map: &mut Map) {
     razorgore::settle(map);
+    if get_data(map, LASHLAYER) == DONE {
+        suppression_off(map);
+    }
 }
 
 // The bosses' timed casts, as EventAI.
@@ -522,5 +556,6 @@ pub fn install(data: &mut GameData) {
     razorgore::install(&mut b);
     vael::install(&mut b);
     chromaggus::install(&mut b);
+    nefarian::install(&mut b);
     b.home_fails(NPC_RAZORGORE, 90, RAZORGORE);
 }
