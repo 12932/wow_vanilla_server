@@ -293,6 +293,40 @@ pub fn inspect(map: &mut Map, g: Guid, target: Guid) {
 }
 
 /// Whether `npc` is a guild master `g` may deal with now.
+/// A mailbox's game object type.
+pub const GAMEOBJECT_TYPE_MAILBOX: u8 = 19;
+
+/// Whether `g` stands at the mailbox `mailbox`: one in the map, within
+/// reach, the player neither flying nor out of their own control (mangos's
+/// `CheckMailBox`, through `GetGameObjectIfCanInteractWith`). The mail is
+/// read, sent and taken at a mailbox alone; before, from anywhere.
+pub fn at_mailbox(map: &Map, g: Guid, mailbox: Guid) -> bool {
+    use crate::game::map::auras::{
+        AURA_MOD_CHARM, AURA_MOD_CONFUSE, AURA_MOD_FEAR, AURA_MOD_POSSESS, AURA_MOD_STUN,
+    };
+    let Some(p) = map.players.get(&g) else {
+        return false;
+    };
+    let held = [
+        AURA_MOD_STUN,
+        AURA_MOD_FEAR,
+        AURA_MOD_CONFUSE,
+        AURA_MOD_CHARM,
+        AURA_MOD_POSSESS,
+    ]
+    .iter()
+    .any(|a| p.auras.has(*a));
+    let at = map
+        .gameobject(mailbox)
+        .is_some_and(|o| o.kind == GAMEOBJECT_TYPE_MAILBOX)
+        && crate::game::map::objects::within_reach(map, g, mailbox);
+    let ok = at && !held && p.flight.is_none();
+    if !ok {
+        tracing::debug!("{g}: no mailbox {mailbox} to hand");
+    }
+    ok
+}
+
 fn petitioner(map: &Map, g: Guid, npc: Guid) -> bool {
     crate::game::map::npc::npc_entry(map, g, npc, crate::game::map::npc::NPC_FLAG_PETITIONER)
         .is_some()
@@ -463,14 +497,35 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::MSG_PETITION_DECLINE(m) => guilds::petition_decline(&realm, &me, m.petition),
         C::MSG_PETITION_RENAME(m) => guilds::petition_rename(&realm, &me, m.petition, &m.new_name),
         C::CMSG_TURN_IN_PETITION(m) => guilds::petition_turn_in(map, g, m.petition),
-        C::CMSG_GET_MAIL_LIST(_) => mail::list(map, g),
-        C::CMSG_SEND_MAIL(m) => mail::send(map, g, m),
-        C::CMSG_MAIL_TAKE_MONEY(m) => mail::take_money(map, g, m.mail_id),
-        C::CMSG_MAIL_TAKE_ITEM(m) => mail::take_item(map, g, m.mail_id),
-        C::CMSG_MAIL_MARK_AS_READ(m) => mail::mark_read(map, g, m.mail_id),
-        C::CMSG_MAIL_RETURN_TO_SENDER(m) => mail::return_to_sender(map, g, m.mail_id),
-        C::CMSG_MAIL_DELETE(m) => mail::delete(map, g, m.mail_id),
-        C::CMSG_MAIL_CREATE_TEXT_ITEM(m) => mail::make_letter(map, g, m.mail_id),
+        C::CMSG_GET_MAIL_LIST(m) if at_mailbox(map, g, m.mailbox) => mail::list(map, g),
+        C::CMSG_SEND_MAIL(m) if at_mailbox(map, g, m.mailbox) => mail::send(map, g, m),
+        C::CMSG_MAIL_TAKE_MONEY(m) if at_mailbox(map, g, m.mailbox) => {
+            mail::take_money(map, g, m.mail_id)
+        }
+        C::CMSG_MAIL_TAKE_ITEM(m) if at_mailbox(map, g, m.mailbox) => {
+            mail::take_item(map, g, m.mail_id)
+        }
+        C::CMSG_MAIL_MARK_AS_READ(m) if at_mailbox(map, g, m.mailbox) => {
+            mail::mark_read(map, g, m.mail_id)
+        }
+        C::CMSG_MAIL_RETURN_TO_SENDER(m) if at_mailbox(map, g, m.mailbox_id) => {
+            mail::return_to_sender(map, g, m.mail_id)
+        }
+        C::CMSG_MAIL_DELETE(m) if at_mailbox(map, g, m.mailbox_id) => {
+            mail::delete(map, g, m.mail_id)
+        }
+        C::CMSG_MAIL_CREATE_TEXT_ITEM(m) if at_mailbox(map, g, m.mailbox) => {
+            mail::make_letter(map, g, m.mail_id)
+        }
+        // Away from a mailbox, the mail's opcodes do nothing.
+        C::CMSG_GET_MAIL_LIST(_)
+        | C::CMSG_SEND_MAIL(_)
+        | C::CMSG_MAIL_TAKE_MONEY(_)
+        | C::CMSG_MAIL_TAKE_ITEM(_)
+        | C::CMSG_MAIL_MARK_AS_READ(_)
+        | C::CMSG_MAIL_RETURN_TO_SENDER(_)
+        | C::CMSG_MAIL_DELETE(_)
+        | C::CMSG_MAIL_CREATE_TEXT_ITEM(_) => {}
         C::CMSG_ITEM_TEXT_QUERY(m) => mail::text_query(map, g, m.item_text_id),
         C::MSG_QUERY_NEXT_MAIL_TIME => mail::next_mail_time(map, g),
         C::CMSG_AUCTION_SELL_ITEM(m) => auction::sell(map, g, &m),

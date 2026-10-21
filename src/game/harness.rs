@@ -229,6 +229,42 @@ pub async fn open_bank(map: &crate::game::map::MapHandle, g: Guid) -> Guid {
     .expect("the map answers")
 }
 
+/// A mailbox at `g`'s side, for a test that uses the mail (whose opcodes
+/// want one within reach, as mangos's `CheckMailBox`): its guid.
+pub fn mailbox(m: &mut crate::game::map::Map, g: Guid) -> Guid {
+    let template = crate::game::data::GameObjectTemplate {
+        entry: 32_349,
+        kind: crate::game::map::social::GAMEOBJECT_TYPE_MAILBOX,
+        display_id: 3_771,
+        name: "Mailbox".into(),
+        size: 1.0,
+        ..Default::default()
+    };
+    let at = m.players[&g].position();
+    let counter = m.object_counter();
+    let spawn = crate::game::data::GameObjectSpawn {
+        guid: counter,
+        entry: template.entry,
+        map: m.key.map,
+        x: at.x + 1.0,
+        y: at.y,
+        z: at.z,
+        state: 1,
+        ..Default::default()
+    };
+    let mut go = crate::game::map::gameobject::GameObject::from_spawn(&template, &spawn);
+    go.spawn_guid = None;
+    m.add_gameobject(go)
+}
+
+/// [`mailbox`], beside `g` wherever they are.
+pub async fn mailbox_for(realm: &Arc<Realm>, g: Guid) -> Guid {
+    let map = realm.registry.online(g).expect("online").map();
+    map.query(move |m| mailbox(m, g))
+        .await
+        .expect("the map answers")
+}
+
 pub fn realm_with(data: GameData) -> Arc<Realm> {
     let (store, startup) = Store::open(":memory:").expect("an in-memory store");
     Realm::new(test_config(), store, startup, data, None)
@@ -261,6 +297,7 @@ pub struct Client {
     /// The order counter of the last teleport received, for its
     /// acknowledgement ([`Client::teleport_order`]).
     teleport_order: u32,
+    realm: Arc<Realm>,
 }
 
 impl Client {
@@ -284,6 +321,7 @@ impl Client {
             created: ahash::AHashMap::new(),
             forgot: ahash::AHashMap::new(),
             teleport_order: 0,
+            realm: realm.clone(),
         }
     }
 
@@ -294,10 +332,34 @@ impl Client {
     }
 
     pub async fn send(&self, msg: impl Into<ClientOpcodeMessage>) {
+        let mut msg = msg.into();
+        self.at_a_mailbox(&mut msg).await;
         self.tx
-            .send(crate::game::conn::Inbound::Msg(msg.into()))
+            .send(crate::game::conn::Inbound::Msg(msg))
             .await
             .expect("the session is running");
+    }
+
+    /// A mail opcode naming no mailbox is sent from one: a mailbox is put
+    /// at the player's side first ([`mailbox_for`]), as the mail is used
+    /// at one alone (mangos's `CheckMailBox`). A test of the check names
+    /// a mailbox of its own, or something else.
+    async fn at_a_mailbox(&self, msg: &mut ClientOpcodeMessage) {
+        use ClientOpcodeMessage as C;
+        let slot = match msg {
+            C::CMSG_GET_MAIL_LIST(m) => &mut m.mailbox,
+            C::CMSG_SEND_MAIL(m) => &mut m.mailbox,
+            C::CMSG_MAIL_TAKE_MONEY(m) => &mut m.mailbox,
+            C::CMSG_MAIL_TAKE_ITEM(m) => &mut m.mailbox,
+            C::CMSG_MAIL_MARK_AS_READ(m) => &mut m.mailbox,
+            C::CMSG_MAIL_RETURN_TO_SENDER(m) => &mut m.mailbox_id,
+            C::CMSG_MAIL_DELETE(m) => &mut m.mailbox_id,
+            C::CMSG_MAIL_CREATE_TEXT_ITEM(m) => &mut m.mailbox,
+            _ => return,
+        };
+        if slot.is_zero() && self.realm.registry.online(self.guid).is_some() {
+            *slot = mailbox_for(&self.realm, self.guid).await;
+        }
     }
 
     /// Send a packet as raw bytes, as the session gets those wow_messages

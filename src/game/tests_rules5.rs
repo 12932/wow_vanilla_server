@@ -1031,8 +1031,10 @@ async fn a_ghost_doesnt_explore_for_a_quest() {
     assert!(explored(realm.clone()).await);
 }
 
+/// Read, a mail keeps its thirty days, as mangos's `HandleMailMarkAsRead`
+/// (Thistle Tea's `mark_read` cut it to three: its row differs).
 #[tokio::test]
-async fn a_read_mail_goes_in_three_days() {
+async fn a_read_mail_keeps_its_time() {
     let realm = harness::realm_with(data());
     let mut a = Client::connect(&realm, "A");
     let g = a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -1063,10 +1065,7 @@ async fn a_read_mail_goes_in_three_days() {
     let after = expiry(&realm).unwrap();
     let now = crate::game::social::mail::now();
     assert!(before > now + 20 * 86_400, "thirty days unread");
-    assert!(
-        after <= now + 3 * 86_400 + 1 && after > now + 3 * 86_400 - 5,
-        "three read"
-    );
+    assert_eq!(after, before, "and read");
 }
 
 fn aura(id: u32, aura: u32, points: i32) -> SpellTemplate {

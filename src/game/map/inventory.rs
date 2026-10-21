@@ -261,6 +261,9 @@ pub fn slots_for(inventory_type: u32) -> &'static [u8] {
     }
 }
 
+/// The most money a player holds: 2^31 - 1 copper, the client's.
+pub const MAX_MONEY: u32 = 2_147_483_647;
+
 impl Player {
     pub fn item_at(&self, bag: u8, slot: u8) -> Option<usize> {
         self.items
@@ -314,8 +317,13 @@ impl Player {
         self.fields.get_u32(PLAYER_FIELD_COINAGE)
     }
 
+    /// The player's money, no more than a player may hold (mangos's
+    /// `ModifyMoney` stops at `MAX_MONEY_AMOUNT`): mail, an auction's
+    /// takings or loot past it are lost, not wrapped into the client's
+    /// negative.
     pub fn set_money(&mut self, money: u32) {
-        self.fields.set_u32(PLAYER_FIELD_COINAGE, money);
+        self.fields
+            .set_u32(PLAYER_FIELD_COINAGE, money.min(MAX_MONEY));
     }
 
     /// Bring the slot fields, the bags' slots and the visible gear in line
