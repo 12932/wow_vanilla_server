@@ -135,6 +135,11 @@ pub struct Loot {
     /// Behind a lock: those who opened it, till they close the window
     /// (Thistle Tea's `opened_by`).
     pub opened_by: AHashSet<Guid>,
+    /// Those it fell to who would find nothing in it of theirs: its quest
+    /// drops not for their quests, its conditions not met. It doesn't
+    /// sparkle for them (mangos's per-viewer `Loot::CanLoot`, Thistle
+    /// Tea's `visible?`), as their quests stood when it last changed.
+    pub quiet: Vec<Guid>,
 }
 
 impl Loot {
@@ -534,6 +539,10 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     c.loot = Some(loot);
     c.fields
         .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);
+    refresh_quiet(map, creature);
+    let Some(c) = map.creature_mut(creature) else {
+        return;
+    };
     // Nothing on it: it can be skinned at once.
     if !lootable && t.skinning_loot_id != 0 {
         c.fields.set_flag(
@@ -939,6 +948,37 @@ fn refresh_lootable(map: &mut Map, object: Guid) {
     if let Some(c) = map.creature_mut(object) {
         c.fields
             .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);
+    }
+    refresh_quiet(map, object);
+}
+
+/// Who of those a corpse's loot fell to would find nothing in it of
+/// theirs ([`Loot::quiet`]): no gold, no roll, and no slot they see.
+fn refresh_quiet(map: &mut Map, object: Guid) {
+    let Some(l) = map.creature(object).and_then(|c| c.loot.as_ref()) else {
+        return;
+    };
+    let quiet: Vec<Guid> = if l.gold > 0 || !l.rolls.is_empty() {
+        Vec::new()
+    } else {
+        let who: Vec<Guid> = if l.allowed.is_empty() {
+            l.owner.into_iter().collect()
+        } else {
+            l.allowed.clone()
+        };
+        let mut quiet: Vec<Guid> = who
+            .into_iter()
+            .filter(|&g| {
+                let wanted = crate::game::map::quests::wanted(map, g);
+                let met = conditions_met(map, l, object, g);
+                !l.items.iter().any(|s| l.visible(s, g, &wanted, &met))
+            })
+            .collect();
+        quiet.sort_unstable();
+        quiet
+    };
+    if let Some(l) = map.creature_mut(object).and_then(|c| c.loot.as_mut()) {
+        l.quiet = quiet;
     }
 }
 

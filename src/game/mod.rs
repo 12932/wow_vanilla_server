@@ -121,6 +121,8 @@ mod tests_order;
 #[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
+mod tests_p10_core_loot;
+#[cfg(test)]
 mod tests_p10_core_regen;
 #[cfg(test)]
 mod tests_p10_core_stats;
