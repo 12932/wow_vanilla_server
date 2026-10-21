@@ -276,6 +276,10 @@ mod tests_p12c_root;
 #[cfg(test)]
 mod tests_p12c_speed;
 #[cfg(test)]
+mod tests_p12g_skills;
+#[cfg(test)]
+mod tests_p12g_table;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

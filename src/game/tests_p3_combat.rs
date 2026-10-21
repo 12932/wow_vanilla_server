@@ -438,7 +438,7 @@ fn hit_takes_off_the_miss_after_a_low_creatures_scaling_and_past_ten_defense_the
 }
 
 #[test]
-fn skill_above_the_cap_glances_no_less_often_but_harder_and_a_creatures_parry_caps_the_skill() {
+fn skill_above_the_cap_glances_no_less_often_but_harder_and_takes_a_creatures_parry_down() {
     // A stunned level-23 creature: miss, then glancing to 40%.
     let stunned = Roll {
         victim_level: 23,
@@ -463,14 +463,15 @@ fn skill_above_the_cap_glances_no_less_often_but_harder_and_a_creatures_parry_ca
             combat::HITINFO_NORMALSWING2 | combat::HITINFO_GLANCING
         );
     }
-    // Skill 105 against a level-20 creature: miss and dodge 4.5% each, but
-    // parry its full 5%.
+    // Skill 105 against a level-20 creature: miss and dodge 4.5% each, and
+    // parry 4.8%, the whole skill counted at 0.04% a point (mangos's
+    // `CalculateEffectiveParryChance`; vmangos capped it, for 5%).
     let skilled = Roll {
         attacker_skill: 105,
         ..even(20)
     };
-    assert_eq!(combat::roll_outcome(&skilled, 1_399), Outcome::Parry);
-    assert_eq!(combat::roll_outcome(&skilled, 1_400), Outcome::Glancing);
+    assert_eq!(combat::roll_outcome(&skilled, 1_379), Outcome::Parry);
+    assert_eq!(combat::roll_outcome(&skilled, 1_380), Outcome::Glancing);
     // Wand users glance harder: three fifths kept at the least.
     let factor = combat::glancing_factor(0, true, 0.0);
     let (_, _, damage, _) = combat::blow(Outcome::Glancing, 1000, 1000, 0, 2.0, factor);

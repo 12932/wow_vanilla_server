@@ -172,8 +172,19 @@ pub enum Outcome {
 pub struct Roll {
     pub attacker_skill: i32,
     pub victim_defense: i32,
+    /// On the players' side of the table: a player, or a creature under a
+    /// player's control (mangos's `CanGlance`, `UNIT_FLAG_PLAYER_CONTROLLED`
+    /// not charmed by a creature).
     pub attacker_is_player: bool,
+    /// A player or a player's pet or charm (mangos's
+    /// `UNIT_FLAG_PLAYER_CONTROLLED`): the players' factors, never glanced,
+    /// the only victims crushed.
     pub victim_is_player: bool,
+    /// The victim is a creature for all that: it dodges from behind.
+    pub victim_creature: bool,
+    /// A creature on the creatures' side that deals no crushing blows: one
+    /// a player masters, or `NO_CRUSHING_BLOWS` (mangos's `CanCrushInCombat`).
+    pub no_crush: bool,
     pub attacker_level: i32,
     pub victim_level: i32,
     /// In percent.
@@ -201,6 +212,9 @@ pub struct Roll {
     pub attacker_hit: f32,
     /// A player victim with weapons sheathed doesn't block.
     pub sheathed: bool,
+    /// The blow is of a magic school (an elemental's): it can't be blocked
+    /// (mangos's pre-WotLK `CanBlockInCombat`).
+    pub magic: bool,
 }
 
 impl Roll {
@@ -219,10 +233,6 @@ impl Roll {
 
     fn avoidance_skill_diff(&self) -> i32 {
         self.attacker_skill - self.victim_level * 5
-    }
-
-    fn capped_avoidance_skill_diff(&self) -> i32 {
-        self.attacker_skill.min(self.attacker_level * 5) - self.victim_level * 5
     }
 
     /// A creature under level ten avoids less.
@@ -270,7 +280,10 @@ impl Roll {
     }
 
     fn dodge(&self) -> i32 {
-        if self.ranged || self.avoidance_disabled || (self.victim_is_player && self.from_behind) {
+        if self.ranged
+            || self.avoidance_disabled
+            || (self.victim_is_player && !self.victim_creature && self.from_behind)
+        {
             return 0;
         }
         let bonus = if self.victim_is_player {
@@ -291,13 +304,30 @@ impl Roll {
         if self.no_parry {
             return 0;
         }
-        let d = self.capped_avoidance_skill_diff() as f32;
-        let bonus = if d < -10.0 { d * 0.6 } else { d * 0.2 };
-        bp(self.low_level(self.parry - bonus).max(0.0))
+        // The attacker's whole weapon skill, past its cap too: a creature
+        // above it by more than ten parries 0.6% a point, by up to ten
+        // 0.1%, and below it 0.04% (mangos's
+        // `CalculateEffectiveParryChance`).
+        let d = (self.victim_level * 5 - self.attacker_skill) as f32;
+        let factor = if d > 10.0 {
+            0.6
+        } else if d > 0.0 {
+            0.1
+        } else {
+            0.04
+        };
+        bp(self.low_level(self.parry + d * factor).max(0.0))
     }
 
     fn glancing(&self) -> i32 {
-        if self.ranged || !self.attacker_is_player || self.victim_is_player || self.special {
+        // A victim of level ten or less is never glanced (mangos's
+        // `CanGlanceInCombat`).
+        if self.ranged
+            || !self.attacker_is_player
+            || self.victim_is_player
+            || self.special
+            || self.victim_level <= 10
+        {
             return 0;
         }
         bp((10.0 - self.capped_skill_diff() as f32 * 2.0).max(0.0)).min(4000)
@@ -305,6 +335,7 @@ impl Roll {
 
     fn block(&self) -> i32 {
         if self.ranged
+            || self.magic
             || self.avoidance_disabled
             || self.from_behind
             || self.block <= 0.0
@@ -336,13 +367,20 @@ impl Roll {
     }
 
     fn crushing(&self) -> i32 {
-        if self.attacker_is_player || self.special || self.ranged {
+        if self.attacker_is_player || self.no_crush || self.special || self.ranged {
             return 0;
         }
         if self.always_crush {
             return 10_000;
         }
-        let diff = self.skill_diff();
+        // Only a player or a player's is crushed, its defense counted no
+        // higher than its level's most: past that, defense takes no
+        // crushing blows off (mangos's `CanCrushInCombat` and
+        // `CalculateEffectiveCrushChance`).
+        if !self.victim_is_player {
+            return 0;
+        }
+        let diff = self.attacker_skill - self.victim_defense.min(self.victim_level * 5);
         if diff >= 15 { diff * 200 - 1500 } else { 0 }
     }
 }
@@ -1343,19 +1381,68 @@ pub fn hand_weapon(map: &Map, g: Guid, hand: Hand) -> Option<crate::game::map::d
     }
 }
 
+/// Whether `g` is a player or under a player's control: a pet, a guardian,
+/// a charm (mangos's `UNIT_FLAG_PLAYER_CONTROLLED`).
+pub fn player_controlled(map: &Map, g: Guid) -> bool {
+    guid::is_player(g)
+        || map.unit_fields(g).is_some_and(|f| {
+            f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::pets::UNIT_FLAG_PLAYER_CONTROLLED,
+            )
+        })
+        || crate::game::map::pets::owner_of(map, g).is_some_and(guid::is_player)
+}
+
+/// Whether a creature charms `g`.
+fn charmed_by_creature(map: &Map, g: Guid) -> bool {
+    map.unit_fields(g).is_some_and(|f| {
+        let by = f.get_guid(UNIT_FIELD_CHARMEDBY);
+        !by.is_zero() && !guid::is_player(by)
+    })
+}
+
+/// Whether `g`'s blows may glance: a player's side's, not a creature's
+/// charm (mangos's `CanGlance`).
+pub fn glances(map: &Map, g: Guid) -> bool {
+    player_controlled(map, g) && !charmed_by_creature(map, g)
+}
+
+/// Whether `g`'s blows may crush: the creatures' side's, not one a player
+/// masters, nor one of `NO_CRUSHING_BLOWS` (mangos's `CanCrush` and
+/// `CanCrushInCombat`).
+pub fn crushes(map: &Map, g: Guid) -> bool {
+    let side = if player_controlled(map, g) {
+        charmed_by_creature(map, g)
+    } else {
+        !guid::is_player(crate::game::map::pets::master(map, g))
+    };
+    side && map
+        .creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .is_none_or(|t| t.static_flags2 & STATIC2_NO_CRUSHING_BLOWS == 0)
+}
+
+/// `static_flags2`: it deals no crushing blows; it trains no weapon skill.
+pub const STATIC2_NO_CRUSHING_BLOWS: u32 = 0x10;
+pub const STATIC2_NO_SKILL_GAINS: u32 = 0x4000_0000;
+
 /// The hit table's inputs for `attacker` against `victim` with `hand`.
 pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<Roll> {
     let (va, vb) = (map.unit_view(attacker)?, map.unit_view(victim)?);
     let (da, dv) = (derived(map, attacker), derived(map, victim));
     let or_level = |v: u32, level: u32| if v == 0 { level * 5 } else { v } as i32;
     let ranged = hand == Hand::Ranged;
+    // Casting, or crowd controlled: stunned, confused or fleeing (mangos's
+    // `CanReactInCombat`, `IsCrowdControlled`).
     let held = |g: Guid| {
         map.caster(g).is_some_and(|c| c.casting.is_some())
             || map.unit_fields(g).is_some_and(|f| {
-                f.has_flag(
-                    UNIT_FIELD_FLAGS,
-                    crate::game::map::player::UNIT_FLAG_STUNNED,
-                )
+                f.get_u32(UNIT_FIELD_FLAGS)
+                    & (crate::game::map::player::UNIT_FLAG_STUNNED
+                        | auras::UNIT_FLAG_CONFUSED
+                        | auras::UNIT_FLAG_FLEEING)
+                    != 0
             })
     };
     let extra = flags_extra(map, victim);
@@ -1408,8 +1495,10 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         } else {
             or_level(defense, vb.level)
         },
-        attacker_is_player: va.is_player,
-        victim_is_player: vb.is_player,
+        attacker_is_player: glances(map, attacker),
+        victim_is_player: player_controlled(map, victim),
+        victim_creature: !vb.is_player,
+        no_crush: !crushes(map, attacker),
         attacker_level: va.level as i32,
         victim_level: vb.level as i32,
         crit: if ranged { da.ranged_crit } else { da.crit } + attacker_crit,
@@ -1435,6 +1524,7 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         always_crush: flags_extra(map, attacker) & FLAG_EXTRA_ALWAYS_CRUSH != 0,
         attacker_hit,
         sheathed,
+        magic: !ranged && melee_school(map, attacker) & 1 == 0,
     })
 }
 
@@ -1714,9 +1804,18 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
     if c.next_swing.is_none_or(|t| t < now) {
         c.next_swing = Some(now);
     }
-    // The off hand follows a moment after.
-    if c.next_offhand.is_none_or(|t| t < now) {
-        c.next_offhand = Some(now + Duration::from_millis(200));
+    // A new attack's off hand waits half its period (mangos's
+    // `Unit::Attack`), or longer if it was waiting longer: a new victim
+    // doesn't hasten it.
+    if !same {
+        let period = map
+            .unit_fields(attacker)
+            .map_or(2000, |f| f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1))
+            .max(400);
+        let half = now + Duration::from_millis(u64::from(period / 2));
+        if let Some(c) = map.combat_mut(attacker) {
+            c.next_offhand = Some(c.next_offhand.map_or(half, |t| t.max(half)));
+        }
     }
     if let Some(f) = map.unit_fields_mut(attacker) {
         f.set_guid(UNIT_FIELD_TARGET, victim);
@@ -2103,6 +2202,8 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         stand_struck(map, victim);
     }
     if left > 0 {
+        // A player's blow that hurts renews their judgements on the victim.
+        refresh_judgements(map, attacker, victim);
         // A blow on a caster pushes its cast back.
         crate::game::map::spells::pushback_by(map, victim, attacker);
         deal_damage_school(map, attacker, victim, left, school);
@@ -2139,6 +2240,42 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
     }
     if left > 0 {
         daze(map, attacker, victim, &roll);
+    }
+}
+
+/// A player's white blow that did damage: every aura on `victim` of their
+/// paladin spells that always hit (the judgements) starts its full duration
+/// again (mangos's `DealMeleeDamage`, `RefreshHolder`).
+pub fn refresh_judgements(map: &mut Map, attacker: Guid, victim: Guid) {
+    if !guid::is_player(attacker) {
+        return;
+    }
+    let data = map.realm.data.clone();
+    let now = map.now;
+    let Some(a) = auras::auras_mut(map, victim) else {
+        return;
+    };
+    let mut shown = Vec::new();
+    for h in a.holders.iter_mut().filter(|h| h.caster == attacker) {
+        let judgement = data.spells.get(h.spell).is_some_and(|s| {
+            s.family_name == 10 && s.attr(3, crate::game::data::spells::ATTR_EX3_ALWAYS_HIT)
+        });
+        let Some(ms) = h.duration.filter(|_| judgement && h.expires.is_some()) else {
+            continue;
+        };
+        h.expires = Some(now + Duration::from_millis(u64::from(ms)));
+        if let Some(slot) = h.slot {
+            shown.push((slot, ms));
+        }
+    }
+    if let Some(p) = map.players.get(&victim) {
+        for (slot, ms) in shown {
+            p.outbound
+                .send(&wow_world_messages::vanilla::SMSG_UPDATE_AURA_DURATION {
+                    aura_slot: slot as u8,
+                    aura_duration: ms,
+                });
+        }
     }
 }
 
@@ -2546,28 +2683,33 @@ fn raise_skill(p: &mut crate::game::map::player::Player, skill: u32, by: u32) ->
     false
 }
 
-/// Thistle Tea's weapon skill-up chance, in percent.
-pub fn weapon_skill_chance(value: u32, cap: u32, intellect: u32) -> f32 {
-    let (value, cap) = (value as f32, cap as f32);
-    let base = if cap * 0.9 > value {
-        (cap * 0.9 * 50.0 / value.max(1.0)).min(100.0)
+/// The chance, in percent, that a blow trains a weapon skill (with the
+/// player's `intellect`) or defense (`None`) at `value` of `max` at `level`
+/// (mangos-classic's `UpdateCombatSkills`): a logarithmic catch-up seven or
+/// more points short of the cap, then a quadratic fall to it; a weapon's
+/// up to a tenth more for intellect, the most at 750 by level 60.
+pub fn combat_skill_chance(value: u32, max: u32, level: u32, intellect: Option<u32>) -> f32 {
+    if max == 0 || level == 0 || value >= max {
+        return 0.0;
+    }
+    let (room, max_f, level_f) = (f64::from(max - value), f64::from(max), f64::from(level));
+    let growth = 0.22 * (1.0 + 12.0 / level_f);
+    let base = if room >= 7.0 {
+        7.0 / max_f + growth * ((room + 5.0) / 12.0).ln()
     } else {
-        let chance = (0.5 - 0.016_896_6 * value * (300.0 / cap) + 0.015_206_9 * 300.0) * 100.0;
-        let diff = cap - value;
-        if diff <= 3.0 {
-            chance * (0.5 / (4.0 - diff))
-        } else {
-            chance
-        }
-    };
-    (base + (0.02 * intellect as f32).min(10.0)).min(100.0)
-}
-
-/// Thistle Tea's defense skill-up chance, in percent.
-pub fn defense_skill_chance(value: u32, cap: u32, player_level: u32, mob_level: u32) -> f32 {
-    let mob = mob_level.min(player_level + 5);
-    let diff = mob.saturating_sub(gray_level(player_level)).max(3) as f32;
-    (3.0 * diff * cap.saturating_sub(value) as f32 / player_level.max(1) as f32).min(100.0)
+        room * room / (7.0 * max_f)
+    }
+    .clamp(0.0, 1.0);
+    let bonus = intellect.map_or(0.0, |int| {
+        let (bracket, most) = match level {
+            ..=60 => (60.0, 750.0),
+            61..=70 => (70.0, 1500.0),
+            71..=80 => (80.0, 3000.0),
+            _ => (255.0, 6000.0),
+        };
+        (0.10 * (f64::from(int) / most) * (bracket / level_f)).clamp(0.0, 0.10)
+    });
+    ((base + bonus).clamp(0.0, 1.0) * 100.0) as f32
 }
 
 /// A critter's creature type.
@@ -2597,27 +2739,44 @@ pub fn ability_skill_gains(
     skill_gains(map, caster, target, hand);
 }
 
-/// Weapon and defense skills that a blow against a creature trains; a
-/// critter trains nothing (mangos's `ProcSkillsAndReactives`).
+/// Weapon and defense skills that a blow between a player and a creature
+/// trains, whatever the creature's level; a critter trains nothing, a
+/// player's pet or charm no weapon skill, nor a creature of
+/// `NO_SKILL_GAINS` (mangos's `ProcSkillsAndReactives`,
+/// `UpdateCombatSkills` and `UpdateWeaponSkill`).
 fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
     let mut rng = rand::rng();
+    // With outcomes fixed, not rolled (the tests), a blow trains whenever
+    // it may.
+    let sure = !crate::game::map::spells::outcome::rolling(map);
+    let mut skill_roll = move || {
+        if sure {
+            0.0
+        } else {
+            rng.random_range(0.0f32..100.0)
+        }
+    };
     let (weapon_by, defense_by) = (
         map.cfg.rates.skill_gain_weapon,
         map.cfg.rates.skill_gain_defense,
     );
     let trains = |map: &Map, g: Guid| {
         map.creature(g).is_some_and(|c| {
-            c.owner.is_none_or(|o| !guid::is_player(o))
-                && map
-                    .realm
-                    .data
-                    .creature_template(c.entry)
-                    .is_none_or(|t| t.creature_type != CREATURE_TYPE_CRITTER)
+            map.realm
+                .data
+                .creature_template(c.entry)
+                .is_none_or(|t| t.creature_type != CREATURE_TYPE_CRITTER)
         })
     };
+    let teaches_weapons = |map: &Map, g: Guid| {
+        !player_controlled(map, g)
+            && map
+                .creature(g)
+                .and_then(|c| map.realm.data.creature_template(c.entry))
+                .is_none_or(|t| t.static_flags2 & STATIC2_NO_SKILL_GAINS == 0)
+    };
     // The attacker's weapon.
-    if map.players.contains_key(&attacker) && trains(map, victim) {
-        let mob_level = map.unit_view(victim).map_or(1, |u| u.level);
+    if map.players.contains_key(&attacker) && trains(map, victim) && teaches_weapons(map, victim) {
         // The weapon it can use: none in cat or bear form, nor in a
         // disarmed main hand, which trains unarmed; an empty off hand or
         // ranged slot trains nothing (mangos's `GetWeaponSkillIdForAttack`
@@ -2642,18 +2801,12 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
         let gained = skill.is_some_and(|skill| {
             map.players.get_mut(&attacker).is_some_and(|p| {
                 let level = u32::from(p.level());
-                if mob_level <= gray_level(level) {
-                    return false;
-                }
                 let Some(value) = crate::game::map::skills::value(p, skill) else {
                     return false;
                 };
                 let cap = level * 5;
-                if value >= cap {
-                    return false;
-                }
                 let intellect = p.fields.get_u32(UNIT_FIELD_STAT0 + 3);
-                rng.random_range(0.0f32..100.0) < weapon_skill_chance(value, cap, intellect)
+                skill_roll() < combat_skill_chance(value, cap, level, Some(intellect))
                     && raise_skill(p, skill, weapon_by)
             })
         });
@@ -2663,7 +2816,6 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
     }
     // The victim's defense.
     if map.players.contains_key(&victim) && trains(map, attacker) {
-        let mob_level = map.unit_view(attacker).map_or(1, |u| u.level);
         let skill = crate::game::map::derive::SKILL_DEFENSE;
         let gained = map.players.get_mut(&victim).is_some_and(|p| {
             let level = u32::from(p.level());
@@ -2671,9 +2823,7 @@ fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
                 return false;
             };
             let cap = level * 5;
-            value < cap
-                && rng.random_range(0.0f32..100.0)
-                    < defense_skill_chance(value, cap, level, mob_level)
+            skill_roll() < combat_skill_chance(value, cap, level, None)
                 && raise_skill(p, skill, defense_by)
         });
         if gained {
@@ -3851,12 +4001,11 @@ mod tests {
     }
 
     #[test]
-    fn skill_ups_follow_thistle_tea() {
-        // Far below the cap, a sure gain.
-        assert_eq!(weapon_skill_chance(10, 100, 0), 100.0);
-        assert!(weapon_skill_chance(99, 100, 0) < 20.0);
-        assert!(defense_skill_chance(50, 100, 20, 20) > 0.0);
-        assert_eq!(defense_skill_chance(100, 100, 20, 20), 0.0);
+    fn skill_ups_follow_mangos_and_glancing_keeps_its_share() {
+        // Far below the cap, a likely gain; at it, none.
+        assert!(combat_skill_chance(10, 100, 20, None) > 75.0);
+        assert!(combat_skill_chance(99, 100, 20, None) < 1.0);
+        assert_eq!(combat_skill_chance(100, 100, 20, Some(100)), 0.0);
         let low = glancing_factor(15, false, 0.0);
         let high = glancing_factor(15, false, 1.0);
         assert!(
