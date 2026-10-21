@@ -324,6 +324,7 @@ impl Session {
                     let query = is_query(&msg);
                     let bucket = if query { &mut queries } else { &mut rate };
                     if !bucket.allow(now) {
+                        crate::game::stats::FLOOD.fetch_add(1, Ordering::Relaxed);
                         warn!(
                             "{} sends {} too fast; disconnecting. Lately: {}",
                             self.account,

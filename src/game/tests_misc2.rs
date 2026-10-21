@@ -402,6 +402,70 @@ async fn gm_commands_act_on_the_selected_creature() {
     assert!(back);
 }
 
+/// `.god`: blows land and cost health, which the player and whoever sees
+/// them are told of, but never below 1, and the player doesn't die; off,
+/// they do.
+#[tokio::test]
+async fn undying_takes_its_blows_but_stays_at_one_health() {
+    let (realm, mut a) = setup().await;
+    let g = a.guid;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(g).await;
+    a.say(".god on").await;
+    a.system_message("Undying on").await;
+    let wolf = guid::unit(WOLF, 20);
+    let (before, after, alive) = on_map(&realm, move |m| {
+        let before = m.players[&g].fields.get_u32(UNIT_FIELD_HEALTH);
+        crate::game::map::combat::deal_damage(m, wolf, g, 1_000_000);
+        let p = &m.players[&g];
+        (
+            before,
+            p.fields.get_u32(UNIT_FIELD_HEALTH),
+            p.death == crate::game::map::death::Death::Alive,
+        )
+    })
+    .await;
+    assert!(before > 1);
+    assert_eq!((after, alive), (1, true));
+    // The health it cost is sent, to the player and to whoever sees them.
+    for c in [&mut a, &mut b] {
+        c.wait_for("health 1", |m| {
+            harness::values(m)
+                .into_iter()
+                .find_map(|(of, mask)| match mask {
+                    UpdateMask::Player(p) if of == g => p.unit_health().filter(|h| *h == 1),
+                    _ => None,
+                })
+        })
+        .await;
+    }
+    // At 1, another blow and a kill leave it there.
+    let (health, alive) = on_map(&realm, move |m| {
+        crate::game::map::combat::deal_damage(m, wolf, g, 50);
+        crate::game::map::combat::kill(m, wolf, g);
+        let p = &m.players[&g];
+        (
+            p.fields.get_u32(UNIT_FIELD_HEALTH),
+            p.death == crate::game::map::death::Death::Alive,
+        )
+    })
+    .await;
+    assert_eq!((health, alive), (1, true));
+    a.say(".god off").await;
+    a.system_message("Undying off").await;
+    let (health, alive) = on_map(&realm, move |m| {
+        crate::game::map::combat::deal_damage(m, wolf, g, 50);
+        let p = &m.players[&g];
+        (
+            p.fields.get_u32(UNIT_FIELD_HEALTH),
+            p.death == crate::game::map::death::Death::Alive,
+        )
+    })
+    .await;
+    assert_eq!((health, alive), (0, false));
+}
+
 #[tokio::test]
 async fn god_mode_takes_no_damage() {
     let (realm, mut a) = setup().await;

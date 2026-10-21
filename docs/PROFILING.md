@@ -4,6 +4,15 @@
 update. It is in every build and costs nothing until it is asked for. Without a GUI, Tracy's own command-line tools
 record and summarize a capture (below).
 
+## The stats file (`WVS_STATS_FILE`)
+
+For a load test, without Tracy's tools: `WVS_STATS_FILE=stats.jsonl` has the server write a JSON line a second
+(`src/game/stats.rs`). Each line has the realm's players online, its packets in and out and bytes out, the clients
+disconnected for their byte budget, for flooding and for stalling, the process's CPU seconds and RSS (counters since
+start-up: take differences), and for each map its players, creatures awake, events waiting, every update's time that
+second (`updates_us`), the events it handled and their time, and its biggest and total outbound queue. Off, it costs
+a relaxed load an update and an event burst. peon's `scripts/drill.sh` reads it.
+
 ## Tracy
 
 ### Running it

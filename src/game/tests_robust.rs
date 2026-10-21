@@ -1412,6 +1412,7 @@ mod chaos {
         "start",
         "talents",
         "tgm",
+        "god",
         "weather",
         "instance",
         "bg",

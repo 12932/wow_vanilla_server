@@ -328,6 +328,7 @@ impl Outbound {
                     Err(_) => {
                         drop(held);
                         if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
+                            crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
                             warn!("a client's outbound queue is over budget; disconnecting it");
                         }
                         self.close();
@@ -350,6 +351,7 @@ impl Outbound {
             }
             Err(_) => {
                 if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
+                    crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
                     warn!("a client's outbound queue is over budget; disconnecting it");
                 }
                 self.close();
@@ -671,6 +673,7 @@ pub(crate) async fn run_writer<W>(
             break;
         }
         PACKETS_OUT.fetch_add(written, Ordering::Relaxed);
+        crate::game::stats::BYTES_OUT.fetch_add(scratch.len() as u64, Ordering::Relaxed);
     }
     // The senders, the reader and the session see the queue closed, and
     // what it held is let go.
@@ -694,6 +697,7 @@ where
             Ok(Ok(n)) => buf = &buf[n..],
             Ok(Err(e)) => return Err(e),
             Err(_) => {
+                crate::game::stats::STALL.fetch_add(1, Ordering::Relaxed);
                 warn!("a client took nothing for {stall:?}; disconnecting it");
                 return Err(std::io::ErrorKind::TimedOut.into());
             }

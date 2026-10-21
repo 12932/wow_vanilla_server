@@ -143,7 +143,11 @@ fn realm_entry() -> (String, bool) {
 fn world_server_address() -> &'static str {
     static ADDR: OnceLock<String> = OnceLock::new();
     ADDR.get_or_init(|| {
-        std::env::var("WOW_REALM_ADDRESS").unwrap_or_else(|_| "localhost:8085".to_string())
+        std::env::var("WOW_REALM_ADDRESS").unwrap_or_else(|_| {
+            let world = &crate::config::config().network.world_address;
+            let port = world.rsplit(':').next().unwrap_or("8085");
+            format!("localhost:{port}")
+        })
     })
 }
 
@@ -191,11 +195,12 @@ pub async fn auth(users: UserCache) {
 
     // A port taken (another server still going) is waited out, rather than
     // the world running on with no way in.
+    let address = &crate::config::config().network.auth_address;
     let listener = loop {
-        match TcpListener::bind("0.0.0.0:3724").await {
+        match TcpListener::bind(address.as_str()).await {
             Ok(l) => break l,
             Err(e) => {
-                tracing::error!("auth: can't listen on 0.0.0.0:3724 ({e}); trying again in 5 s");
+                tracing::error!("auth: can't listen on {address} ({e}); trying again in 5 s");
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }

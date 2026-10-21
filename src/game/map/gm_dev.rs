@@ -16,7 +16,7 @@ use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
 .character level <n>, .character spells, .gear [raid [1|2]], .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
-.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], \
+.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], .god [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
 events [start|stop <id>]|explore|position [guid]|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
@@ -29,10 +29,9 @@ pub fn needed_level(name: &str) -> Option<u8> {
     Some(match name {
         "guid" | "pos" | "threat" => MODERATOR,
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
-        | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "weather"
-        | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion" | "event" => {
-            GAME_MASTER
-        }
+        | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "god"
+        | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
+        | "event" => GAME_MASTER,
         _ => return None,
     })
 }
@@ -62,6 +61,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "start" => start(map, g),
         "talents" => talents(map, g, args),
         "tgm" => tgm(map, g, args),
+        "god" => god(map, g, args),
         "weather" => weather(map, g, args),
         "instance" => instance(map, g, args),
         "bg" | "battleground" => battleground(map, g, args),
@@ -1034,6 +1034,28 @@ fn tgm(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     };
     p.misc.god = on;
     Some(format!("God mode {}.", if on { "on" } else { "off" }))
+}
+
+/// `.god [on|off]`: a load test's god mode (mangos-classic has none): the
+/// player takes damage as usual, but their health never goes below 1.
+fn god(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    let p = map.players.get_mut(&g)?;
+    let on = match args.first() {
+        Some(a) if a.eq_ignore_ascii_case("on") => true,
+        Some(a) if a.eq_ignore_ascii_case("off") => false,
+        Some(_) => return Some("Usage: .god [on|off]".into()),
+        None => !p.misc.undying,
+    };
+    p.misc.undying = on;
+    Some(format!(
+        "Undying {}: blows land, but health stays at 1 or more.",
+        if on { "on" } else { "off" }
+    ))
+}
+
+/// Whether a player is undying (`.god`): hurt, never below 1 health.
+pub fn undying(map: &Map, g: Guid) -> bool {
+    map.players.get(&g).is_some_and(|p| p.misc.undying)
 }
 
 /// Whether a unit takes no damage: a GM in god mode.
