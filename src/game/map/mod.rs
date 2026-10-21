@@ -2462,6 +2462,32 @@ impl Map {
         }
     }
 
+    /// As [`Map::send_to_observers`], but not to `except`: a moved unit's
+    /// movement isn't told back to the client that moved it (mangos's
+    /// `SendMessageToAllWhoSeeMeMove` with its skipped player).
+    pub fn send_to_observers_but(
+        &self,
+        object: Guid,
+        frame: &Arc<[u8]>,
+        to_self: bool,
+        except: Guid,
+    ) {
+        if to_self
+            && object != except
+            && let Some(p) = self.players.get(&object)
+        {
+            p.outbound.send_frame(frame.clone());
+        }
+        let Some(observers) = self.observers(object) else {
+            return;
+        };
+        for o in observers.iter().filter(|o| **o != except) {
+            if let Some(p) = self.players.get(o) {
+                p.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+
     /// Players within `radius` yards of `at`, in three dimensions (Thistle
     /// Tea's `nearby_players`, mangos's `MessageDistDeliverer`).
     pub fn players_near(

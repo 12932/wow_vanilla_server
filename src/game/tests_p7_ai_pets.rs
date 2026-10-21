@@ -19,7 +19,7 @@ use crate::game::map::creature::Motion;
 use crate::game::map::pets::{self, ACT_COMMAND, ACT_REACTION, Kind};
 use crate::game::map::{Map, ai, combat};
 use crate::game::tests_p5_ai_pets::tamed_with;
-use crate::game::tests_pets::{WOLF, effect, place, spell};
+use crate::game::tests_pets::{BOAR, WOLF, effect, place, spell};
 
 /// Two self buffs that take two seconds; one for a fight (it raises
 /// damage), instant.
@@ -429,7 +429,8 @@ async fn an_aggressive_guardian_takes_the_lower_guid_of_two_as_near() {
     let out = map
         .query(move |m| {
             let p = m.players[&gh].position();
-            let g = pets::testing::spawn(m, gh, WOLF, Kind::Guardian, 10, p, 0.0);
+            // A boar's, which looks about it (detection range 20).
+            let g = pets::testing::spawn(m, gh, BOAR, Kind::Guardian, 10, p, 0.0);
             pets::state_mut(m, g).unwrap().react = pets::REACT_AGGRESSIVE;
             think(m, 1);
             m.combat(g).filter(|c| c.attacking).map(|c| c.victim)

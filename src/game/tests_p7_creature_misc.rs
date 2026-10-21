@@ -31,6 +31,8 @@ const SHIELD: u32 = 5_471;
 const BOW: u32 = 5_472;
 const BLADE: u32 = 5_473;
 const CHARM: u32 = 94_770;
+/// A brute that looks about it, for the charm.
+const LOOKOUT: u32 = 94_771;
 
 /// Thistle Tea's `ScriptEquipment.apply` and `reset`: a script's weapon in
 /// a slot shows its display and its item's class, subclass, material,
@@ -125,10 +127,15 @@ async fn charmed() -> (
             )],
         ),
     );
+    // A brute that looks about it (detection range 20), to charm.
+    let mut lookout = d.creature_templates[&BRUTE].clone();
+    lookout.entry = LOOKOUT;
+    lookout.detection_range = 20.0;
+    d.creature_templates.insert(LOOKOUT, lookout);
     let (realm, a, ga, map) = setup_with(d, Class::Warrior).await;
     let (pet, foe) = on(&map, move |m| {
         hardy(m, ga);
-        let pet = spawn(m, ga, BRUTE, 20, 3.0);
+        let pet = spawn(m, ga, LOOKOUT, 20, 3.0);
         let charm = m.realm.data.spells.get(CHARM).cloned().unwrap();
         let _ = crate::game::map::auras::apply_spell(
             m,

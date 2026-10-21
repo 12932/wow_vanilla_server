@@ -150,6 +150,8 @@ pub(crate) fn data() -> GameData {
     let mut boar = template(BOAR, "Tame Boar", 32, 1);
     boar.type_flags = 0x1;
     boar.family = 5;
+    // vmangos's 18 or 20 for nearly all: how far an aggressive pet looks.
+    boar.detection_range = 20.0;
     d.creature_templates.insert(BOAR, boar);
     d.creature_templates
         .insert(WOLF, template(WOLF, "Wolf", 14, 1));

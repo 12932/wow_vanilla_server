@@ -14,8 +14,9 @@ use crate::game::map::creature::Motion;
 
 /// How often a pet thinks about its spells and what to fight.
 const THINK_EVERY: Duration = Duration::from_millis(500);
-/// How far from its master an aggressive pet looks for a fight.
-const AGGRO_YARDS: f32 = 20.0;
+/// How far above or below an aggressive pet's sight goes, beyond both
+/// reaches (mangos's `CREATURE_Z_ATTACK_RANGE_MELEE`).
+const AGGRO_Z_YARDS: f32 = 3.0;
 /// A fight further than this from the master is given up.
 const LEASH_YARDS: f32 = 80.0;
 /// A chase paths again when its quarry has moved this far.
@@ -409,8 +410,28 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
     if pick.is_some() || !aggressive {
         return pick;
     }
+    // As far as its level lets it notice (mangos's `PetAI::MoveInLineOfSight`,
+    // `GetAttackDistance`: its detection range, a yard more for each level
+    // it has over its quarry, 25 at most).
+    let search = map.creature(g).map_or(0.0, |c| {
+        let detection = map
+            .realm
+            .data
+            .creature_template(c.entry)
+            .map_or(20.0, |t| t.detection_range);
+        let modifier = c
+            .auras
+            .sum(crate::game::map::auras::AURA_MOD_DETECT_RANGE)
+            .max(0) as f32;
+        (detection + 25.0 + modifier).max(5.0) * map.cfg.creatures.aggro_rate
+    });
+    let reach = |v: Guid| {
+        map.unit_fields(v)
+            .map_or(0.0, |f| f.get_f32(UNIT_FIELD_COMBATREACH))
+    };
+    let own_reach = reach(g);
     map.grid
-        .around(pos.x, pos.y, AGGRO_YARDS)
+        .around(pos.x, pos.y, search)
         .filter(|v| (guid::is_unit(*v) || guid::is_player(*v)) && *v != g && *v != owner)
         .filter(|v| {
             // Hostile creatures, and enemy players the rules let it fight;
@@ -426,9 +447,10 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
                             .creature_template(c.entry)
                             .is_some_and(|t| t.civilian)
                 }) && combat::hostile(map, *v, owner));
-            foe && map
-                .position_of(*v)
-                .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
+            foe && map.position_of(*v).is_some_and(|p| {
+                dist(p, pos) <= crate::game::map::ai::attack_distance(map, g, *v)
+                    && (p.z - pos.z).abs() - own_reach - reach(*v) <= AGGRO_Z_YARDS
+            })
                 && combat::can_attack(map, g, *v)
                 && !avoids_breaking(map, g, *v)
                 // Where its habitat lets it go (Thistle Tea's
@@ -528,9 +550,31 @@ fn pick_spell(map: &Map, g: Guid, victim: Guid) -> Option<(u32, f32)> {
         if f.get_u32(UNIT_FIELD_POWER1 + power) < t.mana_cost {
             return None;
         }
-        let (_, max) = data.spells.range(t);
+        let max = reach(map, g, t);
         (d <= max + 2.0).then_some((id, max))
     })
+}
+
+/// The opener its master's bar sent it at `victim` with, once in its range
+/// and sight; let go of with its victim nearer than its least range, and
+/// kept while it is further than its most (mangos's `PickSpellWithTarget`).
+fn opener(map: &mut Map, g: Guid, victim: Guid) -> Option<(u32, Guid)> {
+    let (spell, min, max) = state(map, g)?.opener?;
+    let (a, b) = (map.position_of(g)?, map.position_of(victim)?);
+    let radius = |x: Guid| {
+        map.unit_fields(x)
+            .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+    };
+    let d = dist(a, b) - radius(g) - radius(victim);
+    if min > 0.0 && d < min {
+        state_mut(map, g)?.opener = None;
+        return None;
+    }
+    if d >= max || !crate::game::map::spells::checks::sight(map, a, b) {
+        return None;
+    }
+    state_mut(map, g)?.opener = None;
+    Some((spell, victim))
 }
 
 /// `Attributes`: not in combat; it stops a swing; `AttributesEx`: no AI
@@ -811,6 +855,16 @@ fn stunned(map: &Map, g: Guid) -> bool {
         .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & 0x0004_0000 != 0)
 }
 
+/// How far `g`'s spell `t` reaches: its range with the modifiers its cast
+/// takes, a player's pet's its master's (mangos's `GetSpellModOwner`,
+/// Thistle Tea's `observation_radius` with `owner_spell_modifiers`).
+fn reach(map: &Map, g: Guid, t: &crate::game::data::spells::SpellTemplate) -> f32 {
+    let (_, base) = map.realm.data.spells.range(t);
+    crate::game::map::spells::mods::for_spell(map, g, t)
+        .apply(crate::game::map::spells::mods::OP_RANGE, base)
+        .max(0.0)
+}
+
 /// The longest range of the pet's autocast harmful spells it can afford:
 /// a caster stands back and casts.
 fn caster_range(map: &Map, g: Guid) -> Option<f32> {
@@ -823,7 +877,7 @@ fn caster_range(map: &Map, g: Guid) -> Option<f32> {
         .filter(|t| !helpful(t))
         .filter(|t| t.has_effect(2) && t.casting_time_index > 1)
         .filter(|t| f.get_u32(UNIT_FIELD_POWER1 + t.power_type.min(4) as u16) >= t.mana_cost)
-        .map(|t| data.spells.range(t).1)
+        .map(|t| reach(map, g, t))
         .filter(|r| *r > 8.0)
         .reduce(f32::max)
 }
@@ -848,8 +902,8 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
         if let Some(s) = state_mut(map, g) {
             s.next_think = now + THINK_EVERY;
         }
-        let pick = pick_spell(map, g, victim)
-            .map(|(spell, _)| (spell, victim))
+        let pick = opener(map, g, victim)
+            .or_else(|| pick_spell(map, g, victim).map(|(spell, _)| (spell, victim)))
             .or_else(|| pick_positive(map, g, Some(victim)));
         if let Some((spell, at)) = pick {
             crate::game::map::spells::cast(

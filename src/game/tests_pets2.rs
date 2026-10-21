@@ -499,8 +499,15 @@ async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
     w.heartbeat(at.x, at.y, f32::NAN).await;
     w.heartbeat(at.x, at.y, at.z - 30_000.0).await;
     w.heartbeat(at.x + 3.0, at.y, at.z).await;
-    let told = first_heartbeat_of(&mut w, eye).await;
-    assert_eq!(told.x, at.x + 3.0, "the first move told is the good one");
+    // The warlock's client, which moved it, isn't told back (mangos's
+    // `SendMessageToAllWhoSeeMeMove` skips the mover's player); the eye
+    // took only the good move.
+    until(&map, "the eye moved", move |m| {
+        m.position_of(eye)
+            .is_some_and(|p| (p.x - (at.x + 3.0)).abs() < 0.01)
+    })
+    .await;
+    assert_eq!(position(&map, eye).await.z, at.z, "never out of the world");
 }
 
 #[tokio::test]
