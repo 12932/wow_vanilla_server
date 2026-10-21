@@ -1546,6 +1546,16 @@ mod npcs {
         let mut gossip = creature(4000, "Talker", 0x1 | 0x4);
         gossip.gossip_menu_id = 77;
         add(gossip, 40, 1.0);
+        // Something to sell: a vendor with nothing isn't offered as one
+        // (mangos's `PrepareGossipMenu`).
+        d.vendors.insert(
+            4000,
+            vec![VendorItem {
+                slot: 1,
+                item: 5000,
+                ..Default::default()
+            }],
+        );
         let mut trainer = creature(4001, "Trainer", 0x10);
         trainer.trainer_class = 1;
         add(trainer, 41, 2.0);
@@ -3286,7 +3296,9 @@ mod commerce {
             unknown1: 0,
             unknown2: 0,
             item: jerky,
-            money: Gold::new(100),
+            // Money and cash on delivery don't go together (mangos's
+            // `HandleSendMail`): the item, cash on delivery.
+            money: Gold::new(0),
             cash_on_delivery_amount: 50,
             unknown3: 0,
             unknown4: 0,
@@ -3303,8 +3315,8 @@ mod commerce {
             _ => None,
         })
         .await;
-        // 100 sent, 60 postage.
-        assert_eq!(money_of(&realm, ga).await, 840);
+        // 30 postage, item or not (mangos's).
+        assert_eq!(money_of(&realm, ga).await, 970);
         b.wait_for("SMSG_RECEIVED_MAIL", |m| {
             matches!(m, ServerOpcodeMessage::SMSG_RECEIVED_MAIL(_)).then_some(())
         })
@@ -3364,8 +3376,8 @@ mod commerce {
         // Onto Bob's own four, as mangos stacks what comes.
         assert_eq!(jerky_of(&realm, gb).await, 8);
         assert!(!holds(&realm, ga, jerky).await);
-        // Bob paid 50 and took 100.
-        assert_eq!(money_of(&realm, gb).await, 1050);
+        // Bob paid 50.
+        assert_eq!(money_of(&realm, gb).await, 950);
         // Alice gets the 50.
         a.wait_for("the payment's mail", |m| {
             matches!(m, ServerOpcodeMessage::SMSG_RECEIVED_MAIL(_)).then_some(())

@@ -10,7 +10,7 @@ use crate::game::map::creature::Creature;
 use crate::game::map::{Map, MapKey, chat};
 
 const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, .die, .revive, .levelup [n], .gm [on|off], .speed <multiplier>, \
-.online, .maps, .save, .announce <text>, .kick <name>, .spawn <entry>, .account create|password <name> <password>, \
+.online, .maps, .save, .announce <text>, .kick <name>, .rename [name], .spawn <entry>, .account create|password <name> <password>, \
 .account gm <name> <level>, .reload config, .ban <account> <minutes|perm> [reason], .unban <account>, .ticket list|<id>|respond <id> <answer>|close <id>, .honor [week|points <n>], .arena start|stop|status|history, .help";
 
 /// The commands a player has, as mangos-classic's `SEC_PLAYER` table
@@ -231,6 +231,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
             None
         }
         "kick" => Some(kick(map, &args)),
+        "rename" => Some(rename(map, guid, &args)),
         "spawn" => spawn(map, guid, &args),
         "tele" => tele(map, guid, &args),
         "die" => {
@@ -454,6 +455,52 @@ fn kick(map: &Map, args: &[&str]) -> String {
         }
         None => format!("{name} isn't online."),
     }
+}
+
+/// `.rename [name]`: the character named, or the player targeted, must
+/// take a new name before they next enter the world (mangos's
+/// `.character rename`, `AT_LOGIN_RENAME`): kept on them if they are
+/// online, else in the store.
+fn rename(map: &mut Map, guid: Guid, args: &[&str]) -> String {
+    use crate::game::store::AT_LOGIN_RENAME;
+    let target = match args.first() {
+        Some(name) => match map.realm.registry.guid_by_name(name) {
+            Some(g) => g,
+            None => return format!("No character {name}."),
+        },
+        None => target_or_self(map, guid),
+    };
+    let name = map
+        .realm
+        .registry
+        .name(target)
+        .map_or_else(String::new, |e| e.name.to_string());
+    if map.realm.registry.online(target).is_some() {
+        crate::game::map::call_player(&map.realm, target, move |m| {
+            if let Some(p) = m.players.get_mut(&target) {
+                p.row.at_login |= AT_LOGIN_RENAME;
+            }
+        });
+        return format!("{name} will be asked for a new name at their next login.");
+    }
+    let realm = map.realm.clone();
+    tokio::spawn(async move {
+        let Some(mut row) = realm.store.load(crate::game::guid::counter(target)).await else {
+            return;
+        };
+        // Logged in meanwhile: flagged where they are.
+        if realm.registry.online(target).is_some() {
+            crate::game::map::call_player(&realm, target, move |m| {
+                if let Some(p) = m.players.get_mut(&target) {
+                    p.row.at_login |= AT_LOGIN_RENAME;
+                }
+            });
+            return;
+        }
+        row.at_login |= AT_LOGIN_RENAME;
+        realm.store.save(row);
+    });
+    format!("{name} will be asked for a new name at their next login.")
 }
 
 fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {

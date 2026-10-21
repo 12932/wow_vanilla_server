@@ -176,8 +176,11 @@ pub fn hello(map: &mut Map, player: Guid, npc: Guid) {
     let options = menu_options(map, menu_id, flags, player, npc);
     let quests = quests::giver_quests(map, player, npc);
     let hunter = is_hunter(map, player);
-    if options.is_empty() && quests.is_empty() && menu_id == 0 {
-        // No menu: the NPC's one service.
+    // No menu at all (none in the data, not even the default): the NPC's
+    // one service. A menu whose options aren't for this player is still
+    // shown, its greeting alone (mangos's `PrepareGossipMenu`).
+    let no_menu = menu_id == 0 && !data.npc.gossip_menus.contains_key(&0);
+    if options.is_empty() && quests.is_empty() && no_menu {
         if flags & NPC_FLAG_VENDOR != 0 {
             return vendor::list(map, player, npc);
         }
@@ -248,10 +251,54 @@ fn menu_options(
             // The stable is for hunters (mangos's `GOSSIP_OPTION_STABLEPET`
             // in `PrepareGossipMenu`).
             .filter(|o| o.kind != GOSSIP_OPTION_STABLEPET || is_hunter(map, player))
+            .filter(|o| crate::game::guid::is_game_object(npc) || offered(map, o.kind, player, npc))
             .cloned()
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// Whether a creature's option of `kind` is for `player`, as mangos's
+/// `PrepareGossipMenu` has each: the quest giver's and the armorer's
+/// placeholders never (the quests are listed below the options); a
+/// spirit healer's to the dead; a vendor's with something to sell; a
+/// trainer's to those it teaches, with something to teach; unlearning
+/// talents at one's own class trainer from level 10; untraining a pet to
+/// a hunter whose pet has spells, at a hunter's pet trainer; a
+/// battlemaster's to those of its battleground's levels. Options mangos
+/// doesn't know aren't shown.
+fn offered(map: &Map, kind: u32, player: Guid, npc: Guid) -> bool {
+    let data = &map.realm.data;
+    let (Some(p), Some(c)) = (map.players.get(&player), map.creature(npc)) else {
+        return false;
+    };
+    let template = data.creature_template(c.entry);
+    match kind {
+        1 | 4 | 7..=11 | 13 | 14 | 100..=104 => true,
+        6 => p.death != crate::game::map::death::Death::Alive,
+        3 => !data.vendor_items(c.entry).is_empty(),
+        5 => template.is_some_and(|t| {
+            !data.npc.trainer_spells(c.entry, t.trainer_id).is_empty() && trains(data, p, t)
+        }),
+        16 => template.is_some_and(|t| {
+            p.level() >= 10 && t.trainer_type == 0 && t.trainer_class == p.row.class
+        }),
+        17 => {
+            template.is_some_and(|t| t.trainer_type == 3 && t.trainer_class == 3)
+                && p.owned
+                    .pet
+                    .is_some_and(|pet| crate::game::map::pets::untrainable(map, player, pet))
+        }
+        12 => {
+            let bg = crate::game::battlegrounds::bg_of_map(
+                crate::game::map::battleground::map_for_battlemaster(map, npc),
+            );
+            let level = u32::from(p.level());
+            bg.and_then(|bg| data.battlegrounds.get(&bg))
+                .is_none_or(|t| level >= t.min_level && level <= t.max_level)
+        }
+        _ => false,
+    }
 }
 
 /// A menu's greeting for `player`, as Thistle Tea picks it: of the texts
@@ -305,7 +352,15 @@ pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags
             player,
         );
     }
-    let gossips = menu_options(map, menu_id, npc_flags, player, npc)
+    let options = menu_options(map, menu_id, npc_flags, player, npc);
+    // A flight master's node is learned as its menu is shown; with no
+    // quests to list, the discovery is all the player is sent (mangos's
+    // `PrepareGossipMenu`, `SendLearnNewTaxiNode`, and
+    // `SendPreparedGossip`'s `IsJustDiscoveredNode`).
+    let discovered = !crate::game::guid::is_game_object(npc)
+        && options.iter().any(|o| o.kind == 4)
+        && discover_node(map, player, npc);
+    let gossips = options
         .iter()
         .map(|o| GossipItem {
             id: o.id,
@@ -317,6 +372,9 @@ pub fn show_menu(map: &mut Map, player: Guid, npc: Guid, menu_id: u32, npc_flags
     let quests = quests::giver_quests(map, player, npc);
     if let Some(p) = map.players.get_mut(&player) {
         p.gossip_menu = Some((npc, menu_id));
+        if discovered && quests.is_empty() {
+            return;
+        }
         p.outbound.send(&SMSG_GOSSIP_MESSAGE {
             guid: npc,
             title_text_id: text,
@@ -438,6 +496,21 @@ pub fn select(map: &mut Map, player: Guid, npc: Guid, option: u32) {
         }
         15 => vendor::list(map, player, npc),
         16 => crate::game::map::misc::talent_wipe_offer(map, player, npc),
+        // The window closes, and the guild master's charter, or the tabard
+        // designer, opens (mangos's `GOSSIP_OPTION_PETITIONER` and
+        // `GOSSIP_OPTION_TABARDDESIGNER`).
+        10 => {
+            send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            if npc_entry(map, player, npc, NPC_FLAG_PETITIONER).is_some() {
+                crate::game::social::guilds::petition_showlist(map, player, npc);
+            }
+        }
+        11 => {
+            send(map, player, &SMSG_GOSSIP_COMPLETE {});
+            if npc_entry(map, player, npc, NPC_FLAG_TABARDDESIGNER).is_some() {
+                send(map, player, &MSG_TABARDVENDOR_ACTIVATE { guid: npc });
+            }
+        }
         _ => send(map, player, &SMSG_GOSSIP_COMPLETE {}),
     }
     if talked {
@@ -609,6 +682,9 @@ pub fn trains(
                 })
         }
         3 => p.row.class == 3,
+        // A profession's trainer teaches those who have the profession it
+        // asks for (`TRAINER_TYPE_TRADESKILLS`, `TrainerSpell`).
+        2 => t.trainer_spell == 0 || p.spells.contains(&t.trainer_spell),
         _ => true,
     }
 }
@@ -1025,6 +1101,26 @@ pub fn taxi_status(map: &mut Map, player: Guid, npc: Guid) {
             taxi_mask_node_known: knows_node(&p.row.state.taxi_mask, node),
         });
     }
+}
+
+/// The flight master's node learned, if it wasn't known: the player is
+/// told of it (mangos's `SendLearnNewTaxiNode`).
+fn discover_node(map: &mut Map, player: Guid, npc: Guid) -> bool {
+    let Some(node) = node_at(map, npc, player) else {
+        return false;
+    };
+    let Some(p) = map.players.get_mut(&player) else {
+        return false;
+    };
+    if !learn_node(&mut p.row.state.taxi_mask, node) {
+        return false;
+    }
+    p.outbound.send(&SMSG_NEW_TAXI_PATH {});
+    p.outbound.send(&SMSG_TAXINODE_STATUS {
+        guid: npc,
+        taxi_mask_node_known: true,
+    });
+    true
 }
 
 /// `CMSG_TAXIQUERYAVAILABLENODES`: the nodes the player knows, this one

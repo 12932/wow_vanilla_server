@@ -314,6 +314,18 @@ mod tests_p12j_guilds;
 #[cfg(test)]
 mod tests_p12j_zones;
 #[cfg(test)]
+mod tests_p12k_auction;
+#[cfg(test)]
+mod tests_p12k_mail;
+#[cfg(test)]
+mod tests_p12k_npc;
+#[cfg(test)]
+mod tests_p12k_offline;
+#[cfg(test)]
+mod tests_p12k_rename;
+#[cfg(test)]
+mod tests_p12k_vendor;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

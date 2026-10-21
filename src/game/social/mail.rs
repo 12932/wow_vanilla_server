@@ -106,6 +106,12 @@ impl Mails {
                         crate::game::store::parse_record::<Mail>(KIND_MAIL, id.into(), data)
                     {
                         mail.id = id;
+                        // Mail not yet due is announced when it is, after a
+                        // restart too (mangos rebuilds the next mail's time
+                        // at load).
+                        if mail.deliver_at > now() {
+                            m.pending.push(id);
+                        }
                         // Through `insert`, which keeps the index by receiver.
                         m.insert(mail);
                     }
@@ -419,6 +425,12 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         return;
     }
     let money = m.money.as_int();
+    // Money and cash on delivery together the client never sends (mangos's
+    // `HandleSendMail`).
+    if money > 0 && m.cash_on_delivery_amount > 0 {
+        fail(map, Two::ErrInternalError);
+        return;
+    }
     let item_at = (!m.item.is_zero())
         .then(|| map.players.get(&g).and_then(|p| p.item_by_guid(m.item)))
         .flatten();
@@ -426,7 +438,9 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
         fail(map, Two::ErrMailAttachmentInvalid);
         return;
     }
-    let postage = POSTAGE * if item_at.is_some() { 2 } else { 1 };
+    // Thirty copper, with an item or without (mangos's `HandleSendMail`,
+    // the client's own figure).
+    let postage = POSTAGE;
     let Some(p) = map.players.get(&g) else {
         return;
     };
@@ -445,7 +459,16 @@ pub fn send(map: &mut Map, g: Guid, m: CMSG_SEND_MAIL) {
                 .data
                 .item(item.entry)
                 .is_some_and(|t| t.container_slots > 0);
+        // Nor a conjured item, nor one whose time runs (mangos's
+        // `HandleSendMail`).
+        let conjured = realm
+            .data
+            .item(item.entry)
+            .is_some_and(|t| t.flags & crate::game::map::items::TEMPLATE_FLAG_CONJURED != 0);
+        let timed = item.fields.get_u32(ITEM_FIELD_DURATION) != 0;
         if (bound && !me.gm)
+            || conjured
+            || timed
             || bag_with_items
             || item.bag == crate::game::store::BAG_PLAYER && item.slot < 19
             || crate::game::map::vendor::in_buyback(item.bag, item.slot)
@@ -562,12 +585,17 @@ pub fn take_money(map: &mut Map, g: Guid, id: u32) {
 }
 
 /// `CMSG_MAIL_TAKE_ITEM`: cash on delivery is paid, and goes to the sender.
+///
+/// The mail's lock is held from the read of its item to its clearing: let
+/// go between, the sweep could send an expiring mail back, item and all,
+/// while the taker kept a copy (R4-21).
 pub fn take_item(map: &mut Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
     type R = SMSG_SEND_MAIL_RESULT_MailResult;
-    let Some((item, cod, sender, subject)) = with_mail(map, g, id, |m| {
-        (m.item.clone(), m.cod, m.sender, m.subject.clone())
-    }) else {
+    let mut mails = realm.social.mail.lock();
+    let Some((item, cod, sender, subject)) =
+        own_mail(&mut mails, g, id).map(|m| (m.item.clone(), m.cod, m.sender, m.subject.clone()))
+    else {
         return;
     };
     let Some(item) = item else {
@@ -608,7 +636,6 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
         return;
     }
     let mut records = Records::new();
-    let mut mails = realm.social.mail.lock();
     if cod > 0 {
         if let Some(p) = map.players.get_mut(&g) {
             p.set_money(money - cod);
@@ -657,10 +684,9 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
 pub fn mark_read(map: &Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
     with_mail(map, g, id, |m| {
-        // Read, it goes in three days at most (Thistle Tea's `mark_read`).
-        if m.flags & READ == 0 {
-            m.expires_at = m.expires_at.min(now() + 3 * DAY);
-        }
+        // Read, it keeps its time: 30 days from delivery, 3 cash on delivery
+        // (mangos's `HandleMailMarkAsRead`; Thistle Tea's `mark_read` cut it
+        // to three days, attachments and all).
         m.flags |= READ;
         save(&realm, m);
     });
@@ -706,6 +732,24 @@ pub fn return_to_sender(map: &Map, g: Guid, id: u32) {
 pub fn delete(map: &Map, g: Guid, id: u32) {
     let realm = &map.realm;
     let mut mails = realm.social.mail.lock();
+    // A mail cash on delivery isn't deleted: its item is the sender's until
+    // paid for, and goes back (mangos's `HandleMailDelete`).
+    if mails
+        .mails
+        .get(&id)
+        .is_some_and(|m| m.receiver == guid::counter(g) && m.cod > 0)
+    {
+        drop(mails);
+        result(
+            map,
+            g,
+            id,
+            SMSG_SEND_MAIL_RESULT_MailAction::Deleted {
+                result2: Two::ErrInternalError,
+            },
+        );
+        return;
+    }
     if mails
         .mails
         .get(&id)
@@ -726,18 +770,15 @@ pub fn delete(map: &Map, g: Guid, id: u32) {
 /// `CMSG_MAIL_CREATE_TEXT_ITEM`: the mail's text, copied onto a letter.
 pub fn make_letter(map: &mut Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
-    let Some(body) = with_mail(map, g, id, |m| {
-        (m.flags & COPIED == 0 && !m.body.is_empty()).then(|| m.body.clone())
-    })
-    .flatten() else {
+    // Under the mail's lock from the read to the mark, as `take_item`: two
+    // asks at once make one letter.
+    let mut mails = realm.social.mail.lock();
+    let Some(body) = own_mail(&mut mails, g, id)
+        .and_then(|m| (m.flags & COPIED == 0 && !m.body.is_empty()).then(|| m.body.clone()))
+    else {
         return;
     };
-    let text_id = {
-        let mut mails = realm.social.mail.lock();
-        let tid = mails.next_id();
-        mails.texts.insert(tid, body.clone());
-        tid
-    };
+    let text_id = mails.next_id();
     let mut records = Records::new();
     records.put(KIND_TEXT, u64::from(text_id), &body);
     let counter = realm
@@ -753,8 +794,8 @@ pub fn make_letter(map: &mut Map, g: Guid, id: u32) {
     if crate::game::map::inventory::attach_item(map, g, &row).is_err() {
         return;
     }
+    mails.texts.insert(text_id, body.clone());
     // The letter, its text and the mail marked copied, together.
-    let mut mails = realm.social.mail.lock();
     if let Some(m) = own_mail(&mut mails, g, id) {
         m.flags |= COPIED;
         records.put(KIND_MAIL, u64::from(id), m);

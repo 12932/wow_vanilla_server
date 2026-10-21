@@ -555,6 +555,7 @@ fn untraining_world() -> GameData {
             npc_flags: crate::game::map::npc::NPC_FLAG_GOSSIP
                 | crate::game::map::npc::NPC_FLAG_TRAINER,
             trainer_type: 3,
+            trainer_class: 3,
             ..Default::default()
         },
     );

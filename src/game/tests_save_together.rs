@@ -286,7 +286,7 @@ async fn a_mail_sent_saves_the_sender_with_it() {
     assert_eq!(mail.money, 200);
     let alice = stored(&realm, a.guid).await;
     assert!(!holds(&alice, item), "the goods out of Alice's stored bags");
-    assert_eq!(alice.money, MONEY - 200 - 2 * 30, "the money and postage");
+    assert_eq!(alice.money, MONEY - 200 - 30, "the money and postage");
 }
 
 /// A mail's item and money taken: the mail without them and the taker

@@ -184,6 +184,11 @@ pub struct CharacterState {
     pub category_cooldowns: Vec<(u32, u32)>,
     /// Where those came from: (spell, the item's entry or 0, category).
     pub cooldown_sources: Vec<(u32, u32, u32)>,
+    /// When the auras and cooldowns above were saved (Unix milliseconds):
+    /// what of them runs while the character is away runs from then
+    /// (mangos's saved expiry times, and `_LoadAuras`' `timediff`). 0 in a
+    /// character saved before it was kept, whose logout time stands in.
+    pub saved_at_ms: i64,
     /// Standings with factions, as offsets from the base.
     pub reputation: Vec<crate::game::map::reputation::Standing>,
     /// The reputation index watched on the experience bar.
@@ -396,6 +401,9 @@ pub struct CharacterRow {
 
 /// `at_login` flag: the character has never entered the world.
 pub const AT_LOGIN_FIRST: u32 = 0x1;
+/// `at_login` flag: the character must be given a new name before it
+/// enters the world (mangos's `AT_LOGIN_RENAME`, set by `.rename`).
+pub const AT_LOGIN_RENAME: u32 = 0x2;
 
 /// What the store knows at start-up: every character's name, and the
 /// highest GUIDs in use or ever handed out (the `counters`).

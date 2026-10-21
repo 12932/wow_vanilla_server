@@ -775,6 +775,7 @@ impl Player {
         row.state.category_cooldowns =
             crate::game::map::spells::cooldowns::saved_category_cooldowns(self, now);
         row.state.cooldown_sources = crate::game::map::spells::cooldowns::saved_sources(self, now);
+        row.state.saved_at_ms = chrono::Utc::now().timestamp_millis();
         row.spells = self.spells.clone();
         row.state.skills = Some(crate::game::map::skills::saved(self));
         row

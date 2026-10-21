@@ -1562,7 +1562,12 @@ async fn real_gossip_defaults_side_conditions_and_mount_trainers() {
     let (mut a, alliance, kalimdor) =
         enter(&realm, "P3JGOSS1", "Gossa", Race::NightElf, Class::Druid).await;
     let (_h, horde, _) = enter(&realm, "P3JGOSS2", "Gossb", Race::Tauren, Class::Druid).await;
+    // Of the battleground's levels: a battlemaster's option is for those
+    // (mangos's `CanInteractWithBattleMaster` in `PrepareGossipMenu`).
     let master = on(&kalimdor, move |m| {
+        let data = m.realm.data.clone();
+        let p = m.players.get_mut(&alliance).unwrap();
+        crate::game::map::stats::set_level(p, &data, 20);
         dummy(m, alliance, BATTLEMASTER, 60, 2.0)
     })
     .await;

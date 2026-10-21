@@ -8,7 +8,8 @@
 //!   the share of charges it has left; a part of a stack sold is bought
 //!   back on its own; the buyback slots fill in turn, then the first free,
 //!   then the oldest, and empty at logout;
-//! - repairing everything is all or nothing, at the reputation discount;
+//! - repairing everything goes item by item, worn first, while the money
+//!   lasts (mangos's `DurabilityRepairAll`), at the reputation discount;
 //! - dying wears each worn item down a tenth, and a blow now and then a
 //!   point off one.
 
@@ -123,6 +124,21 @@ pub fn restock_secs(v: &VendorItem, percent: u32, population: u32) -> u32 {
     secs.max(1)
 }
 
+/// Whether a vendor offers `t` to `p`: an item of another race never, one
+/// bound when picked up of another class never; a GM everything (mangos's
+/// `SendListInventory`).
+fn for_race_and_class(p: &Player, t: &ItemTemplate) -> bool {
+    const BIND_ON_PICKUP: u32 = 1;
+    if p.gm_level >= crate::accounts::GAME_MASTER {
+        return true;
+    }
+    let mask = |allowed: i32, of: u8| {
+        allowed == 0 || allowed == -1 || (allowed as u32) & (1u32 << (of.max(1) - 1)) != 0
+    };
+    mask(t.allowable_race, p.row.race)
+        && (t.bonding != BIND_ON_PICKUP || mask(t.allowable_class, p.row.class))
+}
+
 /// `CMSG_LIST_INVENTORY`.
 pub fn list(map: &mut Map, player: Guid, npc: Guid) {
     let Some(entry) = vendor_entry(map, player, npc, NPC_FLAG_VENDOR) else {
@@ -136,6 +152,13 @@ pub fn list(map: &mut Map, player: Guid, npc: Guid) {
         };
         if v.condition != 0
             && !crate::game::map::conditions::met(map, v.condition, Some(npc), Some(player))
+        {
+            continue;
+        }
+        if map
+            .players
+            .get(&player)
+            .is_some_and(|p| !for_race_and_class(p, t))
         {
             continue;
         }
@@ -232,6 +255,15 @@ fn buy_to(
     let Some(t) = data.item(item) else {
         return;
     };
+    // An item not listed for the player isn't sold to them.
+    if map
+        .players
+        .get(&player)
+        .is_some_and(|p| !for_race_and_class(p, t))
+    {
+        buy_failed(map, player, npc, item, BuyResult::CantFindItem);
+        return;
+    }
     // A standing short of the item's: its own faction's, else the
     // vendor's (mangos's `BuyItemFromVendor`, Thistle Tea's
     // `item_requirement_met?`).
@@ -656,7 +688,10 @@ fn mendable(it: &Item) -> bool {
 }
 
 /// `CMSG_REPAIR_ITEM`: one item, or (with a zero guid) everything worn and
-/// carried, paid for at once or not at all.
+/// carried, item by item: what is worn, then the backpack, then each bag's,
+/// each paid for in turn, one the money left can't pay for (or with no
+/// cost to its kind) left as it is (mangos's `DurabilityRepairAll` and
+/// `DurabilityRepair`).
 pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
     if vendor_entry(map, player, npc, NPC_FLAG_REPAIR).is_none() {
         return;
@@ -666,13 +701,25 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    let mut costs = Vec::new();
-    for (i, it) in p.items.iter().enumerate() {
-        // Worn or carried, never the bank's (Thistle Tea's
-        // `Durability.repair`), one by one as all at once.
-        if !mendable(it) || !(item.is_zero() || it.guid == item) {
-            continue;
+    // Worn or carried, never the bank's (Thistle Tea's
+    // `Durability.repair`), one by one as all at once.
+    let mut order: Vec<usize> = (0..p.items.len())
+        .filter(|i| {
+            let it = &p.items[*i];
+            mendable(it) && (item.is_zero() || it.guid == item)
+        })
+        .collect();
+    order.sort_by_key(|i| {
+        let it = &p.items[*i];
+        if it.bag == BAG_PLAYER {
+            (0, 0, it.slot)
+        } else {
+            (1, it.bag, it.slot)
         }
+    });
+    let mut mended = false;
+    for i in order {
+        let it = &p.items[i];
         let (max, now) = (
             it.fields.get_u32(ITEM_FIELD_MAXDURABILITY),
             it.fields.get_u32(ITEM_FIELD_DURABILITY),
@@ -684,20 +731,19 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
             .item(it.entry)
             .and_then(|t| repair_cost(&data, t, max - now, discount))
         else {
-            return;
+            continue;
         };
-        costs.push((i, cost, max));
-    }
-    let total: u32 = costs.iter().map(|(_, c, _)| c).sum();
-    if costs.is_empty() || p.money() < total {
-        return;
-    }
-    let money = p.money() - total;
-    p.set_money(money);
-    for (i, _, max) in costs {
+        if p.money() < cost {
+            continue;
+        }
+        let money = p.money() - cost;
+        p.set_money(money);
         p.items[i].fields.set_u32(ITEM_FIELD_DURABILITY, max);
+        mended = true;
     }
-    broke(p, &data);
+    if mended {
+        broke(p, &data);
+    }
 }
 
 /// Wear on everything worn: `fraction` of each item's full durability, at

@@ -4,6 +4,8 @@
 //! cancelling, the searches, and settlement by mail. Each auction is kept
 //! as a record.
 
+use std::sync::Arc;
+
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 use wow_world_messages::Guid;
@@ -25,7 +27,7 @@ pub const PAGE: usize = 50;
 /// The most an auction may ask: mangos's `MAX_MONEY_AMOUNT`.
 const MAX_PRICE: u32 = 0x7FFF_FFFE;
 
-// The mail an auction sends: `item:0:answer`.
+// The mail an auction sends: `item:random property:answer`.
 const OUTBID: u32 = 0;
 const WON: u32 = 1;
 const SOLD: u32 = 2;
@@ -54,7 +56,35 @@ pub struct Auction {
 
 /// The random property of an auction's item, which its notices name.
 fn random_property(realm: &Realm, item: &ItemRow) -> u32 {
-    Item::shown(&realm.data, item).random_property
+    property_of(&realm.data, item)
+}
+
+/// An item's random property: none for one with nothing kept of it (most),
+/// without building the item.
+fn property_of(data: &GameData, item: &ItemRow) -> u32 {
+    if item.data.is_empty() {
+        0
+    } else {
+        Item::shown(data, item).random_property
+    }
+}
+
+impl Auctions {
+    /// The lowercased full name a search matches `a` by ("silk robe of the
+    /// eagle", Thistle Tea's `Query`), kept.
+    fn name_of(&mut self, data: &GameData, entry: u32, property: u32) -> Option<Arc<str>> {
+        if let Some(n) = self.names.get(&(entry, property)) {
+            return Some(n.clone());
+        }
+        let t = data.item(entry)?;
+        let full = match data.crafts.random_property_names.get(&property) {
+            Some(suffix) => format!("{} {}", t.name, suffix),
+            None => t.name.clone(),
+        };
+        let lower: Arc<str> = full.to_lowercase().into();
+        self.names.insert((entry, property), lower.clone());
+        Some(lower)
+    }
 }
 
 impl Auction {
@@ -91,8 +121,14 @@ impl Auction {
 
 #[derive(Debug, Default)]
 pub struct Auctions {
-    pub auctions: AHashMap<u32, Auction>,
+    /// By id, in its order: a search's matches come out in the order the
+    /// client pages them, unsorted (R4-45).
+    pub auctions: std::collections::BTreeMap<u32, Auction>,
     next_id: u32,
+    /// Each item's name with its suffix, lowercased, as a search matches it
+    /// (by entry and random property): worked out once, not for every
+    /// auction at every search (R4-45).
+    names: AHashMap<(u32, u32), Arc<str>>,
 }
 
 impl Auctions {
@@ -156,29 +192,49 @@ fn save(realm: &Realm, a: &Auction) {
     realm.store.put_record(KIND_AUCTION, u64::from(a.id), a);
 }
 
-fn subject(a: &Auction, answer: u32) -> String {
-    format!("{}:0:{answer}", a.item.entry)
+/// An auction mail's subject, which the client reads into its title: the
+/// item, its random property (the "of the Monkey" of its name) and what
+/// happened (mangos's `itemTemplate:itemRandomPropertyId:answer`).
+fn subject(data: &GameData, a: &Auction, answer: u32) -> String {
+    let random = Item::shown(data, &a.item).random_property;
+    format!("{}:{random}:{answer}", a.item.entry)
 }
 
-/// A mail from the auction house.
+/// The invoice a won or sold auction's mail carries, which the client
+/// reads (`GetInboxInvoiceInfo`): the other party's GUID in hex, the bid
+/// and the buyout, and for the seller the deposit and the house's cut
+/// (mangos's `SendAuctionWonMail` and `SendAuctionSuccessfulMail`).
+fn invoice(other: u32, a: &Auction, deposit_and_cut: Option<u32>) -> String {
+    let mut body = format!("{other:>16x}:{}:{}", a.bid, a.buyout);
+    if let Some(cut) = deposit_and_cut {
+        body.push_str(&format!(":{}:{cut}", a.deposit));
+    }
+    body
+}
+
+/// A mail from the auction house, at once: none is copied onto a letter
+/// (mangos's `MAIL_CHECK_MASK_COPIED`).
 fn mail_from(
+    data: &GameData,
     a: &Auction,
     to: u32,
     answer: u32,
     item: Option<ItemRow>,
     money: u32,
-    delay: i64,
+    body: String,
 ) -> Mail {
     let now = mail::now();
     Mail {
         kind: mail::AUCTION,
         sender: a.house,
         receiver: to,
-        subject: subject(a, answer),
+        subject: subject(data, a, answer),
+        body,
         item,
         money,
-        deliver_at: now + delay,
-        expires_at: now + delay + 30 * DAY,
+        deliver_at: now,
+        expires_at: now + 30 * DAY,
+        flags: mail::COPIED,
         auction: a.id,
         ..Default::default()
     }
@@ -341,20 +397,30 @@ fn settle(realm: &Realm, mails: &mut Mails, a: &Auction, records: &mut Records) 
     mail::post_in(
         realm,
         mails,
-        mail_from(a, a.bidder, WON, Some(a.item.clone()), 0, 0),
+        mail_from(
+            &realm.data,
+            a,
+            a.bidder,
+            WON,
+            Some(a.item.clone()),
+            0,
+            invoice(a.owner, a, None),
+        ),
         records,
     );
-    let delay = realm.config().mail_delay.as_secs() as i64;
+    // The takings at once, as mangos-classic pays them (its
+    // `SendAuctionSuccessfulMail`, with no delay; wvs held them an hour).
     mail::post_in(
         realm,
         mails,
         mail_from(
+            &realm.data,
             a,
             a.owner,
             SOLD,
             None,
             (a.bid - cut).saturating_add(a.deposit),
-            delay,
+            invoice(a.bidder, a, Some(cut)),
         ),
         records,
     );
@@ -468,7 +534,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         mail::post_in(
             &realm,
             &mut mails,
-            mail_from(a, a.bidder, OUTBID, None, a.bid, 0),
+            mail_from(&realm.data, a, a.bidder, OUTBID, None, a.bid, String::new()),
             &mut records,
         );
         send_to(
@@ -575,14 +641,30 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
         mail::post_in(
             &realm,
             &mut mails,
-            mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+            mail_from(
+                &realm.data,
+                &a,
+                a.bidder,
+                CANCELLED_TO_BIDDER,
+                None,
+                a.bid,
+                String::new(),
+            ),
             &mut records,
         );
     }
     mail::post_in(
         &realm,
         &mut mails,
-        mail_from(&a, a.owner, CANCELLED, Some(a.item.clone()), 0, 0),
+        mail_from(
+            &realm.data,
+            &a,
+            a.owner,
+            CANCELLED,
+            Some(a.item.clone()),
+            0,
+            String::new(),
+        ),
         &mut records,
     );
     // The auction gone, its item mailed back, the bid refunded and the
@@ -616,48 +698,60 @@ pub fn list(map: &Map, g: Guid, m: &CMSG_AUCTION_LIST_ITEMS) {
     let market = market_of(house);
     let name = m.searched_name.to_lowercase();
     let now = mail::now();
-    let auctions = realm.social.auctions.lock();
-    let mut found: Vec<&Auction> = auctions
-        .auctions
-        .values()
-        .filter(|a| a.market == market && a.expires_at > now)
-        .filter(|a| {
-            let Some(t) = realm.data.item(a.item.entry) else {
-                return false;
-            };
-            // Its name with its suffix, "Silk Robe of the Eagle" (Thistle
-            // Tea's `Query`).
-            let full = match realm
-                .data
-                .crafts
-                .random_property_names
-                .get(&Item::shown(&realm.data, &a.item).random_property)
-            {
-                Some(suffix) => format!("{} {}", t.name, suffix),
-                None => t.name.clone(),
-            };
-            (name.is_empty() || full.to_lowercase().contains(&name))
-                && (m.usable == 0 || usable_by(me, &realm.data, t))
-                && (m.minimum_level == 0 || t.required_level >= u32::from(m.minimum_level))
-                && (m.maximum_level == 0 || t.required_level <= u32::from(m.maximum_level))
-                && (m.auction_slot_id == u32::MAX
+    let data = &realm.data;
+    let mut guard = realm.social.auctions.lock();
+    let auctions = &mut *guard;
+    // What the template says first, the name last: a search for a name
+    // matches each auction's kept name, not one formatted and lowercased
+    // for it (R4-45).
+    let mut found: Vec<u32> = Vec::new();
+    for a in auctions.auctions.values() {
+        if a.market != market || a.expires_at <= now {
+            continue;
+        }
+        let Some(t) = data.item(a.item.entry) else {
+            continue;
+        };
+        let wanted = (m.usable == 0 || usable_by(me, data, t))
+            && (m.minimum_level == 0 || t.required_level >= u32::from(m.minimum_level))
+            && (m.maximum_level == 0 || t.required_level <= u32::from(m.maximum_level))
+            && (m.auction_slot_id == u32::MAX
                     || t.inventory_type == m.auction_slot_id
                     // The chest's slot finds the robes too (mangos's
                     // `BuildListAuctionItems`, Thistle Tea's `Query`).
                     || (m.auction_slot_id == INVTYPE_CHEST && t.inventory_type == INVTYPE_ROBE))
-                && (m.auction_main_category == u32::MAX || t.class == m.auction_main_category)
-                && (m.auction_sub_category == u32::MAX || t.subclass == m.auction_sub_category)
-                && t.quality >= m.auction_quality.as_int() as u32
-        })
-        .collect();
-    found.sort_by_key(|a| a.id);
+            && (m.auction_main_category == u32::MAX || t.class == m.auction_main_category)
+            && (m.auction_sub_category == u32::MAX || t.subclass == m.auction_sub_category)
+            && t.quality >= m.auction_quality.as_int() as u32;
+        if wanted {
+            found.push(a.id);
+        }
+    }
+    if !name.is_empty() {
+        let keys: Vec<(u32, u32, u32)> = found
+            .iter()
+            .filter_map(|id| auctions.auctions.get(id))
+            .map(|a| (a.id, a.item.entry, property_of(data, &a.item)))
+            .collect();
+        found = keys
+            .into_iter()
+            .filter(|(_, entry, property)| {
+                auctions
+                    .name_of(data, *entry, *property)
+                    .is_some_and(|n| n.contains(&name))
+            })
+            .map(|(id, _, _)| id)
+            .collect();
+    }
     let total = found.len() as u32;
     let page = found
         .into_iter()
         .skip(m.list_start_item as usize)
         .take(PAGE)
-        .map(|a| a.list_item(&realm.data))
+        .filter_map(|id| auctions.auctions.get(&id))
+        .map(|a| a.list_item(data))
         .collect();
+    drop(guard);
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_AUCTION_LIST_RESULT {
             auctions: page,
@@ -769,7 +863,15 @@ pub fn sweep(realm: &Realm) {
             mail::post_in(
                 realm,
                 &mut mails,
-                mail_from(&a, a.owner, EXPIRED, Some(a.item.clone()), 0, 0),
+                mail_from(
+                    &realm.data,
+                    &a,
+                    a.owner,
+                    EXPIRED,
+                    Some(a.item.clone()),
+                    0,
+                    String::new(),
+                ),
                 &mut records,
             );
             send_to(
@@ -810,7 +912,15 @@ pub fn character_deleted(realm: &Realm, counter: u32) {
             mail::post_in(
                 realm,
                 &mut mails,
-                mail_from(&a, a.bidder, CANCELLED_TO_BIDDER, None, a.bid, 0),
+                mail_from(
+                    &realm.data,
+                    &a,
+                    a.bidder,
+                    CANCELLED_TO_BIDDER,
+                    None,
+                    a.bid,
+                    String::new(),
+                ),
                 &mut records,
             );
         }
