@@ -55,6 +55,7 @@ async fn a_pull_sets_the_fight_and_stopping_the_attack_keeps_the_rest() {
                 pushbacks: 0,
                 channel_until: None,
                 duration: 3000,
+                at: None,
             };
             m.caster_mut(brute).unwrap().casting = Some(cast);
             combat::stop_attack(m, brute);

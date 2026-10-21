@@ -168,6 +168,15 @@ pub struct Casting {
     pub channel_until: Option<Instant>,
     /// The cast's full time, for a channel's pushback.
     pub duration: u32,
+    /// Where the caster stood and faced as it began: a move from there, or
+    /// a turn of a tenth of a radian, is what breaks it (mangos's
+    /// `m_castPositionX` and `m_castOrientation`).
+    pub at: Option<(Vector3d, f32)>,
+}
+
+/// Where a caster stands and faces, for [`Casting::at`].
+pub fn stance(map: &Map, g: Guid) -> Option<(Vector3d, f32)> {
+    map.unit_view(g).map(|u| (u.position, u.orientation))
 }
 
 /// A unit's spellcasting: the cast under way and the cooldowns.
@@ -1029,6 +1038,7 @@ pub fn cast(
     // `AURA_INTERRUPT_FLAG_ACTION` at `Spell::prepare`).
     let stealthy = class_scripts::allows_stealth(s);
     action_breaks(map, caster, s, auras::INTERRUPT_ACTION, stealthy);
+    let at = stance(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         c.casting = Some(Casting {
             spell,
@@ -1038,6 +1048,7 @@ pub fn cast(
             pushbacks: 0,
             channel_until: None,
             duration: time,
+            at,
         });
     }
     true
@@ -1373,6 +1384,7 @@ fn execute(
             }
             None => 0,
         };
+        let at = stance(map, caster);
         if let Some(c) = map.caster_mut(caster) {
             c.casting = Some(Casting {
                 spell: s.id,
@@ -1382,6 +1394,7 @@ fn execute(
                 pushbacks: 0,
                 channel_until: Some(now + Duration::from_millis(u64::from(ms))),
                 duration: ms,
+                at,
             });
         }
         if let Some(f) = map.unit_fields_mut(caster) {
@@ -2659,16 +2672,28 @@ pub fn cancel(map: &mut Map, g: Guid) {
     crate::game::map::combat::cancel_queued(map, g);
 }
 
-/// A player moved: a cast that movement interrupts stops.
+/// How far from where a cast began a caster may be before it has moved:
+/// float noise alone (mangos compares the position exactly).
+const MOVED_FROM_CAST: f32 = 0.01;
+
+/// A player moved: a cast that movement interrupts stops, once the caster
+/// is away from where it began, however small the steps (mangos's
+/// `Spell::update` against `m_castPositionX`).
 pub fn moved(map: &mut Map, g: Guid) {
     environment::moved(map, g);
-    let Some((spell, channel)) = map
+    let here = map.unit_view(g).map(|u| u.position);
+    let Some((spell, channel, from)) = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
-        .map(|c| (c.spell, c.channel_until.is_some()))
+        .map(|c| (c.spell, c.channel_until.is_some(), c.at.map(|(p, _)| p)))
     else {
         return;
     };
+    if let (Some(from), Some(here)) = (from, here)
+        && combat::dist(from, here) <= MOVED_FROM_CAST
+    {
+        return;
+    }
     let breaks = map.realm.data.spells.get(spell).is_some_and(|s| {
         if channel {
             s.channel_interrupt_flags & 0x8 != 0 || s.interrupt_flags & 0x1 != 0
@@ -2683,27 +2708,50 @@ pub fn moved(map: &mut Map, g: Guid) {
 
 /// `AURA_INTERRUPT_FLAG_TURNING` among a channel's interrupt flags.
 const CHANNEL_INTERRUPT_TURNING: u32 = 0x10;
+/// How far a player may turn from where a channel began (mangos's
+/// "client server mismatch").
+const TURN_LEEWAY: f32 = 0.10;
+/// `SPELL_ATTR_EX_TRACK_TARGET_IN_CHANNEL`: the client turns to its target
+/// as the channel starts.
+const ATTR_EX_TRACK_TARGET_IN_CHANNEL: u32 = 0x4000;
 
-/// A player turned or jumped: a channel stops on a jump, and on a turn if
-/// its channel interrupt flags say so (mangos-classic's `Spell::update` for
+/// A player turned or jumped: a channel stops on a jump, and on a turn of
+/// more than a tenth of a radian from where it began if its channel
+/// interrupt flags say so, more for one the client turns to its target in
+/// its first 1.2 s (mangos-classic's `Spell::update` for
 /// `SPELL_STATE_CHANNELING`: `MOVEFLAG_JUMPING`, and
-/// `AURA_INTERRUPT_FLAG_TURNING`).
+/// `AURA_INTERRUPT_FLAG_TURNING` against `m_castOrientation`).
 pub fn channel_turned(map: &mut Map, g: Guid, turned: bool, jumped: bool) {
-    let Some(spell) = map
+    let now = map.now;
+    let Some(c) = map
         .caster(g)
         .and_then(|c| c.casting.as_ref())
         .filter(|c| c.channel_until.is_some())
-        .map(|c| c.spell)
+        .cloned()
     else {
         return;
     };
+    let facing = map.unit_view(g).map_or(0.0, |u| u.orientation);
     let turns = turned
-        && map
-            .realm
-            .data
-            .spells
-            .get(spell)
-            .is_some_and(|s| s.channel_interrupt_flags & CHANNEL_INTERRUPT_TURNING != 0);
+        && map.realm.data.spells.get(c.spell).is_some_and(|s| {
+            if s.channel_interrupt_flags & CHANNEL_INTERRUPT_TURNING == 0 {
+                return false;
+            }
+            let Some((_, from)) = c.at else {
+                return true;
+            };
+            let mut leeway = TURN_LEEWAY;
+            if s.attr(1, ATTR_EX_TRACK_TARGET_IN_CHANNEL) {
+                let began = c
+                    .channel_until
+                    .map(|u| u - Duration::from_millis(u64::from(c.duration)));
+                let elapsed = began.map_or(0, |b| now.saturating_duration_since(b).as_millis());
+                leeway += std::f32::consts::PI * (1200u128.saturating_sub(elapsed) as f32 / 1200.0);
+            }
+            let pi = std::f32::consts::PI;
+            let apart = pi - ((from - facing).abs() - pi).abs();
+            apart > leeway
+        });
     if jumped || turns {
         interrupt(map, g);
     }

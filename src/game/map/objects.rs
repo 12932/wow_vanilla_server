@@ -1206,10 +1206,11 @@ fn show_readable(map: &mut Map, user: Guid, object: Guid, t: &GameObjectTemplate
     }
 }
 
-fn alive(map: &Map, player: Guid) -> bool {
+/// A player on the map who isn't alive.
+fn dead(map: &Map, player: Guid) -> bool {
     map.players
         .get(&player)
-        .is_some_and(|p| p.death == crate::game::map::death::Death::Alive)
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
 }
 
 fn in_reach(map: &Map, player: Guid, object: Guid) -> bool {
@@ -1384,7 +1385,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
         }
         // Their spells are the user's to cast: not by the dead (mangos's
         // `CheckCast` of the user's cast, Thistle Tea's living user).
-        GO_RITUAL | GO_SPELLCASTER if !alive(map, player) => {}
+        GO_RITUAL | GO_SPELLCASTER if dead(map, player) => {}
         GO_RITUAL => use_ritual(map, player, object, &t),
         GO_SPELLCASTER => use_spellcaster(map, player, object, &t),
         _ => return false,
@@ -1536,6 +1537,7 @@ fn complete_ritual(map: &mut Map, object: Guid) {
 fn start_channel(map: &mut Map, g: Guid, object: Guid, spell: u32, ms: u32) {
     let now = map.now;
     let until = now + Duration::from_millis(u64::from(ms));
+    let at = crate::game::map::spells::stance(map, g);
     if let Some(c) = map.caster_mut(g) {
         c.casting = Some(Casting {
             spell,
@@ -1548,6 +1550,7 @@ fn start_channel(map: &mut Map, g: Guid, object: Guid, spell: u32, ms: u32) {
             pushbacks: 0,
             channel_until: Some(until),
             duration: ms,
+            at,
         });
     }
     if let Some(f) = map.unit_fields_mut(g) {

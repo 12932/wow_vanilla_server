@@ -651,6 +651,7 @@ async fn a_cast_far_from_anyone_is_found_among_the_casting_and_let_go_when_done(
                 pushbacks: 0,
                 channel_until: None,
                 duration: 0,
+                at: None,
             });
             let noted = m.casting.iter().copied().collect::<Vec<_>>();
             spells::update(m);

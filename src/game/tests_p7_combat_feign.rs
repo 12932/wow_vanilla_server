@@ -110,6 +110,7 @@ fn casting_at(m: &mut Map, g: Guid, at: Guid) {
             pushbacks: 0,
             channel_until: None,
             duration: 3000,
+            at: None,
         });
     }
 }

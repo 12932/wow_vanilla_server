@@ -438,6 +438,7 @@ async fn the_death_ray_hurts_its_user_while_channelled_then_lets_it_all_loose() 
                 pushbacks: 0,
                 channel_until: Some(now + Duration::from_secs(10)),
                 duration: 10_000,
+                at: None,
             });
             let channel = template(m, DEATH_RAY);
             assert!(item_scripts::effect(m, ga, target, &channel, 1, None));

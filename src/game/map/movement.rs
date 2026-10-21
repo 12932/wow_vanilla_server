@@ -235,8 +235,11 @@ pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     p.cell = new_cell;
     p.movement = info;
     let position = info.position;
-    if crate::game::map::combat::dist(before, position) > 0.1 {
+    // A cast measures from where it began, however small the steps.
+    if crate::game::map::combat::dist(before, position) > 0.0 {
         crate::game::map::spells::moved(map, guid);
+    }
+    if crate::game::map::combat::dist(before, position) > 0.1 {
         crate::game::map::ranged::moved(map, guid);
     }
     map.grid.relocate(guid, old_cell, new_cell);

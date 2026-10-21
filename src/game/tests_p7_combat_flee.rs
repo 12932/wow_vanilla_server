@@ -110,6 +110,7 @@ async fn a_flight_runs_to_the_nearest_of_its_kind_or_panics_unless_barred() {
                 pushbacks: 0,
                 channel_until: None,
                 duration: 5000,
+                at: None,
             });
             flee_for_assistance(m, runner, true);
             let seeking = (

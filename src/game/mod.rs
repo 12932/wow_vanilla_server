@@ -123,6 +123,8 @@ mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_player;
 #[cfg(test)]
+mod tests_p10_player_casts;
+#[cfg(test)]
 mod tests_p10_player_items;
 #[cfg(test)]
 mod tests_p10_player_objects;

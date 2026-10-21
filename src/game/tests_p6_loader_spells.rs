@@ -37,6 +37,7 @@ fn begun(m: &mut Map, g: Guid, spell: u32) {
             pushbacks: 0,
             channel_until: None,
             duration: 1500,
+            at: None,
         });
     }
 }
