@@ -931,3 +931,80 @@ async fn a_creatures_totem_is_heard_of_as_it_comes_dies_and_goes() {
     .await;
     assert_eq!(gone, (true, 8), "heard of as it goes");
 }
+
+/// A brazier spawned beside where Alice comes in, and the post a script
+/// raises.
+const BRAZIER: u32 = 98_695;
+const POST: u32 = 98_696;
+
+fn post_world() -> GameData {
+    let mut d = data();
+    for (entry, name) in [(BRAZIER, "Brazier"), (POST, "Post")] {
+        d.gameobject_templates.insert(
+            entry,
+            crate::game::tests_p3_entity_objects::object(entry, objects::GO_GOOBER, name, &[]),
+        );
+    }
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 61,
+            entry: BRAZIER,
+            map: 0,
+            x: START.0 + 4.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            respawn_min: 60,
+            ..Default::default()
+        }],
+    );
+    d
+}
+
+/// Thistle Tea's "an object keeps the objects its scripts raise and takes
+/// them when it goes" (game_object_summons_test.exs:271): a post a
+/// script raises, attached (datalong3 without 1), is made by its raiser,
+/// a brazier or a brute, and goes when its raiser goes; one raised
+/// unattached is no one's and stays (vmangos's `SCRIPT_COMMAND_SUMMON_OBJECT`
+/// by `SummonGameObject` with `attach`, `AddGameObject`), where every
+/// post was no one's and outlasted its raiser.
+#[tokio::test]
+async fn a_raised_object_is_its_raisers_and_goes_with_it_unless_unattached() {
+    let (_realm, _a, ga, map) = setup_with(post_world(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let brazier = guid::game_object(BRAZIER, 61);
+        let brute = spawn(m, ga, BRUTE, 20, 6.0);
+        let raise = |m: &mut Map, source: Guid, flags: u32| {
+            let before: Vec<Guid> = m.gameobjects.iter().map(|(_, o)| o.guid).collect();
+            let s = ScriptStep {
+                x: START.0 + 2.0,
+                y: START.1 + 2.0,
+                z: START.2,
+                ..step(76, [POST, 60, flags, 0])
+            };
+            crate::game::map::scripts::execute(m, &s, source, Guid::zero());
+            m.gameobjects
+                .iter()
+                .map(|(_, o)| o)
+                .find(|o| o.entry == POST && !before.contains(&o.guid))
+                .map(|o| (o.guid, o.fields.get_guid(OBJECT_FIELD_CREATED_BY)))
+                .expect("a post")
+        };
+        let by_brazier = raise(m, brazier, 0);
+        let by_brute = raise(m, brute, 0);
+        let loose = raise(m, brute, 1);
+        objects::despawn(m, brazier);
+        crate::game::map::scripts::despawn(m, brute);
+        m.now += Duration::from_secs(1);
+        objects::update(m);
+        let left = [by_brazier.0, by_brute.0, loose.0].map(|g| m.gameobject(g).is_some());
+        (brazier, brute, by_brazier.1, by_brute.1, loose.1, left)
+    })
+    .await;
+    let (brazier, brute, made_by_brazier, made_by_brute, made_loose, left) = out;
+    assert_eq!(made_by_brazier, brazier, "the brazier's");
+    assert_eq!(made_by_brute, brute, "the brute's");
+    assert!(made_loose.is_zero(), "unattached, no one's");
+    assert_eq!(left, [false, false, true], "gone with their raisers");
+}

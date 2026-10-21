@@ -2423,10 +2423,42 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 },
             );
             go.spawn_guid = None;
+            // Attached (datalong3 without 1), it is its summoner's, made by
+            // it and gone with it, a creature or an object (vmangos's
+            // `SummonGameObject` with `attach`, `AddGameObject`, its
+            // objects removed with it; Thistle Tea's raised objects kept
+            // and taken by the object that raised them), where it was no
+            // one's and outlasted it; unattached, no one's.
+            let owner = (d3 & 1 == 0
+                && (map.creature(source).is_some()
+                    || map.gameobject(source).is_some()
+                    || map.players.contains_key(&source)))
+            .then_some(source);
+            if let Some(o) = owner {
+                go.fields
+                    .set_guid(crate::game::fields::OBJECT_FIELD_CREATED_BY, o);
+            }
             let g = map.add_gameobject(go);
-            if d2 > 0 {
-                map.object_resets
-                    .push((map.now + Duration::from_secs(u64::from(d2)), g, u32::MAX));
+            let lasts = (d2 > 0).then(|| map.now + Duration::from_secs(u64::from(d2)));
+            match owner {
+                Some(o) => map
+                    .objects
+                    .summoned
+                    .push(crate::game::map::objects::Summoned {
+                        guid: g,
+                        owner: Some(o),
+                        spell: 0,
+                        slot: 0,
+                        expires: lasts,
+                        linked: Vec::new(),
+                        charges: None,
+                        party_only: false,
+                    }),
+                None => {
+                    if let Some(at) = lasts {
+                        map.object_resets.push((at, g, u32::MAX));
+                    }
+                }
             }
             true
         }
