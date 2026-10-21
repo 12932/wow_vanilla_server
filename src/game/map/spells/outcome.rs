@@ -1399,10 +1399,28 @@ pub fn give_death_items(map: &mut Map, target: Guid, items: Vec<(Guid, u32, u32)
     if items.is_empty() || map.unit_view(target).is_some_and(|u| u.alive) {
         return;
     }
+    use crate::game::map::inventory;
+    let data = map.realm.data.clone();
     for (caster, item, count) in items {
-        if guid::is_player(caster) {
-            let _ = crate::game::map::inventory::add_item(map, caster, item, count, true);
+        // What fits is given, what doesn't told of (mangos's
+        // `HandleChannelDeathItem`: `count - noSpaceForCount`, and the
+        // equip error); none fitting, nothing.
+        let Some(p) = map.players.get(&caster) else {
+            continue;
+        };
+        let fits = match inventory::fitting(p, &data, item, count) {
+            Ok(n) => n,
+            Err(why) => {
+                inventory::send_fail(p, why, Guid::zero());
+                continue;
+            }
+        };
+        if fits < count
+            && let Err(why) = inventory::room_for(p, &data, item, count)
+        {
+            inventory::send_fail(p, why, Guid::zero());
         }
+        let _ = inventory::add_item(map, caster, item, fits, true);
     }
 }
 

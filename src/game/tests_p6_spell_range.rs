@@ -105,8 +105,8 @@ fn reaches(m: &Map, a: Guid, b: Guid) -> f32 {
 }
 
 /// A spell's minimum range is beyond both units' reaches, as its maximum
-/// is; a range modified below nothing is nothing, the reaches and a yard
-/// left, not unlimited; a caster and a player target both running reach
+/// is; a range modified below nothing is nothing, the reaches and a
+/// player's 1.25 yards (round 11c) left, not unlimited; a caster and a player target both running reach
 /// mangos's leeway further, one standing doesn't (Thistle Tea's
 /// `Range.validate_target` and movement allowance; mangos's
 /// `GetMinMaxRange`).
@@ -128,14 +128,14 @@ async fn the_minimum_is_beyond_the_reaches_and_running_reaches_further() {
             }
             kit::apply(m, a, a, SHORTER);
             let mut floored = Vec::new();
-            for d in [r + 0.9, r + 1.1] {
+            for d in [r + 1.2, r + 1.3] {
                 place(m, a, kobold, d);
                 floored.push(why(m, a, BOLT_30, at(kobold)));
             }
             crate::game::map::auras::remove_spell(m, a, SHORTER, None);
             // The heal at a running friend, 2 yards beyond.
             let r = reaches(m, a, b);
-            place(m, a, b, 30.0 + r + 1.0 + 2.0);
+            place(m, a, b, 30.0 + r + 1.25 + 2.0);
             let standing = why(m, a, HEAL, at(b));
             for g in [a, b] {
                 m.players.get_mut(&g).unwrap().movement.flags = Flags::empty().set_forward();
@@ -157,7 +157,7 @@ async fn the_minimum_is_beyond_the_reaches_and_running_reaches_further() {
     assert_eq!(
         floored,
         [None, Some(fail::OUT_OF_RANGE)],
-        "the reaches and a yard"
+        "the reaches and the leeway"
     );
     let out_of_range = Some(fail::OUT_OF_RANGE);
     assert_eq!(
@@ -191,7 +191,13 @@ async fn a_ground_spell_wants_its_place_in_range_and_in_sight() {
                 dest: Some(ahead(m, d)),
                 ..Default::default()
             };
-            let seen: Vec<Option<u8>> = [5.0, 20.0, 31.9, 32.1]
+            // Past the caster's bounding radius, with a player's 1.25 yards
+            // (Thistle Tea's `Destination`, round 11c).
+            let bound = m.unit_fields(a).map_or(0.0, |f| {
+                f.get_f32(crate::game::fields::UNIT_FIELD_BOUNDINGRADIUS)
+            });
+            let edge = 30.0 + 1.25 + bound;
+            let seen: Vec<Option<u8>> = [5.0, 20.0, edge - 0.05, edge + 0.05]
                 .into_iter()
                 .map(|d| {
                     let t = there(m, d);
@@ -202,7 +208,7 @@ async fn a_ground_spell_wants_its_place_in_range_and_in_sight() {
             if let Some(f) = m.unit_fields_mut(a) {
                 f.set_f32(crate::game::fields::UNIT_FIELD_COMBATREACH, 100.0);
             }
-            let wider: Vec<Option<u8>> = [37.9, 38.1]
+            let wider: Vec<Option<u8>> = [36.0 + 1.25 + bound - 0.05, 36.0 + 1.25 + bound + 0.05]
                 .into_iter()
                 .map(|d| {
                     let t = there(m, d);
@@ -243,7 +249,7 @@ async fn a_ground_spell_wants_its_place_in_range_and_in_sight() {
     assert_eq!(
         seen,
         [Some(fail::TOO_CLOSE), None, None, out_of_range],
-        "too close, in range, two yards over, beyond"
+        "too close, in range, the leeway over, beyond"
     );
     assert_eq!(wider, [None, out_of_range], "a fifth more, no reach");
     assert_eq!(walled, (Some(fail::LINE_OF_SIGHT), None), "a wall between");
