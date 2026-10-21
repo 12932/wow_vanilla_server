@@ -11,7 +11,7 @@
 //! "bytes_out":..,"disconnects":{"budget":0,"flood":0,"stall":0},
 //! "cpu_secs":..,"rss_kb":..,"maps":[{"map":1,"instance":0,"players":880,
 //! "awake":312,"mailbox":0,"updates_us":[..],"events":4400,"events_us":..,
-//! "biggest_queue":..,"queued":..}]}`, its counters since start-up (the
+//! "biggest_queue":..,"queued":..,"steps_us":{"visibility":..}}]}`, its counters since start-up (the
 //! reader takes differences), `updates_us` the second's.
 
 use std::io::Write;
@@ -40,6 +40,19 @@ pub static STALL: AtomicU64 = AtomicU64::new(0);
 /// The maps' seconds, waiting for the writer.
 static SAMPLES: Mutex<Vec<Sample>> = Mutex::new(Vec::new());
 
+thread_local! {
+    /// The update steps' times on this thread, since its map's sampler
+    /// last took them: an update runs on one thread, its sampler right
+    /// after it.
+    static STEPS: std::cell::RefCell<Vec<(&'static str, Duration)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// An update step, `name`, took `took`.
+pub fn step_done(name: &'static str, took: Duration) {
+    STEPS.with(|s| s.borrow_mut().push((name, took)));
+}
+
 /// Whether the stats are being written.
 pub fn on() -> bool {
     ON.load(Ordering::Relaxed)
@@ -58,12 +71,15 @@ struct Sample {
     events_us: u64,
     biggest_queue: usize,
     queued: usize,
+    /// Each update step's time over the second, by name.
+    steps_us: std::collections::BTreeMap<&'static str, u64>,
 }
 
 /// What a map's actor keeps of its second, until it hands it over.
 #[derive(Debug)]
 pub struct Sampler {
     updates_us: Vec<u32>,
+    steps_us: std::collections::BTreeMap<&'static str, u64>,
     events: u64,
     events_us: u64,
     due: Instant,
@@ -73,6 +89,7 @@ impl Default for Sampler {
     fn default() -> Self {
         Self {
             updates_us: Vec::with_capacity(24),
+            steps_us: std::collections::BTreeMap::new(),
             events: 0,
             events_us: 0,
             due: Instant::now() + Duration::from_secs(1),
@@ -95,6 +112,11 @@ impl Sampler {
     /// handed over, with `mailbox` events waiting.
     pub fn update(&mut self, map: &Map, mailbox: usize) {
         self.updates_us.push(micros(map.stats.last_update));
+        STEPS.with(|steps| {
+            for (name, took) in steps.borrow_mut().drain(..) {
+                *self.steps_us.entry(name).or_default() += took.as_micros() as u64;
+            }
+        });
         if map.now < self.due {
             return;
         }
@@ -117,6 +139,7 @@ impl Sampler {
             events_us: std::mem::take(&mut self.events_us),
             biggest_queue: biggest,
             queued,
+            steps_us: std::mem::take(&mut self.steps_us),
         };
         SAMPLES.lock().push(sample);
     }

@@ -121,6 +121,7 @@ impl Map {
         #[cfg(all(feature = "world-bench", unix))]
         let probe = super::bench_probe::enabled().then(super::bench_probe::thread_cpu);
         let _z = crate::tracy::Zone::named("update step", name);
+        let timed = crate::game::stats::on().then(std::time::Instant::now);
         let result = catch(|| {
             #[cfg(test)]
             if self.faults.any() {
@@ -130,6 +131,9 @@ impl Map {
         });
         if let Err(e) = result {
             update_panicked(self, name, &e);
+        }
+        if let Some(at) = timed {
+            crate::game::stats::step_done(name, at.elapsed());
         }
         #[cfg(all(feature = "world-bench", unix))]
         if let Some(cpu) = probe {
