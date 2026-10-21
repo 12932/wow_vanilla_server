@@ -336,3 +336,48 @@ async fn one_that_doesnt_move_in_its_fight_doesnt_evade_for_an_unreachable_victi
     .await;
     assert_eq!(got, vec![true, false], "a chaser, one that stands");
 }
+
+// #32: a scripted follower's evade.
+
+/// mangos-classic's `FollowerAI::EnterEvadeMode` walks a follower whose
+/// follow is under way back to where its fight began
+/// (`GetCombatStartPosition`), from where it follows on; a creature
+/// following by `MoveFollow` (not its main movement) loses the follow to
+/// `MoveTargetedHome`, which takes it to the same place. wvs left it where
+/// it stood, as Thistle Tea does.
+#[tokio::test]
+async fn a_scripted_follower_goes_back_to_where_its_fight_began_and_follows_on() {
+    use crate::game::map::ai;
+    use crate::game::map::creature::Motion;
+    let (_realm, _a, ga, map) = setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    let got = on(&map, move |m| {
+        let leader = spawn(m, ga, BRUTE, 1, 5.0);
+        let w = spawn(m, ga, BRUTE, 1, 8.0);
+        m.creature_mut(w)
+            .unwrap()
+            .scripted
+            .get_or_insert_with(Default::default)
+            .follow = Some((leader, 3.0, std::f32::consts::PI));
+        let began = m.creature(w).unwrap().position;
+        ai::attacked(m, w, ga);
+        // Drawn 20 yards off in its fight.
+        let drawn = Vector3d {
+            x: began.x + 20.0,
+            ..began
+        };
+        m.creature_mut(w).unwrap().position = drawn;
+        ai::enter_evade(m, w);
+        let c = m.creature(w).unwrap();
+        let bound = match &c.motion {
+            Motion::Moving(walk) => Some(walk.destination()),
+            _ => None,
+        };
+        (
+            c.evading,
+            bound.map(|b| crate::game::map::combat::dist(b, began) < 0.5),
+            c.scripted.as_deref().and_then(|s| s.follow).map(|f| f.0) == Some(leader),
+        )
+    })
+    .await;
+    assert_eq!(got, (true, Some(true), true), "home to where it began, following");
+}

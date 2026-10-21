@@ -1844,6 +1844,8 @@ pub fn flee_from(map: &mut Map, g: Guid, enemy: Guid, run_for: Option<Duration>)
 
 /// Give up the fight and run home.
 fn evade(map: &mut Map, g: Guid) {
+    // Where its fight began, before the fight is forgotten.
+    let began = map.creature(g).and_then(|c| c.engagement.origin);
     crate::game::map::creature_combat::disengaged(map, g);
     crate::game::map::event_ai::combat_stopped(map, g, false);
     crate::game::map::spells::threat_sync::wiped(map, g);
@@ -1854,23 +1856,31 @@ fn evade(map: &mut Map, g: Guid) {
     };
     // A follower goes back to its place by its leader; a patroller to the
     // last point of its path it reached.
-    let home = crate::game::map::creature_groups::formation_home(map, g)
-        .or_else(|| patrol_home(map, g))
-        .unwrap_or(c.home);
     let from = c.position;
-    // One that never moves leaves its fight where it stands (mangos's
-    // home movement waits out its AI's root; Thistle Tea's sessile
-    // evade).
-    // A flyer flies home, as it chased (Thistle Tea's airborne home
-    // movement).
-    // So does one a script set following someone, who follows on from
-    // there (Thistle Tea's follower's reset after combat).
+    // One a script set following someone goes back to where its fight
+    // began and follows on from there (mangos's `FollowerAI::EnterEvadeMode`,
+    // its combat start position; a follow not its main movement is
+    // dropped by `MoveTargetedHome` for the same place): not where it
+    // stands (Thistle Tea), nor its spawn.
     let follows = c
         .scripted
         .as_deref()
         .and_then(|s| s.follow)
         .is_some_and(|(leader, _, _)| map.unit_view(leader).is_some_and(|u| u.alive));
-    let (path, fly) = if follows || crate::game::map::creature_motion::sessile(map, g) {
+    let home = if follows {
+        began.unwrap_or(from)
+    } else {
+        crate::game::map::creature_groups::formation_home(map, g)
+            .or_else(|| patrol_home(map, g))
+            .unwrap_or(c.home)
+    };
+    // One that never moves leaves its fight where it stands (mangos's
+    // home movement waits out its AI's root; Thistle Tea's sessile
+    // evade).
+    // A flyer flies home, as it chased (Thistle Tea's airborne home
+    // movement).
+    let there = follows && dist(from, home) < 0.5;
+    let (path, fly) = if there || crate::game::map::creature_motion::sessile(map, g) {
         (vec![from], false)
     } else if crate::game::map::creature_motion::habitat(map, g).fly {
         match crate::game::map::creature_motion::route(map, g, from, home) {
