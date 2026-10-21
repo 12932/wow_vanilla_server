@@ -482,6 +482,9 @@ async fn a_possessed_player_isnt_moved_out_of_the_world() {
 async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
     let realm = harness::realm_with(more());
     let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    // A watcher: the eye's mover isn't told its own moves back.
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
     learn(&map, gw, &[EYE_OF_KILROGG]);
     cast(&w, EYE_OF_KILROGG, None).await;
     let eye = w
@@ -495,11 +498,12 @@ async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
         })
         .await;
     w.send(CMSG_SET_ACTIVE_MOVER { guid: eye }).await;
+    b.sees(eye).await;
     let at = position(&map, eye).await;
     w.heartbeat(at.x, at.y, f32::NAN).await;
     w.heartbeat(at.x, at.y, at.z - 30_000.0).await;
     w.heartbeat(at.x + 3.0, at.y, at.z).await;
-    let told = first_heartbeat_of(&mut w, eye).await;
+    let told = first_heartbeat_of(&mut b, eye).await;
     assert_eq!(told.x, at.x + 3.0, "the first move told is the good one");
 }
 
