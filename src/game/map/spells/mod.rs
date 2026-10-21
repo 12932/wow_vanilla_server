@@ -1477,6 +1477,7 @@ fn execute(
         if delay > 0 {
             if Some(target) == launch.targets.unit {
                 landed_on_main = true;
+                launch_hold(map, caster, s, target, delay);
             }
             map.spells.in_flight.push(InFlight {
                 lands: now + Duration::from_millis(u64::from(delay)),
@@ -2040,6 +2041,35 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
             crate::game::map::creature_combat::hostile_act(map, target);
         }
         combat::struck(map, caster, target);
+    }
+}
+
+/// A player's harmful spell flying at the unit it was aimed at, one it
+/// may attack and is seen by, holds the player (or a pet's master) in a
+/// fight for its flight and half a second, before it lands (mangos's
+/// `Spell::cast` for a delayed spell: `SetInCombatWithVictim` and
+/// `TriggerCombatTimer(timeDelay + 500)`; Thistle Tea's `LaunchCombat`).
+/// Not one of no threat, threat only on a miss, or none as it lands, nor
+/// a creature's.
+fn launch_hold(map: &mut Map, caster: Guid, s: &SpellTemplate, target: Guid, delay_ms: u32) {
+    let master = crate::game::map::pets::master(map, caster);
+    if target == caster
+        || !guid::is_player(master)
+        || auras::positive(s)
+        || s.attr(1, ATTR_EX_NO_THREAT)
+        || s.attr(1, ATTR_EX_THREAT_ONLY_ON_MISS)
+        || s.attr(2, ATTR_EX2_NO_INITIAL_THREAT)
+        || !combat::can_attack(map, caster, target)
+        || !stealth::sees(map, target, caster)
+    {
+        return;
+    }
+    let until = map.now + Duration::from_millis(u64::from(delay_ms) + 500);
+    for g in [caster, master] {
+        combat::enter(map, g, false);
+        if let Some(p) = map.players.get_mut(&g) {
+            p.combat.combat_until = p.combat.combat_until.max(Some(until));
+        }
     }
 }
 

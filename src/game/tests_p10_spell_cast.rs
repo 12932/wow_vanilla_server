@@ -76,6 +76,11 @@ const LASTS_3S: u32 = 998;
 const STUN: u32 = 998_428;
 /// A bolt of a family (a mage's).
 const FAMILY_BOLT: u32 = 998_430;
+/// Missiles of 20 yards a second: of 10 damage, the same of no threat,
+/// and a heal.
+const MISSILE: u32 = 998_431;
+const QUIET_MISSILE: u32 = 998_432;
+const HEAL_MISSILE: u32 = 998_433;
 
 fn proc_aura(id: u32, flags: u32) -> SpellTemplate {
     let mut s = bare(id, 0);
@@ -88,6 +93,7 @@ fn proc_aura(id: u32, flags: u32) -> SpellTemplate {
 }
 
 fn data(d: &mut GameData) {
+    d.spells.ranges.insert(1, (0.0, 40.0));
     d.spells.durations.insert(
         LASTS_3S,
         SpellDuration {
@@ -171,9 +177,22 @@ fn data(d: &mut GameData) {
     stun.duration_index = LASTS_15S;
     stun.mechanic = 12;
     effect(&mut stun, 0, aura(auras::AURA_MOD_STUN, 0, 0, 6));
+    let mut missile = bolt.clone();
+    missile.id = MISSILE;
+    missile.speed = 20.0;
+    let mut quiet = missile.clone();
+    quiet.id = QUIET_MISSILE;
+    quiet.attributes[1] |= 0x400;
+    let mut heal_missile = heal.clone();
+    heal_missile.id = HEAL_MISSILE;
+    heal_missile.speed = 20.0;
+    heal_missile.effects[0].target_a = 25;
     insert(
         d,
         [
+            missile,
+            quiet,
+            heal_missile,
             plain,
             from_procs,
             bolt,
@@ -421,4 +440,65 @@ async fn an_auras_stun_and_root_diminish_apart() {
     for impact in [12_355, 18_093] {
         assert_eq!(dr_group(&stun(impact), false), Some(Dr::TriggeredStun));
     }
+}
+
+/// Whether `g` is in combat.
+fn in_combat(m: &Map, g: Guid) -> bool {
+    m.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
+    })
+}
+
+/// A player's missile at a kobold 20 yards off puts the player in a fight
+/// as it leaves, held for its second's flight and half a second, the
+/// kobold not yet in it; it is when the missile lands. One of no threat
+/// doesn't, nor a heal, nor a kobold's missile at the player (mangos's
+/// `Spell::cast` for a delayed spell: `TriggerCombatTimer(timeDelay +
+/// 500)`; Thistle Tea's "player projectiles hold through flight with a
+/// half-second margin" and "NPC projectiles and helpful, instant or exempt
+/// spells do not initiate").
+#[tokio::test]
+async fn a_players_missile_holds_them_in_a_fight_while_it_flies() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10C6", "Launcher", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            m.spells.travel = Some(true);
+            kit::ready(m, a, 60, &[MISSILE, QUIET_MISSILE, HEAL_MISSILE]);
+            let mut quiet = Vec::new();
+            for spell in [QUIET_MISSILE, HEAL_MISSILE] {
+                let k = kit::dummy(m, a, 60, 20.0);
+                cast_fresh(m, a, spell, at(k));
+                quiet.push(in_combat(m, a));
+                crate::game::map::combat::leave_combat(m, a);
+            }
+            let k = kit::dummy(m, a, 60, 20.0);
+            kit::fresh(m, k);
+            spells::cast(m, k, MISSILE, at(a), None);
+            quiet.push(in_combat(m, a));
+            let k = kit::dummy(m, a, 60, 20.0);
+            let t0 = m.now;
+            cast_fresh(m, a, MISSILE, at(k));
+            let held = m.players[&a]
+                .combat
+                .combat_until
+                .map(|t| t.duration_since(t0).as_millis() as u64);
+            let flying = (in_combat(m, a), in_combat(m, k));
+            pass(m, 1_000);
+            (quiet, held, flying, in_combat(m, k))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out.0,
+        vec![false, false, false],
+        "no threat, a heal, a kobold's"
+    );
+    assert_eq!(out.1, Some(1_500), "held for its flight and half a second");
+    assert_eq!(out.2, (true, false), "the player, not yet the kobold");
+    assert!(out.3, "the kobold once it lands");
 }
