@@ -80,6 +80,11 @@ pub enum Fail {
     CantBeEquipped,
     /// An equipment slot already taken.
     NoSlot,
+    /// A bag put into itself, or a bag's things that don't go into the
+    /// one it is swapped for.
+    NonemptyBagOverOtherBag,
+    /// A bag's things too many for the one it is swapped for.
+    ItemsCantBeSwapped,
 }
 
 pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
@@ -227,6 +232,16 @@ pub fn send_fail(p: &Player, fail: Fail, item: Guid) {
             item2: b,
         },
         Fail::NoSlot => R::NoEquipmentSlotAvailable {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::NonemptyBagOverOtherBag => R::NonemptyBagOverOtherBag {
+            bag_type_subclass: s,
+            item1: a,
+            item2: b,
+        },
+        Fail::ItemsCantBeSwapped => R::ItemsCantBeSwapped {
             bag_type_subclass: s,
             item1: a,
             item2: b,
@@ -1400,20 +1415,20 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
         return;
     };
     let b = p.item_at(to.0, to.1);
-    // A bag with things in it doesn't move.
-    let is_bag = |p: &Player, i: usize| {
-        p.items[i].bag == BAG_PLAYER
-            && ((BAG_START..BAG_END).contains(&p.items[i].slot)
-                || (BANK_BAG_START..BANK_BAG_END).contains(&p.items[i].slot))
-    };
-    for i in [Some(a), b].into_iter().flatten() {
-        if is_bag(p, i) && p.items.iter().any(|x| x.bag == p.items[i].slot) {
-            let g = p.items[i].guid;
-            send_fail(p, Fail::OnlyEmptyBags, g);
+    let exchange = match bag_moves(p, &data, a, b, from, to) {
+        Ok(x) => x,
+        Err(f) => {
+            let ag = p.items[a].guid;
+            send_fail(p, f, ag);
             return;
         }
-    }
-    if let Err(f) = may_place(p, &data, &p.items[a].clone(), to.0, to.1) {
+    };
+    // A full bag swapped for an empty one goes empty where that was.
+    let placed = |r: Result<(), Fail>| match r {
+        Err(Fail::OnlyEmptyBags) if exchange.is_some() => Ok(()),
+        r => r,
+    };
+    if let Err(f) = placed(may_place(p, &data, &p.items[a].clone(), to.0, to.1)) {
         let ag = p.items[a].guid;
         send_fail(p, f, ag);
         return;
@@ -1458,7 +1473,7 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
                 return;
             }
         }
-        if let Err(f) = may_place(p, &data, &p.items[b].clone(), from.0, from.1) {
+        if let Err(f) = placed(may_place(p, &data, &p.items[b].clone(), from.0, from.1)) {
             let bg = p.items[b].guid;
             send_fail(p, f, bg);
             return;
@@ -1496,6 +1511,7 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     }
     p.items[a].bag = to.0;
     p.items[a].slot = to.1;
+    rehome_contents(p, from, to, exchange);
     if let Some((off, (bag, slot))) = off_hand {
         p.items[off].bag = bag;
         p.items[off].slot = slot;
@@ -1523,6 +1539,102 @@ pub fn move_item(map: &mut Map, g: Guid, from: (u8, u8), to: (u8, u8)) {
     for (entry, item) in [equipped, swapped].into_iter().flatten() {
         crate::game::map::spells::class_scripts::weapon_equipped(map, g, entry);
         crate::game::map::items::equipped(map, g, item);
+    }
+}
+
+/// Whether `(bag, slot)` is a bag's place: the bag bar or the bank's
+/// (mangos's `IsBagPos`).
+fn bag_pos((bag, slot): (u8, u8)) -> bool {
+    bag == BAG_PLAYER
+        && ((BAG_START..BAG_END).contains(&slot) || (BANK_BAG_START..BANK_BAG_END).contains(&slot))
+}
+
+/// Whether the bag at `at` has things in it.
+fn holds(p: &Player, at: (u8, u8)) -> bool {
+    bag_pos(at) && p.items.iter().any(|x| x.bag == at.1)
+}
+
+/// How a move of `a` at `from` to `to`, where `b` is, takes the bags in
+/// it, as mangos's `SwapItem`: a bag isn't put into itself; one with
+/// things in it moves only to another bag's place, its things with it, or
+/// swapped for an empty bag (`CanUnequipItem`'s swap), whose place it
+/// takes empty, its things going into the empty one if they fit it and
+/// are no more than it holds. `Some` with the full bag's place for that
+/// exchange.
+fn bag_moves(
+    p: &Player,
+    data: &GameData,
+    a: usize,
+    b: Option<usize>,
+    from: (u8, u8),
+    to: (u8, u8),
+) -> Result<Option<u8>, Fail> {
+    if (bag_pos(from) && from.1 == to.0) || (b.is_some() && bag_pos(to) && to.1 == from.0) {
+        return Err(Fail::NonemptyBagOverOtherBag);
+    }
+    let empty_bag = |i: usize| {
+        data.item(p.items[i].entry)
+            .is_some_and(|t| matches!(t.class, 1 | 11) && t.container_slots > 0)
+            && !holds(p, (p.items[i].bag, p.items[i].slot))
+    };
+    let (full_a, full_b) = (holds(p, from), b.is_some() && holds(p, to));
+    if full_a && !(bag_pos(to) || b.is_some_and(empty_bag)) {
+        return Err(Fail::OnlyEmptyBags);
+    }
+    if full_b && !(bag_pos(from) || empty_bag(a)) {
+        return Err(Fail::OnlyEmptyBags);
+    }
+    let (full, empty) = match b {
+        Some(b) if full_a && !bag_pos(to) => (from.1, b),
+        _ if full_b && !bag_pos(from) => (to.1, a),
+        _ => return Ok(None),
+    };
+    let Some(into) = data.item(p.items[empty].entry) else {
+        return Err(Fail::ItemsCantBeSwapped);
+    };
+    let mut count = 0u32;
+    for i in p.items.iter().filter(|i| i.bag == full) {
+        let fits = match into.bag_family {
+            0 => true,
+            family => data
+                .item(i.entry)
+                .is_some_and(|t| t.bag_family == family && t.class != 1),
+        };
+        if !fits {
+            return Err(Fail::NonemptyBagOverOtherBag);
+        }
+        count += 1;
+    }
+    if count > into.container_slots {
+        return Err(Fail::ItemsCantBeSwapped);
+    }
+    Ok(Some(full))
+}
+
+/// The things of the bags a move took from `from` to `to`, rehomed: in
+/// an exchange, into the empty bag now at the full one's place, in their
+/// order from its first slot; else with each bag moved between bags'
+/// places (mangos's bags carry their items).
+fn rehome_contents(p: &mut Player, from: (u8, u8), to: (u8, u8), exchange: Option<u8>) {
+    if let Some(full) = exchange {
+        let mut inside: Vec<usize> = (0..p.items.len())
+            .filter(|i| p.items[*i].bag == full)
+            .collect();
+        inside.sort_by_key(|i| p.items[*i].slot);
+        for (n, i) in inside.into_iter().enumerate() {
+            p.items[i].slot = n as u8;
+        }
+        return;
+    }
+    if !(bag_pos(from) && bag_pos(to)) {
+        return;
+    }
+    for i in p.items.iter_mut() {
+        if i.bag == from.1 {
+            i.bag = to.1;
+        } else if i.bag == to.1 {
+            i.bag = from.1;
+        }
     }
 }
 

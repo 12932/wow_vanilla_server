@@ -459,7 +459,7 @@ async fn a_civilian_is_dishonorable_for_the_members_it_is_grey_to_alone() {
         combat::deal_damage(m, alice, peasant, 100);
     })
     .await;
-    // Level 20 is grey to 60 (51 and under), not to 10.
+    // Level 20 is grey to 60 (47 and under), not to 10.
     assert_eq!(lifetime(&realm, alice), (0, 1));
     assert_eq!(lifetime(&realm, bob), (0, 0));
 }
@@ -560,7 +560,9 @@ fn friends_greys_strangers_and_the_tenth_kill_are_worth_nothing() {
     let mut l = Ledger::new(100, 4);
     l.register(1, 0, 60);
     l.register(2, 0, 60);
-    l.register(3, 1, 51);
+    // Grey at 60: 47 and below (mangos's `IsTrivialLevelDifference`;
+    // Thistle Tea's 51).
+    l.register(3, 1, 47);
     l.register(4, 1, 60);
     for victim in [2, 3, 5] {
         assert_eq!(l.player_kill(1, victim, 1.0), None, "victim {victim}");
