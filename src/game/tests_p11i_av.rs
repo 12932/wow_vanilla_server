@@ -108,3 +108,108 @@ async fn orders_requests_sent_together_give_one_order_and_one_marshal() {
         .unwrap();
     assert_eq!(out, (1, 1, March::Assembled, 0), "one order, one marshal");
 }
+
+/// Thistle Tea's "admits enemy bodies and rejects stale, hidden, distant,
+/// and foreign-copy snapshots": Remove Insignia takes an enemy's body
+/// (`battleground::insignia::remove`), and does nothing, silently (as
+/// mangos's `EffectSkinPlayerCorpse`), at one's own body, from more than
+/// ten yards, cast by the dead, at a body no longer the enemy's to take
+/// (its skinnable flag gone), or at bones already taken; nor is he made to
+/// release by any of those. Another copy's body is another map's.
+#[tokio::test]
+async fn remove_insignia_takes_an_enemys_body_near_and_refuses_the_rest() {
+    use crate::game::fields::*;
+    use crate::game::map::battleground::{self as bg, insignia};
+    use crate::game::map::death::{self, Death};
+    const REMOVE_INSIGNIA: u32 = 22_027;
+    let mut d = super::tests_pvp2::valley();
+    let mut s = crate::game::data::spells::SpellTemplate {
+        id: REMOVE_INSIGNIA,
+        name: "Remove Insignia".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0].effect = insignia::EFFECT_SKIN_PLAYER_CORPSE;
+    d.spells.spells.insert(REMOVE_INSIGNIA, s);
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let grom = b.enter("Grom", Race::Orc, Class::Warrior).await;
+    let map = both_into(&realm, &mut a, &mut b, Map::AlteracValley).await;
+    put(&map, &mut a, 0.0, 0.0).await;
+    put(&map, &mut b, 12.0, 0.0).await;
+    map.query(move |m| {
+        bg::died(m, grom, alice);
+        death::kill(m, grom);
+    })
+    .await;
+    let remove = |target: Guid| {
+        let map = map.clone();
+        async move {
+            map.query(move |m| {
+                crate::game::map::spells::cast_triggered(m, alice, REMOVE_INSIGNIA, Some(target));
+                matches!(m.players[&grom].death, Death::Dead { .. })
+            })
+            .await
+            .unwrap()
+        }
+    };
+    a.clear();
+    // From twelve yards: nothing.
+    assert!(remove(grom).await, "not made to release from afar");
+    // At her own body, or cast while dead: nothing.
+    put(&map, &mut a, 11.0, 0.0).await;
+    a.clear();
+    assert!(remove(alice).await, "her own");
+    map.query(move |m| death::kill(m, alice)).await;
+    assert!(remove(grom).await, "cast by the dead");
+    map.query(move |m| {
+        death::resurrect(m, alice, 1.0);
+    })
+    .await;
+    // His flag gone (he has risen and fallen out of it): nothing.
+    map.query(move |m| {
+        m.players
+            .get_mut(&grom)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, insignia::UNIT_FLAG_SKINNABLE, false);
+    })
+    .await;
+    assert!(remove(grom).await, "no body to take");
+    assert_eq!(looted(&mut a).await, None, "none of those opened his body");
+    // His body, near: taken, he made to release, its bones to loot.
+    map.query(move |m| {
+        m.players
+            .get_mut(&grom)
+            .unwrap()
+            .fields
+            .set_flag(UNIT_FIELD_FLAGS, insignia::UNIT_FLAG_SKINNABLE, true);
+    })
+    .await;
+    assert!(!remove(grom).await, "taken: he is made to release");
+    assert_eq!(looted(&mut a).await, Some(()), "his bones' loot");
+    a.send(CMSG_LOOT_RELEASE {
+        guid: Guid::zero(),
+    })
+    .await;
+    // The bones already taken: nothing again.
+    let bones = map
+        .query(|m| m.corpses.values().map(|c| c.guid).next())
+        .await
+        .unwrap()
+        .expect("the bones");
+    a.clear();
+    remove(bones).await;
+    remove(grom).await;
+    assert_eq!(looted(&mut a).await, None, "bones are taken once");
+}
+
+/// Whether a loot window opens for `c` soon.
+async fn looted(c: &mut Client) -> Option<()> {
+    c.gets(std::time::Duration::from_millis(300), |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOOT_RESPONSE(_)).then_some(())
+    })
+    .await
+}
