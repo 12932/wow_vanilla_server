@@ -34,6 +34,9 @@ const UNIT_FLAG_DISABLE_MOVE: u32 = 0x0000_0004;
 const UNIT_FLAG_NOT_SELECTABLE: u32 = 0x0200_0000;
 /// A flight's speed, in yards a second.
 const TAXI_SPEED: f32 = 32.0;
+/// How near, on each axis, a flight resumed is to what is left of it to
+/// have landed (Thistle Tea's `@move_epsilon`).
+const FLIGHT_LANDED: f32 = 0.1;
 /// The text an NPC without its own shows.
 pub const DEFAULT_TEXT: u32 = 68;
 /// A gossip option that opens the stable.
@@ -1393,8 +1396,19 @@ pub fn resume_flight(map: &mut Map, player: Guid) {
     {
         return;
     }
-    map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let start = p.position();
+    // Saved a hair from its end, it is over: landed where they are, never
+    // mounted, with no spline of no length to fly (Thistle Tea's
+    // `Taxi.resume`, its `at_destination?`).
+    let near = |a: f32, b: f32| (a - b).abs() <= FLIGHT_LANDED;
+    if saved
+        .points
+        .iter()
+        .all(|&(x, y, z)| near(start.x, x) && near(start.y, y) && near(start.z, z))
+    {
+        return;
+    }
+    map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let mut points = vec![start];
     points.extend(saved.points.iter().map(|(x, y, z)| Vector3d {
         x: *x,

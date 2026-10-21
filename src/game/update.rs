@@ -75,6 +75,21 @@ pub struct SplineState {
     pub id: u32,
     pub nodes: Vec<Vector3d>,
     pub final_node: Vector3d,
+    /// Which way it faces on arriving (`Walk::face`, `FINAL_ANGLE`).
+    pub final_angle: Option<f32>,
+    /// The unit it faces as it goes and on arriving (`Walk::face_target`,
+    /// `FINAL_TARGET`; over an angle, as `SMSG_MONSTER_MOVE` has it).
+    pub final_target: Option<Guid>,
+}
+
+/// A jump under way, as the jumper's client said it (mangos's
+/// `MovementInfo::jump`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Jump {
+    pub z_speed: f32,
+    pub cos_angle: f32,
+    pub sin_angle: f32,
+    pub xy_speed: f32,
 }
 
 /// A unit on a transport: the transport, and its place and facing on deck.
@@ -96,6 +111,10 @@ pub enum Placement {
         orientation: f32,
         pitch: f32,
         fall_time: u32,
+        /// A jump under way: `MOVEFLAG_JUMPING` and its data.
+        jump: Option<Jump>,
+        /// `MOVEFLAG_SPLINE_ELEVATION` and its height.
+        spline_elevation: Option<f32>,
         speeds: Speeds,
         spline: Option<SplineState>,
         transport: Option<Aboard>,
@@ -145,6 +164,11 @@ pub fn write_packed_guid(out: &mut Vec<u8>, guid: Guid) {
 
 /// `SplineFlags::RUN_MODE`: the unit runs along the path, not walks.
 const SPLINE_RUN_MODE: u32 = 0x0000_0100;
+/// `SplineFlags::FINAL_TARGET` and `FINAL_ANGLE`: what a spline faces at
+/// its end; with `FINAL_POINT`, `Mask_Final_Facing`.
+const SPLINE_FINAL_TARGET: u32 = 0x0002_0000;
+const SPLINE_FINAL_ANGLE: u32 = 0x0004_0000;
+const SPLINE_FINAL_FACING: u32 = 0x0001_0000 | SPLINE_FINAL_TARGET | SPLINE_FINAL_ANGLE;
 
 /// A create's spline points as mangos-classic sends them, its spline's
 /// whole array (`MoveSpline::getPath`, `SplineBase::InitCatmullRom`, which
@@ -214,13 +238,15 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
             orientation,
             pitch,
             fall_time,
+            jump,
+            spline_elevation,
             speeds,
             spline,
             transport,
         } => {
-            // A create carries a stable state: no jump or spline elevation;
-            // a spline only if there is one to send; a transport if aboard,
-            // its whole GUID and the place and facing on deck (mangos's
+            // A jump and a spline elevation if there are any, a spline only
+            // if there is one to send, a transport if aboard: its whole
+            // GUID and the place and facing on deck (mangos's
             // `MovementInfo::Write`, wow_messages's `MovementBlock`).
             let mut move_flags = *flags
                 & !(MOVEFLAG_ON_TRANSPORT
@@ -246,6 +272,12 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
             if transport.is_some() {
                 move_flags |= MOVEFLAG_ON_TRANSPORT;
             }
+            if jump.is_some() {
+                move_flags |= MOVEFLAG_JUMPING;
+            }
+            if spline_elevation.is_some() {
+                move_flags |= MOVEFLAG_SPLINE_ELEVATION;
+            }
             out.extend_from_slice(&move_flags.to_le_bytes());
             out.extend_from_slice(&timestamp.to_le_bytes());
             write_vector(out, *position);
@@ -259,6 +291,14 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                 out.extend_from_slice(&pitch.to_le_bytes());
             }
             out.extend_from_slice(&fall_time.to_le_bytes());
+            if let Some(j) = jump {
+                for v in [j.z_speed, j.cos_angle, j.sin_angle, j.xy_speed] {
+                    out.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+            if let Some(e) = spline_elevation {
+                out.extend_from_slice(&e.to_le_bytes());
+            }
             for s in [
                 speeds.walk,
                 speeds.run,
@@ -270,9 +310,21 @@ fn write_placement(out: &mut Vec<u8>, c: &Create) {
                 out.extend_from_slice(&s.to_le_bytes());
             }
             if let Some(spline) = spline {
-                // No final angle, target or point.
-                let spline_flags = spline.flags & !(0x0001_0000 | 0x0002_0000 | 0x0004_0000);
+                // Its final facing, a target over an angle, as its
+                // `SMSG_MONSTER_MOVE` has it; never a final point
+                // (mangos's `PacketBuilder::WriteCreate`).
+                let mut spline_flags = spline.flags & !SPLINE_FINAL_FACING;
+                if spline.final_target.is_some() {
+                    spline_flags |= SPLINE_FINAL_TARGET;
+                } else if spline.final_angle.is_some() {
+                    spline_flags |= SPLINE_FINAL_ANGLE;
+                }
                 out.extend_from_slice(&spline_flags.to_le_bytes());
+                if let Some(target) = spline.final_target {
+                    out.extend_from_slice(&target.guid().to_le_bytes());
+                } else if let Some(angle) = spline.final_angle {
+                    out.extend_from_slice(&angle.to_le_bytes());
+                }
                 out.extend_from_slice(&spline.time_passed.to_le_bytes());
                 out.extend_from_slice(&spline.duration.to_le_bytes());
                 out.extend_from_slice(&spline.id.to_le_bytes());
@@ -656,6 +708,8 @@ mod tests {
             id: 446,
             nodes: vec![v(-13719.4, 249.08, 28.52), v(-13718.58, 253.25, 29.73)],
             final_node: v(-13718.58, 253.25, 29.73),
+            final_angle: None,
+            final_target: None,
         };
         let block = create_block(
             &Create {
@@ -668,6 +722,8 @@ mod tests {
                     orientation: 1.38,
                     pitch: 0.0,
                     fall_time: 0,
+                    jump: None,
+                    spline_elevation: None,
                     speeds: Speeds::default(),
                     spline: Some(spline),
                     transport: None,
@@ -708,6 +764,8 @@ mod tests {
                     orientation: 0.0,
                     pitch: 0.0,
                     fall_time: 0,
+                    jump: None,
+                    spline_elevation: None,
                     speeds: Speeds::default(),
                     spline: spline.map(|flags| SplineState {
                         flags,
@@ -716,6 +774,8 @@ mod tests {
                         id: 9,
                         nodes: vec![from, to],
                         final_node: to,
+                        final_angle: None,
+                        final_target: None,
                     }),
                     transport: None,
                 },
@@ -784,6 +844,8 @@ mod tests {
                     orientation: 0.5,
                     pitch: 0.0,
                     fall_time: 0,
+                    jump: None,
+                    spline_elevation: None,
                     speeds: Speeds::default(),
                     spline: None,
                     transport: None,
@@ -901,6 +963,8 @@ mod tests {
                     orientation: 0.0,
                     pitch: 0.25,
                     fall_time: 0,
+                    jump: None,
+                    spline_elevation: None,
                     speeds: Speeds::default(),
                     spline: None,
                     transport: None,

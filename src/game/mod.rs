@@ -195,6 +195,8 @@ mod tests_p11d_pets;
 #[cfg(test)]
 mod tests_p11e_summons;
 #[cfg(test)]
+mod tests_p11f_movement;
+#[cfg(test)]
 mod tests_p11h_stones;
 #[cfg(test)]
 mod tests_p12_questions;

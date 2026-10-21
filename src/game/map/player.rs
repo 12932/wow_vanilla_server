@@ -595,6 +595,16 @@ impl Player {
     /// What a create block says about where the player is.
     pub fn placement(&self) -> Placement {
         let flags = movement_flags(&self.movement.flags);
+        let jump = self
+            .movement
+            .flags
+            .get_jumping()
+            .map(|j| crate::game::update::Jump {
+                z_speed: j.z_speed,
+                cos_angle: j.cos_angle,
+                sin_angle: j.sin_angle,
+                xy_speed: j.xy_speed,
+            });
         Placement::Living {
             flags: flags
                 & (crate::game::update::MOVEFLAG_FORWARD
@@ -609,7 +619,16 @@ impl Player {
                 .get_swimming()
                 .map(|s| s.pitch)
                 .unwrap_or(0.0),
-            fall_time: 0,
+            // Mid-jump, the jump, from the fall's time into it, as mangos's
+            // `MovementInfo::Write` puts it: one who comes into view of a
+            // jumper sees them in the air, not standing on it.
+            fall_time: jump.map_or(0, |_| self.movement.fall_time),
+            jump,
+            spline_elevation: self
+                .movement
+                .flags
+                .get_spline_elevation()
+                .map(|e| e.spline_elevation),
             speeds: self.speeds,
             spline: None,
             transport: self.movement.flags.get_on_transport().map(|t| {
@@ -657,6 +676,8 @@ impl Player {
                 id: f.walk.spline_id,
                 nodes: f.walk.points.clone(),
                 final_node: f.walk.destination(),
+                final_angle: None,
+                final_target: None,
             });
         }
         create
