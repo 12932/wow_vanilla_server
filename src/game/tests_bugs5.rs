@@ -359,11 +359,12 @@ async fn a_percent_mana_tick_threatens_by_half_what_it_gave() {
 
 /// A periodic energize of rage makes threat as a heal does, half the rage
 /// it gave (Bloodrage's on the warrior's foes), as Thistle Tea's
-/// spell_threat_test and mangos's `threatAssist` have it; one of mana makes
-/// none, as Thistle Tea has it.
+/// spell_threat_test and mangos's `threatAssist` have it; one of mana half
+/// the mana too, as mangos's `PeriodicTick` has it (Thistle Tea gives it
+/// none).
 #[tokio::test]
 #[ignore = "extended"]
-async fn an_energize_of_rage_threatens_and_one_of_mana_doesnt() {
+async fn an_energize_of_rage_or_mana_threatens_by_half() {
     if !have_data() {
         return;
     }
@@ -410,7 +411,7 @@ async fn an_energize_of_rage_threatens_and_one_of_mana_doesnt() {
     );
     let (mana, threat) = out[1];
     assert_eq!(mana, 50, "the mana");
-    assert!(threat.abs() < 0.01, "and no threat: {threat}");
+    assert!((threat - 25.0).abs() < 0.01, "half of it too: {threat}");
 }
 
 const WSG: u32 = 489;
