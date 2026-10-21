@@ -981,6 +981,9 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, false);
     }
     crate::game::map::combat::leave_combat(map, unit);
+    // Its cast and its channel end with the charm (mangos's `Uncharm`:
+    // `AttackStop(true, true)`, `InterruptNonMeleeSpells`).
+    crate::game::map::spells::interrupt(map, unit);
     if let Some(p) = map.players.get_mut(&master) {
         if p.owned.charm == Some(unit) {
             p.owned.charm = None;

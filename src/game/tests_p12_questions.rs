@@ -165,3 +165,81 @@ async fn a_druids_attack_power_is_three_a_level_in_every_form_and_agility_in_cat
         "caster, cat, bear, dire bear, moonkin"
     );
 }
+
+/// A cast under way for `g`: a plain one, or a channel.
+fn casting(m: &mut crate::game::map::Map, g: Guid, spell: u32, channel: bool) {
+    use std::time::Duration;
+    let now = m.now;
+    m.caster_mut(g).unwrap().casting = Some(crate::game::map::spells::Casting {
+        spell,
+        targets: Default::default(),
+        ends: now + Duration::from_secs(3),
+        item: None,
+        pushbacks: 0,
+        channel_until: channel.then_some(now + Duration::from_secs(3)),
+        duration: 3_000,
+    });
+}
+
+// #28: a charm's end.
+
+/// mangos-classic's `Unit::Uncharm` lets a creature (not a pet) go with
+/// `AttackStop(true, true)`, which interrupts its cast and its channel
+/// (`InterruptNonMeleeSpells`), and its auto-repeat and melee spells: a
+/// freed creature's cast doesn't carry on, as Thistle Tea has it too. wvs
+/// stopped its swing alone.
+#[tokio::test]
+async fn a_creature_let_go_from_a_charm_stops_its_cast_and_its_channel() {
+    use crate::game::map::pets;
+    use crate::game::tests_p5_data_aura::{CHARM_ONE, charm_data};
+    let (_realm, _a, ga, map) = setup_with(charm_data(), Class::Warrior).await;
+    let got = on(&map, move |m| {
+        let mut out = Vec::new();
+        for channel in [false, true] {
+            let brute = spawn(m, ga, BRUTE, 1, 5.0);
+            pets::charmed(m, ga, brute, false);
+            casting(m, brute, CHARM_ONE, channel);
+            pets::uncharmed(m, ga, brute);
+            out.push(m.caster(brute).unwrap().casting.is_some());
+        }
+        out
+    })
+    .await;
+    assert_eq!(got, vec![false, false], "a cast, a channel");
+}
+
+// #19 and #44: a pet's Stay from the bar.
+
+/// mangos-classic's `HandlePetAction`, `COMMAND_STAY`: the pet's
+/// `AttackStop(true, true)` (unless a combat script holds it) stops its
+/// attack, interrupts its cast and lets go of its target, as Follow and
+/// Passive do; wvs stopped the attack alone, the cast going on.
+#[tokio::test]
+async fn stay_from_the_bar_stops_the_pets_cast_and_its_target_too() {
+    use crate::game::map::pets::{self, ACT_COMMAND, COMMAND_STAY};
+    use crate::game::tests_p5_ai_pets::tamed_with;
+    let (_realm, _h, gh, map, pet, wolf) = tamed_with(crate::game::tests_pets::data()).await;
+    let got = on(&map, move |m| {
+        pets::attack_target(m, pet, wolf);
+        casting(m, pet, 1, false);
+        pets::handle(
+            m,
+            gh,
+            wow_world_messages::vanilla::opcodes::ClientOpcodeMessage::CMSG_PET_ACTION(
+                CMSG_PET_ACTION {
+                    pet,
+                    data: pets::button(u32::from(COMMAND_STAY), ACT_COMMAND),
+                    target: Guid::zero(),
+                },
+            ),
+        );
+        (
+            m.caster(pet).unwrap().casting.is_some(),
+            m.unit_fields(pet).unwrap().get_guid(UNIT_FIELD_TARGET),
+            m.combat(pet).is_some_and(|c| c.attacking),
+            pets::state(m, pet).map(|s| s.command),
+        )
+    })
+    .await;
+    assert_eq!(got, (false, Guid::zero(), false, Some(COMMAND_STAY)));
+}
