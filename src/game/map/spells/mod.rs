@@ -12,13 +12,15 @@ pub mod cooldowns;
 pub mod dynamic;
 mod effects;
 
+pub(crate) use effects::first_clear;
+#[cfg(test)]
+pub(crate) use effects::leap_end;
 #[cfg(test)]
 pub(crate) use effects::{Dr, dr_group};
 pub use effects::{
     add_combo_points, combo_duration, dr_aura_gone, release_retained_combo_points,
     retained_combo_points_expired, shown_power,
 };
-pub(crate) use effects::{first_clear, leap_end};
 pub mod environment;
 pub mod health_sync;
 pub mod heartbeat;
@@ -1041,6 +1043,20 @@ pub fn cast_now(map: &mut Map, caster: Guid, spell: u32, targets: Targets) -> bo
 
 /// A spell cast for free, as another spell or an aura's tick does.
 pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Guid>) {
+    cast_triggered_from(map, caster, spell, target, None);
+}
+
+/// [`cast_triggered`] from `item`, as a spell another cast from an item
+/// triggers is (mangos's `CastSpell(..., m_CastItem)`): no charge of it
+/// spent, but what its effects make of the item (an engineering
+/// trinket's guardian by the skill).
+pub fn cast_triggered_from(
+    map: &mut Map,
+    caster: Guid,
+    spell: u32,
+    target: Option<Guid>,
+    item: Option<Guid>,
+) {
     let data = map.realm.data.clone();
     let Some(s) = data.spells.get(spell) else {
         return;
@@ -1051,7 +1067,7 @@ pub fn cast_triggered(map: &mut Map, caster: Guid, spell: u32, target: Option<Gu
         dest,
         ..Default::default()
     };
-    execute(map, caster, s, targets, None, true);
+    execute(map, caster, s, targets, item, true);
 }
 
 /// `s`'s reagents taken from what `caster` carries (none from a GM).
@@ -1465,7 +1481,17 @@ fn execute(
     }
     let targets = launch.targets;
     // Effects with no unit: places, objects.
-    effects::run_untargeted(map, caster, s, &targets, &m, combo, professions, triggered);
+    effects::run_untargeted(
+        map,
+        caster,
+        s,
+        &targets,
+        &m,
+        combo,
+        professions,
+        triggered,
+        item,
+    );
     crate::game::map::quests::cast_credit(map, caster, &at_objects, s.id);
     class_scripts::after_effects(map, caster, s);
     // Holy Nova's heal for a cast of it; Wolfshead Helm's energy however

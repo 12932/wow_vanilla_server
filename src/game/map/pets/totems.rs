@@ -76,6 +76,32 @@ fn before_spot(map: &Map, owner: Guid, d: f32) -> (Vector3d, f32) {
     )
 }
 
+/// A player's guardian's level: its template's, as near its owner's as
+/// that allows; one an engineering trinket calls, its owner's engineering
+/// over five (mangos-classic's `EffectSummonGuardian`, Thistle Tea's
+/// `GuardianLoader.level`).
+fn guardian_level(map: &Map, owner: Guid, entry: u32, item: Option<Guid>) -> u8 {
+    const ENGINEERING: u32 = 202;
+    const TRINKET: u32 = 12;
+    let data = &map.realm.data;
+    let t = summon::template(data, entry);
+    let own = level_of(map, owner);
+    let level = own.clamp(t.level_min.max(1), t.level_max.max(t.level_min).max(1));
+    let Some(p) = map.players.get(&owner) else {
+        return level;
+    };
+    let trinket = item
+        .and_then(|g| p.item_by_guid(g))
+        .and_then(|i| data.item(p.items[i].entry))
+        .is_some_and(|it| it.required_skill == ENGINEERING && it.inventory_type == TRINKET);
+    let skill = crate::game::map::skills::value_with_bonuses(p, ENGINEERING);
+    if trinket && skill > 0 {
+        (skill / 5).clamp(1, 63) as u8
+    } else {
+        level
+    }
+}
+
 fn level_of(map: &Map, g: Guid) -> u8 {
     map.unit_view(g).map(|u| u.level).unwrap_or(1).clamp(1, 63) as u8
 }
@@ -424,6 +450,7 @@ pub fn summon_guardian(
     s: &SpellTemplate,
     replace: bool,
     at: Option<Vector3d>,
+    item: Option<Guid>,
 ) {
     if entry == 0 {
         return;
@@ -452,7 +479,7 @@ pub fn summon_guardian(
     let now = map.now;
     let data = map.realm.data.clone();
     let level = if guid::is_player(owner) {
-        level_of(map, owner)
+        guardian_level(map, owner, entry, item)
     } else {
         data.creature_template(entry)
             .map_or(1, |t| t.level_max.max(1))

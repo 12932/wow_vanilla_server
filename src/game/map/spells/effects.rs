@@ -667,9 +667,17 @@ fn effect(
     match e.effect {
         // A beacon's planting is the battleground's: see `run_untargeted`.
         _ if crate::game::map::battleground::plants(s) => {}
-        _ if crate::game::map::pets::handles(s, index) => {
-            crate::game::map::pets::effect(map, caster, target, s, index, amount, l.triggered, t)
-        }
+        _ if crate::game::map::pets::handles(s, index) => crate::game::map::pets::effect_by(
+            map,
+            caster,
+            target,
+            s,
+            index,
+            amount,
+            l.triggered,
+            t,
+            item,
+        ),
         _ if crate::game::map::extra_effects::effect(
             map, caster, target, s, index, amount, item,
         ) => {}
@@ -1783,6 +1791,8 @@ pub fn run_untargeted(
     // The effects the professions ran (opening locks, gathering): skipped.
     done: u8,
     triggered: bool,
+    // The item cast from, if any.
+    item: Option<Guid>,
 ) {
     let level = map.unit_view(caster).map(|u| u.level).unwrap_or(1);
     for index in 0..3 {
@@ -1871,7 +1881,9 @@ pub fn run_untargeted(
                     || matches!(e.target_a, 7 | 8)) =>
             {
                 let amount = m.points(s, index, points_with(s, index, level, combo));
-                crate::game::map::pets::effect(map, caster, caster, s, index, amount, triggered, t);
+                crate::game::map::pets::effect_by(
+                    map, caster, caster, s, index, amount, triggered, t, item,
+                );
             }
             _ => {}
         }

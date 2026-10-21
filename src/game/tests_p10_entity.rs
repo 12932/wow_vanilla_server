@@ -197,6 +197,111 @@ async fn an_update_entry_tells_its_watcher_the_new_entry_and_level() {
     );
 }
 
+/// The Mechanical Dragonling's trinket spell, its summon, and made-up
+/// stand-ins for its dragonling (of level 47) and its trinket.
+const DRAGONLING_TRINKET_SPELL: u32 = 23_076;
+const DRAGONLING_SUMMON: u32 = 4073;
+const DRAGONLING: u32 = 990_218;
+const TRINKET: u32 = 990_219;
+/// A guardian of level 5 to 8, its summon.
+const HELPER: u32 = 990_220;
+const SUMMON_HELPER: u32 = 990_221;
+
+/// A player's guardian is at its template's level, as near its owner's as
+/// that allows: a level-1 player's helper of 5 to 8 at 5, a dragonling
+/// cast without its trinket at its 47; one an engineering trinket calls
+/// is at its owner's engineering over five, 300 making a level-60
+/// dragonling (mangos-classic's `EffectSummonGuardian`, `skill202 / 5` for
+/// a `SKILL_ENGINEERING` trinket; Thistle Tea's "engineering trinkets
+/// scale statistics without changing template defaults"). wvs gave every
+/// player's guardian its owner's level, and never looked at the trinket.
+#[tokio::test]
+async fn a_players_guardian_is_at_its_level_and_an_engineers_by_the_skill() {
+    let mut d = data();
+    let none = SpellEffect::default();
+    let mut dragonling = template(DRAGONLING, "Dragonling", 14, 1);
+    (dragonling.level_min, dragonling.level_max) = (47, 47);
+    d.creature_templates.insert(DRAGONLING, dragonling);
+    let mut helper = template(HELPER, "Helper", 14, 1);
+    (helper.level_min, helper.level_max) = (5, 8);
+    d.creature_templates.insert(HELPER, helper);
+    for level in 1..=63u8 {
+        d.class_level_stats
+            .entry((1, level))
+            .or_insert(crate::game::data::ClassLevelStats {
+                health: 40 + u32::from(level) * 10,
+                melee_damage: 3.0,
+                ..Default::default()
+            });
+    }
+    let guardian = |id: u32, entry: u32| {
+        let mut e = effect(pets::EFFECT_SUMMON_GUARDIAN, 0, 32);
+        e.misc_value = entry as i32;
+        spell(id, "Guardian", [e, none, none])
+    };
+    for s in [
+        guardian(DRAGONLING_SUMMON, DRAGONLING),
+        guardian(SUMMON_HELPER, HELPER),
+        spell(
+            DRAGONLING_TRINKET_SPELL,
+            "Mechanical Dragonling",
+            [effect(3, 0, 1), none, none],
+        ),
+    ] {
+        d.spells.spells.insert(s.id, s);
+    }
+    d.items.insert(
+        TRINKET,
+        crate::game::data::items::ItemTemplate {
+            entry: TRINKET,
+            name: "Mechanical Dragonling".into(),
+            display_id: 1000,
+            inventory_type: 12,
+            required_skill: 202,
+            ..Default::default()
+        },
+    );
+    let realm = crate::game::harness::realm_with(d);
+    let (_e, me, map) = enter(&realm, "E", "Engineer", Race::Human, Class::Warrior).await;
+    let levels = map
+        .query(move |m| {
+            crate::game::map::inventory::add_item(m, me, TRINKET, 1, false).unwrap();
+            let p = m.players.get_mut(&me).unwrap();
+            let item = p.items.iter().find(|i| i.entry == TRINKET).unwrap().guid;
+            crate::game::map::skills::learn_skill(p, 202, 4);
+            crate::game::map::skills::set_value(p, 202, 300);
+            let level_of = |m: &Map, entry: u32| {
+                m.players[&me]
+                    .owned
+                    .guardians
+                    .iter()
+                    .rev()
+                    .filter_map(|g| m.creature(*g))
+                    .find(|c| c.entry == entry && c.alive())
+                    .map(|c| c.fields.get_u32(UNIT_FIELD_LEVEL))
+            };
+            let cast = crate::game::map::spells::cast;
+            cast(m, me, SUMMON_HELPER, Default::default(), None);
+            let helper = level_of(m, HELPER);
+            cast(m, me, DRAGONLING_SUMMON, Default::default(), None);
+            let plain = level_of(m, DRAGONLING);
+            cast(
+                m,
+                me,
+                DRAGONLING_TRINKET_SPELL,
+                Default::default(),
+                Some(item),
+            );
+            let engineered = level_of(m, DRAGONLING);
+            let skill = crate::game::map::skills::value_with_bonuses(&m.players[&me], 202);
+            assert_eq!(skill, 300, "the engineer's skill");
+            (helper, plain, engineered)
+        })
+        .await
+        .unwrap();
+    assert_eq!(levels, (Some(5), Some(47), Some(60)));
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 

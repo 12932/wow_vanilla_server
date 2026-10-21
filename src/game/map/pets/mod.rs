@@ -425,6 +425,22 @@ pub fn effect(
     triggered: bool,
     t: &Targets,
 ) {
+    effect_by(map, caster, target, s, index, amount, triggered, t, None);
+}
+
+/// [`effect`], cast from `item` if any.
+#[allow(clippy::too_many_arguments)]
+pub fn effect_by(
+    map: &mut Map,
+    caster: Guid,
+    target: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    amount: i32,
+    triggered: bool,
+    t: &Targets,
+    item: Option<Guid>,
+) {
     let e = s.effects[index];
     // The stacking trinkets' hit scripts ride the same hook.
     if crate::game::map::trinkets::handles(s) {
@@ -529,12 +545,12 @@ pub fn effect(
                     }
                 }
                 for i in 0..count {
-                    totems::summon_guardian(map, caster, entry, s, false, at(i));
+                    totems::summon_guardian(map, caster, entry, s, false, at(i), item);
                 }
                 return;
             }
             for i in 0..count {
-                totems::summon_guardian(map, caster, entry, s, i == 0, at(i));
+                totems::summon_guardian(map, caster, entry, s, i == 0, at(i), item);
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),
