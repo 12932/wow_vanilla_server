@@ -18,6 +18,9 @@ use crate::game::map::spells;
 const CHARGE: u32 = 997_801;
 const ROOT: u32 = 997_802;
 const RANGE_8_25: u32 = 990_801;
+/// A polymorph only for what its caster tapped; a mana burn.
+const SHEEP: u32 = 997_803;
+const BURN: u32 = 997_804;
 
 fn data(d: &mut GameData) {
     d.spells.ranges.insert(RANGE_8_25, (8.0, 25.0));
@@ -48,7 +51,30 @@ fn data(d: &mut GameData) {
     let mut root = bare(ROOT, 4);
     root.duration_index = LASTS_LONG;
     effect(&mut root, 0, aura(AURA_MOD_ROOT, 0, 0, 1));
-    insert(d, [charge, root]);
+    let mut sheep = bare(SHEEP, 6);
+    sheep.duration_index = LASTS_5S;
+    sheep.range_index = RANGE_8_25;
+    sheep.attributes[2] |= crate::game::map::spells::checks::ATTR_EX2_CANNOT_CAST_ON_TAPPED;
+    effect(
+        &mut sheep,
+        0,
+        aura(crate::game::map::auras::AURA_MOD_CONFUSE, 0, 0, 6),
+    );
+    let mut burn = bare(BURN, 6);
+    burn.range_index = RANGE_8_25;
+    effect(
+        &mut burn,
+        0,
+        SpellEffect {
+            effect: 62,
+            base_points: 99,
+            base_dice: 1,
+            misc_value: 0,
+            target_a: 6,
+            ..Default::default()
+        },
+    );
+    insert(d, [charge, root, sheep, burn]);
 }
 
 /// The result of `spell`'s cast as the client hears it: none for a cast
@@ -109,4 +135,99 @@ async fn a_rooted_charge_is_refused_and_costs_nothing() {
         .unwrap();
     assert_eq!(cast_result(&mut c, CHARGE).await, None, "freed, it goes");
     assert_eq!(rage, 90, "and gives its rage");
+}
+
+/// A mage's polymorph at a kobold another player tapped is refused (0x0e,
+/// `SPELL_FAILED_CANT_CAST_ON_TAPPED`), at one no one tapped it goes, and
+/// at one the mage tapped too. Before, it went at anyone's.
+#[tokio::test]
+async fn a_polymorph_is_refused_at_someone_elses_tapped_creature() {
+    let realm = fast_realm(data);
+    let (mut c, a, map) = human(&realm, "P12EK", "Sheeper", Class::Mage).await;
+    let (_d, b, _) = human(&realm, "P12EL", "Tapper", Class::Warrior).await;
+    let (theirs, free) = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[SHEEP]);
+            let theirs = kit::dummy(m, a, 60, 15.0);
+            let free = kit::dummy(m, a, 60, -15.0);
+            let realm = m.realm.clone();
+            crate::game::map::tap::take(&realm, m.creature_mut(theirs).unwrap(), b);
+            (theirs, free)
+        })
+        .await
+        .unwrap();
+    c.sees(theirs).await;
+    c.sees(free).await;
+    c.clear();
+    map.query(move |m| kit::cast_fresh(m, a, SHEEP, at(theirs)))
+        .await
+        .unwrap();
+    assert_eq!(
+        cast_result(&mut c, SHEEP).await,
+        Some(crate::game::map::spells::checks::FAIL_CANT_CAST_ON_TAPPED),
+        "another's tapped kobold: refused"
+    );
+    map.query(move |m| kit::cast_fresh(m, a, SHEEP, at(free)))
+        .await
+        .unwrap();
+    assert_eq!(
+        cast_result(&mut c, SHEEP).await,
+        None,
+        "an untapped one: it goes"
+    );
+    let mine = map
+        .query(move |m| {
+            let realm = m.realm.clone();
+            crate::game::map::tap::take(&realm, m.creature_mut(free).unwrap(), a);
+            kit::cast_fresh(m, a, SHEEP, at(free));
+            kit::has(m, free, SHEEP)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        cast_result(&mut c, SHEEP).await,
+        None,
+        "one of his own: it goes"
+    );
+    assert!(mine);
+}
+
+/// A mana burn at a kobold of rage is refused (bad targets) before it
+/// costs anything; at one of mana it goes. Before, it went off at either,
+/// paid for, and burned nothing from the one of rage.
+#[tokio::test]
+async fn a_mana_burn_is_refused_at_a_unit_without_mana() {
+    let realm = fast_realm(data);
+    let (mut c, a, map) = human(&realm, "P12EB", "Burner", Class::Mage).await;
+    let (raging, mana) = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[BURN]);
+            let raging = kit::dummy(m, a, 60, 15.0);
+            let mana = kit::dummy(m, a, 60, -15.0);
+            if let Some(f) = m.unit_fields_mut(raging) {
+                f.set_byte(crate::game::fields::UNIT_FIELD_BYTES_0, 3, 1);
+            }
+            (raging, mana)
+        })
+        .await
+        .unwrap();
+    c.sees(raging).await;
+    c.sees(mana).await;
+    c.clear();
+    map.query(move |m| kit::cast_fresh(m, a, BURN, at(raging)))
+        .await
+        .unwrap();
+    assert_eq!(
+        cast_result(&mut c, BURN).await,
+        Some(crate::game::map::spells::fail::BAD_TARGETS),
+        "a kobold of rage: refused"
+    );
+    map.query(move |m| kit::cast_fresh(m, a, BURN, at(mana)))
+        .await
+        .unwrap();
+    assert_eq!(
+        cast_result(&mut c, BURN).await,
+        None,
+        "one of mana: it goes"
+    );
 }

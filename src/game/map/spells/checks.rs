@@ -1165,6 +1165,28 @@ fn check_target(
     } else if !u.alive && !for_the_dead(s) {
         return Some(fail::TARGETS_DEAD);
     }
+    // A player's spell only for what they tapped (Polymorph, Mind Control,
+    // Enslave Demon): refused at a creature another tapped, as
+    // mangos-classic's `CheckCast` gives `SPELL_FAILED_CANT_CAST_ON_TAPPED`.
+    if s.attr(2, ATTR_EX2_CANNOT_CAST_ON_TAPPED)
+        && guid::is_player(caster)
+        && map
+            .creature(target)
+            .is_some_and(|c| c.tapped_by.is_some() && !crate::game::map::tap::holds(map, c, caster))
+    {
+        return Some(FAIL_CANT_CAST_ON_TAPPED);
+    }
+    // A player's drain or burn of a power at a unit without it (Mana Burn
+    // at a warrior), refused as mangos-classic's `CheckCast` refuses
+    // `SPELL_EFFECT_POWER_BURN` and `_DRAIN` there.
+    if guid::is_player(caster)
+        && target != caster
+        && s.effects.iter().any(|e| {
+            matches!(e.effect, 8 | 62) && i32::from(super::shown_power(map, target)) != e.misc_value
+        })
+    {
+        return Some(fail::BAD_TARGETS);
+    }
     // A party member's spell is for the caster's party and pets, not the
     // caster (Thistle Tea's `validate_party_unit_query`).
     if s.effects
@@ -1478,3 +1500,8 @@ fn charge_check(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> 
         None => None,
     }
 }
+
+/// `SPELL_ATTR_EX2_CANNOT_CAST_ON_TAPPED`: only at what its caster tapped.
+pub const ATTR_EX2_CANNOT_CAST_ON_TAPPED: u32 = 0x40;
+/// `SPELL_FAILED_CANT_CAST_ON_TAPPED`.
+pub const FAIL_CANT_CAST_ON_TAPPED: u8 = 0x0e;
