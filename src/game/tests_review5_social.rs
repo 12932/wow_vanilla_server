@@ -420,6 +420,7 @@ async fn the_sweep_drops_one_queued_and_offline() {
             team: crate::game::registry::Team::Alliance,
             class: 1,
             leader: false,
+            group: 0,
             since: Instant::now() - Duration::from_secs(60),
             progress_at: Instant::now() + Duration::from_secs(300),
         });
