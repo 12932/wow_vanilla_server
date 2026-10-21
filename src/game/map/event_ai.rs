@@ -1190,17 +1190,32 @@ pub fn death_heard(map: &mut Map, g: Guid) {
         if !alive(map, m) || !crate::game::map::creature_groups::hears_death(map, m, g) {
             continue;
         }
-        fire(
-            map,
-            m,
-            |e| {
-                e.kind == EVENT_GROUP_MEMBER_DIED
-                    && (e.params[0] == 0 || e.params[0] as u32 == entry)
-                    && (e.params[1] != 0) == leader
-            },
-            Some(g),
-        );
+        heard(map, m, g, entry, leader);
     }
+}
+
+/// `listener`, of `dead`'s group, hears of its death: one joining a group
+/// whose leader is already dead (Thistle Tea's `catch_up_death`).
+pub fn group_death_heard(map: &mut Map, listener: Guid, dead: Guid) {
+    if map.creature(listener).is_none_or(|c| !c.alive()) {
+        return;
+    }
+    let entry = map.creature(dead).map(|c| c.entry).unwrap_or(0);
+    let leader = crate::game::map::creature_groups::is_leader(map, dead);
+    heard(map, listener, dead, entry, leader);
+}
+
+fn heard(map: &mut Map, listener: Guid, dead: Guid, entry: u32, leader: bool) {
+    fire(
+        map,
+        listener,
+        |e| {
+            e.kind == EVENT_GROUP_MEMBER_DIED
+                && (e.params[0] == 0 || e.params[0] as u32 == entry)
+                && (e.params[1] != 0) == leader
+        },
+        Some(dead),
+    );
 }
 
 /// It killed `victim`.
