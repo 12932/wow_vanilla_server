@@ -183,6 +183,8 @@ mod tests_p11j_pets;
 #[cfg(test)]
 mod tests_p11j_quests;
 #[cfg(test)]
+mod tests_p11j_real;
+#[cfg(test)]
 mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p10_spell_cast;
