@@ -123,6 +123,8 @@ mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_entity;
 #[cfg(test)]
+mod tests_p10_entity_real;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
