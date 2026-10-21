@@ -201,7 +201,14 @@ fn data() -> GameData {
     );
     seal.proc_flags = 0x4;
     seal.proc_chance = 100;
-    for t in [hs, shot, proc_aura, blow, chance, thorns, seal] {
+    // Its first rank's holy strike (round 12e: the seal casts it).
+    let mut strike = spell(
+        25742,
+        "Seal of Righteousness",
+        [effect(2, 0, 6), none, none],
+    );
+    strike.school = 1;
+    for t in [hs, shot, proc_aura, blow, chance, thorns, seal, strike] {
         s.spells.insert(t.id, t);
     }
     s.enchantments.insert(
@@ -605,8 +612,9 @@ async fn a_weapon_enchantment_procs_a_minute_and_a_seal_strikes_by_weapon_speed(
         (140..=260).contains(&enchanted),
         "about 200 of 1000: {enchanted}"
     );
-    // 1000/87 + (1000/25 - 1000/87) * (2.0 - 1.5) / 2.5.
-    assert_eq!(seal, 17);
+    // mangos-classic's one-hander: 0.85 x ceil(1000 x 1.2 x 1.03 x 2.0 /
+    // 100) - 1, and 3% of the sword's 15, and one (round 12e).
+    assert_eq!(seal, 21);
 }
 
 #[tokio::test]

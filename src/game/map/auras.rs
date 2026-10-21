@@ -299,7 +299,10 @@ pub enum Exclusive {
 
 impl Exclusive {
     /// Whether one of each caster's may be on a unit, rather than one in
-    /// all.
+    /// all. A paladin's aura is one of each paladin's: two paladins'
+    /// different auras stand together, as mangos-classic's
+    /// `SpellStacker::IsStackableAuraEffect` compares only like effects
+    /// (the same aura from two is the rank chain's and the groups').
     fn per_caster(self) -> bool {
         matches!(
             self,
@@ -307,6 +310,7 @@ impl Exclusive {
                 | Exclusive::WarlockCurse
                 | Exclusive::HunterSting
                 | Exclusive::PaladinJudgement
+                | Exclusive::PaladinAura
         )
     }
 
@@ -1349,6 +1353,84 @@ fn group_relation(
 /// from the groups, as Thistle Tea's exclusivity keeps them), or a spell
 /// and the one it triggers.
 fn group_relation_to(
+    data: &crate::game::data::GameData,
+    spell: &SpellTemplate,
+    h: &Holder,
+) -> Option<GroupRelation> {
+    groups_relation_to(data, spell, h).or_else(|| multirank_relation_to(data, spell, h))
+}
+
+/// How `spell` stands to `h` as two helpful spells of one family and the
+/// same family flags (mangos-classic's `SpellStacker` "multirank", which
+/// forbids it for positive spells): one spell, whatever their ids, so
+/// Mark of the Wild and Gift of the Wild, or Shadow Protection and its
+/// Prayer, never stand together. Of two with a like effect (the same aura
+/// and misc value), the stronger stays: a weaker one is refused, an equal
+/// or stronger takes its place (mangos's `IsSimilarExistingAuraStronger`).
+/// Two helpful armor percentages of one dispel type are one too
+/// (Inspiration and Ancestral Fortitude). A passive one and an active one
+/// stand together, as mangos's `IsSpellStackableWithSpell` has them, and
+/// so do their periodic effects
+/// (two HoTs of a family's flags, as Thistle Tea's Swiftmend tests have
+/// them).
+fn multirank_relation_to(
+    data: &crate::game::data::GameData,
+    spell: &SpellTemplate,
+    h: &Holder,
+) -> Option<GroupRelation> {
+    let old = data.spells.get(h.spell)?;
+    if h.spell == spell.id
+        || data.spells.same_kind(h.spell, spell.id)
+        || !h.positive
+        || !positive(spell)
+        || old.attr(0, sd::ATTR_PASSIVE) != spell.attr(0, sd::ATTR_PASSIVE)
+        || triggers_one_another(spell, Some(old))
+    {
+        return None;
+    }
+    let multirank = spell.family_name != 0
+        && spell.family_flags != 0
+        && old.family_name == spell.family_name
+        && old.family_flags == spell.family_flags;
+    // Two helpful armor percentages of one dispel type, whatever their
+    // families (Inspiration and Ancestral Fortitude: mangos's
+    // `SPELL_AURA_MOD_RESISTANCE_PCT` case).
+    let armor_pct = spell.dispel != 0 && spell.dispel == old.dispel;
+    // The effects mangos's stacker lets stand together whatever the
+    // family: periodic ones (damage, healing, a trigger, mana), and the
+    // helpful haste and damage done; armor of a spell that stacks as
+    // damage over time does.
+    const STACK_ANYWAY: &[u32] = &[3, 8, 20, 21, 23, 24, 53, 64, 89, 162, 13, 79, 96, 138, 140];
+    let dot_stacking = spell.attr(3, sd::ATTR_EX3_DOT_STACKING);
+    let level = h.level.max(1);
+    let mut alike = false;
+    let (mut theirs, mut mine) = (0i64, 0i64);
+    for (i, e) in spell.effects.iter().enumerate() {
+        let kept_apart =
+            STACK_ANYWAY.contains(&e.aura) || (e.aura == AURA_MOD_RESISTANCE && dot_stacking);
+        let unstackable =
+            (multirank && !kept_apart) || (e.aura == AURA_MOD_RESISTANCE_PCT && armor_pct);
+        if e.aura == 0 || !unstackable {
+            continue;
+        }
+        for x in h.effects.iter() {
+            let o = &old.effects[(x.effect as usize).min(2)];
+            if o.aura == e.aura && o.misc_value == e.misc_value {
+                alike = true;
+                theirs += i64::from(x.amount.abs());
+                mine += i64::from(crate::game::map::spells::points(spell, i, level).abs());
+            }
+        }
+    }
+    alike.then_some(if theirs > mine {
+        GroupRelation::Blocked
+    } else {
+        GroupRelation::Replaces
+    })
+}
+
+/// How `spell` stands to `h` by the vmangos spell groups they share.
+fn groups_relation_to(
     data: &crate::game::data::GameData,
     spell: &SpellTemplate,
     h: &Holder,
@@ -3304,6 +3386,12 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
             }
         }
+        // Frenzied Regeneration's tick, which names no spell (round 12e).
+        AURA_PERIODIC_TRIGGER_SPELL
+            if a.trigger == 0 && crate::game::map::spells::frenzied::is(h.spell) =>
+        {
+            crate::game::map::spells::frenzied::tick(map, target, a.amount);
+        }
         AURA_PERIODIC_TRIGGER_SPELL
             if a.trigger != 0
                 && !crate::game::map::spells::class_scripts::periodic_trigger_allowed(
@@ -3619,6 +3707,7 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
     }
     let data = map.realm.data.clone();
     let death_casts = crate::game::map::boss_mechanics::death_casts(map, g);
+    let doomed = crate::game::map::spells::script_checks::doomed(map, g);
     remove_where(map, g, |h| {
         !h.passive
             && !data
@@ -3627,6 +3716,7 @@ pub fn clear_on_death(map: &mut Map, g: Guid) {
                 .is_some_and(|s| s.attr(3, sd::ATTR_EX3_DEATH_PERSISTENT))
     });
     crate::game::map::boss_mechanics::cast_on_death(map, g, death_casts);
+    crate::game::map::spells::script_checks::doom(map, &doomed);
 }
 
 /// The holders a dispel of `dispel` can take, helpful (`friendly` target)

@@ -278,6 +278,16 @@ mod tests_p12c_speed;
 #[cfg(test)]
 mod tests_p12d_group_loot;
 #[cfg(test)]
+mod tests_p12e_casts;
+#[cfg(test)]
+mod tests_p12e_classes;
+#[cfg(test)]
+mod tests_p12e_sight;
+#[cfg(test)]
+mod tests_p12e_stacking;
+#[cfg(test)]
+mod tests_p12e_totems;
+#[cfg(test)]
 mod tests_p12f_auras;
 #[cfg(test)]
 mod tests_p12f_pets;

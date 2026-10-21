@@ -40,6 +40,9 @@ pub(crate) enum Dr {
     Horror,
     /// A root an aura or a proc gave (Improved Wing Clip's, Entrapment's).
     TriggeredRoot,
+    /// Blind, a group of its own, for creatures too (mangos-classic's
+    /// `DIMINISHING_BLIND`, `DRTYPE_ALL`).
+    Blind,
 }
 
 /// A spell's diminishing returns group, as Thistle Tea follows vmangos: a
@@ -50,7 +53,7 @@ pub(crate) fn dr_group(s: &SpellTemplate, by_aura: bool) -> Option<Dr> {
     let flags = s.family_flags as u32;
     match (s.family_name, s.id) {
         (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),
-        (8, _) if flags & 0x100_0000 != 0 => return None,
+        (8, _) if flags & 0x100_0000 != 0 => return Some(Dr::Blind),
         (9, _) if flags & 0x8 != 0 => return Some(Dr::Freeze),
         (5, 6358) => return Some(Dr::WarlockFear),
         (5, _) if flags & 0x8000_0000 != 0 && s.mechanic == 5 => return Some(Dr::WarlockFear),
@@ -113,7 +116,7 @@ fn diminished(
     };
     let all = matches!(
         group,
-        Dr::ControlledStun | Dr::TriggeredStun | Dr::KidneyShot
+        Dr::ControlledStun | Dr::TriggeredStun | Dr::KidneyShot | Dr::Blind
     );
     // The rest only between players (and what players control), as
     // Thistle Tea's `DiminishingReturns.applicable?` has it.
@@ -1435,6 +1438,11 @@ fn effect(
                 p.gear_dirty = true;
             }
         }
+        super::held_item::EFFECT_ENCHANT_HELD_ITEM => {
+            super::held_item::enchant(map, caster, target, s, index, amount)
+        }
+        EFFECT_DUMMY
+            if super::held_item::flametongue_totem(map, caster, target, s, amount, item) => {}
         EFFECT_DUMMY if crate::game::map::pets::pet_aura_dummy(map, caster, target, s) => {}
         EFFECT_DUMMY | EFFECT_SCRIPT_EFFECT
             if !super::class_scripts::dummy(map, caster, target, s, index, amount)
@@ -1790,6 +1798,10 @@ fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
 /// Combo points on `target`: a new target starts them over. Points held
 /// only for a while (`retain_combo_points`) are kept for good.
 pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
+    if let Some(owed) = map.spells.deferred_combo.get_mut(&caster) {
+        owed.push((target, n));
+        return;
+    }
     release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         if c.combo_target != target {
@@ -2492,6 +2504,19 @@ pub fn refresh_area_auras(map: &mut Map) {
             let Some(t) = data.spells.get(rank) else {
                 continue;
             };
+            // Not over another caster's of the same spell, which stays
+            // (mangos-classic's `AreaAura::Update`, its party case): a
+            // paladin's own aura isn't taken off him by another's.
+            if !t.custom(crate::game::data::spells::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS)
+                && !t.custom(crate::game::data::spells::CUSTOM_SEPARATE_AURA_PER_CASTER)
+                && auras::auras(map, member).is_some_and(|a| {
+                    a.holders
+                        .iter()
+                        .any(|h| h.spell == rank && h.caster != caster)
+                })
+            {
+                continue;
+            }
             let left = expires.map(|t| t.saturating_duration_since(now).as_millis() as u32);
             // The caster's own amounts for its rank, a lower rank's own.
             let effects: Vec<(usize, i32)> = if rank == spell {

@@ -93,7 +93,7 @@ const RETALIATION: &[(u32, u32)] = &[
 /// Seal of Righteousness's ranks and the holy strike each deals.
 const RIGHTEOUSNESS: &[(u32, u32)] = &[
     (20154, 25742),
-    (21084, 25742),
+    (21084, 25741),
     (20287, 25740),
     (20288, 25739),
     (20289, 25738),
@@ -105,7 +105,6 @@ const RIGHTEOUSNESS: &[(u32, u32)] = &[
 /// Nightfall's ranks give Shadow Trance.
 const NIGHTFALL: &[u32] = &[18094, 18095];
 const SHADOW_TRANCE: u32 = 17941;
-const SCHOOL_HOLY: u32 = 2;
 
 /// What happened between two units, for their procs.
 #[derive(Debug, Clone, Copy, Default)]
@@ -696,18 +695,20 @@ fn fire(
                     && x.effect == 0
                 {
                     fired = true;
-                    let speed = (weapon_speed(map, owner, Hand::Main) as f32 / 1000.0).max(1.5);
-                    let amount = (x.amount * h.stacks.max(1) as i32) as f32;
-                    let damage = amount / 87.0
-                        + (amount / 25.0 - amount / 87.0) * ((speed.min(4.0) - 1.5) / 2.5);
-                    spell_damage(
-                        map,
-                        owner,
-                        other,
-                        *strike,
-                        damage.max(0.0) as u32,
-                        SCHOOL_HOLY,
-                    );
+                    // mangos-classic's formula, cast as the rank's strike
+                    // (`HandleDummyAuraProc`, round 12e).
+                    let amount = x.amount * h.stacks.max(1) as i32;
+                    if let Some(points) = crate::game::map::spells::righteousness::points(
+                        map, owner, other, h.spell, amount,
+                    ) {
+                        crate::game::map::spells::scripts::cast_with_points(
+                            map,
+                            owner,
+                            *strike,
+                            other,
+                            [Some(points.max(0)), None, None],
+                        );
+                    }
                 }
             }
             // Its victim must be alive, as a class script's (mangos's
