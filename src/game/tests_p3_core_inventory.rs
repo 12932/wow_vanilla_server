@@ -1073,15 +1073,20 @@ async fn the_bank_takes_items_onto_its_stacks_and_into_its_bags() {
     );
     let _ = herb_bag;
 
-    // A bag with something in it doesn't go into the bank's bag slots; an
-    // empty one goes in and comes out.
+    // A bag with something in it goes into the bank's bag slots with what
+    // is in it, from one bag's place to another (mangos's `SwapItem`,
+    // `CanUnequipItem`'s swap); an empty one goes in and comes out.
     let full = give_at(&realm, g, BAG, 1, BAG1).await;
-    give_at(&realm, g, FILLER, 1, (BAG_START, 0)).await;
+    let filler = give_at(&realm, g, FILLER, 1, (BAG_START, 0)).await;
     let bank_bag2 = (BAG_PLAYER, BANK_BAG_START + 1);
+    assert_eq!(swap(&mut a, BAG1, bank_bag2).await, None);
     assert_eq!(
-        swap(&mut a, BAG1, bank_bag2).await.as_deref(),
-        Some("CanOnlyDoWithEmptyBags")
+        at(&realm, g, filler).await,
+        Some((BANK_BAG_START + 1, 0, 1)),
+        "with it"
     );
+    assert_eq!(swap(&mut a, bank_bag2, BAG1).await, None);
+    assert_eq!(at(&realm, g, filler).await, Some((BAG_START, 0, 1)));
     assert_eq!(destroy(&mut a, (BAG_START, 0), 0).await, None);
     assert_eq!(swap(&mut a, BAG1, bank_bag2).await, None);
     assert_eq!(

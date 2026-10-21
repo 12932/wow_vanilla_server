@@ -316,15 +316,21 @@ async fn skinning_counts_its_own_bonuses() {
 }
 
 /// Thistle Tea's `Skinning.gain_chance`: by how far past the need, twice
-/// for an elite, halved each 75 points.
+/// for an elite, halved each 75 points (mangos's `SkillChance.SkinningSteps`
+/// at 75; its default, 0, halves nothing: tests_p12h_skills).
 #[test]
 fn a_skinning_skill_rises_by_its_steps() {
+    let rates = crate::config::RatesConfig {
+        skill_chance_skinning_steps: 75,
+        ..Default::default()
+    };
     let chance = |value, level, elite: bool| {
         professions::gather_gain_chance(
             SKINNING,
             value,
             professions::skinning_required(level, value.min(99)),
             if elite { 2 } else { 1 },
+            &rates,
         )
     };
     assert_eq!(chance(24, 5, false), 100.0);
@@ -332,8 +338,9 @@ fn a_skinning_skill_rises_by_its_steps() {
     assert_eq!(chance(50, 5, false), 25.0);
     assert_eq!(chance(75, 17, false), 50.0);
     assert_eq!(chance(75, 17, true), 100.0);
-    let late =
-        |value: u32, level: u32| professions::gather_gain_chance(SKINNING, value, level * 5, 1);
+    let late = |value: u32, level: u32| {
+        professions::gather_gain_chance(SKINNING, value, level * 5, 1, &rates)
+    };
     assert_eq!(late(150, 30), 25.0);
     assert_eq!(late(225, 45), 12.5);
 }
@@ -806,10 +813,12 @@ async fn a_lock_is_opened_by_one_and_gains_once() {
         (skill(m, ga, FISHING), left, skill(m, gb, FISHING))
     })
     .await;
+    // Bob's opening finds the loot made, and isn't rolled (mangos's
+    // `EffectOpenLock`, `!m_loot`).
     assert_eq!(
         again,
-        (2, Some(1), 2),
-        "no second point; the ore kept; Bob's one"
+        (2, Some(1), 1),
+        "no second point; the ore kept; none for Bob"
     );
     let gate_gains = on_map(&realm, move |m| {
         run(m, ga, 900_760, object(gate));

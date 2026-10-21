@@ -101,6 +101,9 @@ pub struct Quest {
     pub auto_complete: bool,
     pub zone_or_sort: i32,
     pub min_level: u8,
+    /// The highest level that may take it, 0 for none (mangos's
+    /// `MaxLevel`, `SatisfyQuestLevel`): a battleground bracket's marks.
+    pub max_level: u8,
     pub level: i32,
     pub kind: u32,
     pub required_classes: u32,

@@ -134,6 +134,10 @@ pub fn decode(data: &GameData, item: &mut Item) {
             set_random_property(data, item, rp);
         } else if let Some(left) = token.strip_prefix("d:").and_then(|v| v.parse().ok()) {
             item.fields.set_u32(ITEM_FIELD_DURATION, left);
+        } else if let Some(maker) = token.strip_prefix("c:").and_then(|v| v.parse::<u64>().ok()) {
+            // Its maker (mangos's `creatorGuid`).
+            item.fields
+                .set_guid(ITEM_FIELD_CREATOR, wow_world_messages::Guid::new(maker));
         } else if let Some(rest) = token.strip_prefix('e')
             && let Some((slot, values)) = rest.split_once(':')
             && let Ok(slot) = slot.parse::<usize>()
@@ -171,6 +175,10 @@ pub fn encode(item: &Item) -> String {
     let rp = item.fields.get_u32(ITEM_FIELD_RANDOM_PROPERTIES_ID);
     if rp != 0 {
         out.push(format!("rp:{rp}"));
+    }
+    let maker = item.fields.get_guid(ITEM_FIELD_CREATOR);
+    if !maker.is_zero() {
+        out.push(format!("c:{}", maker.guid()));
     }
     // A timed item's time left.
     let left = item.fields.get_u32(ITEM_FIELD_DURATION);

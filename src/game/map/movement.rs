@@ -290,6 +290,7 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
     if let Some(drop) = fall {
         fall_damage(map, guid, drop);
     }
+    crate::game::map::death::below_world(map, guid);
     remember_safe_position(map, guid);
 }
 

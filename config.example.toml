@@ -295,6 +295,16 @@ skill_chance_green = 25
 # Default 0. Range 0 to 100, clamped. Changes at a reload. mangos: SkillChance.Grey.
 skill_chance_grey = 0
 
+# Mining's chance to rise halves each this many points (0: it
+# never does, mangos's default).
+# Default 0. Range 0 to 300, clamped. Changes at a reload. mangos: SkillChance.MiningSteps.
+skill_chance_mining_steps = 0
+
+# Skinning's chance to rise halves each this many points (0: it
+# never does, mangos's default).
+# Default 0. Range 0 to 300, clamped. Changes at a reload. mangos: SkillChance.SkinningSteps.
+skill_chance_skinning_steps = 0
+
 # The least rate a grey creature's kill gives reputation at.
 # Default 0.2. Range 0 to 1, clamped. Changes at a reload. mangos: Rate.Reputation.LowLevel.Kill.
 reputation_low_level_kill = 0.2

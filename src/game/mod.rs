@@ -282,6 +282,18 @@ mod tests_p12g_skills;
 #[cfg(test)]
 mod tests_p12g_table;
 #[cfg(test)]
+mod tests_p12h_death;
+#[cfg(test)]
+mod tests_p12h_gear;
+#[cfg(test)]
+mod tests_p12h_items;
+#[cfg(test)]
+mod tests_p12h_quests;
+#[cfg(test)]
+mod tests_p12h_rewards;
+#[cfg(test)]
+mod tests_p12h_skills;
+#[cfg(test)]
 mod tests_p12i_bg;
 #[cfg(test)]
 mod tests_p3_ai_commands;

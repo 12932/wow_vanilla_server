@@ -198,6 +198,8 @@ Multipliers on what players earn, regenerate and pay, and the skill-ups' sizes a
 | `skill_chance_yellow` | The chance, in percent, a yellow recipe raises its skill. | `75` | 0 to 100, clamped | live | `SkillChance.Yellow` |
 | `skill_chance_green` | The chance, in percent, a green recipe raises its skill. | `25` | 0 to 100, clamped | live | `SkillChance.Green` |
 | `skill_chance_grey` | The chance, in percent, a grey recipe raises its skill. | `0` | 0 to 100, clamped | live | `SkillChance.Grey` |
+| `skill_chance_mining_steps` | Mining's chance to rise halves each this many points (0: it never does, mangos's default). | `0` | 0 to 300, clamped | live | `SkillChance.MiningSteps` |
+| `skill_chance_skinning_steps` | Skinning's chance to rise halves each this many points (0: it never does, mangos's default). | `0` | 0 to 300, clamped | live | `SkillChance.SkinningSteps` |
 | `reputation_low_level_kill` | The least rate a grey creature's kill gives reputation at. | `0.2` | 0 to 1, clamped | live | `Rate.Reputation.LowLevel.Kill` |
 | `reputation_low_level_quest` | The least rate a quest well below the player gives reputation at: a fifth less for each level past five below, down to this. | `0.2` | 0 to 1, clamped | live | `Rate.Reputation.LowLevel.Quest` |
 | `health` | Health players regenerate from spirit. | `1.0` | 0 to 100, clamped | live | `Rate.Health` |
