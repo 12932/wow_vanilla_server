@@ -80,8 +80,10 @@ async fn a_controlled_creature_heals_from_its_spirit_and_a_tenth_polymorphed() {
     let r = map
         .query(move |m| {
             let mut out = Vec::new();
-            // A demon and a charmed creature of 100 spirit: a warrior's
-            // 103 a tick, four of them; not before its four seconds.
+            // A demon and a hunter's pet of 100 spirit: a warrior's 103 a
+            // tick, four of them; not before its four seconds. A charmed
+            // creature heals 13% every five (your #40, mangos's
+            // `Creature::RegenerateHealth`): nothing at four.
             for kind in [Kind::Demon, Kind::Charmed, Kind::Hunter] {
                 let c = controlled(m, g, kind, 100, 3_000, 31_440);
                 let early = after(m, c, 2);
@@ -107,9 +109,9 @@ async fn a_controlled_creature_heals_from_its_spirit_and_a_tenth_polymorphed() {
     assert_eq!(
         r,
         vec![
-            (3_000, 3_412),
-            (3_000, 3_412),
-            (3_000, 3_412),
+            (3_000, 3_413),
+            (3_000, 3_000),
+            (3_000, 3_413),
             (3_000, 0),
             (50, 80),
             (1_500, 0),

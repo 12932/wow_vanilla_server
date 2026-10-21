@@ -3084,7 +3084,6 @@ fn deal_damage_with(
         gain_rage(map, victim, damage, true);
     }
     crate::game::map::creature_combat::damaged(map, victim, attacker, damage);
-    crate::game::map::vendor::wear_from_blow(map, attacker, victim);
     if guid::is_unit(victim) {
         let threat = damage as f32 * threat_multiplier(map, attacker, school);
         crate::game::map::ai::add_threat(map, victim, attacker, threat);
@@ -3120,15 +3119,23 @@ fn deal_damage_with(
     } else {
         left
     };
+    // A blow that doesn't kill may wear a point off each player's gear; a
+    // killing blow doesn't (mangos's `HandleDamageDealt`, which `Kill`
+    // takes the place of).
+    if left > 0 {
+        crate::game::map::vendor::wear_from_blow(map, attacker, victim);
+    }
     // A priest with Spirit of Redemption becomes a spirit instead: the kill's
     // honor is had now, the spirit's end giving none (mangos's `Unit::Kill`
     // rewards before the spirit, Thistle Tea's honor at the initial
     // defeat); in a battleground, defeated all the same, the death to come
-    // (Thistle Tea's `count_death?: false`).
+    // (Thistle Tea's `count_death?: false`). The fatal blow's wear is had
+    // now too, the spirit's end (by its own hand) wearing nothing.
     if left == 0 && crate::game::map::spells::redemption::saves(map, victim) {
         let by = crate::game::map::pets::master(map, attacker);
         honor(map, by, victim);
         crate::game::map::battleground::defeated(map, victim, by, false);
+        death_wear(map, victim, by, spell);
         return;
     }
     let Some(f) = map.unit_fields_mut(victim) else {
@@ -3138,6 +3145,37 @@ fn deal_damage_with(
     sync_aura_state(map, victim);
     if left == 0 {
         kill_by(map, attacker, victim, spell);
+    }
+}
+
+/// A player's fatal blow (their death, or the Spirit of Redemption it
+/// becomes) wears their gear down a tenth, if no player was behind it,
+/// `by` being the killer's master: not by a player or their pet, nor by
+/// their own hand (the world's harm too, but a fall's, which
+/// `movement::fall_damage` wears), nor in a battleground, nor by Suicide or
+/// a spell flagged `no_durability_loss` (mangos's `Unit::Kill`, its
+/// `responsiblePlayer`).
+pub fn death_wear(map: &mut Map, victim: Guid, by: Guid, spell: Option<u32>) {
+    let battleground = crate::game::instances::instance_type(&map.realm, map.key.map) == 3;
+    let spared =
+        spell.is_some_and(|id| {
+            id == crate::game::map::spells::redemption::SUICIDE
+                || map.realm.data.spells.get(id).is_some_and(|s| {
+                    s.attr(3, crate::game::data::spells::ATTR_EX3_NO_DURABILITY_LOSS)
+                })
+        });
+    if guid::is_player(victim) && !battleground && !spared && !guid::is_player(by) {
+        wear_at_death(map, victim);
+    }
+}
+
+/// A tenth off everything worn, and the client told (mangos's
+/// `DurabilityLossAll(0.10f)`, `SMSG_DURABILITY_DAMAGE_DEATH`).
+pub fn wear_at_death(map: &mut Map, victim: Guid) {
+    crate::game::map::vendor::wear(map, victim, 0.10);
+    if let Some(p) = map.players.get(&victim) {
+        p.outbound
+            .send(&wow_world_messages::vanilla::SMSG_DURABILITY_DAMAGE_DEATH {});
     }
 }
 
@@ -3295,23 +3333,7 @@ fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         crate::game::map::battleground::died(map, victim, by);
         crate::game::map::arena::died(map, victim, by);
         death::kill(map, victim);
-        // Dying to a creature or the world wears gear down; to a player or
-        // their pet, or in a battleground, it doesn't (Thistle Tea's
-        // `Durability.resolve`).
-        let battleground = crate::game::instances::instance_type(&map.realm, map.key.map) == 3;
-        let spared = spell.is_some_and(|id| {
-            id == crate::game::map::spells::redemption::SUICIDE
-                || map.realm.data.spells.get(id).is_some_and(|s| {
-                    s.attr(3, crate::game::data::spells::ATTR_EX3_NO_DURABILITY_LOSS)
-                })
-        });
-        if !battleground && !spared && (killer == victim || !guid::is_player(by)) {
-            crate::game::map::vendor::wear(map, victim, 0.10);
-            if let Some(p) = map.players.get(&victim) {
-                p.outbound
-                    .send(&wow_world_messages::vanilla::SMSG_DURABILITY_DAMAGE_DEATH {});
-            }
-        }
+        death_wear(map, victim, by, spell);
     } else {
         // A creature a player charmed or possessed is worth nothing to
         // anyone, though its death lets it go first (Thistle Tea's

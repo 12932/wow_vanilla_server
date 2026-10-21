@@ -444,7 +444,7 @@ fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Opt
 /// health a yard past the safe fall, less a quarter, by physical damage
 /// taken modifiers and at most all of it. Not for the dead, a god, a
 /// flight, Slow Fall, hover or physical immunity.
-fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
+pub(crate) fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     let Some(p) = map.players.get(&g) else {
         return;
     };
@@ -484,6 +484,16 @@ fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
     }
     crate::game::map::spells::pushback_by(map, g, g);
     crate::game::map::combat::deal_damage(map, g, g, damage);
+    // A death by one's own hand wears nothing but a fall's (mangos's
+    // `EnvironmentalDamage`: "DealDamage not apply item durability loss at
+    // self damage").
+    if map
+        .players
+        .get(&g)
+        .is_some_and(|p| p.death != crate::game::map::death::Death::Alive)
+    {
+        crate::game::map::combat::wear_at_death(map, g);
+    }
 }
 
 /// Move a player within the map: the client is told, and its movement is

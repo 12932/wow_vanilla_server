@@ -426,11 +426,11 @@ async fn a_break_comes_before_the_auras_own_tick_and_nothing_outlives_the_aura()
 
 /// What a charmed brute offers: two spells and a charm of its own,
 /// each slot always rolled.
-const CHARM_ONE: u32 = 96_740;
+pub(crate) const CHARM_ONE: u32 = 96_740;
 const CHARM_TWO: u32 = 96_741;
 const CHARM_CHARM: u32 = 96_742;
 
-fn charm_data() -> GameData {
+pub(crate) fn charm_data() -> GameData {
     let mut d = data();
     add_spells(
         &mut d,

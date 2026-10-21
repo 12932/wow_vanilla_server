@@ -23,8 +23,8 @@ use crate::game::map::{Map, MapKey};
 use crate::game::store::BAG_PLAYER;
 
 /// Thistle Tea's level 60 mage: strength to spirit, health and mana.
-const MAGE_STATS: [u32; 5] = [35, 41, 45, 125, 126];
-const MAGE_POOLS: (u32, u32) = (1360, 1273);
+pub(crate) const MAGE_STATS: [u32; 5] = [35, 41, 45, 125, 126];
+pub(crate) const MAGE_POOLS: (u32, u32) = (1360, 1273);
 
 const INTELLECT_35: u32 = 962_001;
 const ARMOR_100: u32 = 962_002;
@@ -54,7 +54,7 @@ fn spell(id: u32, effects: &[(u32, i32, i32)]) -> SpellTemplate {
     }
 }
 
-fn data(spells: &[SpellTemplate]) -> GameData {
+pub(crate) fn data(spells: &[SpellTemplate]) -> GameData {
     let mut d = GameData::empty();
     for class in [8u8, 1, 3, 11] {
         for race in [1u8, 3, 4] {
@@ -135,7 +135,7 @@ fn data(spells: &[SpellTemplate]) -> GameData {
     d
 }
 
-async fn on_map<T: Send + 'static>(
+pub(crate) async fn on_map<T: Send + 'static>(
     realm: &Arc<Realm>,
     f: impl FnOnce(&mut Map) -> T + Send + 'static,
 ) -> T {
@@ -151,7 +151,7 @@ async fn on_map<T: Send + 'static>(
         .expect("the map answers")
 }
 
-async fn player(d: GameData, race: Race, class: Class) -> (Arc<Realm>, Client, Guid) {
+pub(crate) async fn player(d: GameData, race: Race, class: Class) -> (Arc<Realm>, Client, Guid) {
     let realm = harness::realm_with(d);
     let mut a = Client::connect(&realm, "A");
     let g = a.enter("Alice", race, class).await;

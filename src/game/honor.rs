@@ -41,6 +41,10 @@ pub struct Entry {
     /// Standing in last week's ranking: 1 the best.
     pub last_standing: u32,
     pub last_settled_week: Option<i64>,
+    /// The day a GM's `.honor week` ranked that week through, early: the
+    /// days after it are ranked at the week's end all the same.
+    #[serde(default)]
+    pub settled_through: Option<i64>,
 }
 
 /// What an award is for.
@@ -203,7 +207,10 @@ impl Ledger {
     }
 
     /// Rank the week so far, now, rather than at its end (a GM's
-    /// `.honor week`); what's counted won't count again.
+    /// `.honor week`); what's counted won't count again. The week still
+    /// turns on its day: what is earned from now to its end is ranked then
+    /// (mangos-classic's maintenance keeps its calendar, `ServerMaintenanceStart`
+    /// setting the next by the maintenance day; question #52).
     pub fn settle_now(&mut self) {
         self.settle_week(self.day, true);
         let day = self.day;
@@ -235,9 +242,14 @@ impl Ledger {
             let Some(e) = self.entries.get_mut(&guid) else {
                 continue;
             };
-            if !force && e.last_settled_week.is_some_and(|w| start <= w) {
+            // Settled already, but for what came after a GM's early ranking.
+            if !force
+                && e.last_settled_week.is_some_and(|w| start <= w)
+                && e.settled_through.is_none_or(|t| t >= last)
+            {
                 continue;
             }
+            e.settled_through = force.then_some(last);
             let mut week = totals(e, start, last);
             week.victims.clear();
             e.last_week = week;

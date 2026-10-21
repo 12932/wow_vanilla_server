@@ -175,7 +175,7 @@ const AT: [(f32, f32, f32); 4] = [
 ];
 
 /// The next second's world PvP, now.
-async fn tick(map: &MapHandle) {
+pub(crate) async fn tick(map: &MapHandle) {
     map.query(|m| {
         if let Some(o) = m.outdoor.as_mut() {
             o.next_tick = Some(Instant::now());
@@ -469,7 +469,7 @@ async fn the_hordes_towers_put_up_the_hordes_services_and_reinforcements() {
 const MOUND: u32 = 181597;
 const GEYSER: u32 = 181598;
 
-fn silithus() -> GameData {
+pub(crate) fn silithus() -> GameData {
     let mut d = GameData::empty();
     banner(&mut d, GEYSER, 10);
     banner(&mut d, MOUND, 10);

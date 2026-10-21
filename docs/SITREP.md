@@ -30,50 +30,20 @@ question and decision in full; this page is the index.
   - a 400-yard battleground view distance.
 
 ## Open questions
-Each number is the question's number in [DECISIONS.md](DECISIONS.md), where it is written out with its options.
-Until you answer, wvs keeps what the line says.
-
-**Server and operations**
-- **#2 A restarted map's players:** they're saved and sent to the character screen. Should they go straight back in
-  instead?
-- **#4 wow_messages' crash bugs:** guarded in wvs and fixed in your fork. Report them upstream, which would be public?
-- **#49 Dungeon copies:** give each copy's creatures fresh guids? Today copies share them.
-- **#26 Reconnect protocol:** both 2 and 3 are accepted. Which does the 1.12.1 client send?
-
-**Combat and creatures**
-- **#28 A charm's end:** should it interrupt the freed creature's cast (Thistle Tea), or let it go on (mangos, wvs)?
-- **#9 Battleground creatures:** give them back a home guard of 60 yards?
-- **#16 Eranikus:** is evading when he can't reach Remulos right?
-- **#31 A creature-owned totem:** does it outlive its owner (Thistle Tea), or go with it (mangos, wvs)?
-- **#32 A scripted follower's evade:** where it stands (Thistle Tea), by its leader (mangos), or its spawn (wvs)?
-- **#45 Corpses:**
-  - a fallen hound with no kin: lootable (wvs) or despawned at once (Thistle Tea)?
-  - a dead pet's corpse: 60 s and 5 s (mangos), or an hour and 15 s (Thistle Tea)?
-- **#50 Nerub'enkan's scarabs:** they vanish on arrival by vmangos's own EventAI. Keep that, or exempt them?
-- **#1 Death's wear:** three small differences from Thistle Tea. Align them?
-
-**Spells, auras and talents**
-- **#37 Lower spell ranks:** should lower ranks of rage and energy spells leave the spellbook, as in mangos?
-- **#29 Talent reset cost:** fall back to 1 gold after a month (Thistle Tea), or stay at 5 (mangos, wvs)?
-- **#48 Druid form attack power:** which is 1.12's? Thistle Tea, mangos and wvs all differ.
-- **#8 Failed openings:** hold back `SMSG_SPELL_GO` for one, as Thistle Tea does?
-
-**Pets**
-- **#19 and #44 Stay:** should Stay from the action bar stop the pet's attack (mangos, wvs), or keep the fight
-  (vmangos, Thistle Tea)?
-- **#40 Healing:** how does a creature a player controls heal out of combat? Thistle Tea, mangos and wvs all differ.
-
-**Quests, items and the world**
-- **#23 An untapped creature's soul shard:** give one, as mangos does, or none, as Thistle Tea?
-- **#36 The Warsong flag:** may a mounted player pick it up? wvs refuses, as Thistle Tea does.
-- **#52 `.honor week`:** it loses the rest of the week's honor. When should the week re-rank?
-- **#6 Water:** keep breaking what water breaks by the terrain's liquid too (mangos), or by the swim flag alone
-  (Thistle Tea)?
-- **#12 Gates of Ahn'Qiraj:** add zone 3478 to the Cenarion Favor's zones, as mangos does?
-- **#14 A timed summon of despawn type 0:** wait out its fight (vmangos, wvs), or go at its time (Thistle Tea)?
-- **#15 Script teleport with a player source:** teleport them (vmangos, wvs), or do nothing (Thistle Tea)?
-- **#17 Quest 2078:** start its follower from the gossip option, as Thistle Tea does?
-- **#24 Model heights:** dbc.sqlite's `CreatureModelData` columns are shifted by one. Is that known?
+Phase 4's agent (12q, 2026-10-21) settled the list that stood here by mangos-classic, your rule each time; the
+answers are under **Answered**. What is left for you:
+- **#4 wow_messages' crash bugs:** guarded in wvs and fixed in your fork. Report them upstream (public)? Yours.
+- **Where wvs keeps Thistle Tea's (or vmangos's) over mangos-classic's**, each an agent's call; say if you'd rather
+  mangos's:
+  - aura 169 (Monster Slaying) raises the crit bonus (×1.5 → ×2.0 at +100%); mangos multiplies the whole (×3.0);
+  - the dungeon pulse (script command 49) draws in pets; mangos's `SetInCombatWithZone` takes players only;
+  - a creature has one armor per point of agility; mangos's `Creature::UpdateArmor` gives two (about 3% for a
+    level 60 elite);
+  - a player's guardian picks the nearest foe; mangos would give it a threat list;
+  - effect immunity holds for one side unless the spell's attribute says both; mangos ignores sides;
+  - a party-accept quest's prompt isn't sent to a raid's other subgroups; mangos sends it and refuses;
+  - an item-making reward spell aimed at its caster stays the player's cast; mangos's quest giver would make it
+    for itself.
 
 ## Your list of 2026-10-19 evening, and my calls
 Being done by agent agents, four at a time; merged after the fast suite (the whole extended suite at most every 4
@@ -922,6 +892,30 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   merged first, is kept; the others' copies go at their merges.
 
 ## Answered
+- **The open questions, by mangos-classic** (12q, 2026-10-21, 0.1.67; each with a test in `tests_p12_questions`):
+  - **changed to mangos's:** #1 death's wear (one's own hand and the world's harm wear nothing but a fall's; a
+    killing blow no per-blow wear: `Unit::Kill`); #8 a gathering, lockpicking or skinning that misses its roll
+    fails as the cast ends, before its go, nothing spent (`CheckCast(false)`); #9 a battleground's creatures leash
+    as the open world's, only dungeons exempt (`CombatManager::Update`); #12 the Cenarion Favor holds in the Gates
+    of Ahn'Qiraj (3478); #16 no unreachable evade without combat movement (Eranikus); #19/#44 Stay from the bar
+    also interrupts the pet's cast and clears its target (`AttackStop(true, true)`); #23 an untapped creature's
+    soul shard by whoever's blow kills it (`IsTappedBy`); #28 a charm's end interrupts the freed creature's cast
+    and channel (`Unit::Uncharm`); #32 a scripted follower evades back to where its fight began, then follows;
+    #36 a mounted player is dismounted and takes the Warsong flag (`GameObject::Use`); #40 a controlled creature
+    heals by its kind (a pet from spirit every 4 s, a guardian a twentieth, a charmed creature 13% every 5 s;
+    merged with 10m's, a polymorphed one a tenth); #45 a dead hunter's pet lies as long as its template's rank's
+    corpse; #48 a druid's attack power is level × 3 + 2 × Str − 20, agility in Cat Form (mangos `adaa953`); #52
+    after `.honor week` the week still ends on its day and ranks what came after.
+  - **already mangos's (stale in the list):** #6, #14, #15, #17, #24 (the shift is the sqlite converter's names;
+    wvs reads right), #26 (the client logs on with 3, reconnects with 2; both accepted, now tested), #29, #31, #37,
+    #49.
+  - **my calls where mangos has no answer:** #2 a restarted map's players still go to the character screen; #49 no
+    fresh guids, even in Naxxramas; #50 the scarabs keep vanishing (the data's EventAI); #52 as above; #15 a creature
+    source of command 6 still moves the creature (vmangos's data); #48 Predatory Strikes kept in Cat and Bear form
+    (the same sum).
+  - **left:** instant kills and leech deaths still wear gear (mangos: none); with several foes an unreachable
+    creature still evades (mangos switches target); a Mind-Controlled creature isn't healed (mangos 13% every 5
+    s); learning a high rank doesn't teach the lower ones first (`addSpell`; row spell_book 31).
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
 - **Feign Death and emotes** (2026-10-20): mangos: an emote is refused while feigning (`UNIT_FLAG_PREVENT_ANIM`).
@@ -1040,7 +1034,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10a: the player, round 10 | 93.5% | 0.1.64 |
 | 10b: spells, round 10 | 93.8% | 0.1.65 |
 | 10m: the core, round 10 | 94.2% | 0.1.66 |
+| 12q: the open questions, by mangos | 94.2% | 0.1.67 |
 
-**Running now:** 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
+**Running now:** 11h (entities, a second pass), **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

@@ -97,8 +97,15 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
             summon::remove(map, g);
             return;
         }
+        // A hunter's pet lies as long as a creature of its template's
+        // rank (mangos's `Creature::InitEntry`, `Corpse.Decay.*`); a
+        // summoned one five seconds (`Pet::Create`'s `SetCorpseDelay(5)`).
         let stays = if kind == Kind::Hunter {
-            CORPSE_STAYS
+            let rank = map
+                .creature(g)
+                .and_then(|c| map.realm.data.creature_template(c.entry))
+                .map_or(0, |t| t.rank);
+            map.cfg.creatures.corpse_decay(rank)
         } else {
             SUMMON_CORPSE_STAYS
         };
@@ -1110,14 +1117,31 @@ fn jump(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
     map.send_to_observers(g, &frame, false);
 }
 
+/// How often a controlled creature's health comes back: every four
+/// seconds for a pet or a guardian (mangos's `Pet::RegenerateAll`), five
+/// for a charmed creature (`Creature::RegenerateAll`, `REGEN_TIME_FULL_UNIT`).
+pub fn health_interval(kind: Kind) -> Duration {
+    match kind {
+        Kind::Charmed | Kind::Possessed => Duration::from_secs(5),
+        _ => Duration::from_secs(4),
+    }
+}
+
 /// Health and power come back: health out of a fight, a demon's mana out
-/// of a fight, a hunter's pet's focus all the time.
+/// of a fight, a hunter's pet's focus all the time. Health by its kind, as
+/// mangos's: a hunter's or a summoned pet's four times its spirit's due
+/// (`Pet::RegenerateHealth`), a guardian a twentieth, a charmed creature
+/// 13% (`Creature::RegenerateHealth`, player controlled).
 pub fn regen(map: &mut Map, g: Guid, now: Instant) {
-    let due = state(map, g).is_some_and(|s| s.regen_at <= now);
-    if !due {
+    let Some((regen_at, health_at, kind)) =
+        state(map, g).map(|s| (s.regen_at, s.health_at, s.kind))
+    else {
+        return;
+    };
+    if regen_at > now && health_at > now {
         return;
     }
-    let kind = state(map, g).map(|s| s.kind);
+    let kind = Some(kind);
     let in_combat = map.unit_fields(g).is_some_and(|f| {
         f.has_flag(
             UNIT_FIELD_FLAGS,
@@ -1125,14 +1149,20 @@ pub fn regen(map: &mut Map, g: Guid, now: Instant) {
         )
     });
     let polymorphed = crate::game::map::creature_combat::polymorphed(map, g);
+    let rate = map.cfg.rates.health;
     let Some(c) = map.creature_mut(g) else {
         return;
     };
-    let mut health_due = false;
+    // Health on a clock of its own (four seconds, a charmed creature's
+    // five), power every two.
+    let (mut health_due, mut power_due) = (false, false);
     if let Some(s) = c.pet.as_deref_mut() {
-        s.regen_at = now + Duration::from_secs(2);
+        if s.regen_at <= now {
+            s.regen_at = now + Duration::from_secs(2);
+            power_due = true;
+        }
         if s.health_at <= now {
-            s.health_at = now + super::HEALTH_EVERY;
+            s.health_at = now + health_interval(s.kind);
             health_due = true;
         }
     }
@@ -1148,14 +1178,23 @@ pub fn regen(map: &mut Map, g: Guid, now: Instant) {
         let h = f.get_u32(UNIT_FIELD_HEALTH);
         let add = if polymorphed {
             max / 10
+        } else if matches!(kind, Some(Kind::Charmed | Kind::Possessed)) {
+            // A charmed creature heals as a creature, 13% every five seconds
+            // (mangos's `Creature::RegenerateHealth`; your #40).
+            (max as f32 * 0.13) as u32
         } else if kind.is_some_and(Kind::controlled) {
             let class = f.get_byte(UNIT_FIELD_BYTES_0, 1);
             let spirit = f.get_u32(UNIT_FIELD_STAT0 + 4) as f32;
-            crate::game::map::stats::health_regen(class, spirit) as u32 * 4
+            // Truncated once, after the rate and the four (mangos's
+            // `OCTRegenHPPerSpirit() * HealthIncreaseRate * 4`).
+            (crate::game::map::stats::health_regen(class, spirit) * rate * 4.0) as u32
         } else {
             (max / 20).max(1)
         };
         f.set_u32(UNIT_FIELD_HEALTH, (h + add).min(max));
+    }
+    if !power_due {
+        return;
     }
     if !in_combat {
         let mana_max = f.get_u32(UNIT_FIELD_MAXPOWER1);

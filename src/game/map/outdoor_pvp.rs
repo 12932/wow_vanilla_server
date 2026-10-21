@@ -234,7 +234,10 @@ fn art_kit(owner: Option<usize>) -> (u32, u32) {
 
 /// Silithus: silithyst brought home by each side, toward 200.
 pub const SILITHUS: u32 = 1377;
-const SILITHUS_BUFF_ZONES: [u32; 3] = [1377, 3428, 3429];
+/// Silithus, the Temple and Ruins of Ahn'Qiraj, and the Gates (3478, on
+/// Kalimdor), as mangos-classic's `GetScriptOfAffectedZone` has them;
+/// Thistle Tea leaves the Gates out.
+const SILITHUS_BUFF_ZONES: [u32; 4] = [1377, 3428, 3429, 3478];
 pub const SPELL_CARRYING: u32 = 29519;
 /// The carrier's aura's pulse, which keeps them flagged.
 const SPELL_CARRIER_PVP: u32 = 30176;

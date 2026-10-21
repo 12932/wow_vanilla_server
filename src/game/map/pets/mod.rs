@@ -111,9 +111,8 @@ pub const DYNFLAG_SPECIALINFO: u32 = 0x10;
 /// its master.
 pub const FOLLOW_DISTANCE: f32 = 2.0;
 const TELEPORT_DISTANCE: f32 = 60.0;
-/// A dead hunter's pet waits this long, then goes (to be revived).
-const CORPSE_STAYS: Duration = Duration::from_secs(60);
-/// Other dead pets go soon.
+/// A dead hunter's pet lies as a creature of its rank does, then goes (to
+/// be revived); other dead pets go soon.
 const SUMMON_CORPSE_STAYS: Duration = Duration::from_secs(5);
 
 /// What a controlled creature is.
@@ -169,8 +168,11 @@ pub struct PetState {
     /// they were when it was set down; 0 for none.
     pub totem_radius: f32,
     pub next_think: Instant,
+    /// Its power's next tick (every two seconds).
     pub regen_at: Instant,
-    /// Its health's tick, every four seconds (mangos's `Pet::RegenerateAll`).
+    /// Its health's next tick, out of a fight: every four seconds for a
+    /// pet or a guardian (mangos's `Pet::RegenerateAll`), five for a
+    /// charmed creature (`Creature::RegenerateAll`).
     pub health_at: Instant,
     pub happiness_at: Instant,
     pub loyalty_at: Instant,
@@ -227,7 +229,7 @@ impl PetState {
             totem_radius: 0.0,
             next_think: now,
             regen_at: now + Duration::from_secs(2),
-            health_at: now + HEALTH_EVERY,
+            health_at: now + ai::health_interval(kind),
             happiness_at: now + hunter::HAPPINESS_TICK,
             loyalty_at: now + hunter::LOYALTY_TICK,
             loyalty_points: 0,
@@ -1058,6 +1060,9 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, false);
     }
     crate::game::map::combat::leave_combat(map, unit);
+    // Its cast and its channel end with the charm (mangos's `Uncharm`:
+    // `AttackStop(true, true)`, `InterruptNonMeleeSpells`).
+    crate::game::map::spells::interrupt(map, unit);
     if let Some(p) = map.players.get_mut(&master) {
         if p.owned.charm == Some(unit) {
             p.owned.charm = None;

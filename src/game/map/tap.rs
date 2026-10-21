@@ -57,6 +57,20 @@ pub fn holds(map: &Map, c: &Creature, g: Guid) -> bool {
     holders(&map.realm, c).is_none_or(|h| h.contains(&g))
 }
 
+/// Whether `c` dying at `killer`'s blow is `g`'s kill (mangos's
+/// `IsTappedBy` after `DealDamage` set the loot recipient): its tap's, or,
+/// untapped, the tap the blow takes, a player's (or their pet's) for them
+/// and their group; an NPC's blow takes none.
+pub fn tapped_at_death(map: &Map, c: &Creature, killer: Guid, g: Guid) -> bool {
+    match holders(&map.realm, c) {
+        Some(h) => h.contains(&g),
+        None => {
+            let by = crate::game::map::pets::master(map, killer);
+            crate::game::guid::is_player(by) && recipients(&map.realm, by, None).contains(&g)
+        }
+    }
+}
+
 /// The dynamic flags a viewer outside the tap sees: grey, nothing to loot.
 /// Each viewer's own is in the one block (its create, or the update's
 /// values) it gets of the creature (`map::views`): a second block about

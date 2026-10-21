@@ -350,6 +350,17 @@ async fn the_leash_snaps_past_its_range_at_once_and_else_waits_its_twelve_second
         t.flags_extra = extra;
         d.creature_templates.insert(entry, t);
     }
+    // The Deadmines, a dungeon.
+    d.maps.insert(
+        36,
+        crate::game::data::MapInfo {
+            id: 36,
+            internal_name: "DeadMines".into(),
+            name: "Deadmines".into(),
+            instance_type: 1,
+            player_limit: 10,
+        },
+    );
     let (_realm, _a, g, map) = setup_with(d, Class::Warrior).await;
     let r = map
         .query(move |m| {
@@ -377,9 +388,13 @@ async fn the_leash_snaps_past_its_range_at_once_and_else_waits_its_twelve_second
             let far_late = place(m, FAR_LEASHED, 100.0, 12_001);
             let unleashed = place(m, UNLEASHED, 100.0, 12_001);
             let ordinary = place(m, BRUTE, 100.0, 12_001);
-            // A dungeon's creature doesn't leash at the ordinary range.
+            // A dungeon's creature doesn't leash at the ordinary range (a
+            // battleground's does: question #9).
             let world = m.key;
-            m.key.instance = 1;
+            m.key = crate::game::map::MapKey {
+                map: 36,
+                instance: 1,
+            };
             let dungeon = place(m, BRUTE, 100.0, 12_001);
             let dungeon_hard = place(m, LEASHED, 60.0, 500);
             m.key = world;

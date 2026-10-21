@@ -587,6 +587,17 @@ fn hard_leash(map: &Map, g: Guid) -> Option<f32> {
         .filter(|r| template(map, g).is_none_or(|t| *r >= t.detection_range))
 }
 
+/// Whether the map is a dungeon's or a raid's copy, where creatures don't
+/// leash (mangos's `CombatManager::Update`, "disabled in instances":
+/// `IsDungeon`, no battleground).
+fn in_dungeon(map: &Map) -> bool {
+    map.key.instance != 0
+        && matches!(
+            crate::game::instances::instance_type(&map.realm, map.key.map),
+            1 | 2
+        )
+}
+
 /// Thistle Tea's `CombatLeash.should_evade?` and `UnreachableTarget`:
 /// whether a creature fighting `victim` should give up and go home.
 pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
@@ -600,18 +611,21 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     if hard_leash(map, g).is_some_and(|r| d > r) {
         return true;
     }
-    // A victim out of reach too long.
+    // A victim out of reach too long, for one that moves in its fight
+    // (mangos's `SelectHostileTarget` starts its evade timer only
+    // `IsCombatMovement`): one that stands, Eranikus, fights on.
     let controlled = controlled(c) || c.owner.is_some();
     if extra & EXTRA_NO_UNREACHABLE_EVADE == 0
         && !controlled
         && c.engagement.unreachable_since.is_some_and(|t| {
             now.duration_since(t) > Duration::from_secs(map.cfg.creatures.unreachable_timeout_secs)
         })
+        && crate::game::map::event_ai::combat_movement(map, g)
     {
         return true;
     }
     // In a dungeon, or without a leash, it fights on.
-    if map.key.instance != 0 || extra & EXTRA_NO_LEASH != 0 || controlled {
+    if in_dungeon(map) || extra & EXTRA_NO_LEASH != 0 || controlled {
         return false;
     }
     // The threat radius, or half again its reach of the victim if more.
@@ -642,7 +656,7 @@ pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
         return true;
     };
     let extra = template(map, g).map_or(0, |x| x.flags_extra);
-    if map.key.instance != 0 || extra & EXTRA_NO_LEASH != 0 {
+    if in_dungeon(map) || extra & EXTRA_NO_LEASH != 0 {
         return false;
     }
     let origin = c.engagement.origin.unwrap_or(c.home);

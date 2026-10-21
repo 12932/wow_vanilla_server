@@ -1370,11 +1370,13 @@ pub fn death_items(map: &Map, target: Guid, by: Guid, damage: u32) -> Vec<(Guid,
         if x.kind != AURA_CHANNEL_DEATH_ITEM || item == 0 || x.amount <= 0 {
             continue;
         }
-        // A creature's tap the caster's or their group's, or no one's
-        // (mangos's `isAllowedToLoot`).
+        // A creature tapped by the caster or their group, the killing
+        // blow taking an untapped one (mangos's `HandleChannelDeathItem`,
+        // `IsTappedBy`).
         if item == SOUL_SHARD {
             let tapped = guid::is_player(target)
-                || creature.is_some_and(|c| crate::game::map::tap::holds(map, c, h.caster));
+                || creature
+                    .is_some_and(|c| crate::game::map::tap::tapped_at_death(map, c, by, h.caster));
             if !shard_target || !tapped || target_level <= combat::gray_level(level(map, h.caster))
             {
                 continue;

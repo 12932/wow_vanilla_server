@@ -407,8 +407,10 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
     let (action, kind) = unpack(data);
     match kind {
         ACT_COMMAND => match action as u8 {
+            // As Follow: mangos's `AttackStop(true, true)` for Stay too, its
+            // cast and its target let go.
             COMMAND_STAY => {
-                crate::game::map::combat::stop_attack(map, pet);
+                stand_down(map, pet);
                 ai::stop(map, pet);
                 // It stays where it stopped.
                 let at = map.position_of(pet);

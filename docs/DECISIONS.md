@@ -5,6 +5,9 @@ the way, with its reasons. SITREP.md keeps the short index; this keeps the detai
 
 ## The questions, as asked
 
+**2026-10-21:** every question still open below was settled by mangos-classic (agent 12q, 0.1.67) except #4;
+the answers, with mangos's functions, are in SITREP.md's **Answered**. The text below is as it was asked.
+
 **Answered (2026-10-18):**
 - **Battleground view distance:** 400 yards, against the world's 100, done in `c380d54` (`[world]
   battleground_visibility_yards`).
