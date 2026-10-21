@@ -283,7 +283,7 @@ async fn a_battlegrounds_creature_leashes_as_the_open_worlds_and_a_dungeons_does
                 y: 100.0,
                 z: 0.0,
             };
-            let mut add = |m: &mut crate::game::map::Map, n: u32| {
+            let add = |m: &mut crate::game::map::Map, n: u32| {
                 let c = Creature::new(guid::unit(BRUTE, 0x70_0000 + n), &t, 10, at, 0.0);
                 m.add_creature(c.with_base())
             };
