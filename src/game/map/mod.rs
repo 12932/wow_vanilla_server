@@ -1239,6 +1239,7 @@ impl Map {
 
     /// A player's client has gone: they leave, saved.
     pub fn handle_disconnect(&mut self, guid: Guid) {
+        objects::owner_leaves(self, guid);
         if let Some(p) = self.take_player(guid) {
             debug!("{} disconnected from {}", p.name, self.key);
             self.save_and_go_offline(p);

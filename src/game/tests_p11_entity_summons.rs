@@ -719,3 +719,94 @@ async fn a_creature_rooted_then_feared_from_afar_stands_until_free() {
     })
     .await;
 }
+
+/// A lamp raised for a minute whose spell's minute of cooldown waits for
+/// it to go (`SPELL_ATTR_COOLDOWN_ON_EVENT`).
+const LAMP: u32 = 98_630;
+const RAISE_LAMP: u32 = 98_631;
+const LASTS_A_MINUTE: u32 = 98;
+
+fn lamp_data(d: &mut GameData) {
+    d.gameobject_templates.insert(
+        LAMP,
+        crate::game::tests_p3_entity_objects::object(LAMP, objects::GO_GOOBER, "Lamp", &[]),
+    );
+    d.spells.durations.insert(
+        LASTS_A_MINUTE,
+        SpellDuration {
+            base: 60_000,
+            per_level: 0,
+            max: 60_000,
+        },
+    );
+    let mut s = cast_kit::bare(RAISE_LAMP, 0);
+    s.attributes[0] |= 0x200_0000;
+    s.recovery_time = 60_000;
+    s.duration_index = LASTS_A_MINUTE;
+    cast_kit::effect(
+        &mut s,
+        0,
+        SpellEffect {
+            effect: objects::EFFECT_TRANS_DOOR,
+            misc_value: LAMP as i32,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    cast_kit::insert(d, [s]);
+}
+
+/// Thistle Tea's "logout saves an activated object cooldown"
+/// (game_object_summons_test.exs:288): a lamp raised by a spell whose
+/// cooldown waits for it, up as its raiser logs out, goes with her, its
+/// cooldown started, so she comes back with it running (mangos-classic's
+/// `RemoveAllGameObjects` as she leaves the world, `AddCooldown` for
+/// `SPELL_ATTR_COOLDOWN_ON_EVENT`), where the lamp went at the next
+/// update, after her save, and the cooldown with it.
+#[tokio::test]
+async fn a_cooldown_waiting_for_its_object_starts_as_its_raiser_logs_out_and_is_kept() {
+    let realm = cast_kit::fast_realm(lamp_data);
+    let (mut c, g, map) = cast_kit::human(&realm, "P11S8", "Lamplighter", Class::Mage).await;
+    let raised = on(&map, move |m| {
+        spell_kit::ready(m, g, 60, &[RAISE_LAMP]);
+        spell_kit::cast_fresh(m, g, RAISE_LAMP, Targets::default());
+        let up = m
+            .objects
+            .summoned
+            .iter()
+            .any(|s| s.owner == Some(g) && s.spell == RAISE_LAMP);
+        let c = m.caster(g).unwrap();
+        (
+            up,
+            c.pending_cooldowns.contains(&RAISE_LAMP),
+            c.cooldowns.contains_key(&RAISE_LAMP),
+        )
+    })
+    .await;
+    assert_eq!(raised, (true, true, false), "up, its cooldown waiting");
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+    c.login(g).await;
+    crate::game::tests_p3_player2_ammo::handled(&mut c).await;
+    let map = map_of(&realm, g);
+    let back = on(&map, move |m| {
+        let now = m.now;
+        let left = m
+            .caster(g)
+            .and_then(|c| c.cooldowns.get(&RAISE_LAMP))
+            .map(|t| t.saturating_duration_since(now));
+        let lamp = m.objects.summoned.iter().any(|s| s.spell == RAISE_LAMP);
+        (left, lamp)
+    })
+    .await;
+    let (left, lamp) = back;
+    assert!(!lamp, "the lamp went with her");
+    assert!(
+        left.is_some_and(|l| l > Duration::from_secs(50)),
+        "its cooldown running: {left:?}"
+    );
+}
