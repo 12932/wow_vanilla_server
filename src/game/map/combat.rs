@@ -3281,11 +3281,17 @@ fn deal_damage_with(
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
     };
+    let prevented = floor > 0 && left == 0;
     let left = if floor > 0 {
         left.max(floor.min(f.get_u32(UNIT_FIELD_HEALTH)))
     } else {
         left
     };
+    // A death the floor kept off, which a script may hear of (mangos's
+    // `JustPreventedDeath`).
+    if prevented {
+        crate::game::map::bwl::death_prevented(map, victim);
+    }
     // A blow that doesn't kill may wear a point off each player's gear; a
     // killing blow doesn't (mangos's `HandleDamageDealt`, which `Kill`
     // takes the place of).

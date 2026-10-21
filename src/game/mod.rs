@@ -338,6 +338,16 @@ mod tests_p12k_rename;
 #[cfg(test)]
 mod tests_p12k_vendor;
 #[cfg(test)]
+mod tests_p12l_bwl;
+#[cfg(test)]
+mod tests_p12l_bwl2;
+#[cfg(test)]
+mod tests_p12l_bwl3;
+#[cfg(test)]
+mod tests_p12l_nefarian;
+#[cfg(test)]
+mod tests_p12l_stadium;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
