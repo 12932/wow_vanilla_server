@@ -7,7 +7,7 @@
 //! but needs its tools and a profiler connected; this needs nothing, and
 //! costs a relaxed load an update and an event while off.
 //!
-//! A line: `{"t":12.0,"online":880,"packets_in":..,"packets_out":..,
+//! A line: `{"t":12.0,"unix":1792571234.5,"online":880,"packets_in":..,"packets_out":..,
 //! "bytes_out":..,"disconnects":{"budget":0,"flood":0,"stall":0},
 //! "cpu_secs":..,"rss_kb":..,"maps":[{"map":1,"instance":0,"players":880,
 //! "awake":312,"mailbox":0,"updates_us":[..],"events":4400,"events_us":..,
@@ -148,6 +148,9 @@ async fn write(realm: Arc<Realm>, mut out: std::io::BufWriter<std::fs::File>) {
         let maps = std::mem::take(&mut *SAMPLES.lock());
         let line = serde_json::json!({
             "t": started.elapsed().as_secs_f64(),
+            "unix": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64()),
             "online": realm.registry.online_count(),
             "packets_in": crate::game::conn::PACKETS_IN.load(Ordering::Relaxed),
             "packets_out": crate::game::conn::PACKETS_OUT.load(Ordering::Relaxed),
