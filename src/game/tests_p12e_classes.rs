@@ -169,3 +169,63 @@ async fn seal_of_righteousness_strikes_by_mangos_formula() {
     assert_eq!(two, 97, "a two-hander's");
     assert_eq!(one, 41, "a one-hander's");
 }
+
+/// Frenzied Regeneration's first rank, its tick naming no spell, and the
+/// heal mangos casts for it.
+const FRENZIED: u32 = 22842;
+const FRENZIED_HEAL: u32 = 22845;
+
+fn druid(d: &mut GameData) {
+    let mut frenzied = bare(FRENZIED, 0);
+    frenzied.family_name = 7;
+    frenzied.duration_index = LASTS_LONG;
+    let mut tick = aura(
+        crate::game::map::auras::AURA_PERIODIC_TRIGGER_SPELL,
+        0,
+        10,
+        1,
+    );
+    tick.amplitude = 1_000;
+    effect(&mut frenzied, 0, tick);
+    let mut heal = bare(FRENZIED_HEAL, 0);
+    heal.attributes[2] |= ATTR_EX2_CANT_CRIT;
+    effect(
+        &mut heal,
+        0,
+        crate::game::data::spells::SpellEffect {
+            effect: 10,
+            base_points: 0,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    heal.effects[0].bonus_coefficient = 0.0;
+    insert(d, [frenzied, heal]);
+}
+
+/// A druid under Frenzied Regeneration (10 health a rage) with 30 rage:
+/// a tick takes 10 rage and heals 100; with 5 rage left, it takes the 5
+/// and heals 50. Before, its ticks did nothing.
+#[tokio::test]
+async fn frenzied_regeneration_turns_rage_into_health() {
+    let realm = fast_realm(druid);
+    let (_c, d, map) = human(&realm, "P12EG", "Frenzied", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, d, 60, &[]);
+            kit::set_power(m, d, 1, 300);
+            kit::set_health(m, d, 100);
+            kit::apply(m, d, d, FRENZIED);
+            kit::tick_now(m, d, FRENZIED);
+            let first = (kit::power(m, d, 1), kit::health(m, d));
+            kit::set_power(m, d, 1, 50);
+            kit::tick_now(m, d, FRENZIED);
+            (first, (kit::power(m, d, 1), kit::health(m, d)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (200, 200), "10 rage for 100 health");
+    assert_eq!(out.1, (0, 250), "the 5 left for 50");
+}

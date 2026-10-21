@@ -3376,6 +3376,12 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
             }
         }
+        // Frenzied Regeneration's tick, which names no spell (round 12e).
+        AURA_PERIODIC_TRIGGER_SPELL
+            if a.trigger == 0 && crate::game::map::spells::frenzied::is(h.spell) =>
+        {
+            crate::game::map::spells::frenzied::tick(map, target, a.amount);
+        }
         AURA_PERIODIC_TRIGGER_SPELL
             if a.trigger != 0
                 && !crate::game::map::spells::class_scripts::periodic_trigger_allowed(

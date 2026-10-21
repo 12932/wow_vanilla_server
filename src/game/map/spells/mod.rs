@@ -23,6 +23,7 @@ pub use effects::{
     retained_combo_points_expired, shown_power,
 };
 pub mod environment;
+pub mod frenzied;
 pub mod health_sync;
 pub mod heartbeat;
 pub mod held_item;
