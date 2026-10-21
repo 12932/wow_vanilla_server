@@ -1364,8 +1364,10 @@ fn group_relation_to(
 /// Prayer, never stand together. Of two with a like effect (the same aura
 /// and misc value), the stronger stays: a weaker one is refused, an equal
 /// or stronger takes its place (mangos's `IsSimilarExistingAuraStronger`).
-/// A passive one and an active one stand together, as mangos's
-/// `IsSpellStackableWithSpell` has them, and so do their periodic effects
+/// Two helpful armor percentages of one dispel type are one too
+/// (Inspiration and Ancestral Fortitude). A passive one and an active one
+/// stand together, as mangos's `IsSpellStackableWithSpell` has them, and
+/// so do their periodic effects
 /// (two HoTs of a family's flags, as Thistle Tea's Swiftmend tests have
 /// them).
 fn multirank_relation_to(
@@ -1375,10 +1377,6 @@ fn multirank_relation_to(
 ) -> Option<GroupRelation> {
     let old = data.spells.get(h.spell)?;
     if h.spell == spell.id
-        || spell.family_name == 0
-        || spell.family_flags == 0
-        || old.family_name != spell.family_name
-        || old.family_flags != spell.family_flags
         || data.spells.same_kind(h.spell, spell.id)
         || !h.positive
         || !positive(spell)
@@ -1387,6 +1385,14 @@ fn multirank_relation_to(
     {
         return None;
     }
+    let multirank = spell.family_name != 0
+        && spell.family_flags != 0
+        && old.family_name == spell.family_name
+        && old.family_flags == spell.family_flags;
+    // Two helpful armor percentages of one dispel type, whatever their
+    // families (Inspiration and Ancestral Fortitude: mangos's
+    // `SPELL_AURA_MOD_RESISTANCE_PCT` case).
+    let armor_pct = spell.dispel != 0 && spell.dispel == old.dispel;
     // The effects mangos's stacker lets stand together whatever the
     // family: periodic ones (damage, healing, a trigger, mana), and the
     // helpful haste and damage done; armor of a spell that stacks as
@@ -1397,10 +1403,11 @@ fn multirank_relation_to(
     let mut alike = false;
     let (mut theirs, mut mine) = (0i64, 0i64);
     for (i, e) in spell.effects.iter().enumerate() {
-        if e.aura == 0
-            || STACK_ANYWAY.contains(&e.aura)
-            || (e.aura == AURA_MOD_RESISTANCE && dot_stacking)
-        {
+        let kept_apart =
+            STACK_ANYWAY.contains(&e.aura) || (e.aura == AURA_MOD_RESISTANCE && dot_stacking);
+        let unstackable =
+            (multirank && !kept_apart) || (e.aura == AURA_MOD_RESISTANCE_PCT && armor_pct);
+        if e.aura == 0 || !unstackable {
             continue;
         }
         for x in h.effects.iter() {

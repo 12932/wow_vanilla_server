@@ -222,3 +222,47 @@ async fn mark_and_gift_of_the_wild_dont_stand_together() {
     );
     assert!(kept, "and the Mark stays");
 }
+
+/// Inspiration (a priest's) and Ancestral Fortitude (a shaman's): +25%
+/// armor each, both magic.
+const INSPIRATION: u32 = 997_721;
+const FORTITUDE: u32 = 997_722;
+
+fn armor_buffs(d: &mut GameData) {
+    let buff = |id: u32, family: u32| {
+        let mut s = bare(id, 0);
+        s.family_name = family;
+        s.dispel = 1;
+        s.duration_index = LASTS_LONG;
+        effect(
+            &mut s,
+            0,
+            super::tests_p3_cast_kit::aura(
+                crate::game::map::auras::AURA_MOD_RESISTANCE_PCT,
+                1,
+                25,
+                1,
+            ),
+        );
+        s
+    };
+    insert(d, [buff(INSPIRATION, 6), buff(FORTITUDE, 11)]);
+}
+
+/// Inspiration on a warrior, then Ancestral Fortitude: the second takes
+/// the first's place, as mangos's stacker has two helpful armor
+/// percentages of one dispel type. Before, both stayed and multiplied.
+#[tokio::test]
+async fn inspiration_and_ancestral_fortitude_dont_stand_together() {
+    let realm = fast_realm(armor_buffs);
+    let (_c, w, map) = human(&realm, "P12EO", "Tanking", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            kit::apply(m, w, w, INSPIRATION);
+            kit::apply(m, w, w, FORTITUDE);
+            (kit::has(m, w, INSPIRATION), kit::has(m, w, FORTITUDE))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (false, true), "the second in the first's place");
+}
