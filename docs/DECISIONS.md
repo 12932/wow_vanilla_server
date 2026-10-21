@@ -1125,4 +1125,18 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **The meeting stones:** a player's queue goes at logout, as mangos-classic (`m_offlinePlayers` is never filled);
       Thistle Tea's offline tickets are `wrong-for-1.12`.
 
+72. **Round 11's questions, answered** (2026-10-21, your answers; `fix/calls11`, 0.1.79):
+    - **Meeting stones:** players alone make a party only when five are queued for the dungeon (mangos-classic's
+      `m_groupSize`); a party short of five is topped up as before. The role order stays as 11h left it (a
+      half-hour wait, then the class best at the role, then the longest wait), and a raid conversion withdraws it.
+    - **An instant spell's bonus and its charge:** kept, the bonus before the charge is spent (Thistle Tea).
+    - **Misses in `SMSG_SPELL_GO`:** every spell lists its misses (and a reflection, as 11) in the go, as mangos's
+      `WriteSpellGoTargets`; `SMSG_SPELLLOGMISS` is no longer sent for a miss the go told. Left: whole-effect and
+      mechanic immunities still go in the miss log, and `tools/client_check` has no `SMSG_SPELL_GO` parser yet.
+    - **A player's guardian:** it goes at its time, even mid-fight (mangos-classic's `Pet::Update`). Left: a
+      player's wild summons (effect 41) still wait out their fight.
+    - **A map's zone without navmesh or terrain:** `Map.dbc`'s first; only Sunken Temple changes (1417 to 1477).
+    - **A cast item banked mid-cast** fails the cast, and **the 45 scripted-object spells with no target rows** cast:
+      both kept.
+
 ## Left for later, and why
