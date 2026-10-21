@@ -302,6 +302,94 @@ async fn a_players_guardian_is_at_its_level_and_an_engineers_by_the_skill() {
     assert_eq!(levels, (Some(5), Some(47), Some(60)));
 }
 
+const DUNGEON: u32 = 33;
+const WARDEN: u32 = 990_222;
+
+/// Script command 49 (`zone_combat_pulse`) draws everyone in its dungeon
+/// into the fight, their pets too, however far off: a warlock 60 yards
+/// from the boss and her imp are both on its threat list, and in the
+/// fight (Thistle Tea's "captures distant dungeon members and pets while
+/// excluding other copies and charms"; a copy is a map of its own in
+/// wvs). mangos-classic's `SetInCombatWithZone` takes the players alone.
+#[tokio::test]
+async fn a_dungeon_pulse_draws_in_its_players_and_their_pets_however_far() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let mut d = data();
+    d.maps.insert(
+        DUNGEON,
+        crate::game::data::MapInfo {
+            id: DUNGEON,
+            internal_name: "Dungeon".into(),
+            name: "Dungeon".into(),
+            instance_type: 1,
+            player_limit: 5,
+        },
+    );
+    d.creature_templates
+        .insert(WARDEN, template(WARDEN, "Warden", 14, 1));
+    d.creature_spawns.insert(
+        DUNGEON,
+        vec![crate::game::data::CreatureSpawn {
+            guid: 70,
+            entries: vec![WARDEN],
+            map: DUNGEON,
+            x: 60.0,
+            ..Default::default()
+        }],
+    );
+    let mut cfg = crate::game::harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let realm = crate::game::Realm::new(cfg, store, startup, d, None);
+    let (mut w, me, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, me, &[crate::game::tests_pets::SUMMON_IMP]);
+    map.call(move |m| {
+        m.teleport(
+            me,
+            crate::game::map::MapKey::world(DUNGEON),
+            Vector3d::default(),
+            0.0,
+        )
+    });
+    w.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    w.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    w.sees(me).await;
+    let inside = realm.registry.online(me).unwrap().map();
+    let warden = crate::game::guid::unit(WARDEN, 70);
+    let out = inside
+        .query(move |m| {
+            crate::game::map::spells::cast(
+                m,
+                me,
+                crate::game::tests_pets::SUMMON_IMP,
+                Default::default(),
+                None,
+            );
+            let imp = m.players[&me].owned.pet?;
+            let step = crate::game::data::scripts::ScriptStep {
+                command: 49,
+                ..Default::default()
+            };
+            crate::game::map::scripts::execute(m, &step, warden, warden);
+            let c = m.creature(warden)?;
+            let listed = |g: Guid| c.threat.iter().any(|(t, _)| *t == g);
+            Some((
+                listed(me),
+                listed(imp),
+                crate::game::map::combat::dist(c.position, m.position_of(me)?),
+            ))
+        })
+        .await
+        .unwrap()
+        .expect("the warden and the imp");
+    let (warlock, imp, far) = out;
+    assert!(far > 50.0, "far off: {far}");
+    assert!(warlock && imp, "the warlock and her imp: {out:?}");
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
