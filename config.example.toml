@@ -683,6 +683,11 @@ invitation_secs = 120
 # Default true. Changes at a reload. mangos: Battleground.CastDeserter.
 cast_deserter = true
 
+# Seconds a match goes on with a side short of players before it
+# ends, the side ahead (or the larger) winning; 0 never ends it.
+# Default 300. Range 0 to 3600, clamped. Changes at a reload. mangos: BattleGround.PrematureFinishTimer.
+premature_finish_secs = 300
+
 # World PvP on the continents.
 [outdoor_pvp]
 

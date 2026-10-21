@@ -280,6 +280,8 @@ mod tests_p12g_skills;
 #[cfg(test)]
 mod tests_p12g_table;
 #[cfg(test)]
+mod tests_p12i_bg;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
@@ -1313,6 +1315,9 @@ pub struct RealmConfig {
     pub tiles_in_background: bool,
     /// A match's leaver is a Deserter.
     pub bg_cast_deserter: bool,
+    /// How long a match goes on with a side short of players (zero:
+    /// for good).
+    pub bg_premature_finish: Duration,
     /// Honorable kills a week needs to be ranked.
     pub min_honor_kills: u32,
     /// The most a `/who` lists.
@@ -1371,6 +1376,7 @@ impl RealmConfig {
             spell_travel: true,
             tiles_in_background: true,
             bg_cast_deserter: b.cast_deserter,
+            bg_premature_finish: Duration::from_secs(b.premature_finish_secs),
             min_honor_kills: c.world.min_honor_kills,
             max_who_list_returns: c.world.max_who_list_returns,
             weather: c.world.weather,

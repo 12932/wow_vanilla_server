@@ -62,6 +62,7 @@ impl Social {
     pub fn load(records: &[(String, u64, String)]) -> Self {
         Self {
             guilds: Mutex::new(guilds::Guilds::load(records)),
+            battlegrounds: Mutex::new(crate::game::battlegrounds::Battlegrounds::load(records)),
             mail: Mutex::new(mail::Mails::load(records)),
             auctions: Mutex::new(auction::Auctions::load(records)),
             instances: Mutex::new(crate::game::instances::Instances::load(records)),

@@ -140,9 +140,12 @@ pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<Client
             m.join_as_group,
             m.instance_id,
         ),
-        C::CMSG_BATTLEFIELD_PORT(m) => {
-            crate::game::battlegrounds::port(map, g, m.action == BattlefieldPortAction::EnterBattle)
-        }
+        C::CMSG_BATTLEFIELD_PORT(m) => crate::game::battlegrounds::port(
+            map,
+            g,
+            m.map.as_int(),
+            m.action == BattlefieldPortAction::EnterBattle,
+        ),
         C::CMSG_LEAVE_BATTLEFIELD(_) => crate::game::battlegrounds::leave(map, g),
         C::CMSG_BATTLEFIELD_STATUS => {
             if let Some(me) = map.realm.registry.online(g) {

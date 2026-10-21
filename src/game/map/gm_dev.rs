@@ -1188,6 +1188,7 @@ fn battleground(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                     bracket: battlegrounds::bracket_for(bg, p.level()),
                     invited: Default::default(),
                     members: Default::default(),
+                    offline: Default::default(),
                     started: std::time::Instant::now(),
                     ended: false,
                     began: None,
