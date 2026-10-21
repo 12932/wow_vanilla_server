@@ -263,6 +263,12 @@ mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
+mod tests_p12c_flags;
+#[cfg(test)]
+mod tests_p12c_root;
+#[cfg(test)]
+mod tests_p12c_speed;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

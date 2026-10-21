@@ -60,6 +60,7 @@ pub mod map_events;
 pub mod meeting_stones;
 pub mod misc;
 pub mod mounts;
+pub mod move_guard;
 pub mod movement;
 pub mod nav;
 pub mod necrotic_camps;

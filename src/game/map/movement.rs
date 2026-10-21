@@ -153,6 +153,21 @@ pub fn on_move(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
 /// server moves the player, or the client is still bound elsewhere, or the
 /// body lies dead; taken, and told to those who see it, by `relay`.
 pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
+    moved_self_as(map, guid, info, relay, Came::Move);
+}
+
+/// What a client's movement of its own player came in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Came {
+    /// A movement packet, or an acknowledgement other than a root's.
+    Move,
+    /// A root's acknowledgement: where the client stopped as the root took
+    /// hold, taken as mangos takes it (its mover not yet rooted).
+    RootAck,
+}
+
+/// [`moved_self`], for what came in as `came`.
+pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay, came: Came) {
     // Someone else's to move (a possessed player's own client).
     if map
         .players
@@ -168,6 +183,7 @@ pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     {
         return;
     }
+    let walks_on_water = crate::game::map::death::walks_on_water(map, guid);
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };
@@ -197,25 +213,32 @@ pub fn moved_self(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay) {
     } else {
         info
     };
-    // Faster than the player can go: pulled back to where they were.
     let now = map.now;
     let check = &map.cfg.anticheat;
+    // Held by a root or stun: a move is refused, and a client that went
+    // anywhere is put back (mangos's `VerifyMovementInfo`).
+    if came != Came::RootAck && crate::game::map::move_guard::held_back(p, &info, now) {
+        let (at, o) = (p.position(), p.movement.orientation);
+        if horizontal(at, info.position) > check.distance_allowance_yards {
+            tracing::debug!("{} moved under a root; put back", p.name);
+            teleport_within(map, guid, at, o);
+        }
+        return;
+    }
+    let info = crate::game::map::move_guard::stripped(p, info, walks_on_water);
+    // Faster than the player can go: pulled back to where they were.
     if let Some((last, at)) = p.move_check
         && check.speed_check
         && !p.gm
         && info.flags.get_on_transport().is_none()
+        && crate::game::map::move_guard::too_fast(p, last, at, &info, now, check)
     {
-        let dt = now.duration_since(at).as_secs_f32();
-        let speed = p.speeds.run.max(p.speeds.swim).max(7.0);
-        let allowed = speed * check.speed_tolerance * (dt + check.latency_allowance_secs)
-            + check.distance_allowance_yards;
-        if horizontal(last, info.position) > allowed {
-            let o = p.movement.orientation;
-            tracing::debug!("{} moved too fast; pulled back", p.name);
-            teleport_within(map, guid, last, o);
-            return;
-        }
+        let o = p.movement.orientation;
+        tracing::debug!("{} moved too fast; pulled back", p.name);
+        teleport_within(map, guid, last, o);
+        return;
     }
+    crate::game::map::move_guard::taken(p, &info);
     p.move_check = Some((info.position, now));
     let fall = landing(p, &info);
     let anchor = p.vis_anchor;
@@ -509,6 +532,7 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.movement.fall_time = 0;
     p.teleport = Some(PendingTeleport { since: now });
     p.move_check = Some((position, now));
+    crate::game::map::move_guard::refill(p);
     p.fall_from = None;
     p.outbound.send(&MSG_MOVE_TELEPORT_ACK_Server {
         guid,

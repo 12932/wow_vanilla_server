@@ -705,16 +705,20 @@ settings! {
 }
 
 settings! {
-    /// The movement check: a player who moves faster than they can is
-    /// pulled back. GMs are never checked.
+    /// The movement check: a player who moves faster than they can, over
+    /// time, is pulled back. GMs are never checked.
     pub struct AnticheatConfig in "anticheat" {
         /// Check players' movement at all.
         speed_check: bool = true, Any, Live, "";
         /// How much faster than their speed a player may seem to go.
         speed_tolerance: f32 = 1.25, Clamp(1.0, 10.0), Live, "";
-        /// Seconds of lag a movement packet may carry.
-        latency_allowance_secs: f32 = 0.5, Clamp(0.0, 5.0), Live, "";
-        /// Yards a move may go past what its speed and time allow.
+        /// Seconds of their speed a player may get ahead by: the lag their
+        /// packets may bunch up by. Time earns it back; however many
+        /// packets they send, they go no further.
+        latency_allowance_secs: f32 = 2.0, Clamp(0.0, 5.0), Live, "";
+        /// Yards a player may get ahead by besides, once, not per packet;
+        /// and how far a client under a root may say it is before it is put
+        /// back.
         distance_allowance_yards: f32 = 3.0, Clamp(0.0, 100.0), Live, "";
     }
 }

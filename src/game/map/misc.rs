@@ -43,6 +43,8 @@ pub const SUMMON_FOR: Duration = Duration::from_secs(120);
 /// What a player has going outside the stored character.
 #[derive(Debug, Default)]
 pub struct PlayerMisc {
+    /// The movement check's state between packets (`move_guard`).
+    pub move_guard: crate::game::map::move_guard::MoveGuard,
     pub rest_since: Option<Instant>,
     pub rest_checked_at: Option<Instant>,
     /// `[rates] rest_in_game`, as the rest check last read it (none: 1).
