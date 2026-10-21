@@ -380,9 +380,10 @@ fn mouth(realm: &Realm, z: Zone, arrive: bool) {
     });
 }
 
-/// A creature died on `map` at `at`: a camp's shard gives way, a camp is
-/// lost and bolts its necropolis, a necropolis falls.
-pub fn creature_died(map: &mut Map, entry: u32, at: Vector3d) {
+/// A creature died on `map` at `at`: a camp's shard gives way (unless its
+/// camp raises the damaged one, `in_camp`), a camp is lost and bolts its
+/// necropolis, a necropolis falls.
+pub fn creature_died(map: &mut Map, entry: u32, at: Vector3d, in_camp: bool) {
     if !matches!(entry, NECROTIC_SHARD | DAMAGED_SHARD | NECROPOLIS_HEALTH) {
         return;
     }
@@ -407,6 +408,7 @@ pub fn creature_died(map: &mut Map, entry: u32, at: Vector3d) {
         })
         .unwrap_or(0);
     match entry {
+        NECROTIC_SHARD if in_camp => {}
         NECROTIC_SHARD => {
             let data = realm.data.clone();
             let counter = map.creature_counter();

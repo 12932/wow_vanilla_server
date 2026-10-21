@@ -62,6 +62,7 @@ pub mod misc;
 pub mod mounts;
 pub mod movement;
 pub mod nav;
+pub mod necrotic_camps;
 pub mod npc;
 pub mod objects;
 pub mod outdoor_pvp;
@@ -565,6 +566,8 @@ pub struct Map {
     pub magnets: AHashMap<Guid, crate::game::ghost_magnet::Magnet>,
     /// Cheer speakers running their cities' fireworks shows.
     pub speakers: AHashMap<Guid, crate::game::cheer_speakers::Speaker>,
+    /// The Scourge Invasion's camps, by their summoning circles.
+    pub camps: AHashMap<Guid, necrotic_camps::Camp>,
     /// Gurubashi Arena's battles and Booty Run (on its continent).
     pub arena: arena::Arena,
     /// Objects spells summoned, traps, rituals and quest objects.
@@ -1131,6 +1134,7 @@ impl Map {
             rifts_checked_at: None,
             magnets: AHashMap::new(),
             speakers: AHashMap::new(),
+            camps: AHashMap::new(),
             arena: Default::default(),
             objects: Default::default(),
             holding: Vec::new(),
@@ -1738,6 +1742,7 @@ impl Map {
         self.step("elemental invasion", crate::game::elemental::update);
         self.step("ghost magnets", crate::game::ghost_magnet::update);
         self.step("cheer speakers", crate::game::cheer_speakers::update);
+        self.step("necrotic camps", necrotic_camps::update);
         self.step("the dead", ai::update_dead);
         self.step("visibility", visibility::refresh_dirty);
         self.step("quest objects", quests::update_objects);
@@ -2306,11 +2311,13 @@ impl Map {
         self.visibility_dirty.insert(guid);
         self.hold_near(guid, at);
         crate::game::cheer_speakers::added(self, guid, entry);
+        necrotic_camps::added(self, guid, entry);
         guid
     }
 
     pub fn remove_gameobject(&mut self, guid: Guid) -> Option<GameObject> {
         crate::game::cheer_speakers::removed(self, guid);
+        necrotic_camps::removed(self, guid);
         let key = self.gameobject_by_guid.remove(&guid)?;
         if let Some(n) = Self::own_counter_of(guid) {
             self.own_counters.remove(&(true, n));

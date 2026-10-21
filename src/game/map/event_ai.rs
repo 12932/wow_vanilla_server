@@ -1344,6 +1344,7 @@ pub fn summoned_unit(map: &mut Map, g: Guid, summoned: Guid) {
 
 /// A summoned creature of its went away.
 pub fn summoned_despawned(map: &mut Map, g: Guid, summoned: Guid, entry: u32) {
+    crate::game::map::necrotic_camps::despawned(map, g, summoned);
     if has_events(map, g) {
         fire(
             map,

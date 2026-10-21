@@ -462,7 +462,8 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
         crate::game::map::instance_script::Event::Death,
     );
     if let Some((entry, at)) = map.creature(creature).map(|c| (c.entry, c.position)) {
-        crate::game::invasion::creature_died(map, entry, at);
+        let camps_shard = crate::game::map::necrotic_camps::died(map, creature, entry);
+        crate::game::invasion::creature_died(map, entry, at, camps_shard);
         crate::game::champions::creature_died(map, creature);
         crate::game::elemental::creature_died(map, creature, entry);
         crate::game::ghost_magnet::creature_died(map, creature, entry);
