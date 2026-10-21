@@ -289,3 +289,127 @@ async fn a_players_script_is_dropped_when_she_takes_a_worldport() {
     .await;
     assert!(!left, "her run is gone from the map she left");
 }
+
+const TRAP: u32 = 97_950;
+const TRAP_LOCK: u32 = 97_951;
+const DISARM: u32 = 97_952;
+const PICK: u32 = 97_953;
+
+/// Thistle Tea's "rechecks detection, range, world, and lock type before
+/// removing the target": a Disarm Trap cast at a trap, its caster gone
+/// thirty yards off as it ends, fails and the trap stays; a lock of
+/// another kind (a lockpick's) is refused it; cast from beside it to its
+/// end, the trap goes (`professions::check` again as the cast ends,
+/// mangos's `CheckCast(false)`). Detection isn't checked again, as
+/// mangos doesn't.
+#[tokio::test]
+async fn a_disarm_trap_ended_out_of_reach_or_of_another_lock_leaves_the_trap() {
+    use crate::game::data::crafts::LockKey;
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut d = crate::game::tests_p3_combat::data();
+    let mut t = crate::game::data::GameObjectTemplate {
+        entry: TRAP,
+        kind: crate::game::map::objects::GO_TRAP,
+        display_id: 1,
+        name: "Trap".into(),
+        size: 1.0,
+        ..Default::default()
+    };
+    t.data[0] = TRAP_LOCK;
+    d.gameobject_templates.insert(TRAP, t);
+    d.crafts.locks.insert(
+        TRAP_LOCK,
+        vec![LockKey {
+            kind: 2,
+            index: 4,
+            skill: 0,
+        }],
+    );
+    d.spells.cast_times.insert(9, 2000);
+    for (id, lock_type) in [(DISARM, 4), (PICK, 1)] {
+        let mut s = SpellTemplate {
+            id,
+            name: format!("Open {id}"),
+            equipped_item_class: -1,
+            range_index: 1,
+            casting_time_index: 9,
+            ..Default::default()
+        };
+        s.effects[0] = SpellEffect {
+            effect: 33,
+            misc_value: lock_type,
+            target_a: 23,
+            ..Default::default()
+        };
+        d.spells.spells.insert(id, s);
+    }
+    let (_realm, _a, g, map) = crate::game::tests_p3_combat::setup_with(d, Class::Rogue).await;
+    let (trap, at) = on(&map, move |m| {
+        let p = m.players[&g].position();
+        let spot = Vector3d { x: p.x + 2.0, ..p };
+        let trap =
+            crate::game::map::objects::summon(m, None, TRAP, spot, 0.0, 0, 0, 0, None).unwrap();
+        (trap, p)
+    })
+    .await;
+    let targets = move || crate::game::map::spells::Targets {
+        object: Some(trap),
+        ..Default::default()
+    };
+    // Begun beside it, ended thirty yards off.
+    let far = on(&map, move |m| {
+        crate::game::map::spells::cast(m, g, DISARM, targets(), None);
+        let begun = m.caster(g).is_some_and(|c| c.casting.is_some());
+        m.players.get_mut(&g).unwrap().movement.position = Vector3d {
+            x: at.x + 30.0,
+            ..at
+        };
+        let now = m.now;
+        if let Some(c) = m.caster_mut(g).and_then(|c| c.casting.as_mut()) {
+            c.ends = now;
+        }
+        begun
+    })
+    .await;
+    assert!(far, "begun");
+    crate::game::harness::an_update(&map).await;
+    crate::game::harness::an_update(&map).await;
+    let left = on(&map, move |m| {
+        (
+            m.gameobject(trap).is_some(),
+            m.caster(g).is_some_and(|c| c.casting.is_some()),
+        )
+    })
+    .await;
+    assert_eq!(left, (true, false), "out of reach: the trap stays");
+    // A lockpick's lock: refused.
+    let picked = on(&map, move |m| {
+        m.players.get_mut(&g).unwrap().movement.position = at;
+        m.now = std::time::Instant::now();
+        if let Some(p) = m.players.get_mut(&g) {
+            p.caster.gcd_until = None;
+        }
+        crate::game::map::spells::cast(m, g, PICK, targets(), None);
+        m.caster(g).is_some_and(|c| c.casting.is_some())
+    })
+    .await;
+    assert!(!picked, "another kind of lock");
+    // Beside it to the end: disarmed.
+    on(&map, move |m| {
+        crate::game::map::spells::cast(m, g, DISARM, targets(), None);
+        let now = m.now;
+        if let Some(c) = m.caster_mut(g).and_then(|c| c.casting.as_mut()) {
+            c.ends = now;
+        }
+    })
+    .await;
+    let mut gone = false;
+    for _ in 0..100 {
+        crate::game::harness::an_update(&map).await;
+        gone = on(&map, move |m| m.gameobject(trap).is_none()).await;
+        if gone {
+            break;
+        }
+    }
+    assert!(gone, "disarmed");
+}
