@@ -506,7 +506,11 @@ async fn a_death_wears_gear_once_and_the_next_again() {
     })
     .await
     .unwrap();
-    assert_eq!(durability(&map, g, helm).await, 90, "the lava's death, nothing");
+    assert_eq!(
+        durability(&map, g, helm).await,
+        90,
+        "the lava's death, nothing"
+    );
     map.query(move |m| {
         crate::game::map::death::resurrect(m, g, 1.0);
         crate::game::map::combat::kill(m, wolf, g);

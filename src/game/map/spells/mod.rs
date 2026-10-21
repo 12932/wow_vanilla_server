@@ -2874,13 +2874,9 @@ pub fn update(map: &mut Map) {
         // A gathering, lockpicking or skinning that misses its roll fails
         // here, before its go and its costs (mangos's `CheckCast(false)` at
         // `Spell::cast`: `SPELL_FAILED_TRY_AGAIN`, then `StopCast`).
-        if let Some(code) = crate::game::map::professions::roll_at_finish(
-            map,
-            g,
-            s,
-            &casting.targets,
-            casting.item,
-        ) {
+        if let Some(code) =
+            crate::game::map::professions::roll_at_finish(map, g, s, &casting.targets, casting.item)
+        {
             launch_failed(map, g, casting.spell, code);
             continue;
         }

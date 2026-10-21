@@ -254,11 +254,11 @@ async fn stay_from_the_bar_stops_the_pets_cast_and_its_target_too() {
 /// too.
 #[tokio::test]
 async fn a_battlegrounds_creature_leashes_as_the_open_worlds_and_a_dungeons_doesnt() {
-    use std::time::Duration;
     use crate::game::guid;
     use crate::game::map::creature::Creature;
     use crate::game::map::creature_combat::should_evade;
     use crate::game::map::{MapKey, ai};
+    use std::time::Duration;
     let mut d = crate::game::tests_p3_combat::data();
     for (id, kind) in [(489u32, 3u32), (36, 1)] {
         d.maps.insert(
@@ -313,10 +313,11 @@ async fn a_battlegrounds_creature_leashes_as_the_open_worlds_and_a_dungeons_does
 /// Nightmare Manifests.
 #[tokio::test]
 async fn one_that_doesnt_move_in_its_fight_doesnt_evade_for_an_unreachable_victim() {
-    use std::time::Duration;
     use crate::game::map::creature_combat::should_evade;
     use crate::game::map::{ai, event_ai};
-    let (_realm, _a, ga, map) = setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    use std::time::Duration;
+    let (_realm, _a, ga, map) =
+        setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
     let got = on(&map, move |m| {
         let mut out = Vec::new();
         for still in [false, true] {
@@ -349,7 +350,8 @@ async fn one_that_doesnt_move_in_its_fight_doesnt_evade_for_an_unreachable_victi
 async fn a_scripted_follower_goes_back_to_where_its_fight_began_and_follows_on() {
     use crate::game::map::ai;
     use crate::game::map::creature::Motion;
-    let (_realm, _a, ga, map) = setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    let (_realm, _a, ga, map) =
+        setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
     let got = on(&map, move |m| {
         let leader = spawn(m, ga, BRUTE, 1, 5.0);
         let w = spawn(m, ga, BRUTE, 1, 8.0);
@@ -379,7 +381,11 @@ async fn a_scripted_follower_goes_back_to_where_its_fight_began_and_follows_on()
         )
     })
     .await;
-    assert_eq!(got, (true, Some(true), true), "home to where it began, following");
+    assert_eq!(
+        got,
+        (true, Some(true), true),
+        "home to where it began, following"
+    );
 }
 
 // #45: a dead pet's corpse.
@@ -391,9 +397,9 @@ async fn a_scripted_follower_goes_back_to_where_its_fight_began_and_follows_on()
 /// (`SetCorpseDelay(5)`). wvs gave a hunter's pet a minute.
 #[tokio::test]
 async fn a_dead_hunters_pet_lies_as_long_as_a_creature_of_its_rank() {
-    use std::time::Duration;
     use crate::game::map::{combat, pets};
     use crate::game::tests_p5_ai_pets::tamed_with;
+    use std::time::Duration;
     let (_realm, _h, _gh, map, pet, wolf) = tamed_with(crate::game::tests_pets::data()).await;
     let got = on(&map, move |m| {
         let decay = m.cfg.creatures.corpse_decay_normal;
@@ -550,15 +556,14 @@ async fn a_mounted_player_comes_off_the_mount_and_takes_the_warsong_flag() {
         };
         let mounted = rides(m);
         let took = take(m, alice);
-        (
-            mounted,
-            took,
-            carried(m, alice),
-            rides(m),
-        )
+        (mounted, took, carried(m, alice), rides(m))
     })
     .await;
-    assert_eq!(got, (true, true, true, false), "mounted, then on foot with it");
+    assert_eq!(
+        got,
+        (true, true, true, false),
+        "mounted, then on foot with it"
+    );
 }
 
 // #40: how a creature a player controls heals.
@@ -571,9 +576,10 @@ async fn a_mounted_player_comes_off_the_mount_and_takes_the_warsong_flag() {
 /// controlled). wvs healed them all a twentieth every two seconds.
 #[tokio::test]
 async fn a_controlled_creature_heals_by_its_kind_as_mangos_has_it() {
-    use std::time::Duration;
     use crate::game::map::pets::{Kind, state, testing};
-    let (_realm, _a, ga, map) = setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
+    use std::time::Duration;
+    let (_realm, _a, ga, map) =
+        setup_with(crate::game::tests_p3_combat::data(), Class::Warrior).await;
     let got = on(&map, move |m| {
         let at = m.players[&ga].position();
         let mut out = Vec::new();
@@ -584,14 +590,21 @@ async fn a_controlled_creature_heals_by_its_kind_as_mangos_has_it() {
             c.fields.set_u32(UNIT_FIELD_HEALTH, 100);
             c.fields.set_u32(UNIT_FIELD_STAT0 + 4, 50);
             c.fields.set_byte(UNIT_FIELD_BYTES_0, 1, 1);
-            c.fields
-                .set_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_IN_COMBAT, false);
+            c.fields.set_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                false,
+            );
             let now = m.now;
-            let health = |m: &crate::game::map::Map| {
-                m.unit_fields(pet).unwrap().get_u32(UNIT_FIELD_HEALTH)
-            };
+            let health =
+                |m: &crate::game::map::Map| m.unit_fields(pet).unwrap().get_u32(UNIT_FIELD_HEALTH);
             // Its tick due now, and once more two seconds on (none then).
-            m.creature_mut(pet).unwrap().pet.as_deref_mut().unwrap().health_at = now;
+            m.creature_mut(pet)
+                .unwrap()
+                .pet
+                .as_deref_mut()
+                .unwrap()
+                .health_at = now;
             testing::regen(m, pet, now);
             let first = health(m);
             testing::regen(m, pet, now + Duration::from_secs(2));
@@ -619,9 +632,9 @@ async fn a_controlled_creature_heals_by_its_kind_as_mangos_has_it() {
 /// sent, as Thistle Tea has it too. wvs rolled in the effect, after the go.
 #[tokio::test]
 async fn a_gathering_that_misses_its_roll_fails_before_its_go() {
-    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     use crate::game::map::professions::FORCED_ATTEMPT;
     use crate::game::map::spells::{self, Targets};
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     const VEIN: u32 = 1731;
     const MINING: u32 = 2575;
     let (_realm, mut a, map) = crate::game::tests_loot::alone("Miner", Class::Warrior).await;

@@ -310,9 +310,8 @@ pub fn roll_at_finish(
             _ => None,
         };
         if let Some(o) = opening
-            && o.skill.is_some_and(|sk| {
-                matches!(sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING)
-            })
+            && o.skill
+                .is_some_and(|sk| matches!(sk, SKILL_HERBALISM | SKILL_MINING | SKILL_LOCKPICKING))
         {
             rolled = true;
             takes &= attempt_takes(&o);

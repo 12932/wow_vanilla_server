@@ -1336,9 +1336,8 @@ pub fn death_items(map: &Map, target: Guid, by: Guid, damage: u32) -> Vec<(Guid,
         // `IsTappedBy`).
         if item == SOUL_SHARD {
             let tapped = guid::is_player(target)
-                || creature.is_some_and(|c| {
-                    crate::game::map::tap::tapped_at_death(map, c, by, h.caster)
-                });
+                || creature
+                    .is_some_and(|c| crate::game::map::tap::tapped_at_death(map, c, by, h.caster));
             if !shard_target || !tapped || target_level <= combat::gray_level(level(map, h.caster))
             {
                 continue;

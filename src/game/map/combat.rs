@@ -3149,12 +3149,13 @@ fn deal_damage_with(
 /// `responsiblePlayer`).
 pub fn death_wear(map: &mut Map, victim: Guid, by: Guid, spell: Option<u32>) {
     let battleground = crate::game::instances::instance_type(&map.realm, map.key.map) == 3;
-    let spared = spell.is_some_and(|id| {
-        id == crate::game::map::spells::redemption::SUICIDE
-            || map.realm.data.spells.get(id).is_some_and(|s| {
-                s.attr(3, crate::game::data::spells::ATTR_EX3_NO_DURABILITY_LOSS)
-            })
-    });
+    let spared =
+        spell.is_some_and(|id| {
+            id == crate::game::map::spells::redemption::SUICIDE
+                || map.realm.data.spells.get(id).is_some_and(|s| {
+                    s.attr(3, crate::game::data::spells::ATTR_EX3_NO_DURABILITY_LOSS)
+                })
+        });
     if guid::is_player(victim) && !battleground && !spared && !guid::is_player(by) {
         wear_at_death(map, victim);
     }
