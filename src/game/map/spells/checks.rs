@@ -199,6 +199,16 @@ fn crosses(p: Vector3d, q: Vector3d, a: Vector3d, b: Vector3d) -> bool {
 const TARGET_FACING_CASTER: u32 = 0x15_0010;
 /// The melee range index.
 const RANGE_MELEE: u32 = 2;
+
+/// Whether `s` reaches as far as a swing: its range is "Combat Range", the
+/// one of 1.12's ranges with the melee flag (mangos's
+/// `SPELL_RANGE_FLAG_MELEE` in `GetMinMaxRange`, Thistle Tea's
+/// `melee_range?`), whatever its damage class: Taunt and Pick Pocket too,
+/// and not a melee blow of "Interact Range" (Backhand), which reaches its
+/// five yards past both units' reach.
+pub fn melee_range(s: &SpellTemplate) -> bool {
+    s.range_index == RANGE_MELEE
+}
 /// Units this close face each other whatever their facing.
 const OVERLAP_DISTANCE: f32 = 1.4;
 
@@ -751,7 +761,7 @@ pub fn at_finish(
     let (_, base) = map.realm.data.spells.range(s);
     let max = m.apply(mods::OP_RANGE, base).max(0.0);
     let d = dist(me.position, u.position);
-    let melee = s.melee_or_ranged() && max <= 5.0;
+    let melee = melee_range(s);
     let reach = if melee {
         combat::melee_range(&me, &u) + 1.0
     } else {
@@ -1129,7 +1139,7 @@ fn check_target(
         let (min, max) = map.realm.data.spells.range(s);
         let max = m.apply(mods::OP_RANGE, max).max(0.0);
         let d = dist(me.position, u.position);
-        let melee = s.melee_or_ranged() && max <= 5.0;
+        let melee = melee_range(s);
         let reach = if s.on_next_swing() {
             // A strike on the next swing is queued from afar, its swing to
             // reach (mangos's `GetMinMaxRange`, strict: a hundred yards).

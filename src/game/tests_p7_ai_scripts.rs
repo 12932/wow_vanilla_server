@@ -57,11 +57,12 @@ const LIST_B: u32 = 9_532;
 
 fn world() -> GameData {
     let mut d = data();
-    d.spells.ranges.insert(2, (0.0, 40.0));
+    // A forty-yard range (index 4; index 2 is 1.12's melee "Combat Range").
+    d.spells.ranges.insert(4, (0.0, 40.0));
     d.spells.ranges.insert(3, (10.0, 40.0));
     d.spells.cast_times.insert(1, 0);
     d.spells.cast_times.insert(99, 3_000);
-    for (id, range, time) in [(BOLT, 2, 1), (NEAR_BOLT, 3, 1), (SLOW_BOLT, 2, 99)] {
+    for (id, range, time) in [(BOLT, 4, 1), (NEAR_BOLT, 3, 1), (SLOW_BOLT, 4, 99)] {
         let mut s = SpellTemplate {
             id,
             name: format!("Bolt {id}"),

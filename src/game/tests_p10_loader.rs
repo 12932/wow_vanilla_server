@@ -675,3 +675,60 @@ async fn ascendance_spends_nothing_on_an_area_spell_a_partys_heal_too() {
     assert_eq!(renewed, (Some(5), Some(1)), "a Renew's stack");
     assert_eq!(areas, [renewed; 3], "the area spells', nothing");
 }
+
+/// Thistle Tea's "distinguishes queued combat-range attacks from other
+/// short-range spells" (`spell_melee_range_dbc_test.exs`): Heroic Strike
+/// (78, 11566), Cleave (845) and Maul (6807) are of "Combat Range" and on
+/// the next swing; Lacerate (5422) is on the next swing at five yards of
+/// "Interact Range", not a swing's reach; Fireball (133) neither. So a
+/// warrior's Taunt (355, "Combat Range", of no melee damage class) reaches
+/// as far as a swing (mangos's `SPELL_RANGE_FLAG_MELEE`): refused at seven
+/// yards, cast at four; and a Backhand (6253, a melee blow of "Interact
+/// Range") reaches its five yards past both units' reach: seven yards.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_combat_range_spell_reaches_as_far_as_a_swing_and_no_further() {
+    if !have_data() {
+        return;
+    }
+    use crate::game::map::spells::checks;
+    let realm = realm();
+    let d = realm.data.clone();
+    for id in [78u32, 11_566, 845, 6807] {
+        let s = d.spells.get(id).unwrap();
+        assert!(checks::melee_range(s) && s.on_next_swing(), "{id}");
+    }
+    let lacerate = d.spells.get(5422).unwrap();
+    assert_eq!(d.spells.range(lacerate).1, 5.0);
+    assert!(lacerate.on_next_swing() && !checks::melee_range(lacerate));
+    assert!(!checks::melee_range(d.spells.get(133).unwrap()));
+    let (_c, g, map) = player(&realm, "P10LC", "Taunter", Race::Human, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[355]);
+            // In Defensive Stance, as Taunt asks.
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .fields
+                .set_byte(UNIT_FIELD_BYTES_1, 2, 18);
+            let data = m.realm.data.clone();
+            [(355u32, 7.0f32), (355, 4.0), (6253, 7.0)].map(|(id, yards)| {
+                let foe = dummy(m, g, 60, yards);
+                let s = data.spells.get(id).unwrap();
+                let mods = spells::mods::for_spell(m, g, s);
+                let r = checks::check(m, g, s, &at(foe), None, false, &mods);
+                m.remove_creature(foe);
+                (id, yards, r)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out[0],
+        (355, 7.0, Some(checks::fail::OUT_OF_RANGE)),
+        "Taunt at seven"
+    );
+    assert_eq!(out[1], (355, 4.0, None), "Taunt at four");
+    assert_eq!(out[2], (6253, 7.0, None), "Backhand at seven");
+}
