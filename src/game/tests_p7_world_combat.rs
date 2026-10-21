@@ -137,18 +137,18 @@ async fn a_pets_kill_and_a_possessed_players_are_their_masters() {
 }
 
 /// Thistle Tea's `KillReward.group_rewards/3` "splits NPC pet experience
-/// after applying its reduction": a creature's pet is worth three
-/// quarters of its experience, and two of level ten share what is left,
-/// 35 each.
+/// after applying its reduction", as mangos-classic has it since round 11
+/// (`XP::Gain` gives nothing for `IsPet()`): a creature's pet is worth
+/// nothing, alone or to two of level ten.
 #[test]
-fn an_npcs_pet_is_worth_three_quarters_and_its_rest_is_split() {
+fn an_npcs_pet_is_worth_nothing_alone_or_split() {
     let pet = KillXp {
         pet_victim: true,
         ..Default::default()
     };
-    assert_eq!(combat::kill_xp_with(10, 10, 10, &pet), 71, "95 x 0.75");
+    assert_eq!(combat::kill_xp_with(10, 10, 10, &pet), 0, "a pet's nothing");
     let (shares, top) = combat::group_shares(&[10, 10], 10, &pet);
-    assert_eq!((shares, top), (vec![35, 35], Some(10)));
+    assert_eq!((shares, top), (vec![0, 0], Some(10)));
 }
 
 const FEIGN: u32 = 997_200;

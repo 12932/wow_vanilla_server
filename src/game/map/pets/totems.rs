@@ -596,6 +596,15 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
     if let Some(p) = map.players.get_mut(&owner) {
         p.owned.critter = Some(g);
     }
+    // Its passives, on itself: the Disgusting Oozeling's aura, which its
+    // area reaches its owner with (mangos-classic's `EffectSummonCritter`
+    // calling `InitPetCreateSpells`, whose `addSpell` casts a passive).
+    let data = map.realm.data.clone();
+    for spell in data.pets.create_spells.get(&entry).into_iter().flatten() {
+        if data.spells.get(*spell).is_some_and(|t| t.passive()) {
+            crate::game::map::spells::cast_triggered(map, g, *spell, Some(g));
+        }
+    }
 }
 
 /// A summoned eye (Eye of Kilrogg): its summoner sees and moves through it

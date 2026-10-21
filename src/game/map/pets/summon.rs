@@ -96,7 +96,19 @@ pub fn spawn(
     c.hostile_to_players = false;
     c.home = at;
     c.pet = Some(Box::new(PetState::new(kind, owner, now)));
-    map.add_creature(c.with_base());
+    // A creature's summons are its own to hear of: their coming, death and
+    // going (mangos-classic's `JustSummoned`, `SummonedCreatureJustDied`
+    // through `GetMaster` and `SummonedCreatureDespawn`, a totem's from
+    // `Totem::Summon` and `Totem::UnSummon`), as its wild ones are.
+    let by_creature = !guid::is_player(owner) && map.creature(owner).is_some();
+    let mut c = c.with_base();
+    if by_creature {
+        c.scripted.get_or_insert_with(Default::default).summoner = Some(owner);
+    }
+    map.add_creature(c);
+    if by_creature && let Some(s) = crate::game::map::event_ai::scripted_mut(map, owner) {
+        s.summoned.push(g);
+    }
     g
 }
 

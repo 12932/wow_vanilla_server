@@ -479,7 +479,10 @@ impl Default for KillXp {
 /// hunter's for their pet), the level factor from `unit_level`, in
 /// single-precision floats as the client counts, rounded half to even.
 pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillXp) -> u32 {
-    if o.no_xp {
+    // A pet is worth nothing, a creature's as a player's (mangos-classic's
+    // `XP::Gain`: `IsPet()`; not Thistle Tea's and vmangos's three
+    // quarters).
+    if o.no_xp || o.pet_victim {
         return 0;
     }
     let factor = if mob_level >= unit_level {
@@ -491,7 +494,7 @@ pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillX
         0.0
     };
     let base = (owner_level * 5 + 45) as f32 * factor;
-    let elite = if o.pet_victim || !o.elite {
+    let elite = if !o.elite {
         1.0
     } else if o.dungeon {
         2.5
@@ -499,9 +502,6 @@ pub fn kill_xp_with(owner_level: u32, unit_level: u32, mob_level: u32, o: &KillX
         2.0
     };
     let mut xp = base * elite;
-    if o.pet_victim {
-        xp *= 0.75;
-    }
     // A multiplier of nothing gives nothing; only one below that is
     // taken for one (Thistle Tea's `experience_multiplier`).
     xp *= if o.multiplier >= 0.0 {
@@ -544,7 +544,9 @@ pub fn kill_options(map: &Map, victim: Guid) -> KillXp {
         multiplier: t.map_or(1.0, |t| t.xp_rate()),
         damage_share: crate::game::map::creature_combat::xp_share(map, victim),
         no_xp: controlled || summoned || t.is_some_and(|t| t.static_flags1 & 0x2 != 0),
-        pet_victim: c.pet.is_some(),
+        // A pet, a totem or a guardian: a creature's guardian made a
+        // creature of its own (`pets::wild`) is mangos's `GUARDIAN_PET`.
+        pet_victim: c.pet.is_some() || c.scripted.as_deref().is_some_and(|s| s.guardian),
     }
 }
 
@@ -3341,6 +3343,31 @@ fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         let controlled = map
             .creature(victim)
             .is_some_and(|c| c.owner.is_some_and(guid::is_player));
+        // A creature's pet, guardian or totem: no loot and no XP, but its
+        // killer's reputation and quest credit (mangos-classic's
+        // `RewardSinglePlayerAtKill`, for a victim not
+        // `UNIT_FLAG_PLAYER_CONTROLLED`).
+        let creatures = crate::game::map::pets::state(map, victim).is_some_and(|s| {
+            !matches!(
+                s.kind,
+                crate::game::map::pets::Kind::Charmed | crate::game::map::pets::Kind::Possessed
+            ) && !guid::is_player(crate::game::map::pets::master(map, s.owner))
+        }) && map.unit_fields(victim).is_some_and(|f| {
+            !f.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::pets::UNIT_FLAG_PLAYER_CONTROLLED,
+            )
+        });
+        if creatures {
+            let tapper = map
+                .creature(victim)
+                .and_then(|c| c.tapped_by)
+                .unwrap_or_else(|| crate::game::map::pets::master(map, killer));
+            if guid::is_player(tapper) {
+                reward(map, tapper, victim);
+                crate::game::map::reputation::creature_killed(map, tapper, victim);
+            }
+        }
         if crate::game::map::pets::died(map, killer, victim) {
             return;
         }

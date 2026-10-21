@@ -2360,6 +2360,8 @@ pub fn refresh_area_auras(map: &mut Map) {
         return;
     }
     map.spells.area_auras_at = Some(now + Duration::from_secs(1));
+    // A pet's (Soul Link, a companion's), for its master.
+    crate::game::map::pets::refresh_area_auras(map);
     let data = map.realm.data.clone();
     // The casters' own holders of party auras: players', and those a totem
     // or pet holds of its own (Grounding Totem's magnet), for its master's

@@ -606,7 +606,7 @@ async fn a_hunters_pet_may_be_renamed_once_by_its_master_with_a_good_name_and_ke
 }
 
 #[tokio::test]
-async fn a_pet_earns_nothing_of_a_grey_kill_dead_or_put_away_and_three_quarters_of_an_npcs_pet() {
+async fn a_pet_earns_nothing_of_a_grey_kill_an_npcs_pet_dead_or_put_away() {
     let realm = harness::realm_with(with_pet_levels(data()));
     let mut a = Client::connect(&realm, "H");
     let h = a.enter("Hunter", Race::Dwarf, Class::Hunter).await;
@@ -638,7 +638,7 @@ async fn a_pet_earns_nothing_of_a_grey_kill_dead_or_put_away_and_three_quarters_
         let grey = victim(m, 1);
         hunter::kill_xp(m, h, grey, solo);
         let from_grey = xp(m);
-        // An NPC's pet: three quarters.
+        // An NPC's pet: nothing (mangos-classic's `XP::Gain`, `IsPet()`).
         let npc_pet = victim(m, 8);
         let npc = victim(m, 8);
         let now = m.now;
@@ -672,10 +672,5 @@ async fn a_pet_earns_nothing_of_a_grey_kill_dead_or_put_away_and_three_quarters_
         (from_grey, from_npc_pet, dead, away)
     })
     .await;
-    use crate::game::map::combat::{KillXp, kill_xp_with};
-    let pet_victim = KillXp {
-        pet_victim: true,
-        ..Default::default()
-    };
-    assert_eq!(got, (0, kill_xp_with(20, 8, 8, &pet_victim), 0, 0));
+    assert_eq!(got, (0, 0, 0, 0));
 }

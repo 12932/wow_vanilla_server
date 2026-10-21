@@ -191,6 +191,8 @@ mod tests_p11a_resurrect;
 #[cfg(test)]
 mod tests_p11d_pets;
 #[cfg(test)]
+mod tests_p11e_summons;
+#[cfg(test)]
 mod tests_p11h_stones;
 #[cfg(test)]
 mod tests_p12_questions;

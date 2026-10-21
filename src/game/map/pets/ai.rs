@@ -75,8 +75,11 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
     }
     // Its time up, a living summon goes; a corpse lies its own time
     // (Thistle Tea's `Guardian.lifetime`).
-    // A Target Dummy falls at its time, in a fight or not.
-    let dies_fighting = crate::game::map::item_scripts::target_dummy(map, g);
+    // A Target Dummy falls at its time, in a fight or not; so does a
+    // creature's guardian (mangos-classic's `Pet::Update`, its
+    // `m_duration` run out mid-fight too).
+    let dies_fighting = crate::game::map::item_scripts::target_dummy(map, g)
+        || !guid::is_player(master(map, owner));
     if expires.is_some_and(|t| t <= now)
         && (!fighting || dies_fighting)
         && (alive || kind == Kind::Possessed)
