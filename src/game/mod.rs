@@ -193,6 +193,8 @@ mod tests_p11b_spells;
 #[cfg(test)]
 mod tests_p11_entity_more;
 #[cfg(test)]
+mod tests_p11_entity_real;
+#[cfg(test)]
 mod tests_p11_entity_spells;
 #[cfg(test)]
 mod tests_p11c_checks;
