@@ -4,6 +4,8 @@
 //! `insignia_test`, `outdoor_pvp_test`, `resurrection_test`,
 //! `state_test`, `trap_disarming_test` and `spells_dbc_test`).
 
+use std::time::Duration;
+
 use wow_world_messages::vanilla::*;
 
 use crate::game::fields::*;
@@ -222,4 +224,68 @@ async fn a_resurrection_offered_is_gone_after_a_logout() {
     })
     .await;
     assert!(!alive, "the old offer raises no one");
+}
+
+/// Thistle Tea's "discards script continuations while retaining the
+/// receipt sequence": a script a player is the source of, with a step a
+/// second on (sitting), is dropped when she takes a worldport before it:
+/// the map she left runs no more of it, and she doesn't sit in the new
+/// one (`scripts::advance` drops a run whose source has left its map). TT's
+/// receipt sequence is its own bookkeeping.
+#[tokio::test]
+async fn a_players_script_is_dropped_when_she_takes_a_worldport() {
+    use crate::game::data::scripts::{ScriptStep, ScriptTable};
+    let mut d = crate::game::tests_p3_combat::data();
+    d.scripts.generic.insert(
+        9_590,
+        vec![ScriptStep {
+            command: 28,
+            delay_ms: 1_000,
+            datalong: [1, 0, 0, 0],
+            ..Default::default()
+        }],
+    );
+    let (realm, mut a, g, from) = crate::game::tests_p3_combat::setup_with(d, Class::Warrior).await;
+    from.call(move |m| {
+        crate::game::map::scripts::start(m, ScriptTable::Generic, 9_590, g, g);
+        m.teleport(
+            g,
+            crate::game::map::MapKey::world(1),
+            Vector3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            0.0,
+        );
+    });
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(
+            m,
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_NEW_WORLD(_)
+        )
+        .then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(g).await;
+    let to = realm.registry.online(g).unwrap().map();
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let (stand, key) = on(&to, move |m| {
+        (
+            m.players[&g].fields.get_byte(UNIT_FIELD_BYTES_1, 0),
+            m.key.map,
+        )
+    })
+    .await;
+    assert_eq!((stand, key), (0, 1), "she doesn't sit in Kalimdor");
+    let left = on(&from, move |m| {
+        crate::game::map::scripts::update(m);
+        m.scripts
+            .runs
+            .iter()
+            .any(|r| r.source == g && r.next != usize::MAX)
+    })
+    .await;
+    assert!(!left, "her run is gone from the map she left");
 }
