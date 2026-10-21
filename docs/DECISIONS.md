@@ -1139,4 +1139,26 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **A cast item banked mid-cast** fails the cast, and **the 45 scripted-object spells with no target rows** cast:
       both kept.
 
+73. **Round 12: the survey against mangos-classic, and its calls** (2026-10-21; `work/12a` to `12l`, 0.1.80 to 0.1.90;
+    the survey and its ranking in `<runs>/survey/`):
+    - **Your answers:** a disarmed creature hits for 50% (mangos-classic; `fix/calls12`); crowd control replaces
+      another of its diminishing-returns group (mangos-classic; `fix/calls12`); need before greed stays Thistle
+      Tea's (only those who can use an item roll, and a lone one gets it); Battlegear of Wrath's Warrior's Wrath is
+      left out (mangos gives it only as a side effect of re-equipping on each stance change).
+    - **Kept as 1.12 was, over mangos-classic:** weekly honor decays a player with fewer than 15 kills (mangos leaves
+      them); a battleground raid counts for quest kills.
+    - **The agents' calls, each following mangos-classic where it has an answer:**
+      - a disconnected character lingers 60 s (a constant, as mangos), a kick or a flood removes it at once;
+      - the speed check's allowance is a bank filled by time (`[anticheat] latency_allowance_secs`, now 2 s deep);
+        the 1.12 root flag is uncertain, so a rooted client is held by its steering and side steps, not the flag;
+      - an empty copy lasts 30 minutes; a world boss in the open world respawns at its own time;
+      - groups are kept as store records (no migration); a battleground side's raid isn't kept;
+      - mining and skinning skill-ups don't decrease (`mangosd.conf`'s 0); a dungeon's rewards reach its whole map;
+      - player commands are on (`[gm] player_commands`); Trade and GuildRecruitment are named for a capital;
+      - a charm is dispellable off a friend as mangos's `IsCharmAura` means (its code reads the wrong way round);
+      - two HoTs of one family stand together (Thistle Tea's Swiftmend test); Blind has its own DR group.
+    - **Left, named by the agents:** a cheat client that never acknowledges a flag's removal keeps it (no order
+      timeout); forged speed acks go unpunished; the client check has no parser for `SMSG_SPELL_GO`, party member
+      stats or the loot window; a lingering player's group sees no change until they go.
+
 ## Left for later, and why
