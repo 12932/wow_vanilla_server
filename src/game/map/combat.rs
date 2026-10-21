@@ -1706,13 +1706,15 @@ pub fn weapon_damage(
             damage *= a.product_mask(AURA_MOD_DAMAGE_DONE_VERSUS, kind);
         }
         damage *= school_pct;
-        // An armed creature, disarmed, hits for four tenths.
+        // An armed creature, disarmed, hits for half (mangos-classic's
+        // `Creature::GetConditionalTotalPhysicalDamageModifier`: a weapon
+        // in the hand it can't use, `0.5f`; Thistle Tea's is four tenths).
         if a.has(AURA_MOD_DISARM)
             && let Some(c) = map.creature(attacker)
             && c.fields.get_u32(UNIT_VIRTUAL_ITEM_SLOT_DISPLAY) != 0
             && hand == Hand::Main
         {
-            damage *= 0.4;
+            damage *= 0.5;
         }
     }
     if let Some(v) = auras::auras(map, victim) {
@@ -3285,11 +3287,17 @@ fn deal_damage_with(
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
     };
+    let prevented = floor > 0 && left == 0;
     let left = if floor > 0 {
         left.max(floor.min(f.get_u32(UNIT_FIELD_HEALTH)))
     } else {
         left
     };
+    // A death the floor kept off, which a script may hear of (mangos's
+    // `JustPreventedDeath`).
+    if prevented {
+        crate::game::map::bwl::death_prevented(map, victim);
+    }
     // A blow that doesn't kill may wear a point off each player's gear; a
     // killing blow doesn't (mangos's `HandleDamageDealt`, which `Kill`
     // takes the place of).

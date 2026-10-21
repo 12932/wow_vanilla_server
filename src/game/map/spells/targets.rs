@@ -482,6 +482,9 @@ pub fn effect_targets(
         out.push(owner);
     }
     area_sight(map, caster, s, index, t, &mut out);
+    // Nefarian's class calls reach their class alone (mangos's
+    // `Spell::CheckTargetScript`).
+    out.retain(|g| crate::game::map::bwl::target_allowed(map, s.id, *g));
     limit(map, &mut out, s.max_affected_targets as usize, t.unit);
     out
 }

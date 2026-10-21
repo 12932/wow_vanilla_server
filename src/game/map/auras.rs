@@ -505,6 +505,11 @@ pub struct Holder {
     /// on, and with which it goes (Thistle Tea's `TriggeredLifetime`: the
     /// Badge of the Swarmguard's Insight of the Qiraji, Jom Gabbar's).
     pub source: Option<(u32, Guid)>,
+    /// The diminishing returns group the cast put it on in (`spells::Dr`
+    /// as a number), if harmful and of one: a later aura of its group
+    /// takes its place (mangos-classic's `getDiminishGroup` in
+    /// `RemoveNoStackAurasDueToAuraHolder`).
+    pub dr: Option<u8>,
 }
 
 impl Holder {
@@ -804,6 +809,8 @@ pub struct Context {
     /// The cast's activation-time modifiers (op 19), flat and percent: what
     /// they make of a periodic aura's interval.
     pub activation: (i32, i32),
+    /// The cast's diminishing returns group (`Holder::dr`).
+    pub dr: Option<u8>,
 }
 
 /// Whether an aura of `kind` ticks (Thistle Tea's `Effect.periodic?`).
@@ -1064,6 +1071,7 @@ pub fn apply_spell(
             })
             .flatten()
             .map(|s| (s.spell, s.caster)),
+        dr: ctx.dr,
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
@@ -1499,6 +1507,14 @@ fn replaces(
     if old.spell == new.spell && old.caster == new.caster {
         // Refreshed in place, unless from another item.
         return old.item != new.item && old.item.is_some() && new.item.is_some() && false;
+    }
+    // Crowd control of a diminishing returns group takes the place of
+    // another of its group, whoever cast it (mangos-classic's
+    // `RemoveNoStackAurasDueToAuraHolder`: "remove any existing holders
+    // from the same diminishing returns group by treating as unique"; its
+    // `DIMINISHING_LIMITONLY` spells are of no group here).
+    if new.dr.is_some() && old.dr == new.dr {
+        return true;
     }
     // Control: one charm or possession.
     let control = |h: &Holder| h.has(AURA_MOD_CHARM) || h.has(AURA_MOD_POSSESS);

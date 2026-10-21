@@ -544,7 +544,9 @@ pub fn effect(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, t: &
                     );
                 // A wind stone's summon is its script's (vmangos's
                 // `OnActivateBySpell`), its action in the spell's place.
-                } else if !crate::game::wind_stones::activated(map, caster, o, s.id) {
+                } else if !crate::game::wind_stones::activated(map, caster, o, s.id)
+                    && !crate::game::map::bwl::object_activated(map, caster, o, s.id)
+                {
                     activate(map, caster, o, action);
                 }
             }

@@ -193,8 +193,9 @@ fn door_entries(s: Script) -> &'static [u32] {
         ],
         Script::BlackrockSpire => &[
             175244, 175153, 164725, 175946, 175947, 175197, 175199, 175195, 175200, 175198, 175196,
-            175194,
+            175194, 164726, 175185, 175186,
         ],
+        Script::BlackwingLair => &super::bwl::DOOR_ENTRIES,
         Script::DireMaul => &[
             179503, 179506, 177220, 179502, 177259, 177257, 177258, 179504, 179505,
         ],
@@ -367,8 +368,11 @@ fn demote(data: &mut BTreeMap<u32, u32>, s: Script) {
             back(0, &in_progress);
             back(7, &in_progress);
         }
-        // The rookery's waves.
-        Script::BlackrockSpire => back(6, &in_progress),
+        // The rookery's waves, and the stadium's.
+        Script::BlackrockSpire => {
+            back(6, &in_progress);
+            back(super::ubrs_stadium::STADIUM, &in_progress);
+        }
         // The Ring of Law, the Tomb of the Seven, the Lyceum, Magmus, the
         // dwarf runes.
         Script::BlackrockDepths => {
@@ -395,6 +399,7 @@ fn demote(data: &mut BTreeMap<u32, u32>, s: Script) {
                 };
             }
         }
+        Script::BlackwingLair => super::bwl::demote(data),
         // Majordomo called but not beaten: he is called again.
         Script::MoltenCore if data.get(&MC_MAJORDOMO_FIELD) != Some(&DONE) => {
             data.remove(&MC_MAJORDOMO_SUMMONED);
@@ -1076,6 +1081,19 @@ pub fn guid_data(map: &Map, index: u32) -> Option<Guid> {
         .iter()
         .find(|(_, c)| c.entry == entry)
         .map(|(_, c)| c.guid)
+}
+
+/// A living player stepped into area trigger `id` here (mangos's
+/// `AreaTrigger_at_*` scripts the copy's script has).
+pub fn area_trigger(map: &mut Map, player: Guid, id: u32) {
+    if map.key.instance == 0 {
+        return;
+    }
+    match map.instance.script {
+        Some(Script::BlackrockSpire) => super::ubrs_stadium::area_trigger(map, player, id),
+        Some(Script::BlackwingLair) => super::bwl::area_trigger(map, player, id),
+        _ => {}
+    }
 }
 
 /// A script that runs on a map event from `event_scripts`: started by the

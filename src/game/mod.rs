@@ -67,6 +67,8 @@ mod tests_bugs7;
 #[cfg(test)]
 mod tests_calls11;
 #[cfg(test)]
+mod tests_calls12;
+#[cfg(test)]
 mod tests_charges;
 #[cfg(test)]
 mod tests_chat_fanout;
@@ -336,6 +338,16 @@ mod tests_p12k_offline;
 mod tests_p12k_rename;
 #[cfg(test)]
 mod tests_p12k_vendor;
+#[cfg(test)]
+mod tests_p12l_bwl;
+#[cfg(test)]
+mod tests_p12l_bwl2;
+#[cfg(test)]
+mod tests_p12l_bwl3;
+#[cfg(test)]
+mod tests_p12l_nefarian;
+#[cfg(test)]
+mod tests_p12l_stadium;
 #[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]

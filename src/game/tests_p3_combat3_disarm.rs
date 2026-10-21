@@ -1,7 +1,8 @@
 //! Phase 3's combat tests: disarm (Thistle Tea's `disarm_test.exs`): a
 //! disarmed player's fists and the off hand kept, attack power read anew,
 //! the weapon back when the last disarm goes or at death; an armed
-//! creature's blows at four tenths; and the weapon abilities refused.
+//! creature's blows at half (mangos-classic's, not Thistle Tea's four tenths);
+//! and the weapon abilities refused.
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
@@ -196,7 +197,7 @@ async fn the_weapon_comes_back_when_the_last_disarm_goes_or_at_death() {
 }
 
 #[tokio::test]
-async fn an_armed_creature_disarmed_hits_for_four_tenths_and_an_unarmed_one_as_ever() {
+async fn an_armed_creature_disarmed_hits_for_half_and_an_unarmed_one_as_ever() {
     let (_a, g, map) = armed().await;
     let got = map
         .query(move |m| {
@@ -220,7 +221,7 @@ async fn an_armed_creature_disarmed_hits_for_four_tenths_and_an_unarmed_one_as_e
         })
         .await
         .unwrap();
-    assert_eq!(got, [40, 100]);
+    assert_eq!(got, [50, 100]);
 }
 
 #[tokio::test]

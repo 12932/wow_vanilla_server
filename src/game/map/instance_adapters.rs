@@ -460,9 +460,18 @@ pub fn doors(s: Script) -> &'static [(u32, Open)] {
         Script::BlackrockSpire => &[
             (175244, Open::Done(0)),
             (175153, Open::Done(1)),
+            (
+                super::ubrs_stadium::ENTRY_DOOR,
+                Open::Rule(super::ubrs_stadium::entry_open),
+            ),
+            (
+                super::ubrs_stadium::EXIT_DOOR,
+                Open::Done(super::ubrs_stadium::STADIUM),
+            ),
             (175946, Open::Done(7)),
             (175947, Open::Done(7)),
         ],
+        Script::BlackwingLair => super::bwl::doors(),
         Script::DireMaul => &[
             (179503, Open::Done(1)),
             (179506, Open::Done(1)),
@@ -503,6 +512,7 @@ pub fn set_data(map: &mut Map, s: Script, field: u32, value: u32) -> bool {
         Script::BlackrockDepths => brd_set(map, field, value),
         Script::Stratholme => strat_set(map, field, value),
         Script::RuinsOfAhnQiraj => {}
+        Script::BlackwingLair => super::bwl::set_data(map, field, value),
         _ => return false,
     }
     true
@@ -525,7 +535,11 @@ pub fn creature_event(
         Script::Gnomeregan => gnome_creature(map, entry, event),
         Script::ZulFarrak => zf_creature(map, g, entry, spawn, event),
         Script::Uldaman => uld_creature(map, g, entry, spawn, event),
-        Script::BlackrockSpire => brs_creature(map, spawn, event),
+        Script::BlackwingLair => super::bwl::creature_event(map, g, entry, spawn, event),
+        Script::BlackrockSpire => {
+            super::ubrs_stadium::creature_event(map, g, event);
+            brs_creature(map, spawn, event)
+        }
         Script::DireMaul => dm_creature(map, g, entry, spawn, event),
         Script::BlackrockDepths => brd_creature(map, g, entry, event),
         Script::Stratholme => strat_creature(map, g, entry, spawn, event),
@@ -585,6 +599,7 @@ pub fn settle_spawns(map: &mut Map, s: Script) {
             raise_object(map, 399065, 3_600_000);
         }
         Script::DireMaul => dm_settle(map),
+        Script::BlackwingLair => super::bwl::settle_spawns(map),
         _ => {}
     }
 }
@@ -607,6 +622,7 @@ pub fn creature_timer(map: &mut Map, s: Script, key: u32, g: Guid) {
         Script::Stratholme if key == T_STRAT_MALOWN => strat_malown_due(map, g),
         Script::DireMaul => dm_creature_timer(map, key, g),
         Script::BlackrockDepths if key == T_BRD_PULSE => zone_pulse(map, g),
+        Script::BlackwingLair => super::bwl::creature_timer(map, key, g),
         _ => {}
     }
 }
@@ -621,6 +637,7 @@ pub fn timer(map: &mut Map, s: Script, key: u32) {
         Script::BlackrockSpire => brs_timer(map, key),
         Script::BlackrockDepths => brd_timer(map, key),
         Script::Stratholme => strat_timer(map, key),
+        Script::BlackwingLair => super::bwl::timer(map, key),
         _ => {}
     }
 }
@@ -1948,6 +1965,9 @@ fn brs_creature(map: &mut Map, spawn: Option<u32>, event: Event) {
 }
 
 fn brs_timer(map: &mut Map, key: u32) {
+    if super::ubrs_stadium::timer(map, key) {
+        return;
+    }
     if (T_BRS_DOOR..T_BRS_ROOKERY).contains(&key) {
         let step = (key - T_BRS_DOOR) as usize;
         if let Some((l, r)) = BRS_BRAZIERS.get(step.wrapping_sub(1)).copied() {
