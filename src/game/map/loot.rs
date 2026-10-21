@@ -1002,7 +1002,7 @@ fn award(
         _ => false,
     };
     if near {
-        if !give(map, object, slot, winner)
+        if give(map, object, slot, winner).is_err()
             && let Some(x) = loot_mut(map, object).and_then(|l| l.items.get_mut(slot))
         {
             x.winner = Some(winner);
@@ -1018,9 +1018,9 @@ fn award(
 
 /// Slot `slot` of `object`'s loot goes into `to`'s bags; if it doesn't
 /// fit, it's free for the taking.
-fn give(map: &mut Map, object: Guid, slot: usize, to: Guid) -> bool {
+fn give(map: &mut Map, object: Guid, slot: usize, to: Guid) -> Result<(), inventory::Fail> {
     let Some(s) = loot_ref(map, object).and_then(|l| l.items.get(slot).cloned()) else {
-        return false;
+        return Err(inventory::Fail::NotFound);
     };
     match inventory::add_item_with_property(map, to, s.item, s.count, true, s.random_property) {
         Ok(()) => {
@@ -1039,7 +1039,7 @@ fn give(map: &mut Map, object: Guid, slot: usize, to: Guid) -> bool {
                     p.outbound.send(&SMSG_LOOT_REMOVED { slot: slot as u8 });
                 }
             }
-            true
+            Ok(())
         }
         Err(f) => {
             if let Some(p) = map.players.get(&to) {
@@ -1050,7 +1050,7 @@ fn give(map: &mut Map, object: Guid, slot: usize, to: Guid) -> bool {
             {
                 x.blocked = false;
             }
-            false
+            Err(f)
         }
     }
 }
@@ -1529,29 +1529,42 @@ pub fn take_money(map: &mut Map, player: Guid) {
 /// `CMSG_LOOT_MASTER_GIVE`: the master looter gives a kept item to a
 /// member near.
 pub fn master_give(map: &mut Map, giver: Guid, object: Guid, slot: u8, to: Guid) {
-    // To one who meets the item's condition (Thistle Tea's
-    // `reserve_master`, mangos's `AllowedForPlayer`).
-    let ok = loot_ref(map, object).is_some_and(|l| {
-        l.master == Some(giver)
-            && l.allowed.contains(&to)
-            && l.items.get(usize::from(slot)).is_some_and(|s| {
-                s.blocked
-                    && !s.taken
-                    && crate::game::map::conditions::met(map, s.condition, Some(object), Some(to))
-            })
-    }) && map
-        .players
-        .get(&giver)
-        .is_some_and(|p| p.looting == Some(object));
-    let near = match (map.players.get(&to), position_of(map, object)) {
-        (Some(p), Some(at)) => dist(p.position(), at) <= map.cfg.players.group_reward_yards,
-        _ => false,
-    };
-    // What doesn't fit stays the master's to give (mangos's
-    // `HandleLootMasterGiveOpcode`, Thistle Tea's master reservation).
+    // To one of the group on the map, wherever on it they stand (mangos's
+    // `HandleLootMasterGiveOpcode`: `IsInGroup`, `IsInMap`), it fell to
+    // and meeting the item's condition (mangos's `IsAllowed`, Thistle
+    // Tea's `reserve_master`). mangos tells the master why it can't; that
+    // `SMSG_LOOT_RESPONSE` (loot type 0 and an error) wvs doesn't send, as
+    // wow_messages reads it otherwise and no client check covers it.
+    let ok = map.players.contains_key(&to)
+        && loot_ref(map, object).is_some_and(|l| {
+            l.master == Some(giver)
+                && l.allowed.contains(&to)
+                && l.items.get(usize::from(slot)).is_some_and(|s| {
+                    s.blocked
+                        && !s.taken
+                        && crate::game::map::conditions::met(
+                            map,
+                            s.condition,
+                            Some(object),
+                            Some(to),
+                        )
+                })
+        })
+        && map
+            .players
+            .get(&giver)
+            .is_some_and(|p| p.looting == Some(object))
+        && map
+            .realm
+            .social
+            .groups
+            .lock()
+            .group_of(giver)
+            .is_some_and(|g| g.is_member(to));
+    // What doesn't fit stays the master's to give (Thistle Tea's master
+    // reservation).
     if ok
-        && near
-        && !give(map, object, usize::from(slot), to)
+        && give(map, object, usize::from(slot), to).is_err()
         && let Some(x) = loot_mut(map, object).and_then(|l| l.items.get_mut(usize::from(slot)))
     {
         x.blocked = true;

@@ -660,3 +660,32 @@ async fn a_skin_left_is_the_groups_and_a_skinned_corpse_goes() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
+/// The master looter gives the blade to Bob, who has gone 100 yards off
+/// since the kill: he is of the group and on the map, which is all
+/// mangos's `HandleLootMasterGiveOpcode` asks.
+#[tokio::test]
+async fn the_master_gives_to_one_of_the_group_anywhere_on_the_map() {
+    let (realm, [mut a, mut b, _c]) = group(GroupLootSetting::MasterLoot).await;
+    let (ga, gb) = (a.guid, b.guid);
+    let map = map_of(&realm);
+    let kobold = unit(KOBOLD, 37);
+    kill(&map, ga, kobold).await;
+    on(&map, move |m| {
+        m.players.get_mut(&gb).unwrap().movement.position.x += 100.0;
+    })
+    .await;
+    assert_eq!(open(&mut a, kobold).await, Some(vec![(LOOT_ITEM, 2)]));
+    a.send(CMSG_LOOT_MASTER_GIVE {
+        loot: kobold,
+        slot_id: 0,
+        player: gb,
+    })
+    .await;
+    b.wait_for("SMSG_ITEM_PUSH_RESULT", |m| match m {
+        ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(r) if r.item == LOOT_ITEM => Some(()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(on(&map, move |m| count(m, gb, LOOT_ITEM)).await, 1);
+}
