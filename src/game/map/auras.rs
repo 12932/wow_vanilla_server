@@ -2396,9 +2396,9 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
         body_held(map, target);
     }
     crate::game::map::captured::ended(map, h.spell, h.caster);
-    if h.caster == target {
-        crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
-    }
+    // A cooldown waiting for the aura is its caster's, whomever it was on
+    // (mangos's `SpellAuraHolder` removal: `caster->AddCooldown`).
+    crate::game::map::spells::cooldowns::aura_gone(map, h.caster, h.spell);
     let expired = h.expires.is_some_and(|t| t <= map.now);
     crate::game::map::spells::redemption::aura_gone(map, target, h.spell, expired);
     crate::game::map::spells::class_scripts::aura_gone(map, target, h);

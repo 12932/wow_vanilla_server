@@ -81,6 +81,24 @@ const FAMILY_BOLT: u32 = 998_430;
 const MISSILE: u32 = 998_431;
 const QUIET_MISSILE: u32 = 998_432;
 const HEAL_MISSILE: u32 = 998_433;
+/// Fire spells: one cooling for half a minute, one free, one whose
+/// cooldown waits for its event, one of a category cooling for twenty
+/// seconds; and a frost one.
+const FIRE_LONG: u32 = 998_434;
+const FIRE_FREE: u32 = 998_435;
+const FIRE_EVENT: u32 = 998_436;
+const FIRE_CATEGORY: u32 = 998_437;
+const FROST_FREE: u32 = 998_438;
+const CATEGORY: u32 = 50;
+/// An aura of a rogue's whose cooldown of ten seconds waits for it to go,
+/// of category 94; the item that casts it, of a minute's cooldown and ten
+/// seconds' for the category; half off the rogue's cooldowns; and a
+/// debuff whose cooldown of eight seconds waits for it.
+const WAITS: u32 = 998_439;
+const WAITING_ITEM: u32 = 998_440;
+const HALF_COOLDOWN: u32 = 998_441;
+const WAITS_AT: u32 = 998_442;
+const ITEM_CATEGORY: u32 = 94;
 
 fn proc_aura(id: u32, flags: u32) -> SpellTemplate {
     let mut s = bare(id, 0);
@@ -187,9 +205,74 @@ fn data(d: &mut GameData) {
     heal_missile.id = HEAL_MISSILE;
     heal_missile.speed = 20.0;
     heal_missile.effects[0].target_a = 25;
+    let fire = |id: u32| {
+        let mut s = bare(id, 2);
+        effect(&mut s, 0, damage(10));
+        s
+    };
+    let mut on_event = fire(FIRE_EVENT);
+    on_event.attributes[0] |= 0x200_0000;
+    let mut category = fire(FIRE_CATEGORY);
+    category.category = CATEGORY;
+    let mut frost = fire(FROST_FREE);
+    frost.school = 4;
+    let mut waits = bare(WAITS, 0);
+    waits.attributes[0] |= 0x200_0000;
+    waits.family_name = 8;
+    waits.family_flags = 1;
+    waits.recovery_time = 10_000;
+    waits.category = ITEM_CATEGORY;
+    waits.category_recovery_time = 5_000;
+    waits.duration_index = LASTS_LONG;
+    effect(&mut waits, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+    let mut half = bare(HALF_COOLDOWN, 0);
+    half.family_name = 8;
+    half.duration_index = LASTS_LONG;
+    effect(
+        &mut half,
+        0,
+        SpellEffect {
+            item_type: 1,
+            ..aura(
+                auras::AURA_ADD_PCT_MODIFIER,
+                crate::game::map::spells::mods::OP_COOLDOWN as i32,
+                -50,
+                1,
+            )
+        },
+    );
+    let mut waits_at = bare(WAITS_AT, 0);
+    waits_at.attributes[0] |= 0x200_0000;
+    waits_at.recovery_time = 8_000;
+    waits_at.duration_index = LASTS_LONG;
+    effect(&mut waits_at, 0, aura(auras::AURA_DUMMY, 0, 1, 6));
+    let mut item = crate::game::data::items::ItemTemplate {
+        entry: WAITING_ITEM,
+        class: 0,
+        name: "Waiting Charm".into(),
+        display_id: 1000,
+        stackable: 1,
+        ..Default::default()
+    };
+    item.spells[0] = crate::game::data::items::ItemSpell {
+        id: WAITS,
+        cooldown: 60_000,
+        category: ITEM_CATEGORY,
+        category_cooldown: 10_000,
+        ..Default::default()
+    };
+    d.items.insert(WAITING_ITEM, item);
     insert(
         d,
         [
+            waits,
+            half,
+            waits_at,
+            fire(FIRE_LONG),
+            fire(FIRE_FREE),
+            on_event,
+            category,
+            frost,
             missile,
             quiet,
             heal_missile,
@@ -501,4 +584,108 @@ async fn a_players_missile_holds_them_in_a_fight_while_it_flies() {
     assert_eq!(out.1, Some(1_500), "held for its flight and half a second");
     assert_eq!(out.2, (true, false), "the player, not yet the kobold");
     assert!(out.3, "the kobold once it lands");
+}
+
+/// A fire lockout of ten seconds tells the client of the fire spells it
+/// holds longer than they were held: not one cooling for half a minute,
+/// nor one of a category cooling for twenty seconds, nor one whose
+/// cooldown waits for its event, nor a frost one (mangos-classic's
+/// `Player::LockOutSpells`; Thistle Tea's "preserves longer spell and
+/// category cooldowns and deferred entries").
+#[tokio::test]
+async fn a_lockout_tells_the_client_only_of_what_it_holds_longer() {
+    let realm = fast_realm(data);
+    let (mut c, a, map) = human(&realm, "P10C7", "Locked", Class::Mage).await;
+    map.query(move |m| {
+        kit::ready(
+            m,
+            a,
+            60,
+            &[FIRE_LONG, FIRE_FREE, FIRE_EVENT, FIRE_CATEGORY, FROST_FREE],
+        );
+        let now = m.now;
+        let c = m.caster_mut(a).unwrap();
+        c.cooldowns
+            .insert(FIRE_LONG, now + std::time::Duration::from_secs(30));
+        c.category_cooldowns
+            .insert(CATEGORY, now + std::time::Duration::from_secs(20));
+        spells::cooldowns::lock_school(m, a, FIRE_FREE, 10_000);
+    })
+    .await
+    .unwrap();
+    let told = c
+        .wait_for("SMSG_SPELL_COOLDOWN", |msg| match msg {
+            wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(s)
+                if s.guid == a =>
+            {
+                Some(
+                    s.cooldowns
+                        .iter()
+                        .map(|x| (x.id, x.cooldown_time.as_millis() as u32))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(told, vec![(FIRE_FREE, 10_000)]);
+}
+
+/// An item's aura whose cooldown waits for it to go starts, as it goes,
+/// the item's minute and its category's ten seconds, halved by the
+/// modifier its caster has then (none at the cast); a debuff's waiting
+/// cooldown starts as it goes from the kobold it was on, the caster's
+/// own (mangos-classic's `SpellAuraHolder` removal: `caster->AddCooldown`,
+/// the old item's times and the spell modifiers of the time; Thistle
+/// Tea's "retains item overrides and applies current cooldown modifiers
+/// once" and "removal requests the caster's timer").
+#[tokio::test]
+async fn a_waiting_cooldown_starts_as_its_aura_goes_with_the_items_times_and_todays_modifiers() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10C8", "Waiter", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[WAITS_AT]);
+            let item = crate::game::map::inventory::add_item(m, a, WAITING_ITEM, 1, false)
+                .ok()
+                .and_then(|_| {
+                    m.players[&a]
+                        .items
+                        .iter()
+                        .find(|i| i.entry == WAITING_ITEM)
+                        .map(|i| i.guid)
+                });
+            let cast = spells::cast(m, a, WAITS, Targets::default(), item);
+            let pending = m.caster(a).unwrap().pending_cooldowns.contains(&WAITS);
+            kit::apply(m, a, a, HALF_COOLDOWN);
+            let now = m.now;
+            auras::remove_spell(m, a, WAITS, None);
+            let left = |t: Option<std::time::Instant>| {
+                t.map(|t| t.saturating_duration_since(now).as_millis() as u64)
+            };
+            let c = m.caster(a).unwrap();
+            let item_times = (
+                left(c.cooldowns.get(&WAITS).copied()),
+                left(c.category_cooldowns.get(&ITEM_CATEGORY).copied()),
+            );
+            let k = kit::dummy(m, a, 60, 3.0);
+            cast_fresh(m, a, WAITS_AT, at(k));
+            let waiting = m.caster(a).unwrap().pending_cooldowns.contains(&WAITS_AT);
+            auras::remove_spell(m, k, WAITS_AT, None);
+            let at_kobold = left(m.caster(a).unwrap().cooldowns.get(&WAITS_AT).copied());
+            (
+                (item.is_some(), cast, pending),
+                item_times,
+                (waiting, at_kobold),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out.0, (true, true, true), "cast from the item, waiting");
+    assert_eq!(
+        out.1,
+        (Some(30_000), Some(5_000)),
+        "the item's times, halved"
+    );
+    assert_eq!(out.2, (true, Some(8_000)), "the caster's, from the kobold");
 }
