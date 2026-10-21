@@ -443,9 +443,7 @@ pub fn creature_killed(map: &mut Map, tapper: Guid, creature: Guid) {
         let Some(p) = map.players.get(&m) else {
             continue;
         };
-        if m != tapper
-            && crate::game::map::combat::dist(p.position(), at) > map.cfg.players.group_reward_yards
-        {
+        if m != tapper && !crate::game::map::combat::at_reward_distance(map, p.position(), at) {
             continue;
         }
         let team = match p.team {

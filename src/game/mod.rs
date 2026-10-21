@@ -263,6 +263,8 @@ mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
+mod tests_p12h_rewards;
+#[cfg(test)]
 mod tests_p12h_skills;
 #[cfg(test)]
 mod tests_p3_ai_commands;

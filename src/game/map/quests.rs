@@ -1108,8 +1108,7 @@ pub fn object_used(map: &mut Map, player: Guid, object: Guid, group: bool) {
     for m in members.into_iter().filter(|m| *m != player) {
         let near = map.players.get(&m).is_some_and(|p| {
             !matches!(p.death, crate::game::map::death::Death::Ghost { .. })
-                && crate::game::map::combat::dist(p.position(), at)
-                    <= map.cfg.players.group_reward_yards
+                && crate::game::map::combat::at_reward_distance(map, p.position(), at)
         });
         if near {
             credit_object(map, m, object, 0, true);

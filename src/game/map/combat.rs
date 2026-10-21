@@ -550,13 +550,16 @@ pub fn kill_options(map: &Map, victim: Guid) -> KillXp {
     }
 }
 
-/// Levels at or below which a kill gives nothing.
+/// Levels at or below which a kill gives nothing: mangos's
+/// `IsTrivialLevelDifference`, which all its rewards use (XP, honor,
+/// reputation, procs); at 60 that is a gap over 12, 47 and below, not the
+/// colour's `GetGrayLevel` (51), which nothing rewards by.
 pub fn gray_level(level: u32) -> u32 {
     match level {
         0..=5 => 0,
         6..=39 => level - 5 - level / 10,
         40..=59 => level - 1 - level / 5,
-        _ => level - 9,
+        _ => level - 13,
     }
 }
 
@@ -3430,6 +3433,17 @@ fn kill_procs(map: &Map, killer: Guid, victim: Guid) -> bool {
 /// default (`[players] group_reward_yards`).
 pub const GROUP_REWARD_YARDS: f32 = 74.0;
 
+/// Whether a member at `member` is near enough `source` for a share of a
+/// group's reward: anywhere in a dungeon or raid copy, else within
+/// `[players] group_reward_yards` (mangos's `IsAtGroupRewardDistance`:
+/// `GetMap()->IsDungeon()`, which a battleground isn't).
+pub fn at_reward_distance(map: &Map, member: Vector3d, source: Vector3d) -> bool {
+    matches!(
+        crate::game::instances::instance_type(&map.realm, map.key.map),
+        1 | 2
+    ) || dist(member, source) <= map.cfg.players.group_reward_yards
+}
+
 /// Thistle Tea's `Experience.group_rate`: three, four and five share more;
 /// a raid's members less the more of them.
 pub fn group_xp_rate(count: usize) -> f32 {
@@ -3497,7 +3511,7 @@ fn reward(map: &mut Map, tapper: Guid, victim: Guid) {
         .into_iter()
         .filter_map(|g| {
             let p = map.players.get(&g)?;
-            (dist(p.position(), at) <= map.cfg.players.group_reward_yards || g == tapper)
+            (at_reward_distance(map, p.position(), at) || g == tapper)
                 .then(|| (g, u32::from(p.level()), p.death))
         })
         .collect();
