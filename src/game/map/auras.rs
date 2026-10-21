@@ -3221,10 +3221,11 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 periodic_log(map, h, target, aura_type);
             }
             // Half of what it gave is its caster's threat on those fighting
-            // the target, as a heal's is (mangos's `threatAssist`): a
-            // percentage of mana's, and an energize's of rage or energy
-            // (Bloodrage's). Thistle Tea's energize of mana makes none.
-            if percent || (a.kind == AURA_PERIODIC_ENERGIZE && power != 0) {
+            // the target, as a heal's is (mangos's `PeriodicTick`:
+            // `threatAssist` of the gain): a percentage of mana's, and an
+            // energize's of any power (Bloodrage's rage, a mana tick).
+            // Thistle Tea's energize of mana makes none.
+            if percent || a.kind == AURA_PERIODIC_ENERGIZE {
                 crate::game::map::combat::heal_threat(
                     map,
                     h.caster,

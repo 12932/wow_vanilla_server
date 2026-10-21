@@ -99,6 +99,9 @@ const WAITING_ITEM: u32 = 998_440;
 const HALF_COOLDOWN: u32 = 998_441;
 const WAITS_AT: u32 = 998_442;
 const ITEM_CATEGORY: u32 = 94;
+/// A hundred mana given, and fifty a second for five seconds.
+const GIVE_MANA: u32 = 998_443;
+const MANA_TICKS: u32 = 998_444;
 
 fn proc_aura(id: u32, flags: u32) -> SpellTemplate {
     let mut s = bare(id, 0);
@@ -262,9 +265,33 @@ fn data(d: &mut GameData) {
         ..Default::default()
     };
     d.items.insert(WAITING_ITEM, item);
+    let mut give = bare(GIVE_MANA, 6);
+    effect(
+        &mut give,
+        0,
+        SpellEffect {
+            effect: 30,
+            base_points: 99,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    let mut ticks = bare(MANA_TICKS, 6);
+    ticks.duration_index = LASTS_5S;
+    effect(
+        &mut ticks,
+        0,
+        SpellEffect {
+            amplitude: 1_000,
+            ..aura(auras::AURA_PERIODIC_ENERGIZE, 0, 50, 1)
+        },
+    );
     insert(
         d,
         [
+            give,
+            ticks,
             waits,
             half,
             waits_at,
@@ -688,4 +715,35 @@ async fn a_waiting_cooldown_starts_as_its_aura_goes_with_the_items_times_and_tod
         "the item's times, halved"
     );
     assert_eq!(out.2, (true, Some(8_000)), "the caster's, from the kobold");
+}
+
+/// Mana given to a mage a kobold fights is half its worth in threat on
+/// her: fifty for a hundred given, and twenty-five a tick of fifty
+/// (mangos-classic's `EnergizeBySpell` and `PeriodicTick`, `threatAssist`
+/// of half, any power; Thistle Tea gives mana none, and rage half of what
+/// it gained).
+#[tokio::test]
+async fn mana_given_is_half_its_worth_in_threat() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10C9", "Wellspring", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[GIVE_MANA, MANA_TICKS]);
+            kit::set_power(m, a, 0, 1_000);
+            let k = kit::dummy(m, a, 60, 3.0);
+            m.creature_mut(k).unwrap().threat = vec![(a, 0.0)];
+            let threat = |m: &Map| {
+                m.creature(k)
+                    .and_then(|c| c.threat.iter().find(|(g, _)| *g == a).map(|(_, t)| *t))
+            };
+            cast_fresh(m, a, GIVE_MANA, Targets::default());
+            let given = threat(m);
+            cast_fresh(m, a, MANA_TICKS, Targets::default());
+            pass(m, 1_000);
+            (given, threat(m))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (Some(50.0), Some(75.0)));
 }

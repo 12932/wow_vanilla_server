@@ -894,6 +894,10 @@ fn effect(
             }) {
                 map.send_to_observers(target, &frame, true);
             }
+            // Half of what it gives, of any power, is its caster's threat on
+            // those fighting the target, as a heal's (mangos's
+            // `EnergizeBySpell`: `threatAssist`).
+            combat::heal_threat(map, caster, target, s.id, amount.max(0) as u32);
             super::scripts::after_energize(map, caster, s);
         }
         // A pool the target has shown, alive, and a power that is one
