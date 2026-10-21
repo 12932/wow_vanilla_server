@@ -40,9 +40,13 @@ pub const SKILL_ENCHANTING: u32 = 333;
 pub const SKILL_FISHING: u32 = 356;
 pub const SKILL_SKINNING: u32 = 393;
 pub const SKILL_LOCKPICKING: u32 = 633;
+pub const SKILL_POISONS: u32 = 40;
 
-/// The skills recipes raise: smelting raises Mining.
+/// The skills recipes raise: smelting raises Mining, a rogue's poisons
+/// Poisons (mangos's `UpdateCraftSkill` raises whatever skill the recipe's
+/// `SkillLineAbility` row names).
 const CRAFTS: &[u32] = &[
+    SKILL_POISONS,
     SKILL_FIRST_AID,
     SKILL_BLACKSMITHING,
     SKILL_LEATHERWORKING,
@@ -353,7 +357,7 @@ fn lock_skill_up(map: &mut Map, caster: Guid, o: &Opening) -> bool {
         map,
         caster,
         skill,
-        gather_gain_chance(skill, learned, o.required, 1),
+        gather_gain_chance(skill, learned, o.required, 1, &map.cfg.rates),
         by,
     )
 }
@@ -394,22 +398,38 @@ pub fn skinning_required(level: u32, skill: u32) -> u32 {
     }
 }
 
-/// A gathering skill's chance to rise, in percent, not rounded (Thistle
-/// Tea's `Gathering.gain_chance`).
-pub fn gather_gain_chance(skill: u32, value: u32, required: u32, multiplier: u32) -> f64 {
+/// A gathering skill's chance to rise, in percent, not rounded (mangos's
+/// `UpdateGatherSkill`): by how far past the need, a need of 1 counted as
+/// 5 ("should stop at 105 not 101"); Mining's and Skinning's halved each
+/// `steps` points when `steps` isn't 0 (`[rates]
+/// skill_chance_mining_steps`, `skill_chance_skinning_steps`; mangos's
+/// `SkillChance.MiningSteps`, 0 by default).
+pub fn gather_gain_chance(
+    skill: u32,
+    value: u32,
+    required: u32,
+    multiplier: u32,
+    rates: &crate::config::RatesConfig,
+) -> f64 {
+    let required = if required == 1 { 5 } else { required };
     let chance = if value >= required + 100 {
-        0.0
+        f64::from(rates.skill_chance_grey)
     } else if value >= required + 50 {
-        25.0
+        f64::from(rates.skill_chance_green)
     } else if value >= required + 25 {
-        75.0
+        f64::from(rates.skill_chance_yellow)
     } else {
-        100.0
+        f64::from(rates.skill_chance_orange)
     };
-    let divisor = if matches!(skill, SKILL_MINING | SKILL_SKINNING) {
-        f64::from(1u32 << (value / 75).min(8))
-    } else {
+    let steps = match skill {
+        SKILL_MINING => rates.skill_chance_mining_steps,
+        SKILL_SKINNING => rates.skill_chance_skinning_steps,
+        _ => 0,
+    };
+    let divisor = if steps == 0 {
         1.0
+    } else {
+        f64::from(1u32 << (value / steps).min(16))
     };
     (chance * f64::from(multiplier) / divisor).min(100.0)
 }
@@ -820,13 +840,18 @@ fn open_lock(
         send_failure(map, caster, s.id, FAIL_TRY_AGAIN);
         return;
     }
-    // Once a spawn for each player (Thistle Tea's `skilled_players`).
+    // One roll a spawn for each player, whatever it comes to, and none
+    // once the object has its loot (mangos's `EffectOpenLock`: `!m_loot`,
+    // `IsInSkillupList`, `AddToSkillupList`): a node opened, closed and
+    // opened again isn't rolled again.
     let skilled = map
         .loot_state
         .skilled
         .get(&object)
         .is_some_and(|who| who.contains(&caster));
-    if !skilled && lock_skill_up(map, caster, &opening) {
+    let has_loot = map.gameobject(object).is_some_and(|o| o.loot.is_some());
+    if !skilled && !has_loot {
+        lock_skill_up(map, caster, &opening);
         map.loot_state
             .skilled
             .entry(object)
@@ -967,7 +992,14 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     } else {
         level * 5
     };
-    let chance = gather_gain_chance(SKILL_SKINNING, learned, required, if elite { 2 } else { 1 });
+    let multiplier = if elite { 2 } else { 1 };
+    let chance = gather_gain_chance(
+        SKILL_SKINNING,
+        learned,
+        required,
+        multiplier,
+        &map.cfg.rates,
+    );
     let by = map.cfg.rates.skill_gain_gathering;
     try_raise_by(map, caster, SKILL_SKINNING, chance, by);
     loot::show(map, caster, creature);
@@ -1610,9 +1642,15 @@ mod tests {
         assert_eq!(craft_gain_chance(15, 15, 35), 75);
         assert_eq!(craft_gain_chance(25, 15, 35), 25);
         assert_eq!(craft_gain_chance(35, 15, 35), 0);
-        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 1, 0, 1), 100.0);
-        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1), 25.0);
-        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1), 12.5);
+        let rates = crate::config::RatesConfig::default();
+        let steps = crate::config::RatesConfig {
+            skill_chance_mining_steps: 75,
+            ..Default::default()
+        };
+        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 1, 0, 1, &rates), 100.0);
+        assert_eq!(gather_gain_chance(SKILL_HERBALISM, 60, 0, 1, &rates), 25.0);
+        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1, &rates), 25.0);
+        assert_eq!(gather_gain_chance(SKILL_MINING, 80, 0, 1, &steps), 12.5);
         assert_eq!(fishing_gain_chance(150), 25);
         assert!(catch_landed(100, 0, 100));
         assert!(!catch_landed(30, 50, 1));

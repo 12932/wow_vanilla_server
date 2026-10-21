@@ -347,6 +347,12 @@ settings! {
         skill_chance_green: u32 = 25, Clamp(0.0, 100.0), Live, "SkillChance.Green";
         /// The chance, in percent, a grey recipe raises its skill.
         skill_chance_grey: u32 = 0, Clamp(0.0, 100.0), Live, "SkillChance.Grey";
+        /// Mining's chance to rise halves each this many points (0: it
+        /// never does, mangos's default).
+        skill_chance_mining_steps: u32 = 0, Clamp(0.0, 300.0), Live, "SkillChance.MiningSteps";
+        /// Skinning's chance to rise halves each this many points (0: it
+        /// never does, mangos's default).
+        skill_chance_skinning_steps: u32 = 0, Clamp(0.0, 300.0), Live, "SkillChance.SkinningSteps";
         /// The least rate a grey creature's kill gives reputation at.
         reputation_low_level_kill: f32 = 0.2, Clamp(0.0, 1.0), Live, "Rate.Reputation.LowLevel.Kill";
         /// The least rate a quest well below the player gives reputation

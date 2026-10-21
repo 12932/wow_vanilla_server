@@ -492,7 +492,13 @@ fn unlock(
             .get(&caster)
             .and_then(|p| crate::game::map::skills::value(p, skill))
             .unwrap_or(0);
-        let chance = crate::game::map::professions::gather_gain_chance(skill, learned, required, 1);
+        let chance = crate::game::map::professions::gather_gain_chance(
+            skill,
+            learned,
+            required,
+            1,
+            &map.cfg.rates,
+        );
         let by = map.cfg.rates.skill_gain_gathering;
         crate::game::map::professions::try_raise_by(map, caster, skill, chance, by);
     }
