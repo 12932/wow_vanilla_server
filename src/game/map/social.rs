@@ -169,6 +169,15 @@ fn away(map: &mut Map, g: Guid, flag: u32, text: &str) {
     }
     let flags = p.fields.get_u32(PLAYER_FLAGS) & (PLAYER_FLAGS_AFK | PLAYER_FLAGS_DND);
     p.online.flags.store(flags, Ordering::Relaxed);
+    // No one AFK in a battleground: out they go, a deserter, unless in GM
+    // mode (mangos's `Player::ToggleAFK`, "afk player not allowed in
+    // battleground").
+    let gm_mode = p
+        .fields
+        .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_GM);
+    if !was && flags & PLAYER_FLAGS_AFK != 0 && map.battleground.is_some() && !gm_mode {
+        crate::game::battlegrounds::leave(map, g);
+    }
 }
 
 /// `CMSG_WHO`: those online on the same side, by level, name, race, class,

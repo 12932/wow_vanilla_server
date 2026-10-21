@@ -319,3 +319,40 @@ async fn guild_recruitment_is_for_the_unguilded() {
     assert!(dir.of(a.guid).is_empty());
     assert_eq!(dir.of(b.guid), vec!["GuildRecruitment - City".to_owned()]);
 }
+
+/// mangos's `Player::ToggleAFK`: "afk player not allowed in battleground".
+/// Going AFK in a match takes the player out of it (a deserter, the match
+/// not over); in GM mode, they stay.
+#[tokio::test]
+async fn going_afk_in_a_battleground_leaves_it() {
+    use crate::game::tests_p3_world_bg::{all_in, gulch, player as bg_player};
+    let realm = harness::realm_with(gulch());
+    let mut a = bg_player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = bg_player(&realm, "B", "Grom", Race::Orc).await;
+    let (ga, gb) = (a.guid, b.guid);
+    let map = all_in(&realm, &mut [&mut a, &mut b]).await;
+    let in_match = |g| {
+        realm
+            .social
+            .battlegrounds
+            .lock()
+            .matches
+            .values()
+            .any(|m| m.members.contains_key(&g))
+    };
+    // Grom in GM mode stays.
+    b.say(".gm on").await;
+    b.system_message("GM mode on").await;
+    b.send(line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal, ""))
+        .await;
+    handled(&mut b).await;
+    assert!(in_match(gb), "a GM in GM mode stays");
+    a.send(line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal, "brb"))
+        .await;
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    assert!(!in_match(ga), "Alice, away, is out of the match");
+    let _ = map;
+}
