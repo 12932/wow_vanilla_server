@@ -131,6 +131,8 @@ mod tests_p10_core_regen;
 #[cfg(test)]
 mod tests_p10_core_stats;
 #[cfg(test)]
+mod tests_p10_core_trade;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

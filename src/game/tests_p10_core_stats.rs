@@ -497,3 +497,79 @@ async fn a_weapon_spell_takes_attack_power_against_its_targets_type_after_the_we
     // (140 + 70) / 14 x 2.8; the mark's alone on a beast; the type's alone.
     assert_eq!((marked, marked_beast, unmarked), (42, 14, 28), "{r:?}");
 }
+
+const ARMOR_BUFF: u32 = 98_120;
+
+/// Against Thistle Tea's `stats/resistances_test.exs` (`apply_spell/5`):
+/// an armor buff raises a player's armor as it lands, a stronger cast of
+/// it replaces it (one aura), and its running out or its removal gives
+/// the armor back; a blow takes the armor as it stands.
+#[tokio::test]
+async fn an_armor_buff_lands_is_replaced_runs_out_and_comes_off_with_the_armor() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut d = data();
+    let mut s = SpellTemplate {
+        id: ARMOR_BUFF,
+        name: "Armor".into(),
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0] = SpellEffect {
+        effect: 6,
+        aura: auras::AURA_MOD_BASE_RESISTANCE,
+        misc_value: 1,
+        base_points: 999,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    d.spells.spells.insert(ARMOR_BUFF, s);
+    let (_realm, _a, g, map) = setup_with(d, Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            crate::game::tests_p3_combat::level(m, g, 60);
+            let armor = |m: &Map| m.players[&g].fields.get_u32(UNIT_FIELD_RESISTANCES);
+            let put = |m: &mut Map, amount: i32| {
+                let s = m.realm.data.spells.get(ARMOR_BUFF).unwrap().clone();
+                auras::apply_spell(m, g, g, &s, &[(0, amount)], Default::default()).unwrap();
+                derive::unit(m, g);
+            };
+            let plain = armor(m);
+            put(m, 1_000);
+            let buffed = armor(m);
+            put(m, 2_000);
+            let replaced = armor(m);
+            let holders = auras::auras(m, g)
+                .unwrap()
+                .holders
+                .iter()
+                .filter(|h| h.spell == ARMOR_BUFF)
+                .count();
+            let now = m.now;
+            for h in auras::auras_mut(m, g).unwrap().holders.iter_mut() {
+                if h.spell == ARMOR_BUFF {
+                    h.expires = Some(now - std::time::Duration::from_millis(1));
+                }
+            }
+            auras::update(m);
+            derive::unit(m, g);
+            let expired = armor(m);
+            put(m, 1_000);
+            auras::remove_spell(m, g, ARMOR_BUFF, None);
+            derive::unit(m, g);
+            let removed = armor(m);
+            (plain, buffed, replaced, holders, expired, removed)
+        })
+        .await
+        .unwrap();
+    let (plain, buffed, replaced, holders, expired, removed) = r;
+    assert_eq!(
+        (buffed, replaced, holders, expired, removed),
+        (plain + 1_000, plain + 2_000, 1, plain, plain)
+    );
+    // A level 60 blow of 1000 at 100 armor and at 1100: 983 and 834.
+    let blow = |armor: u32| {
+        1_000 - (1_000.0 * crate::game::map::combat::armor_reduction(armor, 60)).trunc() as u32
+    };
+    assert_eq!((blow(100), blow(1_100)), (983, 834));
+}
