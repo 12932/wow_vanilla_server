@@ -127,6 +127,8 @@ mod tests_p10_ai_owned;
 #[cfg(test)]
 mod tests_p10_ai_pet_combat;
 #[cfg(test)]
+mod tests_p10_ai_real;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
@@ -1071,6 +1073,7 @@ mod tests_world5;
 pub mod transports;
 pub mod update;
 pub mod weather;
+pub mod wind_stones;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;

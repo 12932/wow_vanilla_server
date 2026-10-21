@@ -524,7 +524,11 @@ pub fn effect(map: &mut Map, caster: Guid, s: &SpellTemplate, index: usize, t: &
         }
         EFFECT_ACTIVATE_OBJECT => {
             for o in object_targets(map, caster, s, t) {
-                activate(map, caster, o, e.misc_value.max(0) as u32);
+                // A wind stone's summon is its script's (vmangos's
+                // `OnActivateBySpell`), its action in the spell's place.
+                if !crate::game::wind_stones::activated(map, caster, o, s.id) {
+                    activate(map, caster, o, e.misc_value.max(0) as u32);
+                }
             }
             true
         }
