@@ -404,18 +404,20 @@ impl Groups {
         }
     }
 
-    /// Take a member out. Returns what to tell: the group (if it stays),
-    /// and whether it is disbanded.
-    fn remove(&mut self, realm: &Realm, g: Guid, kicked: bool) {
+    /// Take a member out. Returns what a meeting stone's queue is to hear
+    /// of it, once the lock is let go (`Left::tell`).
+    #[must_use]
+    fn remove(&mut self, realm: &Realm, g: Guid, kicked: bool) -> Left {
         let Some(&id) = self.of.get(&g) else {
-            return;
+            return Left::Nothing;
         };
         let Some(gr) = self.groups.get_mut(&id) else {
-            return;
+            return Left::Nothing;
         };
         if gr.members.len() <= 2 {
+            let members = gr.members.iter().map(|m| m.guid).collect();
             self.disband(realm, id);
-            return;
+            return Left::Disbanded { id, members };
         }
         gr.members.retain(|m| m.guid != g);
         self.of.remove(&g);
@@ -426,7 +428,8 @@ impl Groups {
         }
         leave_roster(realm, g);
         let gr = &mut self.groups.get_mut(&id).unwrap();
-        if gr.leader == g {
+        let leader_left = gr.leader == g;
+        if leader_left {
             gr.leader = gr.members[0].guid;
             if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER {
                 name: gr.members[0].name.to_string(),
@@ -439,6 +442,13 @@ impl Groups {
             gr.looter = gr.leader;
         }
         gr.send_update(realm);
+        Left::Removed {
+            id,
+            g,
+            kicked,
+            leader_left,
+            rest: gr.members.iter().map(|m| m.guid).collect(),
+        }
     }
 
     fn disband(&mut self, realm: &Realm, id: u32) {
@@ -457,6 +467,42 @@ impl Groups {
         }
         for i in gr.invited {
             self.invites.remove(&i);
+        }
+    }
+}
+
+/// A member out of a group, for a meeting stone's queue to follow.
+#[derive(Debug)]
+enum Left {
+    Nothing,
+    Removed {
+        id: u32,
+        g: Guid,
+        kicked: bool,
+        leader_left: bool,
+        rest: Vec<Guid>,
+    },
+    Disbanded {
+        id: u32,
+        members: Vec<Guid>,
+    },
+}
+
+impl Left {
+    /// Tell the queue, with the groups' lock let go: a kick queues the one
+    /// kicked again, which reads their group.
+    fn tell(self, realm: &Realm) {
+        use crate::game::map::meeting_stones as stones;
+        match self {
+            Left::Nothing => {}
+            Left::Removed {
+                id,
+                g,
+                kicked,
+                leader_left,
+                rest,
+            } => stones::left_group(realm, id, g, kicked, leader_left, &rest),
+            Left::Disbanded { id, members } => stones::group_disbanded(realm, id, &members),
         }
     }
 }
@@ -635,6 +681,9 @@ pub fn accept(realm: &Realm, me: &Online) {
         }
     }
     groups.stats.remove(&me.guid);
+    let members: Vec<Guid> = groups.groups[&id].members.iter().map(|m| m.guid).collect();
+    drop(groups);
+    crate::game::map::meeting_stones::joined_group(realm, id, me.guid, &members);
 }
 
 /// `CMSG_GROUP_DECLINE`.
@@ -710,7 +759,9 @@ pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
             );
             return;
         }
-        groups.remove(realm, t, true);
+        let left = groups.remove(realm, t, true);
+        drop(groups);
+        left.tell(realm);
     } else if gr.invited.contains(&t) {
         groups.drop_invite(t);
     } else {
@@ -729,7 +780,9 @@ pub fn character_deleted(realm: &Realm, g: Guid) {
     let mut groups = realm.social.groups.lock();
     groups.drop_invite(g);
     if groups.group_of(g).is_some() {
-        groups.remove(realm, g, false);
+        let left = groups.remove(realm, g, false);
+        drop(groups);
+        left.tell(realm);
     }
 }
 
@@ -746,7 +799,9 @@ pub fn leave(realm: &Realm, me: &Online) {
         &me.name,
         PartyResult::Success,
     );
-    groups.remove(realm, me.guid, false);
+    let left = groups.remove(realm, me.guid, false);
+    drop(groups);
+    left.tell(realm);
 }
 
 /// `CMSG_GROUP_SET_LEADER`.
@@ -769,6 +824,9 @@ pub fn set_leader(realm: &Realm, me: &Online, to: Guid) {
         gr.broadcast(realm, &frame, None);
     }
     gr.send_update(realm);
+    // A party queued at a meeting stone stays queued (mangos's
+    // `ChangeLeader` leaves the LFG queue be).
+    crate::game::map::meeting_stones::leader_changed(realm, id, to);
 }
 
 /// `CMSG_LOOT_METHOD`.
@@ -808,6 +866,9 @@ pub fn convert_to_raid(realm: &Realm, me: &Online) {
     );
     gr.raid = true;
     gr.send_update(realm);
+    let (id, members): (u32, Vec<Guid>) = (gr.id, gr.members.iter().map(|m| m.guid).collect());
+    drop(groups);
+    crate::game::map::meeting_stones::raid_converted(realm, id, &members);
 }
 
 /// `CMSG_GROUP_CHANGE_SUB_GROUP`.
