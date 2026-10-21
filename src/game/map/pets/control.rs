@@ -309,7 +309,14 @@ fn feedback(map: &Map, player: Guid, f: PetFeedback) {
 /// victim, or itself if helpful), and a place on the ground for one that
 /// wants it, a possessed caster's area spell (mangos's
 /// `HandlePetCastSpellOpcode` reads the whole `SpellCastTargets`).
-fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets) {
+///
+/// From the bar (`CMSG_PET_ACTION`, `from_bar`), a harmful spell at a unit
+/// out of its range or sight that the pet may fight now makes it the
+/// spell's opener: it runs at the unit and attacks it, and casts the spell
+/// once in range; with no way there, its master is told it can't attack
+/// (mangos's `HandlePetAction`, `SetSpellOpener`, `SendNoPathToOwner`).
+/// In range and sight, it casts and starts no attack, as mangos's does.
+fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets, from_bar: bool) {
     let target = asked.unit;
     let data = map.realm.data.clone();
     let knows = match map.players.get(&pet) {
@@ -324,6 +331,11 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets) {
     let Some(t) = data.spells.get(spell) else {
         return;
     };
+    // A new bar spell forgets the opener it had, and its way home.
+    if from_bar && let Some(s) = state_mut(map, pet) {
+        s.opener = None;
+        s.returning = false;
+    }
     let helpful = ai::helpful(t);
     let victim = map.combat(pet).filter(|c| c.attacking).map(|c| c.victim);
     let unit = target
@@ -340,6 +352,18 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets) {
         feedback(map, player, PetFeedback::NothingToAttack);
         return;
     }
+    if from_bar
+        && !helpful
+        && let Some(u) = unit
+        && u != pet
+        && wants_unit(t)
+        && ready(map, pet, t)
+        && !in_reach(map, pet, u, data.spells.range(t).1)
+        && map.unit_view(u).is_some_and(|v| v.alive)
+    {
+        open_with(map, player, pet, u, spell, data.spells.range(t));
+        return;
+    }
     let targets = Targets {
         unit,
         dest: asked.dest,
@@ -353,15 +377,66 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets) {
         cast_failed(map, player, pet, spell, r);
         return;
     }
-    let cast = crate::game::map::spells::cast(map, pet, spell, targets, None);
-    // A harmful spell starts the fight with its target, an instant one of
-    // no cooldown too.
-    if cast
-        && !helpful
-        && let Some(u) = unit
-    {
-        ai::attack(map, pet, u);
+    crate::game::map::spells::cast(map, pet, spell, targets, None);
+}
+
+/// Whether `t` asks for a unit: a spell at one, not about the caster or a
+/// place.
+fn wants_unit(t: &SpellTemplate) -> bool {
+    t.effects
+        .iter()
+        .filter(|e| e.effect != 0)
+        .any(|e| crate::game::map::spells::targets::wants_unit(e.target_a))
+}
+
+/// Whether `pet`'s spell `t` is off its cooldowns (mangos's `IsSpellReady`).
+fn ready(map: &Map, pet: Guid, t: &SpellTemplate) -> bool {
+    let now = map.now;
+    map.caster(pet).is_none_or(|c| {
+        !c.cooldowns.get(&t.id).is_some_and(|at| *at > now)
+            && (t.category == 0
+                || !c
+                    .category_cooldowns
+                    .get(&t.category)
+                    .is_some_and(|at| *at > now))
+    })
+}
+
+/// Whether `u` is within `max` yards of `pet`, edge to edge, and in its
+/// sight (mangos's `IsWithinDistInMap` and `IsWithinLOSInMap`).
+fn in_reach(map: &Map, pet: Guid, u: Guid, max: f32) -> bool {
+    let (Some(a), Some(b)) = (map.position_of(pet), map.position_of(u)) else {
+        return false;
+    };
+    let radius = |g: Guid| {
+        map.unit_fields(g)
+            .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+    };
+    crate::game::map::combat::dist(a, b) - radius(pet) - radius(u) < max
+        && crate::game::map::spells::checks::sight(map, a, b)
+}
+
+/// `pet` sent at `u` with `spell` its opener (mangos's `HandlePetAction`):
+/// a possessed unit, which no AI moves, just starts its swing.
+fn open_with(map: &mut Map, player: Guid, pet: Guid, u: Guid, spell: u32, range: (f32, f32)) {
+    let possessed = map.players.contains_key(&pet)
+        || state(map, pet).is_some_and(|s| s.kind == Kind::Possessed);
+    if !possessed && let Some(s) = state_mut(map, pet) {
+        s.opener = Some((spell, range.0, range.1));
     }
+    crate::game::map::combat::stop_attack(map, pet);
+    if possessed {
+        crate::game::map::combat::start_attack(map, pet, u);
+        return;
+    }
+    if !crate::game::map::creature_motion::may_reach(map, pet, u) {
+        if let Some(s) = state_mut(map, pet) {
+            s.opener = None;
+        }
+        feedback(map, player, PetFeedback::CantAttackTarget);
+        return;
+    }
+    ai::attack(map, pet, u);
 }
 
 pub const SMSG_PET_CAST_FAILED: u16 = 0x138;
@@ -417,6 +492,7 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                 if let Some(s) = state_mut(map, pet) {
                     s.command = COMMAND_STAY;
                     s.stay_at = at;
+                    s.opener = None;
                 }
             }
             COMMAND_FOLLOW => {
@@ -425,6 +501,7 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                     s.command = COMMAND_FOLLOW;
                     s.stay_at = None;
                     s.returning = true;
+                    s.opener = None;
                 }
             }
             COMMAND_ATTACK => {
@@ -455,6 +532,9 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
             // Passive, it stops its attack, its cast and its target, and
             // the chase it was on (Thistle Tea's movement transition).
             if action as u8 == REACT_PASSIVE {
+                if let Some(s) = state_mut(map, pet) {
+                    s.opener = None;
+                }
                 stand_down(map, pet);
                 ai::stop(map, pet);
             }
@@ -472,6 +552,7 @@ fn action(map: &mut Map, player: Guid, pet: Guid, data: u32, target: Guid) {
                     unit: Some(target),
                     ..Default::default()
                 },
+                true,
             );
         }
         _ => {}
@@ -683,6 +764,7 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
                     m.guid,
                     m.id,
                     crate::game::map::spells::targets_of(&m.targets),
+                    false,
                 );
             }
         }

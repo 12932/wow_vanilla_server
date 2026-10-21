@@ -201,6 +201,10 @@ pub struct PetState {
     /// When its master last sent it to attack: crowd control older than
     /// that it was sent to break (mangos's `GetPetLastAttackCommandTime`).
     pub commanded_at: Option<Instant>,
+    /// The bar spell it runs at its victim to cast, sent out of its range
+    /// or sight: the spell and its range's least and most (mangos's
+    /// `CharmInfo::SetSpellOpener`).
+    pub opener: Option<(u32, f32, f32)>,
 }
 
 /// How often a pet's health comes back.
@@ -245,6 +249,7 @@ impl PetState {
             charm_cooldowns: Vec::new(),
             commanded: None,
             commanded_at: None,
+            opener: None,
         }
     }
 }

@@ -112,12 +112,14 @@ async fn a_creatures_demons_are_its_guardians_and_go_when_it_leaves() {
     panic!("its summoner gone, the imps stay");
 }
 
-/// A passive pet told to stay still fights the one its master's spell
-/// for it struck, staying passive and told to stay (Thistle Tea's "a
-/// completed pet spell orders a passive pet to attack through its owner").
+/// A passive pet told to stay casts its master's harmful bar spell at a
+/// wolf in range and starts no fight with it, staying passive and told to
+/// stay: mangos-classic's `HandlePetAction` (the user's call), where
+/// Thistle Tea's "a completed pet spell orders a passive pet to attack
+/// through its owner" has it attack (round 11's 11d).
 #[tokio::test]
-async fn a_passive_pets_harmful_spell_starts_its_fight_and_leaves_its_orders() {
-    let (_realm, h, _gh, map, pet, wolf) = tamed().await;
+async fn a_passive_pets_harmful_spell_in_range_starts_no_fight_and_leaves_its_orders() {
+    let (_realm, mut h, _gh, map, pet, wolf) = tamed().await;
     map.query(move |m| {
         let s = pets::state_mut(m, pet).unwrap();
         s.react = REACT_PASSIVE;
@@ -134,26 +136,39 @@ async fn a_passive_pets_harmful_spell_starts_its_fight_and_leaves_its_orders() {
         target: wolf,
     })
     .await;
-    for _ in 0..200 {
-        let now = map
+    h.wait_for("the pet's Gore", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.caster == pet && g.spell == GORE => Some(()),
+        _ => None,
+    })
+    .await;
+    let since = map.query(|m| m.stats.updates).await.unwrap();
+    loop {
+        let (updates, now) = map
             .query(move |m| {
                 let c = m.creature(pet)?;
                 let s = c.pet.as_deref()?;
                 Some((
-                    c.combat.attacking && c.combat.victim == wolf,
-                    s.react,
-                    s.command,
+                    m.stats.updates,
+                    (
+                        c.combat.attacking && c.combat.victim == wolf,
+                        s.react,
+                        s.command,
+                    ),
                 ))
             })
             .await
-            .flatten();
-        if let Some((true, react, command)) = now {
-            assert_eq!((react, command), (REACT_PASSIVE, COMMAND_STAY));
+            .flatten()
+            .unwrap();
+        assert_eq!(
+            now,
+            (false, REACT_PASSIVE, COMMAND_STAY),
+            "cast, no attack, its orders kept"
+        );
+        if updates >= since + 5 {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("the pet never fought the wolf it gored");
 }
 
 /// The beast tamed leaves the world, and its fight with it: no one fights

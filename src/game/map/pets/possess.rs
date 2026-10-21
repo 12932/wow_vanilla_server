@@ -278,8 +278,9 @@ pub fn moved(
         let Some(v) = map.players.get_mut(&unit) else {
             return true;
         };
-        // Feared or confused, the server moves them, as a creature.
-        if v.driven.is_some() {
+        // Feared or confused, the server moves them, as a creature; dead,
+        // no one does.
+        if v.driven.is_some() || v.death != crate::game::map::death::Death::Alive {
             return true;
         }
         let (anchor, old_cell) = (v.vis_anchor, v.cell);
@@ -290,8 +291,10 @@ pub fn moved(
         map.grid.relocate(unit, old_cell, new_cell);
         crate::game::map::visibility::moved(map, unit, anchor, info.position);
         if let Some(frame) = relay(unit, *info) {
-            // Its own client sees it walk too.
-            map.send_to_observers(unit, &frame, true);
+            // Its own client sees it walk too; the controller's, which
+            // moved it, isn't told back (mangos's `HandleMovementOpcodes`,
+            // `SendMessageToAllWhoSeeMeMove(data, _player)`).
+            map.send_to_observers_but(unit, &frame, true, player);
         }
         return true;
     }
@@ -299,8 +302,8 @@ pub fn moved(
         return true;
     };
     // Feared or confused, the server moves it (Thistle Tea's "possessed
-    // creatures reject input").
-    if c.engagement.control.is_some() {
+    // creatures reject input"); dead, no one does.
+    if c.engagement.control.is_some() || !c.alive() {
         return true;
     }
     let (anchor, old_cell) = (c.vis_anchor, c.cell);
@@ -312,7 +315,7 @@ pub fn moved(
     map.grid.relocate(unit, old_cell, new_cell);
     crate::game::map::visibility::moved(map, unit, anchor, info.position);
     if let Some(frame) = relay(unit, *info) {
-        map.send_to_observers(unit, &frame, false);
+        map.send_to_observers_but(unit, &frame, false, player);
     }
     true
 }

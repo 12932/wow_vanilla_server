@@ -189,6 +189,8 @@ mod tests_p10_world_system;
 #[cfg(test)]
 mod tests_p11a_resurrect;
 #[cfg(test)]
+mod tests_p11d_pets;
+#[cfg(test)]
 mod tests_p11h_stones;
 #[cfg(test)]
 mod tests_p12_questions;
