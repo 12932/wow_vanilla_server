@@ -113,7 +113,13 @@ pub fn complete(p: &Player, q: &Quest, l: &Logged) -> bool {
 /// quest, the race, class, skill and standings, what it depends on, and
 /// the level.
 pub fn can_take(p: &Player, q: &Quest, data: &GameData) -> bool {
-    can_take_but_level(p, q, data) && p.level() >= q.min_level
+    can_take_but_level(p, q, data) && p.level() >= q.min_level && !over_level(p, q)
+}
+
+/// Whether `p` is past `q`'s highest level (mangos's `SatisfyQuestLevel`,
+/// `GetMaxLevel`; none at 0).
+fn over_level(p: &Player, q: &Quest) -> bool {
+    q.max_level != 0 && p.level() > q.max_level
 }
 
 /// [`can_take`] but for the level, which Thistle Tea checks last.
@@ -236,6 +242,7 @@ fn dependencies_met(p: &Player, q: &Quest, data: &GameData) -> bool {
 /// `low_level`, its last check, at any gap).
 fn soon(p: &Player, q: &Quest, data: &GameData, hide_diff: i32) -> bool {
     p.level() < q.min_level
+        && !over_level(p, q)
         && (hide_diff < 0 || u32::from(p.level()) + hide_diff as u32 >= u32::from(q.min_level))
         && can_take_but_level(p, q, data)
 }
@@ -836,6 +843,10 @@ fn accept_with(map: &mut Map, player: Guid, giver: Guid, quest: u32, script: boo
     if p.level() < q.min_level {
         return invalid(p, QuestFailedReason::QuestFailedLowLevel);
     }
+    // Past its highest level: mangos's `SatisfyQuestLevel`'s answer.
+    if over_level(p, q) {
+        return invalid(p, QuestFailedReason::DontHaveReq);
+    }
     if p.journal.full() {
         p.outbound.send(&SMSG_QUESTLOG_FULL {});
         return;
@@ -1280,6 +1291,7 @@ pub fn event_happens(map: &mut Map, player: Guid, quest: u32) {
         if in_log {
             !rewarded(p, &data, quest)
                 && p.level() >= q.min_level
+                && !over_level(p, q)
                 && (q.required_races == 0 || q.required_races & (1 << (p.row.race - 1)) != 0)
                 && (q.required_classes == 0 || q.required_classes & (1 << (p.row.class - 1)) != 0)
                 && (q.required_skill == 0

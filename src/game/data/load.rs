@@ -1385,6 +1385,7 @@ fn load_npcs(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
             auto_complete: c.u32("Method") == 0,
             zone_or_sort: c.i32("ZoneOrSort"),
             min_level: c.u8("MinLevel"),
+            max_level: c.u8("MaxLevel"),
             level: c.i32("QuestLevel"),
             kind: c.u32("Type"),
             required_classes: c.u32("RequiredClasses"),
