@@ -179,6 +179,8 @@ mod tests_p11j_control;
 #[cfg(test)]
 mod tests_p11j_loot;
 #[cfg(test)]
+mod tests_p11j_pets;
+#[cfg(test)]
 mod tests_p11j_quests;
 #[cfg(test)]
 mod tests_p10_spell_cast;
