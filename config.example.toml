@@ -45,6 +45,18 @@ max_queries_per_sec = 1000
 # Default 2. Range 0 to 1000, clamped. Needs a restart. mangos: MaxOverspeedPings.
 max_overspeed_pings = 2
 
+# Where the login server listens, `ip:port`. Every interface by
+# default (decision 53); `127.0.0.1:3724` keeps it to this
+# machine, as a load test should.
+# Default "0.0.0.0:3724". Needs a restart.
+auth_address = "0.0.0.0:3724"
+
+# Where the world server listens, `ip:port`. Without
+# `WOW_REALM_ADDRESS`, the realm list sends clients to
+# `localhost` on its port.
+# Default "0.0.0.0:8085". Needs a restart.
+world_address = "0.0.0.0:8085"
+
 # The world: saves, the message of the day, the character store and
 # the data's paths.
 [world]

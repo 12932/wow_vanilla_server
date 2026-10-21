@@ -86,13 +86,11 @@ async fn async_main(start: Start) -> u8 {
             return 2;
         }
     };
-    let world = match tokio::net::TcpListener::bind(crate::game::WORLD_ADDRESS).await {
+    let world_address = cfg.network.world_address.as_str();
+    let world = match tokio::net::TcpListener::bind(world_address).await {
         Ok(listener) => listener,
         Err(e) => {
-            tracing::error!(
-                "can't listen for the world on {}: {e}",
-                crate::game::WORLD_ADDRESS
-            );
+            tracing::error!("can't listen for the world on {world_address}: {e}");
             return 2;
         }
     };

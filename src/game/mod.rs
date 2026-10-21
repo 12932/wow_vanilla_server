@@ -1755,10 +1755,7 @@ pub fn world_data(dir: Option<&std::path::Path>, characters: usize) -> Result<Ga
     }
 }
 
-/// Where the world listens.
-pub const WORLD_ADDRESS: &str = "0.0.0.0:8085";
-
-/// Run the world server on `listener` (bound to [`WORLD_ADDRESS`] before
+/// Run the world server on `listener` (bound to `[network] world_address` before
 /// the store was touched) until a shutdown signal, then save everyone and
 /// return the process's exit code: 2 if it can't start.
 pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
@@ -1795,7 +1792,10 @@ pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
     }
     stats::start(&realm);
     info!("wow_vanilla_server {}", crate::VERSION);
-    info!("world: listening on {WORLD_ADDRESS}");
+    info!(
+        "world: listening on {}",
+        crate::config::config().network.world_address
+    );
     let accept = {
         let realm = realm.clone();
         async move {

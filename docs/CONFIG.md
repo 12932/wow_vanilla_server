@@ -4,7 +4,7 @@ The server's settings are `config.toml`, in its working directory, with the envi
 default in the code, so a missing file, or one that sets a single key, is fine.
 [config.example.toml](../config.example.toml) has every key at its default, with its range and meaning; it is
 generated, and a test fails when it drifts. Deployment settings that aren't keys stay environment variables of their
-own: `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY` (`1` starts the Tracy profiler) and `RUST_LOG`
+own: `WOW_REALM_ADDRESS` (the realm list's `host:port`), `WOW_TRACY` (`1` starts the Tracy profiler), `WVS_STATS_FILE` (a load test's numbers, a JSON line a second, [PROFILING.md](PROFILING.md)) and `RUST_LOG`
 (the log's filter, below). No `.env` file is read: set them in the environment the server starts in.
 
 ## Precedence
@@ -116,6 +116,8 @@ Connections: queues, timeouts and limits.
 | `max_packets_per_sec` | Packets a client may send a second, sustained (three seconds' worth at once); a client that floods is disconnected. | `100` | 10 to 100000, clamped | restart |  |
 | `max_queries_per_sec` | Read-only queries (names, creatures, objects, items, quests, texts, times) a client may send a second, sustained (three seconds' worth at once), apart from the packets: a client walking into a crowd asks after everyone in it at once. One that floods them is disconnected. | `1000` | 10 to 1000000, clamped | restart |  |
 | `max_overspeed_pings` | Pings a client may send in a row each less than 27 seconds after the last (the client pings every 30) before it is disconnected; 0 never disconnects. | `2` | 0 to 1000, clamped | restart | `MaxOverspeedPings` |
+| `auth_address` | Where the login server listens, `ip:port`. Every interface by default (decision 53); `127.0.0.1:3724` keeps it to this machine, as a load test should. | `"0.0.0.0:3724"` | any | restart | |
+| `world_address` | Where the world server listens, `ip:port`. Without `WOW_REALM_ADDRESS`, the realm list sends clients to `localhost` on its port. | `"0.0.0.0:8085"` | any | restart | |
 
 ### `[world]`
 

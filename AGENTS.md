@@ -138,6 +138,7 @@ that is policy, not 1.12's rule, goes there rather than in a constant.
 | `WVS__SECTION__KEY` | any config key, over the file: `WVS__RATES__XP_KILL=2`. An unknown one is an error. |
 | `WOW_REALM_ADDRESS` | `host:port` in the realm list. Defaults to `localhost:8085`. |
 | `WOW_TRACY` | `1` starts Tracy: a frame per map update, a zone per step, packet and save ([docs/PROFILING.md](docs/PROFILING.md)). |
+| `WVS_STATS_FILE` | a load test's numbers, a JSON line a second: update times, queues, bytes out, CPU ([docs/PROFILING.md](docs/PROFILING.md)). |
 | `RUST_LOG` | the log filter: a bare level and `target=level` entries (tracing-subscriber's `Targets`, no regular expressions). |
 | `WVS_DATA` | the tests' real world: a `data/` with `db`, `nav` and `terrain` (the extended suite's). |
 

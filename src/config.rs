@@ -187,6 +187,14 @@ settings! {
         /// the last (the client pings every 30) before it is disconnected;
         /// 0 never disconnects.
         max_overspeed_pings: u32 = 2, Clamp(0.0, 1000.0), Restart, "MaxOverspeedPings";
+        /// Where the login server listens, `ip:port`. Every interface by
+        /// default (decision 53); `127.0.0.1:3724` keeps it to this
+        /// machine, as a load test should.
+        auth_address: String = "0.0.0.0:3724".to_owned(), Any, Restart, "";
+        /// Where the world server listens, `ip:port`. Without
+        /// `WOW_REALM_ADDRESS`, the realm list sends clients to
+        /// `localhost` on its port.
+        world_address: String = "0.0.0.0:8085".to_owned(), Any, Restart, "";
     }
 }
 
