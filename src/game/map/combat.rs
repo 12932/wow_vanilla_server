@@ -3276,6 +3276,12 @@ fn deal_damage_with(
     // falls below one health unless a script's floor lets it (Thistle
     // Tea's invincibility threshold).
     let floor = crate::game::map::event_ai::invincible_floor(map, victim);
+    // An undying player (`.god`) stops at 1.
+    let floor = if crate::game::map::gm_dev::undying(map, victim) {
+        floor.max(1)
+    } else {
+        floor
+    };
     let Some(f) = map.unit_fields_mut(victim) else {
         return;
     };
@@ -3358,6 +3364,15 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
     if map.unit_view(victim).is_none_or(|u| !u.alive)
         || DYING.with(|d| d.borrow().contains(&victim))
     {
+        return;
+    }
+    // An undying player (`.god`) isn't killed: left at 1 health, at least.
+    if crate::game::map::gm_dev::undying(map, victim) {
+        if let Some(f) = map.unit_fields_mut(victim)
+            && f.get_u32(UNIT_FIELD_HEALTH) == 0
+        {
+            f.set_u32(UNIT_FIELD_HEALTH, 1);
+        }
         return;
     }
     // The creatures fighting it, to fight on after.

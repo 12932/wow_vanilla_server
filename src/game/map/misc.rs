@@ -64,6 +64,10 @@ pub struct PlayerMisc {
     pub quest_shared: Option<(Guid, u32)>,
     /// A GM's god mode: no damage taken.
     pub god: bool,
+    /// `.god`, for load tests: the player takes their blows (the blows,
+    /// their packets and the health they cost) but never falls below 1
+    /// health, so never dies. Saved nowhere.
+    pub undying: bool,
     /// The intro cinematic's camera, and where it has the player see from.
     pub camera: Option<crate::game::map::cinematic::Camera>,
     pub view: Option<Vector3d>,
