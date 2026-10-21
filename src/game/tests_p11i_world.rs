@@ -24,7 +24,10 @@ use crate::game::map::auras::*;
 use crate::game::map::mounts::{self, NO_MOUNTS_ALLOWED};
 use crate::game::map::{Map, MapHandle, MapKey, grid, spells};
 
-async fn on<T: Send + 'static>(map: &MapHandle, f: impl FnOnce(&mut Map) -> T + Send + 'static) -> T {
+async fn on<T: Send + 'static>(
+    map: &MapHandle,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
     map.query(f).await.expect("the map answers")
 }
 
@@ -177,7 +180,10 @@ async fn no_mount_in_booty_bay_and_one_outside_it() {
 #[ignore = "extended"]
 async fn there_is_no_liquid_where_there_is_no_terrain() {
     use crate::game::map::terrain::Terrain;
-    assert!(Terrain::open(TERRAIN.as_path(), 9999).is_none(), "no map 9999");
+    assert!(
+        Terrain::open(TERRAIN.as_path(), 9999).is_none(),
+        "no map 9999"
+    );
     let mut azeroth = Terrain::open(TERRAIN.as_path(), 0).expect("Azeroth's tiles");
     let far = (16_900.0, 16_900.0, 0.0);
     assert_eq!(azeroth.liquid(v(far)), None, "off its tiles");
@@ -312,7 +318,10 @@ async fn blackrock_mountains_lava_is_its_wmos_not_its_bridges_or_rocks() {
     }
     let realm = with_terrain(GameData::empty(), true);
     let map = realm.maps.get(&realm, MapKey::world(0));
-    let lava = on(&map, |m| crate::game::map::environment::liquid_at(m, v(BLACKROCK))).await;
+    let lava = on(&map, |m| {
+        crate::game::map::environment::liquid_at(m, v(BLACKROCK))
+    })
+    .await;
     let lava = lava.expect("the liquid there");
     assert!(lava.magma() && lava.touching(BLACKROCK.2), "{lava:?}");
 }
@@ -368,12 +377,18 @@ async fn a_druid_back_in_cat_form_has_its_hidden_passive() {
 const START: (f32, f32, f32) = (-8_949.95, -132.493, 83.5312);
 const KAZZAK: u32 = 12_397;
 const SHADOW_BOLT_WHIRL: u32 = 24_834;
-const WHIRL: [u32; 8] = [24_820, 24_821, 24_822, 24_823, 24_835, 24_836, 24_837, 24_838];
+const WHIRL: [u32; 8] = [
+    24_820, 24_821, 24_822, 24_823, 24_835, 24_836, 24_837, 24_838,
+];
 
 /// `yards` from the start at `turns` eighths of a turn.
 fn around(turns: f32, yards: f32) -> Vector3d {
     let a = turns * std::f32::consts::FRAC_PI_4;
-    v((START.0 + yards * a.cos(), START.1 + yards * a.sin(), START.2))
+    v((
+        START.0 + yards * a.cos(),
+        START.1 + yards * a.sin(),
+        START.2,
+    ))
 }
 
 /// Thistle Tea's "each whirl child selects a rotated 120-degree arc with
@@ -507,9 +522,15 @@ async fn linkens_boomerang_disarms_and_stuns_and_both_wear_off() {
     let out = on(&map, move |m| {
         let data = m.realm.data.clone();
         let kind = |id: u32| {
-            data.spells.get(id).map(|s| s.effects.map(|e| e.aura)).unwrap_or_default()
+            data.spells
+                .get(id)
+                .map(|s| s.effects.map(|e| e.aura))
+                .unwrap_or_default()
         };
-        assert!(kind(BOOMERANG_DISARM).contains(&AURA_MOD_DISARM), "15752 disarms");
+        assert!(
+            kind(BOOMERANG_DISARM).contains(&AURA_MOD_DISARM),
+            "15752 disarms"
+        );
         assert!(kind(BOOMERANG_STUN).contains(&AURA_MOD_STUN), "15753 stuns");
         let hands = |m: &Map| {
             let f = &m.players[&b].fields;
@@ -566,7 +587,11 @@ async fn linkens_boomerang_disarms_and_stuns_and_both_wear_off() {
         } else {
             assert_eq!(on_it.1, armed, "the weapon's");
         }
-        assert_eq!(later, (disarm, false), "{disarm} {stun}: the stun gone at 3 s");
+        assert_eq!(
+            later,
+            (disarm, false),
+            "{disarm} {stun}: the stun gone at 3 s"
+        );
         assert_eq!(recovered, ((false, false), armed), "all gone at 11 s");
         assert_eq!(dead, (false, false), "death takes both");
     }

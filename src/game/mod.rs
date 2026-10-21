@@ -187,23 +187,23 @@ mod tests_p10_world_spells;
 #[cfg(test)]
 mod tests_p10_world_system;
 #[cfg(test)]
-mod tests_p12_questions;
-#[cfg(test)]
-mod tests_p11i_views;
-#[cfg(test)]
-mod tests_p11i_spells;
-#[cfg(test)]
-mod tests_p11i_world;
-#[cfg(test)]
-mod tests_p11i_objects;
-#[cfg(test)]
-mod tests_p11i_misc;
+mod tests_p11i_ai;
 #[cfg(test)]
 mod tests_p11i_av;
 #[cfg(test)]
+mod tests_p11i_misc;
+#[cfg(test)]
+mod tests_p11i_objects;
+#[cfg(test)]
+mod tests_p11i_spells;
+#[cfg(test)]
 mod tests_p11i_summons;
 #[cfg(test)]
-mod tests_p11i_ai;
+mod tests_p11i_views;
+#[cfg(test)]
+mod tests_p11i_world;
+#[cfg(test)]
+mod tests_p12_questions;
 #[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]

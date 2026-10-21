@@ -254,7 +254,11 @@ fn keyed() -> Guid {
     guid::game_object(KEYED, 802)
 }
 
-pub(crate) async fn setup(realm: &Arc<Realm>, account: &str, name: &str) -> (Client, Guid, MapHandle) {
+pub(crate) async fn setup(
+    realm: &Arc<Realm>,
+    account: &str,
+    name: &str,
+) -> (Client, Guid, MapHandle) {
     let mut a = Client::connect(realm, account);
     let g = a.enter(name, Race::Human, Class::Rogue).await;
     let map = realm.maps.get(realm, MapKey::world(0));

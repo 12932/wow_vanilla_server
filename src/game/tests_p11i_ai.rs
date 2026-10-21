@@ -16,7 +16,10 @@ use crate::game::harness::{self, Client};
 use crate::game::map::creature::Motion;
 use crate::game::map::{Map, MapHandle, MapKey, ai, combat, grid};
 
-async fn on<T: Send + 'static>(map: &MapHandle, f: impl FnOnce(&mut Map) -> T + Send + 'static) -> T {
+async fn on<T: Send + 'static>(
+    map: &MapHandle,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
     map.query(f).await.expect("the map answers")
 }
 
@@ -66,7 +69,11 @@ async fn a_formation_waits_out_its_leaders_fight_and_its_own_stun() {
         (fighting, stunned, rooted, free)
     })
     .await;
-    assert_eq!(out, (false, false, false, true), "(fighting, stunned, rooted, free)");
+    assert_eq!(
+        out,
+        (false, false, false, true),
+        "(fighting, stunned, rooted, free)"
+    );
 }
 
 const FISH: u32 = 3_970;
@@ -185,7 +192,14 @@ async fn a_swimmers_partial_route_keeps_its_clock_until_its_victim_is_in_reach()
         let kept = since(m);
         // Into the water, by the fish.
         let by = m.creature(fish).unwrap().position;
-        put_player(m, g, Vector3d { x: by.x + 1.0, ..by });
+        put_player(
+            m,
+            g,
+            Vector3d {
+                x: by.x + 1.0,
+                ..by
+            },
+        );
         turns(m, 4);
         (partial, started, kept, since(m))
     })

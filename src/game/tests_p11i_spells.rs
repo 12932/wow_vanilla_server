@@ -15,9 +15,7 @@ use super::tests_p3_cast_kit::*;
 use super::tests_p3_spells_kit::{self as kit, at, cast_fresh, casting, pass};
 use crate::game::data::GameData;
 use crate::game::data::items::{ItemSpell, ItemTemplate};
-use crate::game::data::spells::{
-    ATTR_EX_CHANNELED, ATTR_EX3_ALWAYS_HIT, Enchantment, SpellEffect,
-};
+use crate::game::data::spells::{ATTR_EX_CHANNELED, ATTR_EX3_ALWAYS_HIT, Enchantment, SpellEffect};
 use crate::game::fields::*;
 use crate::game::map::auras::*;
 use crate::game::map::spells::{self, Targets};
@@ -82,11 +80,7 @@ fn weapons(d: &mut GameData) {
         t.duration_index = LASTS_LONG;
         t.equipped_item_class = 2;
         t.equipped_item_subclass_mask = 1 << subclass;
-        effect(
-            &mut t,
-            0,
-            aura(AURA_MOD_DAMAGE_PERCENT_DONE, 1, 25, 1),
-        );
+        effect(&mut t, 0, aura(AURA_MOD_DAMAGE_PERCENT_DONE, 1, 25, 1));
         all.push(t);
     }
     insert(d, all);
@@ -325,7 +319,12 @@ async fn a_turn_ends_a_channels_auras_and_their_ticks() {
             let gone = !kit::has(m, held, spell);
             let before = (kit::health(m, a), kit::health(m, kobold));
             pass(m, 3_000);
-            (fields, gone, before, (kit::health(m, a), kit::health(m, kobold)))
+            (
+                fields,
+                gone,
+                before,
+                (kit::health(m, a), kit::health(m, kobold)),
+            )
         })
         .await;
         let (fields, gone, before, after) = out;
@@ -546,7 +545,11 @@ async fn an_enchantment_takes_its_reagent_at_its_end_and_a_cancelled_one_nothing
         let bracer = crate::game::tests_loot::equip(m, g, BRACER, 8);
         crate::game::map::inventory::add_item(m, g, DUST, 2, false).unwrap();
         let enchanted = |m: &Map| {
-            let i = m.players[&g].items.iter().find(|i| i.guid == bracer).unwrap();
+            let i = m.players[&g]
+                .items
+                .iter()
+                .find(|i| i.guid == bracer)
+                .unwrap();
             crate::game::map::enchant::get(i, crate::game::map::enchant::PERM_SLOT).id
         };
         let item = Targets {
@@ -554,7 +557,7 @@ async fn an_enchantment_takes_its_reagent_at_its_end_and_a_cancelled_one_nothing
             ..Default::default()
         };
         // Cancelled a second in.
-        assert!(cast_fresh(m, g, ENCHANT, item.clone()));
+        assert!(cast_fresh(m, g, ENCHANT, item));
         let casting_dust = count(m, g, DUST);
         pass(m, 1_000);
         spells::cancel(m, g);
@@ -599,7 +602,7 @@ async fn an_items_change_is_of_its_casting_item_and_costs_only_at_its_end() {
             item: Some(other.0),
             ..Default::default()
         };
-        fresh_cast(m, g, aimed.clone(), cast_from.0);
+        fresh_cast(m, g, aimed, cast_from.0);
         pass(m, 500);
         spells::interrupt(m, g);
         pass(m, 2_000);
@@ -627,14 +630,21 @@ async fn an_items_change_is_of_its_casting_item_and_costs_only_at_its_end() {
     let (interrupted, during, changed, kept, dust, (from, other)) = out;
     assert_eq!(interrupted, (2, 0, 2), "interrupted: as it was");
     assert_eq!(during, (2, 2), "nothing taken as it is cast");
-    assert_eq!(changed, Some((TOOL, from.1, from.2)), "its casting item, where it lay");
+    assert_eq!(
+        changed,
+        Some((TOOL, from.1, from.2)),
+        "its casting item, where it lay"
+    );
     assert_eq!(kept, Some((KIT, other.1, other.2)), "not the one aimed at");
     assert_eq!(dust, 1, "the reagent at its end");
 }
 
 fn fresh_cast(m: &mut Map, g: Guid, t: Targets, item: Guid) {
     kit::fresh(m, g);
-    assert!(spells::cast(m, g, CHANGE, t, Some(item)), "the change begins");
+    assert!(
+        spells::cast(m, g, CHANGE, t, Some(item)),
+        "the change begins"
+    );
 }
 
 /// Three blows of 10, 20 and 30 in one spell.
@@ -676,7 +686,11 @@ async fn a_scripts_points_leave_the_other_effects_and_the_template_as_they_were(
     })
     .await;
     assert_eq!(out.0, 1 + 20 + 5, "the points given, the middle as it was");
-    assert_eq!(out.1, vec![(9, 1, 0), (19, 1, 0), (29, 1, 0)], "the template");
+    assert_eq!(
+        out.1,
+        vec![(9, 1, 0), (19, 1, 0), (29, 1, 0)],
+        "the template"
+    );
     assert_eq!(out.2, 60, "and cast as it is after");
 }
 
@@ -730,5 +744,9 @@ async fn a_triggered_childs_hit_takes_its_own_familys_modifier() {
         (mages, warlocks)
     })
     .await;
-    assert_eq!(out, (50, 0), "the mage's child lands, the warlock's is resisted");
+    assert_eq!(
+        out,
+        (50, 0),
+        "the mage's child lands, the warlock's is resisted"
+    );
 }

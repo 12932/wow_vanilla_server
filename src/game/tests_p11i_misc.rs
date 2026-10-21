@@ -21,7 +21,10 @@ use crate::game::guid;
 use crate::game::harness::{self, Client};
 use crate::game::map::{Map, MapHandle, MapKey, objects};
 
-async fn on<T: Send + 'static>(map: &MapHandle, f: impl FnOnce(&mut Map) -> T + Send + 'static) -> T {
+async fn on<T: Send + 'static>(
+    map: &MapHandle,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
     map.query(f).await.expect("the map answers")
 }
 
@@ -62,8 +65,7 @@ async fn a_gms_added_quest_starts_no_script() {
             ..Default::default()
         }],
     );
-    let (_realm, mut a, g, map) =
-        crate::game::tests_p3_combat::setup_with(d, Class::Warrior).await;
+    let (_realm, mut a, g, map) = crate::game::tests_p3_combat::setup_with(d, Class::Warrior).await;
     a.say(&format!(".addquest {ESCAPE}")).await;
     a.system_message("Added Escape.").await;
     harness::an_update(&map).await;
@@ -120,7 +122,11 @@ async fn a_scripts_emote_on_a_player_holds_a_state_and_plays_a_one_shot() {
             _ => None,
         })
         .await;
-    assert_eq!(played, Emote::OneshotWave, "a one-shot, the unknown one dropped");
+    assert_eq!(
+        played,
+        Emote::OneshotWave,
+        "a one-shot, the unknown one dropped"
+    );
     assert_eq!(on(&map, state).await, 0, "no state from either");
 }
 
@@ -153,7 +159,10 @@ async fn a_possessed_players_bar_is_ten_buttons_and_no_pet() {
     let expected = on(&map, move |m| crate::game::map::pets::possess::bar(m, gb)).await;
     assert_eq!(bar.action_bars, expected, "attack and nine passives");
     assert!(bar.spells.is_empty(), "no pet spells: {:?}", bar.spells);
-    let creature_pet = on(&map, move |m| crate::game::map::pets::state(m, gb).is_some()).await;
+    let creature_pet = on(&map, move |m| {
+        crate::game::map::pets::state(m, gb).is_some()
+    })
+    .await;
     assert!(!creature_pet, "no creature pet's state");
 }
 
@@ -168,7 +177,12 @@ fn rituals(d: &mut GameData) {
     use crate::game::tests_p3_cast_kit::*;
     d.gameobject_templates.insert(
         RITUAL,
-        crate::game::tests_p3_entity_objects::object(RITUAL, objects::GO_RITUAL, "Ritual", &[(0, 3)]),
+        crate::game::tests_p3_entity_objects::object(
+            RITUAL,
+            objects::GO_RITUAL,
+            "Ritual",
+            &[(0, 3)],
+        ),
     );
     d.spells.radii.insert(7, 3.0);
     let mut all = Vec::new();
@@ -222,7 +236,11 @@ async fn only_an_owned_ritual_takes_its_casters_channel() {
     .await;
     let (_, owned, channel, casting) = out[0];
     let owned = owned.expect("the owned ritual raised");
-    assert_eq!((channel, casting), (owned, Some(OWNED_RITUAL)), "on its own ritual");
+    assert_eq!(
+        (channel, casting),
+        (owned, Some(OWNED_RITUAL)),
+        "on its own ritual"
+    );
     let (_, wild, channel, casting) = out[1];
     let wild = wild.expect("the wild one raised");
     assert_eq!(casting, Some(WILD_RITUAL), "its channel goes on");
@@ -287,7 +305,11 @@ async fn a_teleport_no_spell_made_ends_the_fight_and_a_spells_short_one_keeps_it
         (pet, boar, at)
     })
     .await;
-    assert_eq!(on(&map, move |m| state(m, boar)).await, (true, true, true), "fighting");
+    assert_eq!(
+        on(&map, move |m| state(m, boar)).await,
+        (true, true, true),
+        "fighting"
+    );
     // A spell's: Blink's ten yards keep it.
     let short = Vector3d {
         x: start.x + 10.0,
@@ -323,7 +345,11 @@ async fn a_teleport_no_spell_made_ends_the_fight_and_a_spells_short_one_keeps_it
         )
     })
     .await;
-    assert_eq!(ended.0, (false, false, true), "the fight over, the target kept");
+    assert_eq!(
+        ended.0,
+        (false, false, true),
+        "the fight over, the target kept"
+    );
     assert_eq!(ended.1, None, "the pet left behind");
     a.wait_for("the teleport", |m| {
         matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
@@ -336,11 +362,16 @@ async fn a_teleport_no_spell_made_ends_the_fight_and_a_spells_short_one_keeps_it
     })
     .await;
     let deadline = tokio::time::Instant::now() + harness::WAIT;
-    while on(&map, move |m| m.players[&h].owned.pet.filter(|p| m.creature(*p).is_some()))
-        .await
-        .is_none()
+    while on(&map, move |m| {
+        m.players[&h].owned.pet.filter(|p| m.creature(*p).is_some())
+    })
+    .await
+    .is_none()
     {
-        assert!(tokio::time::Instant::now() < deadline, "the pet back at the acknowledgement");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the pet back at the acknowledgement"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     let _ = pet;
@@ -382,7 +413,10 @@ async fn a_picked_lockbox_is_unlocked_opened_and_teaches_once() {
     let looted = a
         .wait_frame("SMSG_LOOT_RESPONSE", SMSG_LOOT_RESPONSE, |b| b.len() >= 9)
         .await;
-    assert_eq!(u64::from_le_bytes(looted[0..8].try_into().unwrap()), box_item.guid());
+    assert_eq!(
+        u64::from_le_bytes(looted[0..8].try_into().unwrap()),
+        box_item.guid()
+    );
     let (unlocked, picked, looting) = on(&map, move |m| {
         let p = &m.players[&g];
         let i = p.item_by_guid(box_item).unwrap();
@@ -409,8 +443,10 @@ async fn a_picked_lockbox_is_unlocked_opened_and_teaches_once() {
         slot,
     })
     .await;
-    a.wait_frame("the box opened by hand", SMSG_LOOT_RESPONSE, |b| b.len() >= 9)
-        .await;
+    a.wait_frame("the box opened by hand", SMSG_LOOT_RESPONSE, |b| {
+        b.len() >= 9
+    })
+    .await;
     assert_eq!(on(&map, skill).await, 51, "no second point");
 }
 
@@ -480,20 +516,35 @@ async fn a_refilled_vein_takes_another_cast_and_teaches_once_a_spawn() {
     })
     .await;
     assert!(mine(&map, g, vein).await, "it opens");
-    assert_eq!(on(&map, move |m| skill_of(m, g, 186)).await, 2, "a first vein teaches");
+    assert_eq!(
+        on(&map, move |m| skill_of(m, g, 186)).await,
+        2,
+        "a first vein teaches"
+    );
     empty(&mut a, vein).await;
     let refilled = on(&map, move |m| {
         (
             m.gameobject(vein).map(|o| o.loot.is_none()),
-            m.loot_state.skilled.get(&vein).is_some_and(|s| s.contains(&g)),
+            m.loot_state
+                .skilled
+                .get(&vein)
+                .is_some_and(|s| s.contains(&g)),
             m.players[&g].looting,
         )
     })
     .await;
-    assert_eq!(refilled, (Some(true), true, None), "filled again, shut, her gain kept");
+    assert_eq!(
+        refilled,
+        (Some(true), true, None),
+        "filled again, shut, her gain kept"
+    );
     // Another cast opens it; she learns nothing more of it.
     assert!(mine(&map, g, vein).await, "opens again");
-    assert_eq!(on(&map, move |m| skill_of(m, g, 186)).await, 2, "once a spawn");
+    assert_eq!(
+        on(&map, move |m| skill_of(m, g, 186)).await,
+        2,
+        "once a spawn"
+    );
     empty(&mut a, vein).await;
     // Mined out, at the third if not the second.
     if on(&map, move |m| m.gameobject(vein).is_some()).await {
@@ -514,5 +565,9 @@ async fn a_refilled_vein_takes_another_cast_and_teaches_once_a_spawn() {
     .await;
     a.sees(vein).await;
     assert!(mine(&map, g, vein).await, "back, it opens");
-    assert_eq!(on(&map, move |m| skill_of(m, g, 186)).await, 3, "and teaches again");
+    assert_eq!(
+        on(&map, move |m| skill_of(m, g, 186)).await,
+        3,
+        "and teaches again"
+    );
 }

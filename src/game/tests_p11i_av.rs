@@ -8,7 +8,9 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
-use super::tests_p4_items_av::{COMMANDERS, ORDERS, QUARTERMASTERS, data, menu, of, set_standing, x, xm};
+use super::tests_p4_items_av::{
+    COMMANDERS, ORDERS, QUARTERMASTERS, data, menu, of, set_standing, x, xm,
+};
 use super::tests_pvp::{both_into, put};
 use super::tests_pvp2::choose;
 use crate::game::harness::{self, Client};
@@ -68,7 +70,11 @@ async fn beacon_requests_sent_together_give_one_beacon() {
         };
     })
     .await;
-    assert_eq!(menu(&mut b, guse).await.1.len(), 2, "the beacon and the attack");
+    assert_eq!(
+        menu(&mut b, guse).await.1.len(),
+        2,
+        "the beacon and the attack"
+    );
     together(&mut b, guse, 0, 8).await;
     let (count, beacons) = map
         .query(move |m| (x(m).air[i].count, count_of(m, grom, beacon)))
@@ -91,7 +97,11 @@ async fn orders_requests_sent_together_give_one_order_and_one_marshal() {
         xm(m).ground[0].irondeep = 280;
     })
     .await;
-    assert_eq!(menu(&mut a, quartermaster).await.1.len(), 3, "status, orders, goods");
+    assert_eq!(
+        menu(&mut a, quartermaster).await.1.len(),
+        3,
+        "status, orders, goods"
+    );
     together(&mut a, quartermaster, 1, 8).await;
     let marshals = |m: &World| {
         m.creatures
@@ -102,7 +112,12 @@ async fn orders_requests_sent_together_give_one_order_and_one_marshal() {
     let out = map
         .query(move |m| {
             let gr = x(m).ground[0];
-            (count_of(m, alice, ORDERS), marshals(m), gr.phase, gr.irondeep)
+            (
+                count_of(m, alice, ORDERS),
+                marshals(m),
+                gr.phase,
+                gr.irondeep,
+            )
         })
         .await
         .unwrap();
@@ -170,30 +185,27 @@ async fn remove_insignia_takes_an_enemys_body_near_and_refuses_the_rest() {
     .await;
     // His flag gone (he has risen and fallen out of it): nothing.
     map.query(move |m| {
-        m.players
-            .get_mut(&grom)
-            .unwrap()
-            .fields
-            .set_flag(UNIT_FIELD_FLAGS, insignia::UNIT_FLAG_SKINNABLE, false);
+        m.players.get_mut(&grom).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            insignia::UNIT_FLAG_SKINNABLE,
+            false,
+        );
     })
     .await;
     assert!(remove(grom).await, "no body to take");
     assert_eq!(looted(&mut a).await, None, "none of those opened his body");
     // His body, near: taken, he made to release, its bones to loot.
     map.query(move |m| {
-        m.players
-            .get_mut(&grom)
-            .unwrap()
-            .fields
-            .set_flag(UNIT_FIELD_FLAGS, insignia::UNIT_FLAG_SKINNABLE, true);
+        m.players.get_mut(&grom).unwrap().fields.set_flag(
+            UNIT_FIELD_FLAGS,
+            insignia::UNIT_FLAG_SKINNABLE,
+            true,
+        );
     })
     .await;
     assert!(!remove(grom).await, "taken: he is made to release");
     assert_eq!(looted(&mut a).await, Some(()), "his bones' loot");
-    a.send(CMSG_LOOT_RELEASE {
-        guid: Guid::zero(),
-    })
-    .await;
+    a.send(CMSG_LOOT_RELEASE { guid: Guid::zero() }).await;
     // The bones already taken: nothing again.
     let bones = map
         .query(|m| m.corpses.values().map(|c| c.guid).next())

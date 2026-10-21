@@ -16,7 +16,10 @@ use crate::game::harness::{self, Client};
 use crate::game::map::{Map, MapHandle, scripts};
 use crate::game::tests_p3_combat::{BRUTE, START, data, spawn};
 
-async fn on<T: Send + 'static>(map: &MapHandle, f: impl FnOnce(&mut Map) -> T + Send + 'static) -> T {
+async fn on<T: Send + 'static>(
+    map: &MapHandle,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
     map.query(f).await.expect("the map answers")
 }
 
@@ -125,7 +128,10 @@ async fn a_timed_death_summons_dies_at_its_time_and_leaves_a_corpse() {
     .await;
     assert_eq!(summons.len(), 1);
     let s = summons[0];
-    assert!(on(&map, move |m| m.creature(s).is_some_and(|c| c.alive())).await, "alive at first");
+    assert!(
+        on(&map, move |m| m.creature(s).is_some_and(|c| c.alive())).await,
+        "alive at first"
+    );
     let deadline = tokio::time::Instant::now() + harness::WAIT;
     loop {
         let state = on(&map, move |m| m.creature(s).map(|c| c.alive())).await;
@@ -139,7 +145,8 @@ async fn a_timed_death_summons_dies_at_its_time_and_leaves_a_corpse() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let after = on(&map, move |m| {
         (
-            m.creature(s).map(|c| (c.alive(), c.fields.get_u32(UNIT_FIELD_HEALTH))),
+            m.creature(s)
+                .map(|c| (c.alive(), c.fields.get_u32(UNIT_FIELD_HEALTH))),
             summoned_by(m, summoner).len(),
         )
     })
@@ -196,14 +203,20 @@ async fn a_creatures_demon_leaves_no_slot_and_another_comes_once_it_goes() {
     let imps = move |m: &Map| {
         m.creatures
             .iter()
-            .filter(|(_, c)| c.entry == IMP && c.scripted.as_deref().and_then(|s| s.summoner) == Some(summoner))
+            .filter(|(_, c)| {
+                c.entry == IMP && c.scripted.as_deref().and_then(|s| s.summoner) == Some(summoner)
+            })
             .map(|(_, c)| c.guid)
             .collect::<Vec<Guid>>()
     };
     let (first, slot) = on(&map, move |m| {
         crate::game::map::spells::cast_triggered(m, summoner, SUMMON_IMP, None);
         let imp = imps(m);
-        let slot = m.creature(summoner).unwrap().fields.get_guid(UNIT_FIELD_SUMMON);
+        let slot = m
+            .creature(summoner)
+            .unwrap()
+            .fields
+            .get_guid(UNIT_FIELD_SUMMON);
         (imp, slot)
     })
     .await;
@@ -214,7 +227,14 @@ async fn a_creatures_demon_leaves_no_slot_and_another_comes_once_it_goes() {
         scripts::despawn(m, imp);
         let gone = m.creature(imp).is_none();
         crate::game::map::spells::cast_triggered(m, summoner, SUMMON_IMP, None);
-        (gone, imps(m), m.creature(summoner).unwrap().fields.get_guid(UNIT_FIELD_SUMMON))
+        (
+            gone,
+            imps(m),
+            m.creature(summoner)
+                .unwrap()
+                .fields
+                .get_guid(UNIT_FIELD_SUMMON),
+        )
     })
     .await;
     assert!(after.0, "the imp gone from the world");

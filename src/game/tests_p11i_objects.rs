@@ -106,16 +106,19 @@ fn world() -> GameData {
     d.gameobject_templates
         .insert(BOOK, object(BOOK, 2, "Book", &[(3, MENU)]));
     for (guid, entry, dx, dy) in SPAWNS {
-        d.gameobject_spawns.entry(0).or_default().push(GameObjectSpawn {
-            guid,
-            entry,
-            map: 0,
-            x: START.0 + dx,
-            y: START.1 + dy,
-            z: START.2,
-            state: 1,
-            ..Default::default()
-        });
+        d.gameobject_spawns
+            .entry(0)
+            .or_default()
+            .push(GameObjectSpawn {
+                guid,
+                entry,
+                map: 0,
+                x: START.0 + dx,
+                y: START.1 + dy,
+                z: START.2,
+                state: 1,
+                ..Default::default()
+            });
     }
     for (id, title) in [
         (EVENT_QUEST, "Seasonal"),
@@ -155,10 +158,9 @@ fn world() -> GameData {
         (STARTER, vec![STARTED]),
         (ENDER, vec![TURNED_IN, NEXT]),
     ]);
-    d.npc.object_ends.extend([
-        (EVENT_GIVER, vec![EVENT_QUEST]),
-        (ENDER, vec![TURNED_IN]),
-    ]);
+    d.npc
+        .object_ends
+        .extend([(EVENT_GIVER, vec![EVENT_QUEST]), (ENDER, vec![TURNED_IN])]);
     for (entry, name, stack) in [(LETTER, "Letter", 1), (PELT, "Pelt", 20), (RING, "Ring", 1)] {
         d.items.insert(entry, item(entry, name, stack));
     }
@@ -176,7 +178,9 @@ fn world() -> GameData {
     d.scripts
         .quest_start
         .insert(START_SCRIPT, vec![talk(START_SCRIPT, HELLO)]);
-    d.scripts.quest_complete_script.insert(TURNED_IN, END_SCRIPT);
+    d.scripts
+        .quest_complete_script
+        .insert(TURNED_IN, END_SCRIPT);
     d.scripts
         .quest_end
         .insert(END_SCRIPT, vec![talk(END_SCRIPT, WELL_DONE)]);
@@ -334,7 +338,10 @@ async fn an_exclusive_quests_object_goes_dark_once_its_alternative_is_rewarded()
     })
     .await;
     crate::game::tests_p3_player2_ammo::handled(&mut a).await;
-    assert!(!on(&map, move |m| m.players[&g].journal.has(EXCLUSIVE)).await, "refused");
+    assert!(
+        !on(&map, move |m| m.players[&g].journal.has(EXCLUSIVE)).await,
+        "refused"
+    );
 }
 
 /// Thistle Tea's "refreshes accepted and abandoned quests and forgets
@@ -363,7 +370,8 @@ async fn a_starters_flag_follows_its_quest_taken_and_dropped_and_goes_with_it() 
     })
     .await
     .expect("taken");
-    a.send(CMSG_QUESTLOG_REMOVE_QUEST { slot: slot as u8 }).await;
+    a.send(CMSG_QUESTLOG_REMOVE_QUEST { slot: slot as u8 })
+        .await;
     usable_becomes(&map, g, o, true).await;
     // Out of sight, then back.
     let away = |dx: f32| {
@@ -440,10 +448,14 @@ async fn a_quest_turned_in_at_an_object_takes_its_items_and_offers_the_next() {
     let o = spawned(ENDER);
     let money = on(&map, move |m| {
         crate::game::map::inventory::add_item(m, g, PELT, 3, false).unwrap();
-        m.players.get_mut(&g).unwrap().journal.add(crate::game::store::Logged {
-            quest: TURNED_IN,
-            ..Default::default()
-        });
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .journal
+            .add(crate::game::store::Logged {
+                quest: TURNED_IN,
+                ..Default::default()
+            });
         crate::game::map::quests::check(m, g, TURNED_IN);
         m.players[&g].fields.get_u32(PLAYER_FIELD_COINAGE)
     })
@@ -455,7 +467,9 @@ async fn a_quest_turned_in_at_an_object_takes_its_items_and_offers_the_next() {
         reward: 0,
     })
     .await;
-    let line = a.wait_for("the object's end script", |m| said_by(m, o)).await;
+    let line = a
+        .wait_for("the object's end script", |m| said_by(m, o))
+        .await;
     assert_eq!(line, "Well done, Alice.");
     let next = a
         .wait_frame(
@@ -547,7 +561,11 @@ async fn an_objects_option_is_checked_again_as_it_is_chosen() {
     on(&map, move |m| crate::game::tests_p3_combat::level(m, g, 60)).await;
     a.clear();
     a.send(CMSG_GAMEOBJ_USE { guid: book }).await;
-    assert_eq!(menu(&mut a, book).await, vec![0, 2], "the level 50 option too");
+    assert_eq!(
+        menu(&mut a, book).await,
+        vec![0, 2],
+        "the level 50 option too"
+    );
     let put = |dx: f32| {
         move |m: &mut Map| {
             m.players.get_mut(&g).unwrap().movement.position = Vector3d {

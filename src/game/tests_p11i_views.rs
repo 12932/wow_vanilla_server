@@ -196,7 +196,11 @@ async fn a_broadcast_leaves_out_its_source_when_asked_and_stays_in_its_copy() {
     c.enter("Cid", Race::Human, Class::Warrior).await;
     group(&mut a, &mut b, "Bob").await;
     let copy = go(&realm, &mut a, DEADMINES).await;
-    assert_eq!(go(&realm, &mut b, DEADMINES).await, copy, "the party's copy");
+    assert_eq!(
+        go(&realm, &mut b, DEADMINES).await,
+        copy,
+        "the party's copy"
+    );
     let other = go(&realm, &mut c, DEADMINES).await;
     assert_ne!(other, copy, "Cid's own copy");
     b.sees(ga).await;
@@ -205,9 +209,8 @@ async fn a_broadcast_leaves_out_its_source_when_asked_and_stays_in_its_copy() {
     b.clear();
     c.clear();
     on(&map, move |m| {
-        let frame = |emote| {
-            crate::game::conn::encode(&SMSG_EMOTE { emote, guid: ga }).expect("encoded")
-        };
+        let frame =
+            |emote| crate::game::conn::encode(&SMSG_EMOTE { emote, guid: ga }).expect("encoded");
         m.send_to_observers(ga, &frame(Emote::OneshotWave), true);
         m.send_to_observers(ga, &frame(Emote::OneshotBow), false);
     })
