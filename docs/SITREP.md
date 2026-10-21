@@ -45,6 +45,24 @@ answers are under **Answered**. What is left for you:
   - an item-making reward spell aimed at its caster stays the player's cast; mangos's quest giver would make it
     for itself.
 
+- **Round 11's questions** (2026-10-21; each an agent's call, wvs doing what is said until you answer):
+  - **Meeting stones, players queued alone:** wvs makes a party of two of them; mangos-classic and Thistle Tea wait
+    for five. (Existing tests rely on two.)
+  - **Meeting stones, class priority:** mangos's `FindRoleToGroup` compares priorities as bools, so class never
+    decides; wvs follows its evident intent (a half-hour wait first, then class), as Thistle Tea does. A raid
+    conversion takes the party out of the queue (mangos leaves it queued, though a raid can't queue at a stone).
+  - **An instant spell's damage bonus and its stack** (Arcane Power-style charges): wvs takes the bonus before the
+    stack is spent (Thistle Tea); mangos spends it first.
+  - **Misses in `SMSG_SPELL_GO`:** wvs lists every target as a hit and sends the miss in `SMSG_SPELLLOGMISS` (round
+    9's call); mangos's `WriteSpellGoTargets` lists misses in the go. A travelling spell lists them in the go now
+    (11b). Switch instant spells too?
+  - **A player's own guardian at its time:** it waits until the fight ends (Thistle Tea); mangos's `Pet::Update`
+    sends it at its time, as a creature's now goes.
+  - **Sunken Temple's zone without a navmesh:** 1417, its only `AreaTable` zone; `Map.dbc` says 1477.
+  - **A cast item banked mid-cast** fails the cast; mangos doesn't count the bank as gone.
+  - **Spells at a scripted object with no target rows** (45 in vmangos's data, among them the Warsong flag events
+    and Summon RC Tank) go; mangos fails them, which would break them.
+
 ## Your list of 2026-10-19 evening, and my calls
 Being done by agent agents, four at a time; merged after the fast suite (the whole extended suite at most every 4
 hours), the crate version bumped with each merge.

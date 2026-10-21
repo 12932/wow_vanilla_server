@@ -43,8 +43,8 @@ covers how it's built, how to run, test and measure it, what changed on 17–21 
   That suits development and load tests; see sitrep question #53 before exposing the ports.
 
 ## Testing it ([TESTING.md](TESTING.md))
-- **The fast suite**, `cargo nextest run --lib`: about 3,020 tests in 24 seconds on 32 cores, none needing the real world.
-- **The extended suite**, `cargo extended`: every test, about 3,730 (707 of them marked extended). It loads the real world from
+- **The fast suite**, `cargo nextest run --lib`: about 3,140 tests in 24 seconds on 32 cores, none needing the real world.
+- **The extended suite**, `cargo extended`: every test, about 3,860 (721 of them marked extended), in about 3½ minutes. It loads the real world from
   a snapshot and runs the long walks in parallel shards. Run it before merging or pushing.
 - **Marking:** a test that reads the real world is marked `#[ignore = "extended"]`. An unmarked one fails in the
   fast suite, saying so.
@@ -144,17 +144,19 @@ Alongside them: `fix/flaky` made nine load-flaky tests deterministic, `fix/lowsa
 open questions by mangos-classic (#1, #8, #9, #12, #16, #19/#44, #23, #28, #32, #36, #40, #45, #48, #52), the rest
 confirmed.
 
-## What's left
-- **Parity:** 178 rows are still gap (2026-10-21), across 98 of Thistle Tea's test files, most with one to three.
-  By area:
-  - the player in the world, 77 (game object quests 8, resurrection 7, items and quest conditions 4 each);
-  - spells, 40 (casting 8, spell objects 8, stacking 3);
-  - entities and mobs, 24; the effect resolver, 9 (triggered hits 5); the rest of the core, 7 (the meeting
-    stones 6); the loaders, 3; 18 others, one or two each.
+## Round 11, the matrix closed (21 October)
+The last 178 gaps were triaged by six agents (82 already done, needing a test; 38 a note; 53 a fix; 5 your call),
+then closed by ten Opus agents on their own worktrees (`parity/11a` to `11j`), merged one at a time with the fast
+suite after each and the extended suite every few: 96.0% covered or accepted, the rest `wrong-for-1.12`, none gap
+(0.1.77). What changed is in [ALIGNMENT_PLAN.md](ALIGNMENT_PLAN.md), "The parity matrix closed"; your calls are
+decision 71.
 
-  What's left is mostly what wvs doesn't model: creature-group routes, the meeting stones' LFG queue, cases that
-  need a navmesh that refuses, and Thistle Tea internals. The briefs of rounds 1 to 10 and their leftovers were in
-  `<runs>/prompts/` on the machine that ran them; it isn't on this one.
+## What's left
+- **Parity:** no row is gap (round 11, 2026-10-21). What's left are the workers' calls in [SITREP.md](SITREP.md)
+  ("Round 11's questions"), and the engineering items they named: the per-update create cache can serve a create
+  made earlier in the same update (`Map::public_create`); peon must acknowledge the teleport for an accepted
+  resurrection to finish; instant spells still report misses only in `SMSG_SPELLLOGMISS`. The non-matrix leftovers
+  of earlier rounds are in `<runs>/prompts/_carryover.md`.
 - **The fork (12932/wow_messages):** its 1.12 `HitInfo` is flags (with the debug trailer under 0x1),
   `SMSG_AUCTION_COMMAND_RESULT`'s inventory error a u32, `CMSG_BATTLEFIELD_JOIN` the map, the instance and the group
   byte, and a spell's targets the client's (a corpse's guid before the locations), so wvs encodes and reads them

@@ -1444,6 +1444,16 @@ Thistle Tea writes in code rather than data. Closed since:
     summon's death heard after it dies, two escorts and a C++ script the import missed), and quest details are sent in
     1.12's layout.
 
+### The parity matrix closed (2026-10-21, round 11, 0.1.68 to 0.1.77)
+The last 178 gap rows were triaged against Thistle Tea and mangos-classic: 82 were things wvs already did, 38 needed
+only a note, 53 a fix, and 5 the user's call (decision 71). Ten stages (`parity/11a` to `11j`) closed them. No row
+is gap: 7,975 of 8,304 applicable are covered or accepted (96.0%), and the other 329 keep mangos-classic where
+Thistle Tea isn't 1.12. Among the fixes: resurrection at a body on any map, revived as the teleport lands; the
+meeting stones' queue as mangos's LFG; a travelling spell's hit rolled at launch; spell range by Thistle Tea's
+leeway at a unit and a place alike; casts on a ship measured on deck; a pet's bar spell as mangos's opener; a
+creature's pet as a kill (no XP, reputation and quest credit); jumps, heights and final facings in creates;
+cooldowns in the initial spells; zone-bound items dropped at load.
+
 ## Where the plan leaves the gap
 
 [THISTLE_TEA_DIFFERENCES.md](THISTLE_TEA_DIFFERENCES.md): what wvs does differently on purpose, and what it doesn't do

@@ -4,21 +4,20 @@
 Phase 1a of [FULL_PARITY_PLAN.md](../FULL_PARITY_PLAN.md): its headline, covered over applicable, measures how close
 wvs is.
 
-## Where it stands (2026-10-21, after round 10)
+## Where it stands (2026-10-21, after round 11)
 
-Every row is mapped. Phase 1a found 1,781 of the 8,429 applicable tests covered (21%). Phase 3's rounds and rounds 6
-to 10 settled the rest but for 178 gaps, most as covered, with a fix where a test showed wvs differed; 302 rows keep
-mangos-classic's behaviour where Thistle Tea isn't 1.12. The table is `summary.py`'s. The open gaps are listed by
-feature in [FINDINGS.md](FINDINGS.md).
+Every row is mapped, and none is gap. Phase 1a found 1,781 of the 8,429 applicable tests covered (21%); Phase 3's
+rounds and rounds 6 to 11 settled the rest, most as covered, with a fix where a test showed wvs differed. 329 rows
+keep mangos-classic's behaviour where Thistle Tea isn't 1.12. The table is `summary.py`'s.
 
 | Area | Covered or accepted / applicable | | The rest |
 |---|---|---|---|
-| game/core | 5138 / 5363 | 95.8% | gap 46, not-applicable 310, wrong-for-1.12 179 |
-| game/world | 2280 / 2519 | 90.5% | gap 129, not-applicable 202, wrong-for-1.12 110 |
+| game/core | 5176 / 5363 | 96.5% | not-applicable 310, wrong-for-1.12 187 |
+| game/world | 2390 / 2519 | 94.9% | not-applicable 202, wrong-for-1.12 129 |
 | game/network | 255 / 261 | 97.7% | not-applicable 6, wrong-for-1.12 6 |
 | game/inbound | 112 / 119 | 94.1% | not-applicable 1, wrong-for-1.12 7 |
-| . | 18 / 20 | 90.0% | gap 2, not-applicable 1 |
-| game | 11 / 12 | 91.7% | gap 1 |
+| . | 20 / 20 | 100.0% | not-applicable 1 |
+| game | 12 / 12 | 100.0% |  |
 | game/architecture | 0 / 0 | 100.0% | not-applicable 8 |
 | telemetry | 0 / 0 | 100.0% | not-applicable 7 |
 | auth | 6 / 6 | 100.0% |  |
@@ -26,7 +25,7 @@ feature in [FINDINGS.md](FINDINGS.md).
 | db/mangos | 4 / 4 | 100.0% |  |
 | native | 0 / 0 | 100.0% | not-applicable 3 |
 | web/utils | 0 / 0 | 100.0% | not-applicable 2 |
-| **all** | 7824 / 8304 | 94.2% | gap 178, not-applicable 546, wrong-for-1.12 302 |
+| **all** | 7975 / 8304 | 96.0% | not-applicable 546, wrong-for-1.12 329 |
 
 ## The columns
 
