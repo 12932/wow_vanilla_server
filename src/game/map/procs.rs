@@ -652,10 +652,10 @@ fn grants_extra_attacks(data: &crate::game::data::GameData, h: &Holder) -> bool 
     })
 }
 
-/// The chance, in percent, that a blow of `damage` breaks a fear on a unit
-/// of `level` (mangos-classic's `HandleRemoveByDamageChanceProc`): the
-/// damage over 25 a level less 150 past level 8, else over 50; 100 or more
-/// is sure.
+/// The chance, in percent, that a blow of `damage` breaks a fear, a root or
+/// a pacify-silence on a unit of `level` (mangos-classic's
+/// `HandleRemoveByDamageChanceProc`): the damage over 25 a level less 150
+/// past level 8, else over 50; 100 or more is sure.
 pub fn fear_break_chance(level: u32, damage: u32) -> f32 {
     let most = if level > 8 { 25 * level - 150 } else { 50 };
     damage as f32 / most as f32 * 100.0
@@ -675,12 +675,13 @@ fn fire(
     let mut fired = false;
     for x in &h.effects {
         match x.kind {
-            // A fear whose spell's procFlags name the blow (Psychic
-            // Scream's, Fear's, Intimidating Shout's: every damage taken)
-            // breaks by chance, whatever its interrupt flags (mangos-classic,
-            // the user's #43; mangos does a root and a pacify-silence so
-            // too, which wvs leaves as they are).
-            auras::AURA_MOD_FEAR => {
+            // A fear, a root or a pacify-silence whose spell's procFlags
+            // name the blow (Psychic Scream's, Frost Nova's, Entangling
+            // Roots': every damage taken) breaks by chance, whatever its
+            // interrupt flags (mangos-classic's
+            // `HandleRemoveByDamageChanceProc` for auras 7, 26 and 60; the
+            // user's #43, and #59 by mangos's rule).
+            auras::AURA_MOD_FEAR | auras::AURA_MOD_ROOT | auras::AURA_MOD_PACIFY_SILENCE => {
                 let level = map.unit_view(owner).map_or(1, |u| u.level);
                 let chance = fear_break_chance(level, damage);
                 if chance > 0.0

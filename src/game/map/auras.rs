@@ -193,6 +193,9 @@ pub const AURA_MOD_MOUNTED_SPEED_NOT_STACK: u32 = 172;
 pub const AURA_ALLOW_CHAMPION_SPELLS: u32 = 173;
 pub const AURA_MOD_SPELL_DAMAGE_OF_STAT_PERCENT: u32 = 174;
 pub const AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT: u32 = 175;
+/// A change to the crit chance of harmful spells of the schools of its
+/// mask cast at the unit (Winter's Chill's 2% a stack).
+pub const AURA_MOD_ATTACKER_SPELL_CRIT_CHANCE: u32 = 179;
 /// Spell damage against creature types (`misc` their mask).
 pub const AURA_MOD_FLAT_SPELL_DAMAGE_VERSUS: u32 = 180;
 /// The threat of a critical hit of the schools of its mask (28746's).
