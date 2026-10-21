@@ -49,7 +49,7 @@ async fn joins(by: &mut Client, c: &mut Client, name: &str) {
 
 /// Thistle Tea's group loot preparation: a creature Alice tapped in her
 /// round-robin party is looted by that party's rules though she has left
-/// it for Dee's: its turn goes to one of the party, she may not open it,
+/// it for Dee's: its turn goes to one of the party (she may open it),
 /// and Dee's group's turn doesn't move ("uses the original group's loot
 /// policy after its tagger leaves"; mangos's `GetGroupLootRecipient`). A
 /// kill the players did too little of leaves nothing, and turns neither
@@ -134,7 +134,9 @@ async fn a_corpse_is_looted_by_the_rules_of_the_group_it_was_tapped_for() {
         assigned.is_some_and(|g| g == gb || g == gc),
         "the party's turn: {assigned:?}"
     );
-    assert!(!alice, "not hers");
+    // Hers to open as one it fell to, not her turn (R4-18: the corpse
+    // isn't locked to the looter).
+    assert!(alice, "one it fell to");
     let (party_turn, dees) = turns(&realm);
     assert_eq!(party_turn, assigned, "the party's turn moved");
     assert_eq!(dees, Some(Guid::zero()), "Dee's group's didn't");

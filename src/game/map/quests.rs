@@ -1362,6 +1362,13 @@ pub fn wanted(map: &Map, player: Guid) -> Vec<u32> {
         .unwrap_or_default()
 }
 
+/// Whether `p` has taken `quest`, or done it: its status isn't "none"
+/// (mangos's `GetQuestStatus`), so an item that starts it doesn't drop
+/// for them.
+pub fn begun(p: &Player, quest: u32) -> bool {
+    p.journal.slot_of(quest).is_some() || p.journal.rewarded.contains(&quest)
+}
+
 /// The quest items `p`'s quests under way still need.
 pub fn wanted_items(p: &Player, data: &GameData, raid: bool) -> Vec<u32> {
     let mut out = Vec::new();

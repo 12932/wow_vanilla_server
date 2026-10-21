@@ -276,6 +276,8 @@ mod tests_p12c_root;
 #[cfg(test)]
 mod tests_p12c_speed;
 #[cfg(test)]
+mod tests_p12d_group_loot;
+#[cfg(test)]
 mod tests_p12g_skills;
 #[cfg(test)]
 mod tests_p12g_table;

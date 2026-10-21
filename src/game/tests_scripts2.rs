@@ -170,7 +170,9 @@ async fn loot_with_a_condition_shows_only_to_those_who_meet_it() {
         })
         .await
         .flatten();
-    assert_eq!(shown, Some((3, 2)), "three drop, two are shown");
+    // The third, its condition met by no one it falls to, doesn't drop
+    // (mangos's `PlayerOrGroupFulfilsCondition`).
+    assert_eq!(shown, Some((2, 2)), "two drop, both shown");
 }
 
 #[tokio::test]

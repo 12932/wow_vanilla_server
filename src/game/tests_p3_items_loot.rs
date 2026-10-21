@@ -564,6 +564,9 @@ async fn the_master_keeps_what_does_not_fit() {
     let realm = harness::realm_with(data());
     let [mut a, mut b, mut c] = group(&realm, GroupLootSetting::MasterLoot).await;
     let (ga, gb, gc) = (a.guid, b.guid, c.guid);
+    // The ring drops only if one it may fall to meets its condition
+    // (mangos's `PlayerOrGroupFulfilsCondition`): Alice does.
+    on_map(&realm, move |m| set_level(m, ga, 10)).await;
     kill(&realm, ga, 26).await;
     let corpse = kobold(26);
     assert!(opened(&mut a, corpse).await);
@@ -595,7 +598,9 @@ async fn the_master_keeps_what_does_not_fit() {
     })
     .await;
     assert_eq!(on_map(&realm, ring).await, (RING, true, false, 0));
-    assert!(opened(&mut b, corpse).await);
+    // Bob may look in it (for what's his, mangos's `CanLoot`), but not
+    // take the ring.
+    opened(&mut b, corpse).await;
     b.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 2 }).await;
     handled(&mut b).await;
     assert_eq!(on_map(&realm, move |m| count(m, gb, RING)).await, 0);

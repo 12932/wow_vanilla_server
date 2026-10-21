@@ -26,7 +26,6 @@ use crate::game::map::creature::Creature;
 use crate::game::map::loot::DYNFLAG_LOOTABLE;
 use crate::game::map::player::Player;
 use crate::game::update::{self, Batch};
-use wow_world_messages::vanilla::GroupLootSetting;
 
 /// Those who see a unit otherwise than a stranger does, but for its tap.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,15 +42,14 @@ pub struct Viewers {
 }
 
 /// Who may open a corpse's loot (`Loot::may_loot`): its owner alone, or
-/// the group's members near at the kill, round robin's looter alone
-/// among them, and not one with nothing in it of theirs (a quest drop
-/// not for their quests). Another sees no loot on it (mangos's `Loot::CanLoot` in
+/// the group's members near at the kill, and not one with nothing in it
+/// of theirs (a quest drop not for their quests, the items the current
+/// looter hasn't let go). Another sees no loot on it (mangos's `Loot::CanLoot` in
 /// its per-viewer `UNIT_DYNFLAG_LOOTABLE`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LootRights {
     owner: Option<Guid>,
     allowed: Vec<Guid>,
-    looter: Option<Guid>,
     /// Those of them with nothing in it of theirs (`Loot::quiet`).
     quiet: Vec<Guid>,
 }
@@ -69,9 +67,6 @@ impl LootRights {
         Some(Self {
             owner: l.owner,
             allowed,
-            looter: l
-                .assigned
-                .filter(|_| l.method == Some(GroupLootSetting::RoundRobin)),
             quiet: l.quiet.clone(),
         })
     }
@@ -82,7 +77,7 @@ impl LootRights {
             return true;
         }
         if !self.allowed.is_empty() {
-            return !self.allowed.contains(&g) || self.looter.is_some_and(|a| a != g);
+            return !self.allowed.contains(&g);
         }
         self.owner.is_some_and(|o| o != g)
     }
