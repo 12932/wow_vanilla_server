@@ -1102,6 +1102,8 @@ async fn talents_reset_for_a_rising_price_and_skills_unlearn() {
     assert_eq!(has, None);
 }
 
+/// Five alone at a dungeon's stone make a party (mangos-classic's
+/// `LFGQueue::Update`, `m_groupSize`: the leader and four others).
 #[tokio::test]
 async fn a_meeting_stone_makes_a_party_of_those_waiting() {
     let realm = harness::realm_with(data());
@@ -1109,9 +1111,19 @@ async fn a_meeting_stone_makes_a_party_of_those_waiting() {
     let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
     let mut b = Client::connect(&realm, "B");
     let gb = b.enter("Bob", Race::Human, Class::Priest).await;
+    let mut rest = Vec::new();
+    for (account, name, class) in [
+        ("C", "Carol", Class::Mage),
+        ("D", "Dave", Class::Rogue),
+        ("E", "Eve", Class::Warlock),
+    ] {
+        let mut c = Client::connect(&realm, account);
+        let g = c.enter(name, Race::Human, class).await;
+        rest.push((c, g));
+    }
     let stone = guid::game_object(STONE, 30);
     a.sees(stone).await;
-    for c in [&a, &b] {
+    for c in [&a, &b].into_iter().chain(rest.iter().map(|(c, _)| c)) {
         c.send(CMSG_MEETINGSTONE_JOIN { guid: stone }).await;
     }
     let status = a
@@ -1121,7 +1133,19 @@ async fn a_meeting_stone_makes_a_party_of_those_waiting() {
         })
         .await;
     assert_eq!(status, MeetingStoneStatus::JoinedQueue);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let all: Vec<Guid> = [ga, gb]
+        .into_iter()
+        .chain(rest.iter().map(|(_, g)| *g))
+        .collect();
+    for _ in 0..100 {
+        if all
+            .iter()
+            .all(|g| realm.social.meeting_stones.lock().of(*g).is_some())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     crate::game::map::meeting_stones::sweep(&realm);
     let added = a
         .wait_for("SMSG_MEETINGSTONE_MEMBER_ADDED", |m| match m {
@@ -1129,15 +1153,15 @@ async fn a_meeting_stone_makes_a_party_of_those_waiting() {
             _ => None,
         })
         .await;
-    // Whoever queued first leads; the other is added.
-    assert!(added == gb || added == ga);
+    // Whoever queued first leads; the others are added.
+    assert!(all.contains(&added));
     let together = realm
         .social
         .groups
         .lock()
         .group_of(ga)
-        .is_some_and(|gr| gr.is_member(gb));
-    assert!(together);
+        .is_some_and(|gr| all.iter().all(|g| gr.is_member(*g)));
+    assert!(together, "the five in one party");
     b.send(CMSG_MEETINGSTONE_INFO {}).await;
     b.wait_for("SMSG_MEETINGSTONE_SETQUEUE", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(_)).then_some(())

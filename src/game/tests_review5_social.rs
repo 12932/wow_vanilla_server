@@ -365,11 +365,8 @@ async fn one_queued_and_gone_doesnt_stall_a_meeting_stone() {
     let map0 = realm.maps.get(&realm, MapKey::world(0));
     let mut a = Client::connect(&realm, "A");
     let ga = a.enter("Gone", Race::Human, Class::Warrior).await;
-    let mut b = Client::connect(&realm, "B");
-    let gb = b.enter("Bee", Race::Human, Class::Priest).await;
-    let mut c = Client::connect(&realm, "C");
-    let gc = c.enter("Cee", Race::Human, Class::Mage).await;
-    for g in [ga, gb, gc] {
+    let (_others, five) = five_alone(&realm).await;
+    for g in std::iter::once(ga).chain(five.iter().copied()) {
         map0.query(move |m| crate::game::map::meeting_stones::queue(m, g, AREA))
             .await
             .unwrap();
@@ -392,8 +389,32 @@ async fn one_queued_and_gone_doesnt_stall_a_meeting_stone() {
     );
     crate::game::map::meeting_stones::sweep(&realm);
     let groups = realm.social.groups.lock();
-    let bee = groups.group_of(gb).expect("Bee is grouped");
-    assert!(bee.members.iter().any(|m| m.guid == gc), "with Cee");
+    let party = groups.group_of(five[0]).expect("the five are grouped");
+    assert!(
+        five.iter()
+            .all(|g| party.members.iter().any(|m| m.guid == *g)),
+        "all five together"
+    );
+}
+
+/// Five players alone, online, who make a party between them: a warrior,
+/// a priest, a mage, a rogue and a warlock (mangos-classic's
+/// `LFGQueue::Update` waits for five).
+async fn five_alone(realm: &Arc<Realm>) -> (Vec<Client>, Vec<Guid>) {
+    let mut clients = Vec::new();
+    let mut guids = Vec::new();
+    for (account, name, class) in [
+        ("B", "Bee", Class::Priest),
+        ("C", "Cee", Class::Mage),
+        ("D", "Dee", Class::Rogue),
+        ("E", "Eee", Class::Warlock),
+        ("T", "Tee", Class::Warrior),
+    ] {
+        let mut c = Client::connect(realm, account);
+        guids.push(c.enter(name, Race::Human, class).await);
+        clients.push(c);
+    }
+    (clients, guids)
 }
 
 /// rev5-social 4: one gone without the social logout (a player lost with
@@ -403,10 +424,7 @@ async fn the_sweep_drops_one_queued_and_offline() {
     const AREA: u32 = 1581;
     let realm = harness::realm();
     let map0 = realm.maps.get(&realm, MapKey::world(0));
-    let mut b = Client::connect(&realm, "B");
-    let gb = b.enter("Bee", Race::Human, Class::Priest).await;
-    let mut c = Client::connect(&realm, "C");
-    let gc = c.enter("Cee", Race::Human, Class::Mage).await;
+    let (_others, five) = five_alone(&realm).await;
     // The longest waiting, and offline.
     let ghost = guid::player(99_999);
     realm
@@ -424,7 +442,7 @@ async fn the_sweep_drops_one_queued_and_offline() {
             since: Instant::now() - Duration::from_secs(60),
             progress_at: Instant::now() + Duration::from_secs(300),
         });
-    for g in [gb, gc] {
+    for g in five.iter().copied() {
         map0.query(move |m| crate::game::map::meeting_stones::queue(m, g, AREA))
             .await
             .unwrap();
@@ -433,8 +451,12 @@ async fn the_sweep_drops_one_queued_and_offline() {
     crate::game::map::meeting_stones::sweep(&realm);
     assert!(realm.social.meeting_stones.lock().of(ghost).is_none());
     let groups = realm.social.groups.lock();
-    let bee = groups.group_of(gb).expect("Bee is grouped");
-    assert!(bee.members.iter().any(|m| m.guid == gc), "with Cee");
+    let party = groups.group_of(five[0]).expect("the five are grouped");
+    assert!(
+        five.iter()
+            .all(|g| party.members.iter().any(|m| m.guid == *g)),
+        "all five together"
+    );
 }
 
 /// rev5-social 8: what a service changes on a player (a guild's rank, a

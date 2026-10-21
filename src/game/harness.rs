@@ -415,6 +415,52 @@ impl Client {
         }
     }
 
+    /// The next `SMSG_SPELL_GO` of `spell` that lists a miss: the target
+    /// it missed and why, as 1.12's reason byte (2 a resist, 7 immune, 11
+    /// a reflection), the miss told in the go as mangos-classic's
+    /// `WriteSpellGoTargets` tells it.
+    pub async fn go_miss(&mut self, spell: u32) -> (Guid, u8) {
+        self.wait_for("a miss in SMSG_SPELL_GO", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => g
+                .misses
+                .first()
+                .map(|x| (x.target, miss_reason(&x.miss_info))),
+            _ => None,
+        })
+        .await
+    }
+
+    /// The first miss of `spell` this client was told of: in the go's
+    /// misses (rolled as the spell went, mangos-classic's
+    /// `WriteSpellGoTargets`) or in `SMSG_SPELLLOGMISS` (one that came
+    /// about as it landed, `SendSpellMiss`). Its target and reason byte.
+    pub async fn told_miss(&mut self, spell: u32) -> (Guid, u8) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            self.drain();
+            let found = self.frames.iter().enumerate().find_map(|(i, f)| {
+                let body = &f[4..];
+                match u16::from_le_bytes([f[2], f[3]]) {
+                    0x132 => go_miss_of(f, spell),
+                    0x24B if body.len() >= 26 && body[..4] == spell.to_le_bytes() => Some((
+                        Guid::new(u64::from_le_bytes(body[17..25].try_into().ok()?)),
+                        body[25],
+                    )),
+                    _ => None,
+                }
+                .map(|m| (i, m))
+            });
+            if let Some((i, m)) = found {
+                self.frames.remove(i);
+                return m;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("{}: no miss of {spell} within {WAIT:?}", self.account);
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
     /// Whether a message `pick` takes arrives within `within`.
     pub async fn gets<T>(
         &mut self,
@@ -670,6 +716,35 @@ pub fn values(m: &ServerOpcodeMessage) -> Vec<(Guid, UpdateMask)> {
             _ => None,
         })
         .collect()
+}
+
+/// A go's miss as 1.12's reason byte (`SpellMissInfo`).
+pub fn miss_reason(m: &SpellMiss_SpellMissInfo) -> u8 {
+    match m {
+        SpellMiss_SpellMissInfo::None => 0,
+        SpellMiss_SpellMissInfo::Miss => 1,
+        SpellMiss_SpellMissInfo::Resist => 2,
+        SpellMiss_SpellMissInfo::Dodge => 3,
+        SpellMiss_SpellMissInfo::Parry => 4,
+        SpellMiss_SpellMissInfo::Block => 5,
+        SpellMiss_SpellMissInfo::Evade => 6,
+        SpellMiss_SpellMissInfo::Immune => 7,
+        SpellMiss_SpellMissInfo::Immune2 => 8,
+        SpellMiss_SpellMissInfo::Deflect => 9,
+        SpellMiss_SpellMissInfo::Absorb => 10,
+        SpellMiss_SpellMissInfo::Reflect { .. } => 11,
+    }
+}
+
+/// The first miss an `SMSG_SPELL_GO` frame of `spell` lists.
+fn go_miss_of(frame: &[u8], spell: u32) -> Option<(Guid, u8)> {
+    match ServerOpcodeMessage::read_unencrypted(frame).ok()? {
+        ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => g
+            .misses
+            .first()
+            .map(|x| (x.target, miss_reason(&x.miss_info))),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

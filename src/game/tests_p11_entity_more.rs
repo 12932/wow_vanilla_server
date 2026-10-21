@@ -581,6 +581,15 @@ async fn a_triggered_spells_hit_takes_only_the_modifiers_of_its_own_family() {
     })
     .await;
     assert!(!fire_missed, "no miss told of the mage's");
+    let fire_go = c
+        .wait_for("the mage's go", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == FIREBOLT => {
+                Some((g.hits.len(), g.misses.len()))
+            }
+            _ => None,
+        })
+        .await;
+    assert_eq!(fire_go, (1, 0), "the mage's go: a hit, no miss");
 }
 
 /// Fifty mana; fifty drained, half of it back; fifty a second leeched,

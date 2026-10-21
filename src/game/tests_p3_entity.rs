@@ -801,12 +801,8 @@ async fn a_spell_shrugged_off_still_reaches_its_victim() {
         )
     })
     .await;
-    let miss = a
-        .wait_frame("SMSG_SPELLLOGMISS", 0x24B, |f| {
-            spell_of(f, 0) == SHADOW_BOLT
-        })
-        .await;
-    assert_eq!(miss[miss.len() - 1], 7, "immune");
+    let (missed, why) = a.go_miss(SHADOW_BOLT).await;
+    assert_eq!((missed, why), (brute, 7), "immune, in the go");
     assert_eq!(health, 100_000, "unhurt");
     assert!(fights, "the brute turns on Alice all the same");
 }
