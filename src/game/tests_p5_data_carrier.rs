@@ -30,7 +30,7 @@ const SHIELD: u32 = 96_800;
 const CURSE_SHIELD: u32 = 96_801;
 const PHYSICAL_WARD: u32 = 96_802;
 const MAGIC_WARD: u32 = 96_803;
-const MOUNT: u32 = 96_804;
+pub(crate) const MOUNT: u32 = 96_804;
 const HOLDS: u32 = 96_810;
 const ROOT: u32 = 96_820;
 const STEALTH: u32 = 96_821;
@@ -82,7 +82,7 @@ fn gulch() -> GameData {
 
 /// Alice (Alliance) and Grom (Horde) in the gulch, Alice by the Horde's
 /// flag at its stand.
-async fn by_the_flag() -> (Client, Client, MapHandle) {
+pub(crate) async fn by_the_flag() -> (Client, Client, MapHandle) {
     let realm = harness::realm_with(gulch());
     let mut a = Client::connect(&realm, "A");
     a.enter("Alice", Race::Human, Class::Warrior).await;
@@ -121,14 +121,14 @@ fn flag(m: &crate::game::map::Map) -> Option<Flag> {
     m.battleground.as_ref().and_then(|b| b.flags[1])
 }
 
-fn carried(m: &crate::game::map::Map, g: Guid) -> bool {
+pub(crate) fn carried(m: &crate::game::map::Map, g: Guid) -> bool {
     flag(m) == Some(Flag::Carried(g))
         && auras::auras(m, g).is_some_and(|a| a.has_spell(wsg::SPELL_FLAG_CARRIED[1]))
 }
 
 /// `g` uses the Horde's flag, at its stand or on the ground: whether they
 /// carry it after.
-fn take(m: &mut crate::game::map::Map, g: Guid) -> bool {
+pub(crate) fn take(m: &mut crate::game::map::Map, g: Guid) -> bool {
     let go = match flag(m) {
         Some(Flag::AtBase(go) | Flag::Dropped(go)) => go,
         _ => return carried(m, g),
@@ -138,7 +138,7 @@ fn take(m: &mut crate::game::map::Map, g: Guid) -> bool {
 }
 
 /// `id` on `target` from `caster`.
-fn on(m: &mut crate::game::map::Map, caster: Guid, target: Guid, id: u32) {
+pub(crate) fn on(m: &mut crate::game::map::Map, caster: Guid, target: Guid, id: u32) {
     let s = m.realm.data.spells.get(id).cloned().expect("the spell");
     let effects: Vec<(usize, i32)> = (0..3)
         .filter(|i| s.effects[*i].aura != 0)
@@ -224,9 +224,10 @@ async fn a_carrier_keeps_the_flag_unless_protected_mounted_or_dead() {
 }
 
 /// Thistle Tea's pickup: one protected from every school (by two auras
-/// together), mounted, stunned, confused, feared, feigning death,
-/// possessed or dead can't take a flag up; one rooted or only partly
-/// protected can. Taking it up ends stealth and invisibility.
+/// together), stunned, confused, feared, feigning death, possessed or dead
+/// can't take a flag up; one rooted or only partly protected can. Taking
+/// it up ends stealth and invisibility. (One mounted is dismounted and
+/// takes it, as mangos's `GameObject::Use`: question #36.)
 #[tokio::test]
 async fn only_one_free_and_not_wholly_protected_may_take_a_flag_up() {
     let (a, b, map) = by_the_flag().await;
@@ -239,9 +240,6 @@ async fn only_one_free_and_not_wholly_protected_may_take_a_flag_up() {
             refused.push(("protected from every school", take(m, alice)));
             auras::remove_spell(m, alice, PHYSICAL_WARD, None);
             auras::remove_spell(m, alice, MAGIC_WARD, None);
-            on(m, alice, alice, MOUNT);
-            refused.push(("mounted", take(m, alice)));
-            auras::remove_spell(m, alice, MOUNT, None);
             for (i, kind) in HOLDING.iter().enumerate() {
                 let id = HOLDS + i as u32;
                 on(m, alice, alice, id);

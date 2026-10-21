@@ -539,11 +539,12 @@ async fn in_the_gulch(realm: &Arc<Realm>) -> (Client, Client, MapHandle) {
 }
 
 /// The Warsong flag isn't taken up by one immune to every school (Divine
-/// Shield: mangos's `CanUseBattleGroundObject`), mounted, stunned, feared
-/// or a Spirit of Redemption, as Thistle Tea's `battleground_allowed?` has
-/// it; one only partly immune is let take it, and a stealthed one comes out
-/// of stealth to (mangos's pickup isn't a triggered cast, so it ends
-/// stealth).
+/// Shield: mangos's `CanUseBattleGroundObject`), stunned, feared or a
+/// Spirit of Redemption, as Thistle Tea's `battleground_allowed?` has it
+/// (one mounted is dismounted and takes it, as mangos's `GameObject::Use`:
+/// question #36); one only partly immune is let take it, and a stealthed
+/// one comes out of stealth to (mangos's pickup isn't a triggered cast, so
+/// it ends stealth).
 #[tokio::test]
 async fn the_warsong_flag_wont_go_to_the_immune_the_mounted_or_the_stunned_and_ends_stealth() {
     let realm = harness::realm_with(gulch());
@@ -562,24 +563,21 @@ async fn the_warsong_flag_wont_go_to_the_immune_the_mounted_or_the_stunned_and_e
     let refused = map
         .query(move |m| {
             let mut taken = Vec::new();
-            for spell in [BUBBLE, STEED, STUN, FEAR, SPIRIT_OF_REDEMPTION] {
+            for spell in [BUBBLE, STUN, FEAR, SPIRIT_OF_REDEMPTION] {
                 on(m, grom, spell);
                 crate::game::map::world::use_object(m, grom, stand);
                 taken.push((spell, flags(m)[0] != Some(Flag::AtBase(stand))));
                 auras::remove_spell(m, grom, spell, None);
             }
-            let mounted = m.players[&grom].fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID);
             on(m, grom, PROTECTION);
             on(m, grom, VEIL);
-            (taken, mounted)
+            taken
         })
         .await
         .unwrap();
-    let (taken, mounted) = refused;
-    for (spell, taken) in taken {
+    for (spell, taken) in refused {
         assert!(!taken, "taken up under {spell}");
     }
-    assert_eq!(mounted, 0, "the steed went with its aura");
     b.send(CMSG_GAMEOBJ_USE { guid: stand }).await;
     until(&map, "the flag carried", move |m| {
         flags(m)[0] == Some(Flag::Carried(grom))

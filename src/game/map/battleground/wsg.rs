@@ -11,7 +11,6 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::data::{GameObjectSpawn, GameObjectTemplate};
-use crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID;
 use crate::game::map::Map;
 use crate::game::map::auras;
 use crate::game::map::battleground::{self as bg, Due, Phase};
@@ -218,13 +217,11 @@ fn carry(map: &mut Map, g: Guid, s: usize) {
 
 /// Whether `g` may take up or return a flag, as Thistle Tea's
 /// `battleground_allowed?` has it: not immune to every school (Divine
-/// Shield, Ice Block: mangos's `CanUseBattleGroundObject`), mounted,
-/// stunned, feared or confused, feigning death, possessed, or a Spirit of
-/// Redemption. One only partly immune (Blessing of Protection) may.
+/// Shield, Ice Block: mangos's `CanUseBattleGroundObject`), stunned,
+/// feared or confused, feigning death, possessed, or a Spirit of
+/// Redemption. One only partly immune (Blessing of Protection) may; one
+/// mounted is dismounted first ([`use_object`]).
 fn may_use_flag(map: &Map, g: Guid) -> bool {
-    let mounted = map
-        .unit_fields(g)
-        .is_some_and(|f| f.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0);
     let Some(a) = auras::auras(map, g) else {
         return false;
     };
@@ -243,7 +240,7 @@ fn may_use_flag(map: &Map, g: Guid) -> bool {
     ]
     .iter()
     .any(|k| a.has(*k));
-    !mounted && !immune && !held && !crate::game::map::spells::redemption::spirit(map, g)
+    !immune && !held && !crate::game::map::spells::redemption::spirit(map, g)
 }
 
 /// `CMSG_GAMEOBJ_USE` on a flag. Returns whether it was one.
@@ -272,6 +269,10 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
         if !may_use_flag(map, g) {
             return true;
         }
+        // One mounted comes off the mount to take it (mangos's
+        // `GameObject::Use`: a flag isn't `IsUsableMounted`, so
+        // `RemoveSpellsCausingAura(SPELL_AURA_MOUNTED)`).
+        crate::game::map::mounts::dismount(map, g);
         // Using it ends stealth and invisibility (mangos's pickup is no
         // triggered cast).
         auras::remove_where(map, g, |h| {

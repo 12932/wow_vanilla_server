@@ -530,3 +530,33 @@ async fn a_spirit_of_redemption_wears_at_the_fatal_blow_and_not_at_its_end() {
     .await;
     assert_eq!(worn, ((true, 45), (true, 45)), "at the blow; not again");
 }
+
+// #36: the Warsong flag on a mount.
+
+/// mangos-classic's `GameObject::Use` takes a player off their mount
+/// before using an object that isn't `IsUsableMounted` (a flag stand or a
+/// dropped flag isn't), then `CanUseBattleGroundObject` asks only that
+/// they live and aren't wholly immune: a mounted player is dismounted and
+/// takes the flag. wvs refused them, as Thistle Tea does.
+#[tokio::test]
+async fn a_mounted_player_comes_off_the_mount_and_takes_the_warsong_flag() {
+    use crate::game::tests_p5_data_carrier::{MOUNT, by_the_flag, carried, on as aura_on, take};
+    let (a, _b, map) = by_the_flag().await;
+    let alice = a.guid;
+    let got = on(&map, move |m| {
+        aura_on(m, alice, alice, MOUNT);
+        let rides = |m: &crate::game::map::Map| {
+            auras::auras(m, alice).is_some_and(|a| a.has(auras::AURA_MOUNTED))
+        };
+        let mounted = rides(m);
+        let took = take(m, alice);
+        (
+            mounted,
+            took,
+            carried(m, alice),
+            rides(m),
+        )
+    })
+    .await;
+    assert_eq!(got, (true, true, true, false), "mounted, then on foot with it");
+}
