@@ -105,6 +105,24 @@ pub fn destination(
     }
 }
 
+/// Where effect `index` of `s`, cast by `caster` at `t`, summons: its
+/// place, else its spot about the caster (mangos-classic's `m_destPos`, as
+/// the effect's target set it, which `EffectSummonDemon` and
+/// `EffectSummonPossessed` summon at).
+pub fn place(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    t: &Targets,
+) -> Option<Vector3d> {
+    if let Some(p) = destination(map, caster, s, index, t) {
+        return Some(p);
+    }
+    let view = map.unit_view(caster)?;
+    Some(spot(map, s, index, view.position, view.orientation))
+}
+
 /// A point about `base` within `radius`, on its level (mangos's
 /// `GetRandomPoint` for a summon's second and later).
 pub(crate) fn about(base: Vector3d, radius: f32) -> Vector3d {

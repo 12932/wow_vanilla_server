@@ -31,6 +31,13 @@ const EXCLUDED: u32 = 991_802;
 /// its first effect at living beasts, its second at dead ones.
 const CAPPED: u32 = 991_803;
 const R10: u32 = 999;
+/// A demon (112) summoned where the cast was aimed (no implicit target,
+/// as Inferno), a demon at its minion's spot (32) and a possessed eye
+/// (73) there, five yards out.
+const DEMON_THERE: u32 = 991_804;
+const DEMON_AT_SPOT: u32 = 991_805;
+const EYE: u32 = 991_806;
+const R5: u32 = 997;
 
 fn data(d: &mut GameData) {
     sides(d);
@@ -64,7 +71,32 @@ fn data(d: &mut GameData) {
     capped.max_affected_targets = 1;
     at_script(&mut capped, 0, 3, 1, 22, 7);
     at_script(&mut capped, 1, 3, 1, 22, 7);
+    d.spells.radii.insert(R5, 5.0);
+    let summon = |id: u32, effect: u32, target: u32| {
+        let mut s = bare(id, 0);
+        s.range_index = RANGE_30;
+        crate::game::tests_p3_cast_kit::effect(
+            &mut s,
+            0,
+            SpellEffect {
+                effect,
+                base_points: 0,
+                base_dice: 1,
+                target_a: target,
+                radius_index: R5,
+                misc_value: BEAST as i32,
+                ..Default::default()
+            },
+        );
+        s
+    };
+    let summons = [
+        summon(DEMON_THERE, 112, 0),
+        summon(DEMON_AT_SPOT, 112, 32),
+        summon(EYE, 73, 32),
+    ];
     insert(d, [mixed, life, excluded, capped]);
+    insert(d, summons);
     let s = &mut d.spells;
     s.script_targets
         .insert(MIXED, vec![(1, BEAST), (1, DRAGONKIN)]);
@@ -176,4 +208,62 @@ async fn a_rows_effect_mask_splits_the_living_and_the_dead_per_effect() {
     );
     assert!(excluded.is_empty(), "no one, not everyone: {excluded:?}");
     assert_eq!(capped, (vec![picked], vec![dead]), "capped per effect");
+}
+
+/// Where `caster`'s summon of `spell` stands, the newest.
+fn summoned(m: &Map, spell: u32) -> Option<Vector3d> {
+    m.creatures
+        .iter()
+        .filter(|(_, c)| c.fields.get_u32(UNIT_CREATED_BY_SPELL) == spell)
+        .max_by_key(|(_, c)| c.guid.guid())
+        .map(|(_, c)| c.position)
+}
+
+fn near(a: Option<Vector3d>, b: Vector3d) -> bool {
+    a.is_some_and(|a| crate::game::map::combat::dist(a, b) < 0.01)
+}
+
+/// Thistle Tea's `SpellEffect.receive/4` "possessed and demon summons
+/// retain resolved minion coordinates": a demon (effect 112) of no
+/// implicit target summoned where the cast was aimed, ten yards on, stands
+/// there (Inferno's infernal); one at its minion's spot (32) and a
+/// possessed eye (73) there stand five yards out on the caster's front
+/// left, where both stood two yards before her. mangos-classic's
+/// `EffectSummonDemon` and `EffectSummonPossessed` summon at the cast's
+/// destination.
+#[tokio::test]
+async fn demon_and_possessed_summons_stand_where_their_target_puts_them() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10WS3", "Summoner", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[DEMON_THERE, DEMON_AT_SPOT, EYE]);
+            face_east(m, a);
+            let me = m.players[&a].position();
+            let aimed = Vector3d {
+                x: me.x + 10.0,
+                y: me.y + 3.0,
+                z: me.z,
+            };
+            let there = Targets {
+                dest: Some(aimed),
+                ..Default::default()
+            };
+            assert!(kit::cast_fresh(m, a, DEMON_THERE, there));
+            let demon_there = near(summoned(m, DEMON_THERE), aimed);
+            let a45 = std::f32::consts::FRAC_PI_4;
+            let spot = Vector3d {
+                x: me.x + 5.0 * a45.cos(),
+                y: me.y + 5.0 * a45.sin(),
+                z: me.z,
+            };
+            // (A second demon of the entry replaces the first.)
+            assert!(kit::cast_fresh(m, a, DEMON_AT_SPOT, Targets::default()));
+            let demon_spot = near(summoned(m, DEMON_AT_SPOT), spot);
+            assert!(kit::cast_fresh(m, a, EYE, Targets::default()));
+            (demon_there, demon_spot, near(summoned(m, EYE), spot))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, true), "(where aimed, the spot, the spot)");
 }

@@ -534,12 +534,19 @@ pub fn summon_critter(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate)
 
 /// A summoned eye (Eye of Kilrogg): its summoner sees and moves through it
 /// while the channel lasts.
-pub fn summon_possessed(map: &mut Map, owner: Guid, entry: u32, s: &SpellTemplate) {
+pub fn summon_possessed(
+    map: &mut Map,
+    owner: Guid,
+    entry: u32,
+    s: &SpellTemplate,
+    at: Option<Vector3d>,
+) {
     if !guid::is_player(owner) || entry == 0 {
         return;
     }
     let level = level_of(map, owner);
-    let (at, o) = before(map, owner, 2.0);
+    let (beside, o) = before(map, owner, 2.0);
+    let at = at.unwrap_or(beside);
     let g = summon::spawn(map, owner, entry, Kind::Guardian, level, at, o);
     if let Some(c) = map.creature_mut(g) {
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
