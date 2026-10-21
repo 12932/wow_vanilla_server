@@ -316,6 +316,14 @@ impl Map {
                 }
                 if changed {
                     crate::game::map::world_states::send_init(self, guid);
+                    if let Some(p) = self.players.get(&guid) {
+                        let online = p.online.clone();
+                        crate::game::social::channels::zone_changed(
+                            &self.realm,
+                            &online,
+                            m.area.as_int(),
+                        );
+                    }
                 }
             }
             ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(m) => {

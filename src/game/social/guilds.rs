@@ -65,6 +65,13 @@ pub struct Member {
     pub rank: u32,
     pub note: String,
     pub officer_note: String,
+    /// When (Unix seconds) they last went offline, and the zone they left
+    /// it in, for the roster (mangos's `characters.logout_time` and
+    /// `zone`); 0 before the first.
+    #[serde(default)]
+    pub logout_at: i64,
+    #[serde(default)]
+    pub logout_zone: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -203,14 +210,16 @@ impl Guilds {
         self.guilds.get_mut(&id)
     }
 
+    /// Whether a guild has the name. A charter's petition holds none: two
+    /// may carry one name, and the first turned in founds it (mangos's
+    /// `HandlePetitionBuyOpcode` and `HandlePetitionRenameOpcode` ask
+    /// `GetGuildByName` alone, as `HandleTurnInPetitionOpcode` does).
+    /// Before, a charter destroyed, sold or lost kept its name reserved
+    /// for good (R4-22).
     pub fn name_taken(&self, name: &str) -> bool {
         self.guilds
             .values()
             .any(|g| g.name.eq_ignore_ascii_case(name))
-            || self
-                .petitions
-                .values()
-                .any(|p| p.name.eq_ignore_ascii_case(name))
     }
 
     /// The guild's name, for `/who`.
@@ -507,6 +516,7 @@ pub fn roster(realm: &Realm, me: &Online) {
         return;
     };
     let officer = has(g.rights(me.guid), RIGHT_VIEW_OFFICER_NOTE);
+    let now = chrono::Utc::now().timestamp();
     let members = g
         .members
         .iter()
@@ -514,17 +524,27 @@ pub fn roster(realm: &Realm, me: &Online) {
             let gm = guid::player(m.guid);
             let n = realm.registry.name(gm)?;
             let online = realm.registry.online(gm);
+            // One offline: the days since they left, and where (mangos's
+            // `Guild::Roster`).
+            let away_days = if m.logout_at > 0 {
+                (now - m.logout_at).max(0) as f32 / 86_400.0
+            } else {
+                0.0
+            };
             Some(GuildMember {
                 guid: gm,
                 status: match &online {
                     Some(_) => GuildMember_GuildMemberStatus::Online,
-                    None => GuildMember_GuildMemberStatus::Offline { time_offline: 0.0 },
+                    None => GuildMember_GuildMemberStatus::Offline {
+                        time_offline: away_days,
+                    },
                 },
                 name: n.name.to_string(),
                 rank: m.rank,
                 level: Level::new(n.level.load(std::sync::atomic::Ordering::Relaxed)),
                 class: Class::try_from(n.class).unwrap_or_default(),
-                area: Area::try_from(online.map_or(0, |o| o.zone())).unwrap_or_default(),
+                area: Area::try_from(online.map_or(m.logout_zone, |o| o.zone()))
+                    .unwrap_or_default(),
                 public_note: m.note.clone(),
                 officer_note: if officer {
                     m.officer_note.clone()
@@ -1104,12 +1124,22 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     guild.event(&realm, GuildEvent::SignedOn, &[&name]);
 }
 
-/// Going offline: the others are told.
+/// Going offline: the others are told, and the roster keeps when and
+/// where.
 pub fn logged_out(realm: &Realm, g: Guid) {
+    let zone = realm.registry.online(g).map_or(0, |o| o.zone());
     let invites = {
         let mut guilds = realm.social.guilds.lock();
         guilds.invites.remove(&g);
-        guilds.of(g).map(|guild| guild.id)
+        let me = guid::counter(g);
+        guilds.of_mut(g).map(|guild| {
+            if let Some(m) = guild.members.iter_mut().find(|m| m.guid == me) {
+                m.logout_at = chrono::Utc::now().timestamp();
+                m.logout_zone = zone;
+            }
+            save(realm, guild);
+            guild.id
+        })
     };
     if invites.is_none() {
         return;
@@ -1474,7 +1504,7 @@ pub fn petition_turn_in(map: &mut Map, g: Guid, item: Guid) {
         p.clone()
     };
     let signers: Vec<Guid> = petition.signers.iter().map(|s| guid::player(*s)).collect();
-    // The charter holds its name until the guild takes it.
+    // Out while the guild is founded, and back if a guild has its name.
     realm.social.guilds.lock().petitions.remove(&petition.id);
     if found(&realm, &petition.name, g, &signers).is_none() {
         realm

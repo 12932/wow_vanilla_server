@@ -1,7 +1,8 @@
 //! Chat channels: the built-in ones from `ChatChannels.dbc` (General,
 //! Trade, LocalDefense and the rest) and custom ones, one set per team,
 //! with owners, moderators, passwords, mutes and bans, as mangos-zero runs
-//! them. The client joins the built-in ones itself.
+//! them. The client joins the built-in ones itself at login; as a player
+//! changes zone, the server moves them ([`zone_changed`]).
 //!
 //! Each channel has a lock of its own ([`Channels`]), and a line is fanned
 //! out after it is let go ([`say`]): two channels never wait for each
@@ -89,14 +90,24 @@ const BUILT_IN: [(u32, u32, &str); 6] = [
     (25, 0x2_0032, "GuildRecruitment"),
 ];
 
-/// The built-in channel a name is one of: its id and channel flags.
-pub(crate) fn built_in(name: &str) -> Option<(u32, u8)> {
-    let (id, dbc, _) = BUILT_IN.iter().find(|(_, _, prefix)| {
+// `ChatChannels.dbc`'s flags.
+const DBC_ZONE_DEPENDENT: u32 = 0x2;
+const DBC_GLOBAL: u32 = 0x4;
+const DBC_CITY_ONLY: u32 = 0x10;
+
+/// The built-in channel a name is one of: its `BUILT_IN` row.
+fn built_in_row(name: &str) -> Option<&'static (u32, u32, &'static str)> {
+    BUILT_IN.iter().find(|(_, _, prefix)| {
         name.eq_ignore_ascii_case(prefix)
             || name
                 .get(..prefix.len() + 3)
                 .is_some_and(|p| p.eq_ignore_ascii_case(&format!("{prefix} - ")))
-    })?;
+    })
+}
+
+/// The built-in channel a name is one of: its id and channel flags.
+pub(crate) fn built_in(name: &str) -> Option<(u32, u8)> {
+    let (id, dbc, _) = built_in_row(name)?;
     let mut flags = FLAG_GENERAL;
     if dbc & 0x8 != 0 {
         flags |= FLAG_TRADE;
@@ -459,6 +470,43 @@ pub fn leave_all(realm: &Realm, me: &Online) {
     let names = realm.social.channels.of(me.guid);
     for name in names {
         leave(realm, me, &name, false);
+    }
+}
+
+/// A player come into `zone`: each built-in channel of a zone they are in
+/// (General, LocalDefense) is the new zone's, joined ("Changed Channel")
+/// and the old one left without a word, as mangos's
+/// `Player::UpdateLocalChannels` does it: the 1.12 client swaps the
+/// channel on its side and sends no join or leave of its own ("recent
+/// client version not send leave/join channel packets for built-in local
+/// channels"). A city's (Trade, GuildRecruitment) is "<name> - City" in a
+/// capital, and left outside one, as TrinityCore and vmangos take it
+/// (mangos-classic's would be "Trade - Elwynn Forest"). The global ones
+/// (WorldDefense, LookingForGroup) stay.
+pub fn zone_changed(realm: &Realm, me: &Online, zone: u32) {
+    let Some(area) = realm.data.area(zone) else {
+        return;
+    };
+    let capital = area.flags & crate::game::data::AREA_FLAG_CAPITAL != 0;
+    for old in realm.social.channels.of(me.guid) {
+        let Some((_, dbc, prefix)) = built_in_row(&old) else {
+            continue;
+        };
+        if dbc & DBC_GLOBAL != 0 || dbc & DBC_ZONE_DEPENDENT == 0 {
+            continue;
+        }
+        let new = if dbc & DBC_CITY_ONLY != 0 {
+            capital.then(|| format!("{prefix} - City"))
+        } else {
+            Some(format!("{prefix} - {}", area.name))
+        };
+        if new.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&old)) {
+            continue;
+        }
+        if let Some(new) = new {
+            join(realm, me, &new, "");
+        }
+        leave(realm, me, &old, false);
     }
 }
 
