@@ -426,11 +426,9 @@ pub fn gather_gain_chance(
         SKILL_SKINNING => rates.skill_chance_skinning_steps,
         _ => 0,
     };
-    let divisor = if steps == 0 {
-        1.0
-    } else {
-        f64::from(1u32 << (value / steps).min(16))
-    };
+    let divisor = value
+        .checked_div(steps)
+        .map_or(1.0, |halvings| f64::from(1u32 << halvings.min(16)));
     (chance * f64::from(multiplier) / divisor).min(100.0)
 }
 

@@ -274,7 +274,7 @@ async fn a_made_item_names_its_maker_and_keeps_it() {
             },
         );
     }
-    let (_realm, mut a, g, map) = setup_with(d, Class::Warrior).await;
+    let (_realm, a, g, map) = setup_with(d, Class::Warrior).await;
     for spell in [MAKE_TUNIC, MAKE_PEBBLES] {
         on(&map, move |m| crate::game::map::spells::learn(m, g, spell)).await;
         a.send(CMSG_CAST_SPELL {
