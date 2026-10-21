@@ -190,8 +190,8 @@ impl Accounts {
         else {
             return false;
         };
-        let proof =
-            SrpVerifier::from_database_values(n.clone(), account.verifier, account.salt).into_proof();
+        let proof = SrpVerifier::from_database_values(n.clone(), account.verifier, account.salt)
+            .into_proof();
         let Ok(server_key) = wow_srp::PublicKey::from_le_bytes(*proof.server_public_key()) else {
             return false;
         };

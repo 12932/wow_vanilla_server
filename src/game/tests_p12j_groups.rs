@@ -17,7 +17,13 @@ use crate::game::harness::{self, Client};
 
 fn realm_on(db: &std::path::Path) -> Arc<Realm> {
     let (store, startup) = crate::game::store::Store::open(db).unwrap();
-    Realm::new(harness::test_config(), store, startup, Default::default(), None)
+    Realm::new(
+        harness::test_config(),
+        store,
+        startup,
+        Default::default(),
+        None,
+    )
 }
 
 /// A player named `name`, on the account of that name in capitals (as the
@@ -173,7 +179,10 @@ async fn a_group_survives_a_restart() {
     joins(&mut d, &mut e, "Erin").await;
     let ids = {
         let groups = realm.social.groups.lock();
-        (groups.group_of(ga).unwrap().id, groups.group_of(d.guid).unwrap().id)
+        (
+            groups.group_of(ga).unwrap().id,
+            groups.group_of(d.guid).unwrap().id,
+        )
     };
     assert!(ids.1 > ids.0, "{ids:?}");
     realm.shutdown().await;
@@ -241,7 +250,11 @@ async fn a_leaving_leader_hands_the_lead_to_one_online() {
     .await;
     d.send(CMSG_GROUP_DISBAND {}).await;
     handled(d).await;
-    assert_eq!(leader_of(&realm, gg), Some(gg), "the assistant leads the raid");
+    assert_eq!(
+        leader_of(&realm, gg),
+        Some(gg),
+        "the assistant leads the raid"
+    );
 }
 
 /// mangos's `Group::UpdateOfflineLeader`: a leader offline

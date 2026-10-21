@@ -31,7 +31,10 @@ async fn handled(c: &mut Client) {
     .await;
 }
 
-async fn on<R: Send + 'static>(map: &MapHandle, f: impl FnOnce(&mut Map) -> R + Send + 'static) -> R {
+async fn on<R: Send + 'static>(
+    map: &MapHandle,
+    f: impl FnOnce(&mut Map) -> R + Send + 'static,
+) -> R {
     map.query(f).await.expect("the map answers")
 }
 
@@ -82,7 +85,7 @@ async fn the_roster_shows_when_and_where_a_member_left() {
                 .members
                 .iter()
                 .find(|m| m.guid == gb)
-                .map(|m| (m.status.clone(), m.area)),
+                .map(|m| (m.status, m.area)),
             _ => None,
         })
         .await;
@@ -181,7 +184,9 @@ async fn a_charter_reserves_no_name() {
     })
     .await;
     buy(&mut b, npc, "Fellowship").await;
-    let bobs = charter(&map, gb).await.expect("Bob's charter, the name free");
+    let bobs = charter(&map, gb)
+        .await
+        .expect("Bob's charter, the name free");
     // Carol's of the same name is sold too.
     buy(&mut c, npc, "Fellowship").await;
     let carols = charter(&map, gc).await.expect("Carol's charter");

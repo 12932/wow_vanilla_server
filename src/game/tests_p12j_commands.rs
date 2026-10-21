@@ -59,7 +59,10 @@ async fn a_player_has_mangos_player_commands() {
     let mut a = player(&realm, "A", "Alice").await;
     a.say(".help").await;
     let help = told(&mut a).await.expect("the help");
-    assert!(help.contains(".start") && help.contains(".gm ingame"), "{help}");
+    assert!(
+        help.contains(".start") && help.contains(".gm ingame"),
+        "{help}"
+    );
     assert!(!help.contains(".kick"), "no GM's command listed: {help}");
     a.say(".server info").await;
     let info = told(&mut a).await.expect("the server's info");
@@ -102,8 +105,7 @@ async fn without_player_commands_a_players_dot_line_is_chat() {
 /// new one twice. A wrong old one, or two that differ, change nothing.
 #[tokio::test]
 async fn a_player_changes_their_own_password() {
-    let accounts =
-        crate::accounts::Accounts::in_memory(crate::accounts::Creation::Existing, false);
+    let accounts = crate::accounts::Accounts::in_memory(crate::accounts::Creation::Existing, false);
     accounts.set_password("ALICE", "old").unwrap();
     crate::accounts::install(accounts);
     let accounts = crate::accounts::get().unwrap();

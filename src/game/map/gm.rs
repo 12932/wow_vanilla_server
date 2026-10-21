@@ -189,7 +189,9 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         "server" => Some(server(map, &args)),
         "dismount" => {
             let mounted = map.players.get(&guid).is_some_and(|p| {
-                p.fields.get_u32(crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID) != 0
+                p.fields
+                    .get_u32(crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID)
+                    != 0
             });
             if mounted {
                 crate::game::map::mounts::dismount(map, guid);
@@ -198,7 +200,10 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
                 Some("You are not mounted.".to_owned())
             }
         }
-        "gm" if args.first().is_some_and(|a| a.eq_ignore_ascii_case("ingame")) => {
+        "gm" if args
+            .first()
+            .is_some_and(|a| a.eq_ignore_ascii_case("ingame")) =>
+        {
             Some(gms_online(map))
         }
         "ban" => Some(ban(map, &args)),

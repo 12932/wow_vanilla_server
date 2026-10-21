@@ -200,7 +200,9 @@ impl Group {
             invited: Vec::new(),
             loot_method: GroupLootSetting::try_from(r.loot_method)
                 .unwrap_or(GroupLootSetting::GroupLoot),
-            threshold: threshold(ItemQuality::try_from(r.threshold).unwrap_or(ItemQuality::Uncommon)),
+            threshold: threshold(
+                ItemQuality::try_from(r.threshold).unwrap_or(ItemQuality::Uncommon),
+            ),
             icons: r.icons.map(Guid::new),
             round_robin: Guid::new(r.round_robin),
             // Everyone is offline at start-up: the leader's five minutes
@@ -579,7 +581,8 @@ impl Groups {
             // Every id counts, read or not (`Mails::load`).
             let id = *id as u32;
             g.next_id = g.next_id.max(id);
-            let Some(r) = crate::game::store::parse_record::<GroupRecord>(KIND_GROUP, id.into(), data)
+            let Some(r) =
+                crate::game::store::parse_record::<GroupRecord>(KIND_GROUP, id.into(), data)
             else {
                 continue;
             };
@@ -692,7 +695,10 @@ impl Groups {
             if let Some(s) = gr.members.iter_mut().find(|m| m.guid == next) {
                 s.assistant = false;
             }
-            let name = gr.slot(next).map(|s| s.name.to_string()).unwrap_or_default();
+            let name = gr
+                .slot(next)
+                .map(|s| s.name.to_string())
+                .unwrap_or_default();
             if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER { name }) {
                 gr.broadcast(realm, &frame, None);
             }

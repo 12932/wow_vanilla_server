@@ -96,11 +96,18 @@ async fn addon_lines_and_afk_toggles_are_no_flood() {
             &format!("CTRA\tsync {i}"),
         ))
         .await;
-        a.send(line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal, ""))
-            .await;
+        a.send(line(
+            CMSG_MESSAGECHAT_ChatType::Afk,
+            Language::Universal,
+            "",
+        ))
+        .await;
     }
     a.say("still free").await;
-    let said = hears(&mut a, |k| matches!(k, SMSG_MESSAGECHAT_ChatType::Say { .. })).await;
+    let said = hears(&mut a, |k| {
+        matches!(k, SMSG_MESSAGECHAT_ChatType::Say { .. })
+    })
+    .await;
     assert_eq!(said.map(|s| s.0).as_deref(), Some("still free"));
     assert!(!muted(&mut a).await, "no mute for addon lines and toggles");
     for i in 0..12 {
@@ -173,11 +180,7 @@ async fn anyone_speaks_in_local_defense_and_the_ranked_in_world_defense() {
     join(&mut a, "LocalDefense - Elwynn Forest").await;
     join(&mut a, "WorldDefense").await;
     a.clear();
-    let channel = |name: &'static str| {
-        move |k: &SMSG_MESSAGECHAT_ChatType| {
-            matches!(k, SMSG_MESSAGECHAT_ChatType::Channel { channel_name, .. } if channel_name == name)
-        }
-    };
+    let channel = |name: &'static str| move |k: &SMSG_MESSAGECHAT_ChatType| matches!(k, SMSG_MESSAGECHAT_ChatType::Channel { channel_name, .. } if channel_name == name);
     a.send(line(
         CMSG_MESSAGECHAT_ChatType::Channel {
             channel: "LocalDefense - Elwynn Forest".into(),
@@ -253,7 +256,10 @@ async fn guild_chat_is_universal() {
         "well met",
     ))
     .await;
-    let heard = hears(&mut h, |k| matches!(k, SMSG_MESSAGECHAT_ChatType::Guild { .. })).await;
+    let heard = hears(&mut h, |k| {
+        matches!(k, SMSG_MESSAGECHAT_ChatType::Guild { .. })
+    })
+    .await;
     assert_eq!(
         heard,
         Some(("well met".to_owned(), Language::Universal)),
@@ -265,7 +271,10 @@ async fn guild_chat_is_universal() {
         "GUILDSYNC\t1",
     ))
     .await;
-    let heard = hears(&mut h, |k| matches!(k, SMSG_MESSAGECHAT_ChatType::Guild { .. })).await;
+    let heard = hears(&mut h, |k| {
+        matches!(k, SMSG_MESSAGECHAT_ChatType::Guild { .. })
+    })
+    .await;
     assert_eq!(heard.map(|h| h.1), Some(Language::Addon));
 }
 
@@ -290,7 +299,10 @@ async fn a_guild_invite_from_one_ignored_is_not_sent() {
             matches!(m, ServerOpcodeMessage::SMSG_GUILD_INVITE(_)).then_some(())
         })
         .await;
-    assert!(asked.is_none(), "an ignored inviter's invitation isn't sent");
+    assert!(
+        asked.is_none(),
+        "an ignored inviter's invitation isn't sent"
+    );
     let told = a
         .gets(Duration::from_millis(50), |m| {
             matches!(m, ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(_)).then_some(())
@@ -343,12 +355,20 @@ async fn going_afk_in_a_battleground_leaves_it() {
     // Grom in GM mode stays.
     b.say(".gm on").await;
     b.system_message("GM mode on").await;
-    b.send(line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal, ""))
-        .await;
+    b.send(line(
+        CMSG_MESSAGECHAT_ChatType::Afk,
+        Language::Universal,
+        "",
+    ))
+    .await;
     handled(&mut b).await;
     assert!(in_match(gb), "a GM in GM mode stays");
-    a.send(line(CMSG_MESSAGECHAT_ChatType::Afk, Language::Universal, "brb"))
-        .await;
+    a.send(line(
+        CMSG_MESSAGECHAT_ChatType::Afk,
+        Language::Universal,
+        "brb",
+    ))
+    .await;
     a.wait_for("SMSG_NEW_WORLD", |m| {
         matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
     })

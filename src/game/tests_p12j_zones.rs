@@ -146,7 +146,10 @@ async fn zone_channels_follow_the_player() {
         .await;
     assert_eq!(heard, "hello Westfall");
     assert!(
-        !notices(&mut b).await.iter().any(|(k, _)| *k == LEFT || *k == YOU_LEFT),
+        !notices(&mut b)
+            .await
+            .iter()
+            .any(|(k, _)| *k == LEFT || *k == YOU_LEFT),
         "nothing told of the move"
     );
 
