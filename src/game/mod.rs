@@ -203,6 +203,8 @@ mod tests_p11i_av;
 #[cfg(test)]
 mod tests_p11i_summons;
 #[cfg(test)]
+mod tests_p11i_ai;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
