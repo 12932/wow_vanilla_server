@@ -764,6 +764,7 @@ pub fn dispelled(map: &mut Map, caster: Guid, s: &SpellTemplate) {
 pub fn after_effects(map: &mut Map, caster: Guid, s: &SpellTemplate) {
     if script(s, "spell_rogue_vanish") {
         vanish(map, caster);
+        crate::game::map::set_procs::vanished(map, caster);
         return;
     }
     if !script(s, "spell_warlock_inferno") {

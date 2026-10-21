@@ -171,6 +171,9 @@ fn mana_cost(map: &Map, e: &Event) -> u32 {
 
 /// Run a scripted proc of holder `h` on `owner`, against `other`.
 pub fn fire(map: &mut Map, owner: Guid, other: Guid, h: &Holder, e: &Event) -> Outcome {
+    if let Some(o) = crate::game::map::set_procs::fire(map, owner, other, h, e) {
+        return o;
+    }
     let id = h.spell;
     let mut rng = rand::rng();
     if let Some((_, pct)) = IGNITE.iter().find(|(s, _)| *s == id) {
