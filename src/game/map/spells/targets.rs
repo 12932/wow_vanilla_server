@@ -481,8 +481,78 @@ pub fn effect_targets(
     {
         out.push(owner);
     }
+    area_sight(map, caster, s, index, t, &mut out);
     limit(map, &mut out, s.max_affected_targets as usize, t.unit);
     out
+}
+
+/// Where an area's line of sight is drawn from (mangos's `SpellTargetLOS`
+/// for each target in `SpellTargetInfoTable`).
+#[derive(Clone, Copy)]
+enum Anchor {
+    Caster,
+    Source,
+    Dest,
+}
+
+/// The anchor of an area target, if it is one tested for sight: not a
+/// script's (their filter is `TARGET_SCRIPT`), nor a single unit's or a
+/// chain's (tested at the cast and hop by hop).
+fn anchor(target: u32) -> Option<Anchor> {
+    match target {
+        15 | 30 | 33 => Some(Anchor::Source),
+        16 | 31 | 34 => Some(Anchor::Dest),
+        24 | 28 | 36 | 54 | 56 | 59 => Some(Anchor::Caster),
+        _ => None,
+    }
+}
+
+/// Whether `s` ignores line of sight altogether (mangos's
+/// `IsIgnoreLosSpell`): its attribute, or the Blackfathom and Magic Wings
+/// spells mangos names.
+pub(crate) fn ignores_sight(s: &SpellTemplate) -> bool {
+    matches!(s.id, 8733 | 8735 | 24742) || s.attr(2, crate::game::data::spells::ATTR_EX2_IGNORE_LOS)
+}
+
+/// An area's units out of sight of its anchor taken off (mangos's
+/// `Spell::CheckTarget`, its default line-of-sight case): an area at the
+/// caster or a source seen from there, one at a destination from the
+/// destination, a cone or a raid from the caster. Not for an effect that
+/// ignores sight (`IsIgnoreLosSpellEffect`: the chain heal's, a party's
+/// within the caster's range, the party of a friend, the raid of a class,
+/// the world-wide radius 28), nor the caster at its own place. A
+/// persistent area (Blizzard's, Consecration's) isn't tested as it ticks,
+/// as mangos's `DynamicObjectUpdater` doesn't.
+fn area_sight(
+    map: &Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    index: usize,
+    t: &Targets,
+    out: &mut Vec<Guid>,
+) {
+    let e = &s.effects[index];
+    if out.is_empty()
+        || ignores_sight(s)
+        || e.radius_index == 28
+        || matches!(e.target_a, 20 | 37 | 45 | 61)
+    {
+        return;
+    }
+    let Some(kind) = anchor(e.target_b).or_else(|| anchor(e.target_a)) else {
+        return;
+    };
+    let about = t.origin.unwrap_or(caster);
+    let from = match kind {
+        Anchor::Caster | Anchor::Source => center(map, caster, t, false),
+        Anchor::Dest => center(map, caster, t, e.target_a != 18),
+    };
+    out.retain(|g| {
+        (matches!(kind, Anchor::Caster) && (*g == caster || *g == about))
+            || map
+                .position_of(*g)
+                .is_some_and(|p| super::checks::sight(map, from, p))
+    });
 }
 
 /// Whether effect `index` of `s` is done at a place, not on a unit: a
@@ -545,7 +615,7 @@ fn chain(
     let count = m
         .apply(mods::OP_JUMP_TARGETS, s.effects[index].chain_target as f32)
         .max(1.0) as usize;
-    let ignores_sight = s.attr(2, crate::game::data::spells::ATTR_EX2_IGNORE_LOS);
+    let ignores_sight = ignores_sight(s);
     let mut out = vec![first];
     let mut last = first;
     while out.len() < count {
