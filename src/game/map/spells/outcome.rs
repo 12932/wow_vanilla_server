@@ -799,7 +799,9 @@ pub fn power(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, heal: boo
             .map(|f| f.get_u32(UNIT_FIELD_STAT0 + 4) as i32)
             .unwrap_or(0);
         let a = auras::auras(map, caster);
-        let done = a.map_or(0, |a| a.sum(AURA_MOD_HEALING_DONE));
+        // Those of the heal's school (mangos's `SpellBaseHealingBonusDone`
+        // by its school mask).
+        let done = a.map_or(0, |a| a.sum_mask(AURA_MOD_HEALING_DONE, s.school_mask()));
         let from_spirit = a.map_or(0, |a| {
             spirit * a.sum(AURA_MOD_SPELL_HEALING_OF_STAT_PERCENT) / 100
         });

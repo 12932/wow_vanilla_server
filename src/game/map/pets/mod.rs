@@ -170,6 +170,8 @@ pub struct PetState {
     pub totem_radius: f32,
     pub next_think: Instant,
     pub regen_at: Instant,
+    /// Its health's tick, every four seconds (mangos's `Pet::RegenerateAll`).
+    pub health_at: Instant,
     pub happiness_at: Instant,
     pub loyalty_at: Instant,
     pub loyalty_points: i32,
@@ -199,6 +201,9 @@ pub struct PetState {
     pub commanded_at: Option<Instant>,
 }
 
+/// How often a pet's health comes back.
+pub const HEALTH_EVERY: Duration = Duration::from_secs(4);
+
 impl PetState {
     pub fn new(kind: Kind, owner: Guid, now: Instant) -> Self {
         Self {
@@ -222,6 +227,7 @@ impl PetState {
             totem_radius: 0.0,
             next_think: now,
             regen_at: now + Duration::from_secs(2),
+            health_at: now + HEALTH_EVERY,
             happiness_at: now + hunter::HAPPINESS_TICK,
             loyalty_at: now + hunter::LOYALTY_TICK,
             loyalty_points: 0,

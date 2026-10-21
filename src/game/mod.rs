@@ -133,6 +133,24 @@ mod tests_p10_ai_real;
 #[cfg(test)]
 mod tests_p10_combat_pets;
 #[cfg(test)]
+mod tests_p10_core_events;
+#[cfg(test)]
+mod tests_p10_core_loot;
+#[cfg(test)]
+mod tests_p10_core_power;
+#[cfg(test)]
+mod tests_p10_core_pvp;
+#[cfg(test)]
+mod tests_p10_core_real;
+#[cfg(test)]
+mod tests_p10_core_regen;
+#[cfg(test)]
+mod tests_p10_core_skills;
+#[cfg(test)]
+mod tests_p10_core_stats;
+#[cfg(test)]
+mod tests_p10_core_trade;
+#[cfg(test)]
 mod tests_p10_entity;
 #[cfg(test)]
 mod tests_p10_entity_real;

@@ -385,25 +385,33 @@ pub fn spell_crit_chance(class: u8, level: u32, intellect: u32) -> f32 {
 }
 
 pub fn melee_attack_power(class: u8, level: u32, strength: u32, agility: u32) -> u32 {
+    stat_melee_attack_power(class, level, strength, agility).max(0) as u32
+}
+
+/// A class's melee attack power from its stats, unclamped: a creature
+/// takes the change of it (Thistle Tea's `stat_melee_attack_power`).
+fn stat_melee_attack_power(class: u8, level: u32, strength: u32, agility: u32) -> i32 {
     let (l, s, a) = (level as i32, strength as i32, agility as i32);
-    let v = match class {
+    match class {
         WARRIOR | PALADIN => l * 3 + s * 2 - 20,
         ROGUE | HUNTER => l * 2 + s + a - 20,
         SHAMAN => l * 2 + s * 2 - 20,
         DRUID => s * 2 - 20,
         _ => s - 10,
-    };
-    v.max(0) as u32
+    }
 }
 
 pub fn ranged_attack_power(class: u8, level: u32, agility: u32) -> u32 {
+    stat_ranged_attack_power(class, level, agility).max(0) as u32
+}
+
+fn stat_ranged_attack_power(class: u8, level: u32, agility: u32) -> i32 {
     let (l, a) = (level as i32, agility as i32);
-    let v = match class {
+    match class {
         HUNTER => l * 2 + a * 2 - 10,
         ROGUE | WARRIOR => l + a - 10,
         _ => a - 10,
-    };
-    v.max(0) as u32
+    }
 }
 
 /// Health from stamina: one a point for the first twenty, ten after.
@@ -461,23 +469,20 @@ fn percent_product(a: &Auras, kind: u32, bit: u32) -> f64 {
 /// intellect, as Thistle Tea's `Resistances.recompute`: the base and its
 /// flats scaled by the base percentages; agility's armor, intellect's
 /// share and the flat bonuses on top; then the percentages, truncated
-/// once at the end.
+/// once at the end. Agility gives `per_agility` armor a point: a player's
+/// and a hunter's pet's two, another creature's one.
 fn resistances(
     a: &Auras,
     base: [i32; 7],
     agility: u32,
     intellect: u32,
-    creature: bool,
+    per_agility: u32,
 ) -> [i32; 7] {
     std::array::from_fn(|i| {
         let bit = 1u32 << i;
         let initial = base[i] + a.sum_mask(AURA_MOD_BASE_RESISTANCE, bit);
         let scaled = f64::from(initial) * percent_product(a, AURA_MOD_BASE_RESISTANCE_PCT, bit);
-        let stat = f64::from(if i == 0 {
-            if creature { agility } else { agility * 2 }
-        } else {
-            0
-        });
+        let stat = f64::from(if i == 0 { agility * per_agility } else { 0 });
         let exclusive = {
             let v: Vec<i32> = a
                 .effects()
@@ -657,7 +662,7 @@ pub fn player(p: &mut Player, data: &GameData) {
         f.set_u32(UNIT_FIELD_MAXPOWER1 + 1, 1000);
     }
     // Armor and resistances.
-    let res = resistances(a, g.resistances, agility, intellect, false);
+    let res = resistances(a, g.resistances, agility, intellect, 2);
     for (i, v) in res.iter().enumerate() {
         let s = i as u16;
         f.set_u32(UNIT_FIELD_RESISTANCES + s, (*v).max(0) as u32);
@@ -930,63 +935,137 @@ pub fn player(p: &mut Player, data: &GameData) {
     };
 }
 
+/// How a creature's attack power comes from its stats (Thistle Tea's
+/// `attack_power_model`): a hunter's pet's, a demon's (the imp's apart)
+/// and any other creature's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PowerModel {
+    Creature,
+    HunterPet,
+    Demon,
+    Imp,
+}
+
+/// The imp, whose attack power is its strength - 10.
+const IMP: u32 = 416;
+
+impl PowerModel {
+    fn of(c: &crate::game::map::creature::Creature) -> Self {
+        use crate::game::map::pets::Kind;
+        match c.pet.as_deref().map(|s| s.kind) {
+            Some(Kind::Hunter) => PowerModel::HunterPet,
+            Some(Kind::Demon) if c.entry == IMP => PowerModel::Imp,
+            Some(Kind::Demon) => PowerModel::Demon,
+            _ => PowerModel::Creature,
+        }
+    }
+}
+
 /// A creature's stats from its spawn values and auras.
 pub fn creature(c: &mut crate::game::map::creature::Creature) {
     let b = c.base;
     let a = &c.auras;
+    let model = PowerModel::of(c);
     let f = &mut c.fields;
-    // A pet with a bar has stats its auras raise, and its stamina and
-    // intellect over its level's give it ten health and fifteen mana a
-    // point (mangos-zero's `Pet::UpdateMaxHealth` and `UpdateMaxPower`,
-    // Thistle Tea's creature stat model). Other creatures' stats are
-    // their template's.
-    let mut stamina_health = 0.0;
-    if c.pet.as_deref().is_some_and(|s| s.kind.controlled()) {
-        for i in 0..5 {
-            let value = scaled_stat(
-                b.stats[i] as i32,
-                &factors(a, AURA_MOD_PERCENT_STAT, i as i32),
-                a.sum_misc(AURA_MOD_STAT, i as i32),
-                &factors(a, AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32),
-            );
-            f.set_u32(UNIT_FIELD_STAT0 + i as u16, value);
-        }
-        stamina_health = (f.get_u32(UNIT_FIELD_STAT0 + 2) as f32 - b.stats[2] as f32) * 10.0;
-        let intellect_mana = (f.get_u32(UNIT_FIELD_STAT0 + 3) as f32 - b.stats[3] as f32) * 15.0;
-        if b.max_mana > 0 {
-            let mana = (b.max_mana as f32 + intellect_mana).max(0.0) as u32;
-            f.set_u32(UNIT_FIELD_MAXPOWER1, mana);
-            if f.get_u32(UNIT_FIELD_POWER1) > mana {
-                f.set_u32(UNIT_FIELD_POWER1, mana);
-            }
+    // Its stats, from its class's at its level (a pet's from its own
+    // table) through its auras; the change of them moves its health,
+    // mana, armor and attack power (Thistle Tea's creature stat model,
+    // mangos-classic's `Creature::UpdateStats`).
+    let mut stats = [0u32; 5];
+    for (i, stat) in stats.iter_mut().enumerate() {
+        *stat = scaled_stat(
+            b.stats[i] as i32,
+            &factors(a, AURA_MOD_PERCENT_STAT, i as i32),
+            a.sum_misc(AURA_MOD_STAT, i as i32),
+            &factors(a, AURA_MOD_TOTAL_STAT_PERCENTAGE, i as i32),
+        );
+        f.set_u32(UNIT_FIELD_STAT0 + i as u16, *stat);
+    }
+    let change = |i: usize| stats[i] as f32 - b.stats[i] as f32;
+    // Ten health a point of stamina it gains, fifteen mana a point of
+    // intellect with mana already (mangos's `Unit::UpdateMaxPower`
+    // "ignore classes without mana").
+    if b.max_mana > 0 {
+        let mana = (b.max_mana as f32 + change(3) * 15.0).max(0.0) as u32;
+        f.set_u32(UNIT_FIELD_MAXPOWER1, mana);
+        if f.get_u32(UNIT_FIELD_POWER1) > mana {
+            f.set_u32(UNIT_FIELD_POWER1, mana);
         }
     }
-    let health = ((b.max_health as f32 + stamina_health + a.sum(AURA_MOD_INCREASE_HEALTH) as f32)
+    let health = ((b.max_health as f32 + change(2) * 10.0 + a.sum(AURA_MOD_INCREASE_HEALTH) as f32)
         * a.product(AURA_MOD_INCREASE_HEALTH_PERCENT))
     .max(1.0) as u32;
     f.set_u32(UNIT_FIELD_MAXHEALTH, health);
     if f.get_u32(UNIT_FIELD_HEALTH) > health {
         f.set_u32(UNIT_FIELD_HEALTH, health);
     }
-    let res = resistances(a, b.resistances, 0, 0, true);
+    let per_agility = if model == PowerModel::HunterPet { 2 } else { 1 };
+    let res = resistances(a, b.resistances, stats[1], stats[3], per_agility);
     for (i, v) in res.iter().enumerate() {
         f.set_u32(UNIT_FIELD_RESISTANCES + i as u16, (*v).max(0) as u32);
     }
+    // Attack power: a pet's from its strength as it is (mangos-classic's
+    // `Pet::UpdateAttackPowerAndDamage`: the imp's strength - 10, the
+    // others' 2 x strength - 20); another creature's from its class and
+    // level's, moved by the change of its stats' share (Thistle Tea's
+    // `creature_stat_attack_power`, unclamped).
+    let class = f.get_byte(UNIT_FIELD_BYTES_0, 1);
+    let level = f.get_u32(UNIT_FIELD_LEVEL);
+    let (str_, agi) = (stats[0], stats[1]);
+    let pet_base = match model {
+        PowerModel::Imp => Some(str_ as i32 - 10),
+        PowerModel::HunterPet | PowerModel::Demon => Some(str_ as i32 * 2 - 20),
+        PowerModel::Creature => None,
+    };
+    let melee_base = pet_base.unwrap_or_else(|| {
+        b.attack_power as i32 + stat_melee_attack_power(class, level, str_, agi)
+            - stat_melee_attack_power(class, level, b.stats[0], b.stats[1])
+    });
     let ap_mods = a.sum(AURA_MOD_ATTACK_POWER);
-    let ap =
-        ((b.attack_power as i32 + ap_mods) as f32 * a.product(AURA_MOD_ATTACK_POWER_PCT)).max(0.0);
-    f.set_u32(UNIT_FIELD_ATTACK_POWER, b.attack_power);
+    let ap = ((melee_base + ap_mods) as f32 * a.product(AURA_MOD_ATTACK_POWER_PCT)).max(0.0);
+    f.set_u32(UNIT_FIELD_ATTACK_POWER, melee_base.max(0) as u32);
     f.set_u32(UNIT_FIELD_ATTACK_POWER_MODS, ap_mods.max(0) as u32);
     // vmangos's creature damage with attack power changed: seven tenths
-    // its own, three tenths the new.
-    let ratio = if b.attack_power > 0 {
-        (7.0 * b.attack_power as f32 + 3.0 * ap) / (10.0 * b.attack_power as f32)
+    // its own, three tenths the new. A hunter's pet and other creatures
+    // weigh it against their level's; a demon against its strength's, so
+    // its strength moves its attack power alone (Thistle Tea's
+    // `creature_multiplier`).
+    let seed = match model {
+        PowerModel::Imp | PowerModel::Demon => pet_base.unwrap_or(0).max(0) as f32,
+        _ => b.attack_power as f32,
+    };
+    let ratio = if seed > 0.0 {
+        (7.0 * seed + 3.0 * ap) / (10.0 * seed)
     } else {
         1.0 + (ap_mods as f32 / 14.0) / b.max_damage.max(1.0)
     };
     let pct = a.product_mask(AURA_MOD_DAMAGE_PERCENT_DONE, 1);
     f.set_f32(UNIT_FIELD_MINDAMAGE, (b.min_damage * ratio * pct).max(1.0));
     f.set_f32(UNIT_FIELD_MAXDAMAGE, (b.max_damage * ratio * pct).max(1.0));
+    // A creature's ranged attack power and damage the same way, by its
+    // ranged auras and its agility's change; a pet has none.
+    let mut ranged_ap = 0;
+    if model == PowerModel::Creature {
+        let ranged_base = b.ranged_attack_power as i32
+            + stat_ranged_attack_power(class, level, agi)
+            - stat_ranged_attack_power(class, level, b.stats[1]);
+        let rap_mods = a.sum(AURA_MOD_RANGED_ATTACK_POWER);
+        let rap = ((ranged_base + rap_mods) as f32 * a.product(AURA_MOD_RANGED_ATTACK_POWER_PCT))
+            .max(0.0);
+        ranged_ap = rap as u32;
+        f.set_u32(UNIT_FIELD_RANGED_ATTACK_POWER, ranged_base.max(0) as u32);
+        f.set_u32(UNIT_FIELD_RANGED_ATTACK_POWER_MODS, rap_mods.max(0) as u32);
+        if b.max_ranged > 0.0 {
+            let ratio = if b.ranged_attack_power > 0 {
+                let seed = b.ranged_attack_power as f32;
+                (7.0 * seed + 3.0 * rap) / (10.0 * seed)
+            } else {
+                1.0
+            };
+            f.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, b.min_ranged * ratio * pct);
+            f.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, b.max_ranged * ratio * pct);
+        }
+    }
     let haste = period_multiplier(a, &[AURA_MOD_HASTE, AURA_MOD_ATTACKSPEED]);
     let attack = if b.attack_time > 0 {
         b.attack_time
@@ -1021,7 +1100,7 @@ pub fn creature(c: &mut crate::game::map::creature::Creature) {
         spell_hit: a.sum(AURA_MOD_SPELL_HIT_CHANCE) as f32,
         block_value: level / 2,
         attack_power: ap as u32,
-        ranged_attack_power: b.ranged_attack_power,
+        ranged_attack_power: ranged_ap,
         spell_power: std::array::from_fn(|i| a.sum_mask(AURA_MOD_DAMAGE_DONE, 1 << i)),
         healing_power: a.sum(AURA_MOD_HEALING_DONE),
         weapon_skill: level * 5,

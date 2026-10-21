@@ -551,8 +551,12 @@ pub fn forget_spells(map: &mut Map, g: Guid, spells: &[u32]) {
     for spell in spells {
         crate::game::map::auras::remove_spell(map, g, *spell, Some(g));
         if let Some(p) = map.players.get_mut(&g) {
+            let known = p.spells.contains(spell);
             p.spells.retain(|s| s != spell);
             crate::game::map::skills::forget_from_line(p, &data, *spell);
+            if known {
+                crate::game::map::skills::forget_from_spell(p, &data, *spell);
+            }
             if let Ok(id) = u16::try_from(*spell) {
                 p.outbound.send(&SMSG_REMOVED_SPELL { spell: id });
             }

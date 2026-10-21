@@ -44,13 +44,16 @@ pub struct Viewers {
 
 /// Who may open a corpse's loot (`Loot::may_loot`): its owner alone, or
 /// the group's members near at the kill, round robin's looter alone
-/// among them. Another sees no loot on it (mangos's `Loot::CanLoot` in
+/// among them, and not one with nothing in it of theirs (a quest drop
+/// not for their quests). Another sees no loot on it (mangos's `Loot::CanLoot` in
 /// its per-viewer `UNIT_DYNFLAG_LOOTABLE`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LootRights {
     owner: Option<Guid>,
     allowed: Vec<Guid>,
     looter: Option<Guid>,
+    /// Those of them with nothing in it of theirs (`Loot::quiet`).
+    quiet: Vec<Guid>,
 }
 
 impl LootRights {
@@ -69,11 +72,15 @@ impl LootRights {
             looter: l
                 .assigned
                 .filter(|_| l.method == Some(GroupLootSetting::RoundRobin)),
+            quiet: l.quiet.clone(),
         })
     }
 
-    /// Whether `g` may not open it.
+    /// Whether `g` may not open it, or would find nothing of theirs.
     fn bars(&self, g: Guid) -> bool {
+        if self.quiet.contains(&g) {
+            return true;
+        }
         if !self.allowed.is_empty() {
             return !self.allowed.contains(&g) || self.looter.is_some_and(|a| a != g);
         }

@@ -1124,17 +1124,40 @@ pub fn regen(map: &mut Map, g: Guid, now: Instant) {
             crate::game::map::player::UNIT_FLAG_IN_COMBAT,
         )
     });
+    let polymorphed = crate::game::map::creature_combat::polymorphed(map, g);
     let Some(c) = map.creature_mut(g) else {
         return;
     };
+    let mut health_due = false;
     if let Some(s) = c.pet.as_deref_mut() {
         s.regen_at = now + Duration::from_secs(2);
+        if s.health_at <= now {
+            s.health_at = now + super::HEALTH_EVERY;
+            health_due = true;
+        }
     }
     let f = &mut c.fields;
-    if !in_combat {
+    // Its health every four seconds, out of a fight or polymorphed in one:
+    // a tenth polymorphed (Thistle Tea's controlled creature's); else a
+    // pet or a charmed creature from its spirit as a player of its class,
+    // four seconds' worth (mangos's `Pet::RegenerateHealth`:
+    // `OCTRegenHPPerSpirit() * 4`, Thistle Tea's
+    // `controlled_health_per_tick`); a guardian or a totem a twentieth.
+    if health_due && (!in_combat || polymorphed) {
         let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
         let h = f.get_u32(UNIT_FIELD_HEALTH);
-        f.set_u32(UNIT_FIELD_HEALTH, (h + (max / 20).max(1)).min(max));
+        let add = if polymorphed {
+            max / 10
+        } else if kind.is_some_and(Kind::controlled) {
+            let class = f.get_byte(UNIT_FIELD_BYTES_0, 1);
+            let spirit = f.get_u32(UNIT_FIELD_STAT0 + 4) as f32;
+            crate::game::map::stats::health_regen(class, spirit) as u32 * 4
+        } else {
+            (max / 20).max(1)
+        };
+        f.set_u32(UNIT_FIELD_HEALTH, (h + add).min(max));
+    }
+    if !in_combat {
         let mana_max = f.get_u32(UNIT_FIELD_MAXPOWER1);
         let mana = f.get_u32(UNIT_FIELD_POWER1);
         f.set_u32(

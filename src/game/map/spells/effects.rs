@@ -634,32 +634,55 @@ fn weapon_damage(
                 * pct;
         }
     }
-    // Hunter's Mark: ranged attack power against its target; and melee
-    // attack power against one so marked.
-    {
-        let (kind, period) = if ranged {
+    // Attack power against the target: Hunter's Mark's (ranged, or melee
+    // against one so marked) and the caster's against its creature type
+    // (auras 102 and 131), at the hand's speed, or the weapon kind's
+    // normalized (mangos's `MeleeDamageBonusDone` by `GetAPMultiplier`,
+    // Thistle Tea's `TargetAttackPower`).
+    let ap_bonus = {
+        let (kind, versus, period) = if ranged {
             (
                 AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS,
+                AURA_MOD_RANGED_ATTACK_POWER_VERSUS,
                 UNIT_FIELD_RANGEDATTACKTIME,
             )
         } else if offhand {
             (
                 AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS,
+                AURA_MOD_MELEE_ATTACK_POWER_VERSUS,
                 UNIT_FIELD_BASEATTACKTIME + 1,
             )
         } else {
             (
                 AURA_MELEE_ATTACK_POWER_ATTACKER_BONUS,
+                AURA_MOD_MELEE_ATTACK_POWER_VERSUS,
                 UNIT_FIELD_BASEATTACKTIME,
             )
         };
-        let bonus = auras::auras(map, target).map_or(0, |a| a.sum(kind));
-        let speed = map
-            .unit_fields(caster)
-            .map(|f| f.get_u32(period))
-            .unwrap_or(2000);
-        base += bonus.max(0) as f32 / 14.0 * speed as f32 / 1000.0;
-    }
+        let mark = auras::auras(map, target).map_or(0, |a| a.sum(kind)).max(0);
+        let type_mask = crate::game::map::combat::creature_type_mask(map, target);
+        let against = if type_mask == 0 {
+            0
+        } else {
+            auras::auras(map, caster).map_or(0, |a| a.sum_mask(versus, type_mask))
+        };
+        let speed = match map.players.get(&caster) {
+            Some(p) if normalized => {
+                let g = crate::game::map::derive::gear(p, &data);
+                let w = if ranged {
+                    g.ranged
+                } else if offhand {
+                    g.off
+                } else {
+                    g.main
+                };
+                // A fist's 2.4 (mangos's `GetAPMultiplier`).
+                w.map_or(2.4, |w| normalized_speed(w.subclass, ranged))
+            }
+            _ => map.unit_fields(caster).map_or(2000, |f| f.get_u32(period)) as f32 / 1000.0,
+        };
+        (mark + against) as f32 / 14.0 * speed
+    };
     let flat: i32 = effects
         .iter()
         .filter(|(i, _)| s.effects[*i].effect != EFFECT_WEAPON_PERCENT_DAMAGE)
@@ -685,7 +708,7 @@ fn weapon_damage(
         target,
         &weapon_spell,
         index,
-        (base + flat as f32) * pct,
+        (base + flat as f32) * pct + ap_bonus,
         l,
     );
     outcome::deal(map, caster, target, s, d, l);
@@ -924,6 +947,22 @@ fn effect(
             {
                 return;
             }
+            // A drain takes the caster's spell power and damage done, and
+            // the target's damage taken (mangos's `EffectPowerDrain`:
+            // `SpellDamageBonusDone`, `SpellDamageBonusTaken`); a burn
+            // takes what it burns.
+            let amount = if e.effect == EFFECT_POWER_DRAIN
+                && amount > 0
+                && !s.custom(sd::CUSTOM_FIXED_DAMAGE)
+            {
+                let mut d = amount as f32
+                    + outcome::bonus(map, caster, target, s, index, Kind::Direct, &l.mods);
+                d *= outcome::done_multiplier(map, caster, target, s);
+                d = l.mods.apply(super::mods::OP_DAMAGE, d);
+                outcome::taken_of(map, caster, target, s, index, Kind::Direct, 1, d) as i32
+            } else {
+                amount
+            };
             let taken = map
                 .unit_fields_mut(target)
                 .map(|f| {

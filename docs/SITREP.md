@@ -902,6 +902,22 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   (`tests_p9_world_spells::a_spell_from_a_proc_procs_only_what_may_proc_from_procs`) rewritten to mangos's rule,
   each section counted from its own start. 27 rows left (casting, ranges, stack rules; wvs's extra yard at a cast's
   start differs from mangos and was left, as it may be on purpose).
+- **10m, the core (0.1.66):** **the Scourge camps** (11 rows, new `map::necrotic_camps`, vmangos's NecroticShard and
+  minion spawners: a circle raises a shard and calls 1–3 minions every 5 s, a rare 1 in 217; a broken shard's
+  damaged one brings four cultists an hour; its fall clears the camp); **the creature stat model** (stats from
+  their class through their auras; ranged attack power and damage, so creatures' Shoot now hurts; a pet's attack
+  power 2 × strength − 20, the imp's strength − 10); target-type attack power on weapon spells; pets and charmed
+  creatures heal from spirit every 4 s (mangos's `Pet::RegenerateHealth`), a tenth polymorphed; a quest drop alone
+  doesn't sparkle for one not on the quest; a direct drain takes spell power and damage taken (mangos's
+  `EffectPowerDrain`); healing bonuses by the heal's school; PvP's flag and contested timers stand still in a fight
+  with players (mangos's `inPvPCombat`); a forgotten rank takes its skill to the step below, its value down to that
+  cap (merged with 10a's weapon lines: both kept, and the clamp only on forgetting, as mangos). **Its calls, one
+  against your mangos rule, yours to check:** **a creature gets one armor per point of agility (Thistle Tea);
+  mangos-classic's `Creature::UpdateArmor` gives two** (about 3% for a level 60 elite); the negative damage field
+  keeps the penalty's size (accepted; the client doesn't show it); a pet's health ticks every 4 s (mangos);
+  healing bonuses by school mask (mangos). Twelve rows `wrong-for-1.12` (wvs is mangos's). Left `gap`: druid form
+  attack power (12q's #48 has since settled it by mangos), six meeting-stone rows (a port of mangos's LFG, about
+  1,300 lines), and some not reached (insignia, Soul Link's range, taxi resume and others).
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -1023,6 +1039,7 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10d: combat and movement, round 10 | 93.1% | 0.1.63 |
 | 10a: the player, round 10 | 93.5% | 0.1.64 |
 | 10b: spells, round 10 | 93.8% | 0.1.65 |
+| 10m: the core, round 10 | 94.2% | 0.1.66 |
 
 **Running now:** 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
 

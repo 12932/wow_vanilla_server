@@ -54,6 +54,26 @@ pub struct PvpState {
     /// Out of it, still free-for-all until then (`[arena]
     /// ffa_grace_secs`).
     pub ffa_until: Option<Instant>,
+    /// In a fight with players: the flag's and the contested timers stand
+    /// still, as of this update (mangos's `UpdatePvPFlagTimer` and
+    /// `UpdatePvPContestedFlagTimer` frozen `inPvPCombat`).
+    pub paused_at: Option<Instant>,
+}
+
+impl PvpState {
+    /// The timers stand still from `paused_at` to `now`: each deadline
+    /// put off by as long.
+    fn hold_timers(&mut self, now: Instant) {
+        if let Some(t) = self.paused_at {
+            let held = now.saturating_duration_since(t);
+            for deadline in [&mut self.until, &mut self.contested_until]
+                .into_iter()
+                .flatten()
+            {
+                *deadline += held;
+            }
+        }
+    }
 }
 
 impl PvpState {
@@ -401,6 +421,9 @@ pub fn update(map: &mut Map) {
         }
     }
     for p in map.players.values_mut() {
+        // A fight with players holds both timers where they are.
+        p.pvp.hold_timers(now);
+        p.pvp.paused_at = p.combat.last_pvp.is_some().then_some(now);
         if p.pvp.contested_until.is_some_and(|t| t <= now) {
             p.pvp.contested_until = None;
             p.fields

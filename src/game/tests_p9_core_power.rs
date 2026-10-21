@@ -292,9 +292,10 @@ async fn spells_cast_under_a_buff_keep_it_once_it_is_gone() {
             level(m, ga, 60);
             // Gear's ten holy and twenty healing; a buff's sixty and 120.
             aura_of(m, ga, 97_930, AURA_MOD_DAMAGE_DONE, 1 << HOLY, 10);
-            aura_of(m, ga, 97_931, AURA_MOD_HEALING_DONE, 0, 20);
+            // (Healing of every school, -1, as the data's gear has it.)
+            aura_of(m, ga, 97_931, AURA_MOD_HEALING_DONE, -1, 20);
             aura_of(m, ga, 97_932, AURA_MOD_DAMAGE_DONE, 1 << HOLY, 60);
-            aura_of(m, ga, 97_933, AURA_MOD_HEALING_DONE, 0, 120);
+            aura_of(m, ga, 97_933, AURA_MOD_HEALING_DONE, -1, 120);
             derive::unit(m, ga);
             let beast = spawn(m, ga, BEAST, 60, 3.0);
             spells::cast_triggered(m, ga, DOT, Some(beast));
@@ -694,14 +695,16 @@ async fn haste_shortens_a_cast_and_not_the_channel_after_it() {
 
 /// Thistle Tea's "does not invent base stats for creatures": a creature's
 /// stats are its own; a percentage of every stat gives it none it hasn't,
-/// nor health.
+/// nor health. (Its own strength, its base's, the percentages double
+/// twice.)
 #[tokio::test]
 async fn a_creature_is_given_no_stats_it_has_not() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
     let r = map
         .query(move |m| {
             let c = spawn(m, ga, BRUTE, 20, 3.0);
-            m.unit_fields_mut(c).unwrap().set_u32(UNIT_FIELD_STAT0, 50);
+            m.creature_mut(c).unwrap().base.stats[0] = 50;
+            derive::unit(m, c);
             let before = m.unit_fields(c).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
             aura_of(m, c, 97_990, AURA_MOD_PERCENT_STAT, -1, 100);
             aura_of(m, c, 97_991, AURA_MOD_TOTAL_STAT_PERCENTAGE, -1, 100);
@@ -716,6 +719,6 @@ async fn a_creature_is_given_no_stats_it_has_not() {
         })
         .await
         .unwrap();
-    assert_eq!((r.0, r.1), (50, 0), "its strength as it was, no stamina");
+    assert_eq!((r.0, r.1), (200, 0), "its own strength by both, no stamina");
     assert_eq!(r.2, r.3, "nor health");
 }

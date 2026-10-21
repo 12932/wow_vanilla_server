@@ -187,11 +187,26 @@ pub struct ClassLevelStats {
     pub attack_power: u32,
     pub ranged_attack_power: u32,
     pub armor: u32,
-    /// For a creature's block.
+    /// For a creature's block, and its stats.
     pub strength: u32,
+    pub agility: u32,
+    pub stamina: u32,
     /// For a creature's mana in a fight.
     pub intellect: u32,
     pub spirit: u32,
+}
+
+impl ClassLevelStats {
+    /// Strength to spirit, as a creature's stat fields hold them.
+    pub fn stats(&self) -> [u32; 5] {
+        [
+            self.strength,
+            self.agility,
+            self.stamina,
+            self.intellect,
+            self.spirit,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

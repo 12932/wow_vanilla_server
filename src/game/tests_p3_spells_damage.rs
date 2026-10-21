@@ -157,7 +157,7 @@ async fn a_spell_that_ignores_its_casters_modifiers_takes_no_power_percent_or_da
             };
             lasting(m, 990_820, auras::AURA_MOD_DAMAGE_DONE, 8, 500);
             lasting(m, 990_821, auras::AURA_MOD_DAMAGE_PERCENT_DONE, 8, 100);
-            lasting(m, 990_822, auras::AURA_MOD_HEALING_DONE, 0, 1000);
+            lasting(m, 990_822, auras::AURA_MOD_HEALING_DONE, -1, 1000);
             lasting(m, 990_823, auras::AURA_MOD_HEALING_DONE_PERCENT, 0, 100);
             lasting(m, 990_824, auras::AURA_MOD_SPELL_CRIT_CHANCE, 0, 100);
             let before = health(m, kobold);

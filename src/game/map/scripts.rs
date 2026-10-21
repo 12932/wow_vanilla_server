@@ -904,7 +904,13 @@ fn template_stats(
         .set_f32(UNIT_FIELD_MAXDAMAGE, (base * 1.14).max(1.0));
     c.fields
         .set_u32(UNIT_FIELD_ATTACK_POWER, stats.attack_power);
+    let ranged = stats.ranged_damage * mult;
+    c.fields.set_f32(UNIT_FIELD_MINRANGEDDAMAGE, ranged * 0.86);
+    c.fields.set_f32(UNIT_FIELD_MAXRANGEDDAMAGE, ranged * 1.14);
+    c.fields
+        .set_u32(UNIT_FIELD_RANGED_ATTACK_POWER, stats.ranged_attack_power);
     c.fields.set_u32(UNIT_FIELD_RESISTANCES, stats.armor);
+    c.set_class_stats(stats);
 }
 
 /// `SCRIPT_COMMAND_UPDATE_ENTRY`, as Thistle Tea's `CreatureEntry.apply`:
