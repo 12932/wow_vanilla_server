@@ -575,6 +575,9 @@ pub fn check(
         {
             return Some(fail::AURA_BOUNCED);
         }
+        if let Some(code) = charge_check(map, caster, s, t) {
+            return Some(code);
+        }
         if let Some(r) = crate::game::map::pets::check(map, caster, s, t) {
             return Some(r);
         }
@@ -1435,4 +1438,43 @@ pub fn cancels(
             _ => false,
         }
     })
+}
+
+/// `SPELL_FAILED_ROOTED` and `SPELL_FAILED_NOPATH`.
+pub const FAIL_ROOTED: u8 = 0x5f;
+pub const FAIL_NOPATH: u8 = 0x32;
+
+/// A charge (Charge, Intercept) refused before it costs anything: from a
+/// caster held to the spot (`SPELL_FAILED_ROOTED`), or at a unit there is
+/// no path to (`SPELL_FAILED_NOPATH`) or whose path is longer than half
+/// again the spell's range (`SPELL_FAILED_OUT_OF_RANGE`), as
+/// mangos-classic's `Spell::CheckCast` has it for `SPELL_EFFECT_CHARGE`.
+/// A spell that frees its caster from roots isn't held by them
+/// (`IsIgnoreRootSpell`).
+fn charge_check(map: &mut Map, caster: Guid, s: &SpellTemplate, t: &Targets) -> Option<u8> {
+    if !s.has_effect(super::EFFECT_CHARGE) {
+        return None;
+    }
+    const MECHANIC_ROOT: i32 = 7;
+    let frees = s.effects.iter().any(|e| {
+        e.effect == 6
+            && e.target_a == 1
+            && e.aura == AURA_MECHANIC_IMMUNITY
+            && e.misc_value == MECHANIC_ROOT
+    });
+    if !frees && auras::auras(map, caster).is_some_and(|a| a.has(AURA_MOD_ROOT)) {
+        return Some(FAIL_ROOTED);
+    }
+    let target = t.unit.filter(|u| *u != caster)?;
+    let (from, to) = (map.position_of(caster)?, map.position_of(target)?);
+    let range = map.realm.data.spells.range(s).1;
+    let path = map.nav.as_mut().map(|nav| nav.path(from, to));
+    match path {
+        Some(None) => Some(FAIL_NOPATH),
+        Some(Some(points)) => {
+            let length: f32 = points.windows(2).map(|w| dist(w[0], w[1])).sum();
+            (range > 0.0 && length > range * 1.5).then_some(fail::OUT_OF_RANGE)
+        }
+        None => None,
+    }
 }
