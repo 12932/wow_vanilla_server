@@ -3,8 +3,9 @@
 //! pet or charm on the players' side of the table (no crushing blows,
 //! glancing ones on a boss, players' factors as a victim, spells missing
 //! it by 7% a level); parry by the attacker's whole weapon skill; crowd
-//! control taking avoidance away; and a paladin's blows renewing their
-//! judgements.
+//! control taking avoidance away; no glancing on a victim of level ten or
+//! less; no block of a magic blow; a new attack's off hand at half its
+//! period; and a paladin's blows renewing their judgements.
 
 use std::time::Duration;
 
@@ -26,6 +27,8 @@ const SWORDS: u32 = 43;
 const JUDGEMENT: u32 = 96_900;
 /// A warrior's, that doesn't.
 const REND: u32 = 96_901;
+/// A creature whose blows are fire.
+const FLAME: u32 = 96_930;
 
 fn data() -> GameData {
     let mut d = p3::data();
@@ -50,6 +53,9 @@ fn data() -> GameData {
         };
         d.spells.spells.insert(id, s);
     }
+    let mut flame = p3::template(FLAME, 4);
+    flame.damage_school = 2;
+    d.creature_templates.insert(FLAME, flame);
     d
 }
 
@@ -277,4 +283,83 @@ async fn a_paladins_blow_renews_their_judgement() {
     assert_eq!(r.0, Some(Duration::from_secs(6)), "a miss renews nothing");
     assert_eq!(r.1, Some(Duration::from_secs(10)), "the judgement renewed");
     assert_eq!(r.2, Some(Duration::from_secs(4)), "the rest not");
+}
+
+/// mangos's `CanGlanceInCombat`: a creature of level ten is never glanced,
+/// one of eleven is.
+#[tokio::test]
+async fn no_glancing_blow_falls_on_a_victim_of_level_ten_or_less() {
+    let (_realm, _a, g, map) = p3::setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            p3::level(m, g, 10);
+            [10, 11].map(|level| {
+                let c = p3::spawn(m, g, BRUTE, level, 3.0);
+                share(
+                    &combat::roll_for(m, g, c, Hand::Main).unwrap(),
+                    Outcome::Glancing,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(r[0], 0, "level ten");
+    assert!(r[1] > 0, "level eleven: {}", r[1]);
+}
+
+/// mangos's pre-WotLK `CanBlockInCombat`: a shield blocks a creature's
+/// physical blows, not a fire elemental's.
+#[tokio::test]
+async fn a_shield_blocks_no_magic_blow() {
+    let (_realm, _a, g, map) = p3::setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            trained(m, g, 300, 0);
+            crate::game::map::spells::learn(m, g, crate::game::map::derive::SPELL_BLOCK);
+            p3::equip(m, g, p3::SHIELD, p3::OFF_HAND);
+            m.players
+                .get_mut(&g)
+                .unwrap()
+                .fields
+                .set_byte(UNIT_FIELD_BYTES_2, 0, 1);
+            restat(m, g);
+            [BRUTE, FLAME].map(|entry| {
+                let c = p3::spawn(m, g, entry, 60, 3.0);
+                share(
+                    &combat::roll_for(m, c, g, Hand::Main).unwrap(),
+                    Outcome::Block,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    assert!(r[0] > 0, "a physical blow blocked: {r:?}");
+    assert_eq!(r[1], 0, "a fire one never");
+}
+
+/// mangos's `Unit::Attack`: a new attack's off hand first swings half its
+/// period after (1.3 s of 2.6), not at once with the main hand; one
+/// waiting longer waits on.
+#[tokio::test]
+async fn a_new_attacks_off_hand_waits_half_its_period() {
+    let (_realm, _a, g, map) = p3::setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            trained(m, g, 300, 0);
+            let one = p3::spawn(m, g, BRUTE, 60, 3.0);
+            let two = p3::spawn(m, g, BRUTE, 60, 3.0);
+            m.unit_fields_mut(g)
+                .unwrap()
+                .set_u32(UNIT_FIELD_BASEATTACKTIME + 1, 2_600);
+            let now = m.now;
+            combat::start_attack(m, g, one);
+            let first = m.combat(g).unwrap().next_offhand.map(|t| t - now);
+            m.combat_mut(g).unwrap().next_offhand = Some(now + Duration::from_secs(5));
+            combat::start_attack(m, g, two);
+            (first, m.combat(g).unwrap().next_offhand.map(|t| t - now))
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, Some(Duration::from_millis(1_300)));
+    assert_eq!(r.1, Some(Duration::from_secs(5)));
 }

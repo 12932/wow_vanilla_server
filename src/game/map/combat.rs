@@ -212,6 +212,9 @@ pub struct Roll {
     pub attacker_hit: f32,
     /// A player victim with weapons sheathed doesn't block.
     pub sheathed: bool,
+    /// The blow is of a magic school (an elemental's): it can't be blocked
+    /// (mangos's pre-WotLK `CanBlockInCombat`).
+    pub magic: bool,
 }
 
 impl Roll {
@@ -332,6 +335,7 @@ impl Roll {
 
     fn block(&self) -> i32 {
         if self.ranged
+            || self.magic
             || self.avoidance_disabled
             || self.from_behind
             || self.block <= 0.0
@@ -1520,6 +1524,7 @@ pub fn roll_for(map: &Map, attacker: Guid, victim: Guid, hand: Hand) -> Option<R
         always_crush: flags_extra(map, attacker) & FLAG_EXTRA_ALWAYS_CRUSH != 0,
         attacker_hit,
         sheathed,
+        magic: !ranged && melee_school(map, attacker) & 1 == 0,
     })
 }
 
@@ -1799,9 +1804,18 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
     if c.next_swing.is_none_or(|t| t < now) {
         c.next_swing = Some(now);
     }
-    // The off hand follows a moment after.
-    if c.next_offhand.is_none_or(|t| t < now) {
-        c.next_offhand = Some(now + Duration::from_millis(200));
+    // A new attack's off hand waits half its period (mangos's
+    // `Unit::Attack`), or longer if it was waiting longer: a new victim
+    // doesn't hasten it.
+    if !same {
+        let period = map
+            .unit_fields(attacker)
+            .map_or(2000, |f| f.get_u32(UNIT_FIELD_BASEATTACKTIME + 1))
+            .max(400);
+        let half = now + Duration::from_millis(u64::from(period / 2));
+        if let Some(c) = map.combat_mut(attacker) {
+            c.next_offhand = Some(c.next_offhand.map_or(half, |t| t.max(half)));
+        }
     }
     if let Some(f) = map.unit_fields_mut(attacker) {
         f.set_guid(UNIT_FIELD_TARGET, victim);
@@ -2323,7 +2337,7 @@ pub fn blow(
 #[cfg(test)]
 thread_local! {
     /// A test's outcome for the white swings it makes, in place of the
-    /// roll; such a swing trains a skill whenever it may.
+    /// roll.
     pub static FORCED_OUTCOME: std::cell::Cell<Option<Outcome>> =
         const { std::cell::Cell::new(None) };
 }
@@ -2732,11 +2746,9 @@ pub fn ability_skill_gains(
 /// `UpdateCombatSkills` and `UpdateWeaponSkill`).
 fn skill_gains(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand) {
     let mut rng = rand::rng();
-    // A test's forced swing trains whenever it may.
-    #[cfg(test)]
-    let sure = FORCED_OUTCOME.with(|f| f.get()).is_some();
-    #[cfg(not(test))]
-    let sure = false;
+    // With outcomes fixed, not rolled (the tests), a blow trains whenever
+    // it may.
+    let sure = !crate::game::map::spells::outcome::rolling(map);
     let mut skill_roll = move || {
         if sure {
             0.0
