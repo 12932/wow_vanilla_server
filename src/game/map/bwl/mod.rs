@@ -20,6 +20,7 @@ use std::time::Duration;
 use wow_world_messages::Guid;
 
 pub mod razorgore;
+pub mod vael;
 
 use super::instance_adapters::TIMERS;
 use super::instance_script::{
@@ -119,6 +120,9 @@ pub fn doors() -> &'static [(u32, Open)] {
 /// A field set, as `instance_blackwing_lair::SetData` has it: a boss's
 /// field won stays won; the doors follow the data.
 pub fn set_data(map: &mut Map, field: u32, value: u32) {
+    if vael::hook(map, field) {
+        return;
+    }
     let old = get_data(map, field);
     if field <= NEFARIAN && old == DONE {
         return;
@@ -212,6 +216,12 @@ pub fn creature_event(map: &mut Map, g: Guid, entry: u32, _spawn: Option<u32>, e
         lashlayer_event(map, g, event);
     }
     razorgore::creature_event(map, g, entry, event);
+    vael::creature_event(map, g, entry, event);
+}
+
+/// A living player into area trigger `id` here.
+pub fn area_trigger(map: &mut Map, player: Guid, id: u32) {
+    vael::area_trigger(map, player, id);
 }
 
 // Broodlord Lashlayer: his yell at the pull, and his leash: below the
@@ -231,7 +241,7 @@ fn lashlayer_event(map: &mut Map, g: Guid, event: Event) {
 
 /// A timed step for one creature of the lair.
 pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
-    if razorgore::creature_timer(map, key, g) {
+    if razorgore::creature_timer(map, key, g) || vael::creature_timer(map, key, g) {
         return;
     }
     if key == T_LASHLAYER_LEASH {
@@ -256,7 +266,7 @@ pub fn creature_timer(map: &mut Map, key: u32, g: Guid) {
 
 /// A timed step of the copy.
 pub fn timer(map: &mut Map, key: u32) {
-    razorgore::timer(map, key);
+    let _ = razorgore::timer(map, key) || vael::timer(map, key);
 }
 
 /// Objects as the copy's data leaves them, once its spawns are in.
@@ -267,7 +277,7 @@ pub fn settle_spawns(map: &mut Map) {
 // The bosses' timed casts, as EventAI.
 
 /// The ids of what is built here, clear of the world's and Thistle Tea's.
-const BASE: u32 = 96_120_000;
+pub(super) const BASE: u32 = 96_120_000;
 
 /// Where a cast goes.
 #[derive(Debug, Clone, Copy)]
@@ -300,13 +310,28 @@ impl Build<'_> {
         params: [i32; 4],
         steps: Vec<ScriptStep>,
     ) {
+        self.event_chance(entry, n, kind, flags, 100, params, steps);
+    }
+
+    /// [`Build::event`], by a chance in a hundred.
+    #[allow(clippy::too_many_arguments)]
+    fn event_chance(
+        &mut self,
+        entry: u32,
+        n: u32,
+        kind: u32,
+        flags: u32,
+        chance: u32,
+        params: [i32; 4],
+        steps: Vec<ScriptStep>,
+    ) {
         let action = self.id();
         self.data.scripts.ai_scripts.insert(action, steps);
         let e = AiEvent {
             id: entry * 100 + n,
             creature: entry,
             kind,
-            chance: 100,
+            chance,
             flags,
             params,
             actions: [action, 0, 0],
@@ -490,5 +515,6 @@ pub fn install(data: &mut GameData) {
         b.home_fails(entry, 90, field);
     }
     razorgore::install(&mut b);
+    vael::install(&mut b);
     b.home_fails(NPC_RAZORGORE, 90, RAZORGORE);
 }

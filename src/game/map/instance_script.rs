@@ -1089,8 +1089,10 @@ pub fn area_trigger(map: &mut Map, player: Guid, id: u32) {
     if map.key.instance == 0 {
         return;
     }
-    if map.instance.script == Some(Script::BlackrockSpire) {
-        super::ubrs_stadium::area_trigger(map, player, id);
+    match map.instance.script {
+        Some(Script::BlackrockSpire) => super::ubrs_stadium::area_trigger(map, player, id),
+        Some(Script::BlackwingLair) => super::bwl::area_trigger(map, player, id),
+        _ => {}
     }
 }
 
