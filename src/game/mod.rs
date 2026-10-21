@@ -191,6 +191,10 @@ mod tests_p11a_resurrect;
 #[cfg(test)]
 mod tests_p11b_spells;
 #[cfg(test)]
+mod tests_p11_entity_more;
+#[cfg(test)]
+mod tests_p11_entity_spells;
+#[cfg(test)]
 mod tests_p11c_checks;
 #[cfg(test)]
 mod tests_p11c_movement;
