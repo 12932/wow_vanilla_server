@@ -1287,8 +1287,17 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
     let Some(c) = map.creature_mut(g) else {
         return false;
     };
-    let frame = c.walk_at(path, how.run, how.fly, how.time, now, spline_id);
+    let mut frame = c.walk_at(path, how.run, how.fly, how.time, now, spline_id);
     let moved = matches!(&c.motion, Motion::Moving(w) if w.spline_id == spline_id);
+    // Its facing there is in its move, for those who see it go and those
+    // who come upon it on the way (mangos's `PointMovementGenerator`,
+    // `init.SetFacing`): told as it sets off, not only as it turns.
+    if let (Some(o), Motion::Moving(w)) = (how.face, &mut c.motion)
+        && moved
+    {
+        w.face = Some(o);
+        frame = w.frame(g, from);
+    }
     if let Some(s) = c.scripted.as_deref_mut() {
         s.scripted_move = None;
     }

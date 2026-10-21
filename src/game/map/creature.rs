@@ -767,6 +767,9 @@ impl Creature {
                         id: w.spline_id,
                         nodes: w.points.clone(),
                         final_node: w.destination(),
+                        // A fall keeps the way it faced.
+                        final_angle: w.face.filter(|_| !w.falling),
+                        final_target: w.face_target.filter(|_| !w.falling),
                     }),
                 )
             }
@@ -782,6 +785,8 @@ impl Creature {
                 orientation,
                 pitch: 0.0,
                 fall_time: 0,
+                jump: None,
+                spline_elevation: None,
                 speeds: self.speeds,
                 spline,
                 transport: None,

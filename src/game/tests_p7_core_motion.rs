@@ -140,6 +140,8 @@ fn living(
                 orientation: 0.5,
                 pitch: 0.25,
                 fall_time: 9,
+                jump: None,
+                spline_elevation: None,
                 speeds: Speeds::default(),
                 spline: None,
                 transport,
