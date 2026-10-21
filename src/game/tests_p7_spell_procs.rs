@@ -330,11 +330,13 @@ async fn a_cast_ends_once_whatever_it_lands_on() {
 
 /// A spell that procs nothing of its caster's doesn't go off on its end;
 /// a helpful cast at no one goes off at its caster; a helpful item's
-/// doesn't, nor a triggered bolt, but a triggered channel that is no
-/// proc's own does (Thistle Tea's "caster-suppressed spells cannot
-/// trigger", "helpful casts with no unit target use the caster for their
-/// proc", "positive item casts ... cannot trigger" and "triggered
-/// channels honor aura origin and the NOT_A_PROC exception").
+/// doesn't; a triggered bolt does, as a triggered channel that is no
+/// proc's own (Thistle Tea's "caster-suppressed spells cannot trigger",
+/// "helpful casts with no unit target use the caster for their proc",
+/// "positive item casts ... cannot trigger" and "triggered channels honor
+/// aura origin and the NOT_A_PROC exception"; its triggered bolt that
+/// procs nothing is not 1.12's: mangos-classic's `Spell::cast` procs
+/// `PROC_EX_CAST_END` for every spell, a triggered one's too).
 #[tokio::test]
 async fn a_suppressed_cast_procs_nothing_and_a_buff_procs_at_its_caster() {
     let realm = fast_realm(data);
@@ -358,8 +360,8 @@ async fn a_suppressed_cast_procs_nothing_and_a_buff_procs_at_its_caster() {
                 Some(Guid::new(0x4000_0000_0000_0123)),
             );
             let item = charges(m, a, ON_CAST);
-            // Triggered, a bolt procs nothing; a channel that is no
-            // proc's own does.
+            // Triggered, a bolt procs, as a channel that is no proc's own
+            // does.
             spells::cast_triggered(m, a, BOLT, Some(kobold));
             let triggered = charges(m, a, ON_CAST);
             spells::interrupt(m, a);
@@ -368,7 +370,7 @@ async fn a_suppressed_cast_procs_nothing_and_a_buff_procs_at_its_caster() {
         })
         .await
         .unwrap();
-    assert_eq!(out, ((3, 0), (2, 1), 2, 2, 1));
+    assert_eq!(out, ((3, 0), (2, 1), 2, 1, 0));
 }
 
 /// Unstable Power starts at twelve stacks and loses one a cast, a nova on
