@@ -232,3 +232,83 @@ async fn a_split_joins_a_stack_of_its_own() {
     assert_eq!((count(from).await, count(onto).await), (6, 9));
     let _ = realm;
 }
+
+const TUNIC: u32 = 9652;
+const MAKE_TUNIC: u32 = 900_850;
+const MAKE_PEBBLES: u32 = 900_851;
+
+/// mangos's `DoCreateItem` (`HasCreator`) and `Item::SaveToDB`: a made
+/// item that isn't a stack, a consumable or a quest item shows "Made by"
+/// its maker, kept with it; wvs never set `ITEM_FIELD_CREATOR`.
+#[tokio::test]
+async fn a_made_item_names_its_maker_and_keeps_it() {
+    use crate::game::data::spells::{SpellEffect, SpellTemplate};
+    let mut d = data();
+    d.items.insert(
+        TUNIC,
+        ItemTemplate {
+            class: 4,
+            subclass: 1,
+            inventory_type: 5,
+            ..crate::game::tests_p12h_items::item(TUNIC)
+        },
+    );
+    for (id, item) in [(MAKE_TUNIC, TUNIC), (MAKE_PEBBLES, PEBBLE)] {
+        let mut effects = [SpellEffect::default(); 3];
+        effects[0] = SpellEffect {
+            effect: 24,
+            item_type: u64::from(item),
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        };
+        d.spells.spells.insert(
+            id,
+            SpellTemplate {
+                id,
+                name: format!("Make {item}"),
+                effects,
+                equipped_item_class: -1,
+                range_index: 1,
+                ..Default::default()
+            },
+        );
+    }
+    let (_realm, mut a, g, map) = setup_with(d, Class::Warrior).await;
+    for spell in [MAKE_TUNIC, MAKE_PEBBLES] {
+        on(&map, move |m| crate::game::map::spells::learn(m, g, spell)).await;
+        a.send(CMSG_CAST_SPELL {
+            spell,
+            targets: crate::game::map::spells::wire_targets(&Default::default()),
+        })
+        .await;
+    }
+    let made = move |m: &mut Map| {
+        let data = m.realm.data.clone();
+        let p = &m.players[&g];
+        let of = |entry: u32| {
+            p.items.iter().find(|i| i.entry == entry).map(|i| {
+                let kept = crate::game::map::player::Item::from_row(&data, &i.to_row(), g);
+                (
+                    i.fields.get_guid(ITEM_FIELD_CREATOR),
+                    kept.fields.get_guid(ITEM_FIELD_CREATOR),
+                )
+            })
+        };
+        (of(TUNIC), of(PEBBLE))
+    };
+    let mut got = (None, None);
+    for _ in 0..100 {
+        got = on(&map, made).await;
+        if got.0.is_some() && got.1.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(got.0, Some((g, g)), "the tunic's maker, kept");
+    assert_eq!(
+        got.1,
+        Some((Guid::zero(), Guid::zero())),
+        "a stack names none"
+    );
+}

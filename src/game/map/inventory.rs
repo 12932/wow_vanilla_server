@@ -1150,6 +1150,19 @@ pub fn add_item(map: &mut Map, g: Guid, entry: u32, count: u32, alert: bool) -> 
 
 /// [`add_item`] for what a player made: told as created ("You create"),
 /// as Thistle Tea and mangos tell a craft.
+/// Whether a made item names its maker: not a stack, a consumable, a
+/// quest item, one flagged so (`ITEM_FLAG_NO_CREATOR`) or the Hearthstone
+/// (mangos's `ItemPrototype::HasCreator`).
+pub fn has_creator(t: &crate::game::data::ItemTemplate) -> bool {
+    const ITEM_FLAG_NO_CREATOR: u32 = 0x0002_0000;
+    const HEARTHSTONE: u32 = 6948;
+    t.stackable <= 1
+        && t.class != 0
+        && t.class != 12
+        && t.flags & ITEM_FLAG_NO_CREATOR == 0
+        && t.entry != HEARTHSTONE
+}
+
 pub fn add_created_item(map: &mut Map, g: Guid, entry: u32, count: u32) -> Result<(), Fail> {
     store(map, g, entry, count, true, NewItemCreationType::Created, 0)
 }
@@ -1236,6 +1249,10 @@ fn store_planned(
         };
         if property != 0 {
             crate::game::map::enchant::set_random_property(&data, &mut item, property);
+        }
+        // Made: "Made by <name>" (mangos's `DoCreateItem`, `HasCreator`).
+        if creation == NewItemCreationType::Created && data.item(entry).is_some_and(has_creator) {
+            item.fields.set_guid(ITEM_FIELD_CREATOR, g);
         }
         batch.push(&update::create_block(&item.create(), Visibility::Owner));
         p.items.push(item);
