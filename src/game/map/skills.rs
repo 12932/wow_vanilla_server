@@ -109,7 +109,15 @@ pub fn learn_skill(p: &mut Player, skill: u32, step: u32) {
         // Riding's next rank is had whole, as its first (mangos's
         // `SetSkillStep` at the tier's value).
         Some(i) if skill == RIDING => (i, max),
-        Some(i) => (i, value(p, skill).unwrap_or(1)),
+        // A step set keeps the value had, over a lower step's cap too
+        // (mangos's `SetSkillStep`).
+        Some(i) => {
+            let base = PLAYER_SKILL_INFO_1_1 + i * 3;
+            let had = value(p, skill).unwrap_or(1);
+            p.fields.set_u32(base, skill | (step << 16));
+            p.fields.set_u32(base + 1, had.max(1) | (max << 16));
+            return;
+        }
         None => {
             let Some(free) =
                 (0..SLOTS).find(|i| p.fields.get_u32(PLAYER_SKILL_INFO_1_1 + i * 3) == 0)
@@ -248,9 +256,25 @@ fn derive(p: &mut Player, data: &GameData) {
         1u32 << (p.row.class.max(1) - 1),
         1u32 << (p.row.race.max(1) - 1),
     );
+    let saved: Vec<u32> = p
+        .row
+        .state
+        .skills
+        .iter()
+        .flatten()
+        .map(|(s, _)| *s)
+        .collect();
     for spell in spells {
         learn_from_spell(p, data, spell);
         learn_from_line(p, data, spell);
+        // A weapon skill a spell learned since brought, as it was saved (a
+        // character's first weapon skills, with no slot, count as at
+        // their cap).
+        for skill in weapon_lines(p, data, spell) {
+            if saved.contains(&skill) && slot_of(p, skill).is_none() {
+                learn_skill(p, skill, 1);
+            }
+        }
         let languages: Vec<u32> = data
             .spells
             .skill_abilities
@@ -383,6 +407,71 @@ pub fn learn_from_line(p: &mut Player, data: &GameData, spell: u32) {
             learn_skill(p, skill, 1);
             set_value(p, skill, 1);
         }
+    }
+}
+
+/// A weapon's spell learned brings its weapon skill, from 1, or from what
+/// it had reached when a reset took it, if the level's cap allows
+/// (mangos's `UpdateSpellTrainedSkills` for a race or class skill's
+/// ability, `m_forgottenSkills`): Two-Handed Axes from a shaman's talent.
+pub fn learn_weapon_lines(p: &mut Player, data: &GameData, spell: u32) {
+    for skill in weapon_lines(p, data, spell) {
+        if slot_of(p, skill).is_some() {
+            continue;
+        }
+        learn_skill(p, skill, 1);
+        let kept = p
+            .row
+            .state
+            .forgotten_skills
+            .iter()
+            .position(|(s, _)| *s == skill);
+        let value = match kept {
+            Some(i) => p.row.state.forgotten_skills.remove(i).1,
+            None => 1,
+        };
+        let fits = max_value(p, skill).is_some_and(|max| value <= max);
+        set_value(p, skill, if fits { value } else { 1 });
+    }
+}
+
+/// The weapon skills `spell` is the ability of for `p`'s race and class,
+/// learned with it (`SkillLineAbility`'s acquire method 2, mangos's
+/// `ABILITY_LEARNED_ON_GET_RACE_OR_CLASS_SKILL`).
+fn weapon_lines(p: &Player, data: &GameData, spell: u32) -> Vec<u32> {
+    let (class_bit, race_bit) = (
+        1u32 << (p.row.class.max(1) - 1),
+        1u32 << (p.row.race.max(1) - 1),
+    );
+    data.spells
+        .skill_abilities
+        .get(&spell)
+        .into_iter()
+        .flatten()
+        .filter(|a| {
+            a.acquire == 2
+                && WEAPONS.contains(&a.skill)
+                && (a.class_mask == 0 || a.class_mask & class_bit != 0)
+                && (a.race_mask == 0 || a.race_mask & race_bit != 0)
+        })
+        .map(|a| a.skill)
+        .collect()
+}
+
+/// A spell forgotten: the weapon skills it was the ability of go, their
+/// values kept for a retrain (mangos's `UpdateSpellTrainedSkills` on
+/// removal, `m_forgottenSkills`, highest kept).
+pub fn forget_from_line(p: &mut Player, data: &GameData, spell: u32) {
+    for skill in weapon_lines(p, data, spell) {
+        let Some(value) = value(p, skill) else {
+            continue;
+        };
+        let kept = &mut p.row.state.forgotten_skills;
+        match kept.iter_mut().find(|(s, _)| *s == skill) {
+            Some((_, v)) => *v = (*v).max(value),
+            None => kept.push((skill, value)),
+        }
+        forget_skill(p, skill);
     }
 }
 

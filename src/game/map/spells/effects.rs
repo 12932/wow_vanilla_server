@@ -1104,7 +1104,12 @@ fn effect(
                 }
             }
         }
-        EFFECT_LEARN_SPELL if e.trigger_spell != 0 => learn(map, target, e.trigger_spell),
+        // A spell that doesn't exist isn't learned (mangos's `addSpell`).
+        EFFECT_LEARN_SPELL
+            if e.trigger_spell != 0 && map.realm.data.spells.get(e.trigger_spell).is_some() =>
+        {
+            learn(map, target, e.trigger_spell)
+        }
         EFFECT_TRIGGER_SPELL if e.trigger_spell != 0 => {
             cast_triggered(map, caster, e.trigger_spell, Some(target));
         }

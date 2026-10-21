@@ -306,12 +306,27 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
             .filter(|s| *s != spell && ranks.contains(s))
             .collect();
         p.spells.retain(|s| *s == spell || !ranks.contains(s));
+        // What came with them (Feline Swiftness's hidden dodge) goes too,
+        // unless the new rank brings it (mangos's `removeSpell` takes a
+        // spell's dependents).
+        let keep = data
+            .spells
+            .learn_with
+            .get(&spell)
+            .cloned()
+            .unwrap_or_default();
+        let dependents: Vec<u32> = gone
+            .iter()
+            .flat_map(|r| data.spells.learn_with.get(r).cloned().unwrap_or_default())
+            .filter(|d| !keep.contains(d) && p.spells.contains(d))
+            .collect();
         // And their passive auras with them: the ranks never stack (mangos's
         // `removeSpell` of the rank below, Thistle Tea's "without duplicate
         // ranks").
         for r in gone {
             auras::remove_spell(map, player, r, Some(player));
         }
+        crate::game::map::misc::forget_spells(map, player, &dependents);
     }
     let Some(p) = map.players.get_mut(&player) else {
         return;
@@ -329,6 +344,7 @@ pub fn learn(map: &mut Map, player: Guid, spell: u32) {
     if let Some(p) = map.players.get_mut(&player) {
         crate::game::map::skills::learn_from_spell(p, &data, spell);
         crate::game::map::skills::learn_from_line(p, &data, spell);
+        crate::game::map::skills::learn_weapon_lines(p, &data, spell);
         crate::game::map::skills::learn_language(p, &data, spell);
     }
     // The spells a skill it brought comes with (Mining's Find Minerals and
@@ -438,7 +454,12 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
     let Some(s) = data.spells.get(spell) else {
         return;
     };
-    if !s.passive() || !passive_eligible(s, auras::form(map, player)) {
+    // A passive, or a hidden spell of the form the player is in (Feline
+    // Swiftness's dodge: mangos's `IsNeedCastSpellAtFormApply` takes
+    // `SPELL_ATTR_PASSIVE` or `SPELL_ATTR_DO_NOT_DISPLAY`).
+    let form = auras::form(map, player);
+    let hidden = s.attr(0, sd::ATTR_HIDDEN) && form > 0;
+    if !(s.passive() || hidden) || !passive_eligible(s, form) {
         return;
     }
     if s.attr(0, sd::ATTR_ONLY_OUTDOORS) && environment::outdoors(map, player) == Some(false) {
