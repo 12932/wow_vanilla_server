@@ -102,6 +102,12 @@ const ITEM_CATEGORY: u32 = 94;
 /// A hundred mana given, and fifty a second for five seconds.
 const GIVE_MANA: u32 = 998_443;
 const MANA_TICKS: u32 = 998_444;
+/// Stealth broken by an action, and Distract as the client's data has it
+/// (1725): no threat, allowed in stealth, ten seconds on the enemies
+/// within ten yards of the point.
+const HIDING: u32 = 998_445;
+const DISTRACT: u32 = 998_446;
+const R10: u32 = 13;
 
 fn proc_aura(id: u32, flags: u32) -> SpellTemplate {
     let mut s = bare(id, 0);
@@ -287,9 +293,30 @@ fn data(d: &mut GameData) {
             ..aura(auras::AURA_PERIODIC_ENERGIZE, 0, 50, 1)
         },
     );
+    d.spells.radii.insert(R10, 10.0);
+    let mut hiding = bare(HIDING, 0);
+    hiding.duration_index = LASTS_LONG;
+    hiding.aura_interrupt_flags = auras::INTERRUPT_ACTION | auras::INTERRUPT_ACTION_COMPLETE;
+    effect(&mut hiding, 0, aura(auras::AURA_MOD_STEALTH, 0, 100, 1));
+    let mut distract = bare(DISTRACT, 0);
+    distract.attributes[1] |= 0x2_0520;
+    effect(
+        &mut distract,
+        0,
+        SpellEffect {
+            effect: spells::EFFECT_DISTRACT,
+            base_points: 9,
+            base_dice: 1,
+            target_a: 16,
+            radius_index: R10,
+            ..Default::default()
+        },
+    );
     insert(
         d,
         [
+            hiding,
+            distract,
             give,
             ticks,
             waits,
@@ -746,4 +773,45 @@ async fn mana_given_is_half_its_worth_in_threat() {
         .await
         .unwrap();
     assert_eq!(out, (Some(50.0), Some(75.0)));
+}
+
+/// A rogue in stealth casting Distract at a kobold's feet stays hidden and
+/// out of a fight, and the kobold stands distracted, in none either
+/// (Thistle Tea's "a no-threat distraction preserves stealth and avoids
+/// combat"; mangos-classic's `SPELL_ATTR_EX_NO_THREAT` and
+/// `SPELL_ATTR_EX_ALLOW_WHILE_STEALTHED`).
+#[tokio::test]
+async fn a_distraction_from_stealth_keeps_it_and_starts_no_fight() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "P10CA", "Distracter", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, a, 60, &[DISTRACT]);
+            let k = kit::dummy(m, a, 60, 8.0);
+            kit::apply(m, a, a, HIDING);
+            let at = m.position_of(k);
+            cast_fresh(
+                m,
+                a,
+                DISTRACT,
+                Targets {
+                    dest: at,
+                    ..Default::default()
+                },
+            );
+            let distracted = matches!(
+                m.creature(k).unwrap().motion,
+                crate::game::map::creature::Motion::Idle { until: Some(_) }
+            );
+            (
+                kit::has(m, a, HIDING),
+                in_combat(m, a),
+                in_combat(m, k),
+                distracted,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, false, false, true));
 }

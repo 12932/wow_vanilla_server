@@ -515,3 +515,30 @@ async fn an_effect_immunity_keeps_a_repair_off_until_it_goes() {
     assert_eq!(out, (1_000, 1_100));
     assert_eq!(kit::missed(&mut c, REPAIR).await, 7, "immune");
 }
+
+/// Feline Swiftness's hidden dodge (24864), passive with no forms in its
+/// data, holds in cat form alone and goes with it; another passive of
+/// the same data holds anywhere (mangos-classic's
+/// `IsNeedCastSpellAtFormApply` naming 24864; Thistle Tea's "hidden Feline
+/// Swiftness dodge is cat-only even without its DBC stance mask").
+#[test]
+fn feline_swiftness_dodge_holds_in_cat_form_alone() {
+    let passive = |id: u32| {
+        let mut s = bare(id, 0);
+        s.attributes[0] |= sd::ATTR_PASSIVE;
+        effect(&mut s, 0, aura(49, 0, 2, 1));
+        s
+    };
+    let feline = passive(24_864);
+    let other = passive(24_865);
+    let forms = [0, auras::FORM_CAT, auras::FORM_BEAR];
+    assert_eq!(
+        forms.map(|f| spells::passive_eligible(&feline, f)),
+        [false, true, false]
+    );
+    assert!(spells::ends_with_form(&feline), "it goes with the form");
+    assert_eq!(
+        forms.map(|f| spells::passive_eligible(&other, f)),
+        [true, true, true]
+    );
+}
