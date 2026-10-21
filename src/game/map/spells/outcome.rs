@@ -99,6 +99,17 @@ pub struct Landing {
     pub shared: u32,
     /// The spell was triggered.
     pub triggered: bool,
+    /// An aura's or a proc's (`spells::cast_by_aura`).
+    pub by_aura: bool,
+    /// Cast from an item.
+    pub item: bool,
+}
+
+impl Landing {
+    /// Where `s`'s hit came from, for its procs.
+    pub fn origin(&self, s: &SpellTemplate) -> procs::Origin {
+        procs::Origin::of(s, self.by_aura, self.item)
+    }
 }
 
 /// Whether spell outcomes are rolled (production), or fixed: always a hit,
@@ -537,6 +548,14 @@ pub fn melee_roll(
     let Some(mut r) = combat::roll_for(map, caster, target, hand) else {
         return (Hit::Miss, false);
     };
+    // An ability of no weapon (a ranged one not of the ranged slot: Scorpid
+    // Sting, Wing Clip's kind) rolls with the most skill of its caster's
+    // level, not a weapon's (mangos-classic's `IsSpellUseWeaponSkill` and
+    // `GetSkillMaxForLevel`; Thistle Tea's level skill for one needing no
+    // weapon).
+    if !uses_weapon_skill(s) {
+        r.attacker_skill = r.attacker_level * 5;
+    }
     r.crit += m.flat[mods::OP_CRITICAL_CHANCE] as f32;
     r.can_crit = !s.attr(2, sd::ATTR_EX2_CANT_CRIT);
     if s.attr(0, 0x20_0000) {
@@ -566,6 +585,15 @@ pub fn melee_roll(
         combat::Outcome::Crit => (Hit::Hit, true),
         _ => (Hit::Hit, false),
     }
+}
+
+/// Whether ability `s` rolls with its weapon's skill: one wanting a weapon,
+/// a melee one, or a ranged one of the ranged slot (mangos-classic's
+/// `IsSpellUseWeaponSkill`).
+pub fn uses_weapon_skill(s: &SpellTemplate) -> bool {
+    s.equipped_item_class == 2
+        || s.dmg_class == 2
+        || (s.dmg_class == 3 && s.attr(0, sd::ATTR_RANGED))
 }
 
 /// What a block of ability `s` is: a miss for one blocked whole (Shield
@@ -1232,9 +1260,17 @@ pub fn damage_log(
 /// the procs and the threat.
 pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Damage, l: &Landing) {
     // Its damage puts a creature in the fight, whether it saw the caster
-    // or not; a proc's doesn't (Thistle Tea's `Engagement.on_damage`).
-    // The players' sides of it too (mangos's `HandleDamageDealt`).
-    if d.amount > 0 && caster != target && !l.triggered {
+    // or not, another spell's trigger's too (a trap's); an aura's or a
+    // proc's doesn't, unless it is no proc's own (Thistle Tea's
+    // `damage_contact?`; mangos's `DealDamage` for every one). The players'
+    // sides of it too (mangos's `HandleDamageDealt`).
+    // An object's (a brazier's) is no one's fight (mangos's affective
+    // caster: none for an object no one owns).
+    if d.amount > 0
+        && caster != target
+        && (guid::is_unit(caster) || guid::is_player(caster))
+        && !(l.by_aura && !s.attr(3, sd::ATTR_EX3_NOT_A_PROC))
+    {
         if guid::is_unit(target) {
             crate::game::map::ai::attacked(map, target, caster);
         }
@@ -1281,6 +1317,7 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
             offhand: false,
             ranged: s.dmg_class == 3,
             extra_attack: false,
+            origin: l.origin(s),
         },
     );
     let items = death_items(map, target, caster, left);

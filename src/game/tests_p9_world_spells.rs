@@ -102,21 +102,25 @@ fn proc_auras(d: &mut GameData) {
 
 /// The charges `g`'s two spell procs have spent since `was`.
 fn spent(m: &Map, g: Guid, was: (u32, u32)) -> (u32, u32) {
+    let (a, b) = left(m, g);
+    (was.0 - a, was.1 - b)
+}
+
+/// The two proc auras' charges left.
+fn left(m: &Map, g: Guid) -> (u32, u32) {
     let left = |id: u32| holder(m, g, id).map_or(0, |h| h.charges);
-    (was.0 - left(ORDINARY), was.1 - left(FROM_PROCS))
+    (left(ORDINARY), left(FROM_PROCS))
 }
 
 /// Thistle Tea's "real channel exceptions distinguish ordinary proc auras
 /// from CAN_PROC_FROM_PROCS" (`cast_proc_dbc_test.exs`): Magic Absorption
 /// (29447) has `ATTR_EX3_CAN_PROC_FROM_PROCS`, and Arcane Missiles'
 /// missile (7268) `ATTR_EX3_NOT_A_PROC` where Hellfire's flames (5857)
-/// have none. Each spell a periodic trigger casts procs both an ordinary
-/// proc aura and one with Magic Absorption's attributes: the missile as
-/// Thistle Tea and mangos have it, the flames too, where they would
-/// spare the ordinary one (mangos's `IsTriggeredAtSpellProcEvent` refuses
-/// a triggered spell's proc to an aura without the attribute unless the
-/// spell is `NOT_A_PROC`; wvs's `procs::run` refuses only a spell a proc
-/// cast). A missile a proc casts procs only the one with the attribute.
+/// have none. As mangos's `IsTriggeredAtSpellProcEvent` (round 10's 10b): a
+/// spell an aura or a proc casts procs only an aura with the attribute,
+/// unless it is `NOT_A_PROC`: Hellfire's flames the flagged one alone, a
+/// missile both, from a channel or a proc. Each section counts from its own
+/// start (10b's cast-end procs spend charges of their own).
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_spell_from_a_proc_procs_only_what_may_proc_from_procs() {
@@ -138,19 +142,22 @@ async fn a_spell_from_a_proc_procs_only_what_may_proc_from_procs() {
                 apply(m, g, g, id);
             }
             // Hellfire's tick: its flames about the warlock.
+            let was = left(m, g);
             apply(m, g, g, HELLFIRE);
             tick_now(m, g, HELLFIRE);
-            let flames = spent(m, g, (10, 10));
+            let flames = spent(m, g, was);
             auras::remove_spell(m, g, HELLFIRE, None);
             // Arcane Missiles' tick: a missile at the warlock's target.
             if let Some(f) = m.unit_fields_mut(g) {
                 f.set_guid(UNIT_FIELD_TARGET, foe);
             }
+            let was = left(m, g);
             apply(m, g, g, ARCANE_MISSILES);
             tick_now(m, g, ARCANE_MISSILES);
-            let missile = spent(m, g, (9, 9));
+            let missile = spent(m, g, was);
             auras::remove_spell(m, g, ARCANE_MISSILES, None);
             // A swing's proc: a missile from a proc.
+            let was = left(m, g);
             procs::trigger(
                 m,
                 Event {
@@ -164,22 +171,18 @@ async fn a_spell_from_a_proc_procs_only_what_may_proc_from_procs() {
                     ..Default::default()
                 },
             );
-            let from_a_proc = spent(m, g, (8, 8));
+            let from_a_proc = spent(m, g, was);
             (flames, missile, from_a_proc)
         })
         .await
         .unwrap();
     let (flames, missile, from_a_proc) = out;
     assert_eq!(missile, (1, 1), "a missile: both");
-    assert_eq!(
-        flames,
-        (1, 1),
-        "the flames: both (mangos: the flagged one only)"
-    );
+    assert_eq!(flames, (0, 1), "the flames: the flagged one only");
     assert_eq!(
         from_a_proc,
-        (0, 1),
-        "a proc's missile: the flagged one only"
+        (1, 1),
+        "a proc's missile: both, as no proc's own"
     );
 }
 

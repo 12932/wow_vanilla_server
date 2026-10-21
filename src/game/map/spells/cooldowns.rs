@@ -49,20 +49,24 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
         ),
         _ => (s.recovery_time, s.category, s.category_recovery_time),
     };
-    let recovery = charm_cooldown(map, caster, s.id).unwrap_or(recovery);
-    let recovery = m.apply_ms(mods::OP_COOLDOWN, recovery);
-    let category_recovery = m.apply_ms(mods::OP_COOLDOWN, category_recovery);
+    let raw = charm_cooldown(map, caster, s.id).unwrap_or(recovery);
+    let raw_category = category_recovery;
+    let recovery = m.apply_ms(mods::OP_COOLDOWN, raw);
+    let category_recovery = m.apply_ms(mods::OP_COOLDOWN, raw_category);
     if recovery == 0 && category_recovery == 0 {
         return;
     }
+    // One that waits for its event keeps its times (an item's own) as they
+    // are, the modifiers then to be had once as it starts (mangos's
+    // `AddCooldown` at the aura's going, Thistle Tea's "retains item
+    // overrides and applies current cooldown modifiers once").
     if s.attr(0, ATTR_COOLDOWN_ON_EVENT) {
         if let Some(c) = map.caster_mut(caster)
             && !c.pending_cooldowns.contains(&s.id)
         {
             c.pending_cooldowns.push(s.id);
             c.pending_times.retain(|p| p.0 != s.id);
-            c.pending_times
-                .push((s.id, recovery, category, category_recovery));
+            c.pending_times.push((s.id, raw, category, raw_category));
         }
         return;
     }
@@ -186,6 +190,10 @@ pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
             0,
         ),
     };
+    // With the modifiers its caster has now.
+    let m = mods::for_spell(map, target, s);
+    let recovery = m.apply_ms(mods::OP_COOLDOWN, recovery);
+    let category_recovery = m.apply_ms(mods::OP_COOLDOWN, category_recovery);
     // The spell itself waits the longer of the two.
     let longer = recovery.max(category_recovery);
     if let Some(c) = map.caster_mut(target) {
@@ -229,18 +237,37 @@ pub fn lock_school(map: &mut Map, target: Guid, interrupted: u32, ms: u32) {
         return;
     };
     let mask = s.school_mask();
+    let until = now + Duration::from_millis(u64::from(ms));
     if let Some(c) = map.caster_mut(target) {
-        c.school_lockout
-            .push((mask, now + Duration::from_millis(u64::from(ms))));
+        c.school_lockout.push((mask, until));
     }
     let Some(p) = map.players.get(&target) else {
         return;
+    };
+    // The client is told of the school's spells the lockout holds longer
+    // than they were held: not one whose own or category cooldown runs
+    // past it, nor one whose cooldown waits for its event (mangos's
+    // `Player::LockOutSpells`, Thistle Tea's "preserves longer spell and
+    // category cooldowns and deferred entries").
+    let c = &p.caster;
+    let longer = |t: &SpellTemplate| {
+        c.cooldowns.get(&t.id).is_some_and(|e| *e >= until)
+            || (t.category != 0
+                && c.category_cooldowns
+                    .get(&t.category)
+                    .is_some_and(|e| *e >= until))
     };
     let locked: Vec<(u32, u32)> = p
         .spells
         .iter()
         .filter_map(|id| data.spells.get(*id))
-        .filter(|t| !t.passive() && t.school_mask() & mask != 0 && !t.melee_or_ranged())
+        .filter(|t| {
+            !t.passive()
+                && t.school_mask() & mask != 0
+                && !t.melee_or_ranged()
+                && !t.attr(0, ATTR_COOLDOWN_ON_EVENT)
+                && !longer(t)
+        })
         .map(|t| (t.id, ms))
         .collect();
     send(map, target, &locked);

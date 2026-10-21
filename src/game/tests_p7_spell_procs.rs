@@ -276,7 +276,8 @@ fn marks(m: &Map, g: Guid) -> u32 {
 /// lands on, and the hits after spend nothing more: a nova on two kobolds
 /// marks the first named once, a charge gone; a bolt at a kobold immune to
 /// it still goes off; a cast begun and cancelled spends nothing; a channel
-/// goes off as it begins, not at its ticks nor as it ends; a bolt that
+/// goes off as it begins, not as it ends (its ticks' casts, which raise
+/// their own, find no charge left); a bolt that
 /// procs nothing of its caster's doesn't; a buff at no one marks its
 /// caster (Thistle Tea's `Casting.complete`'s cast-completion procs).
 #[tokio::test]
@@ -330,11 +331,12 @@ async fn a_cast_ends_once_whatever_it_lands_on() {
 
 /// A spell that procs nothing of its caster's doesn't go off on its end;
 /// a helpful cast at no one goes off at its caster; a helpful item's
-/// doesn't, nor a triggered bolt, but a triggered channel that is no
-/// proc's own does (Thistle Tea's "caster-suppressed spells cannot
-/// trigger", "helpful casts with no unit target use the caster for their
-/// proc", "positive item casts ... cannot trigger" and "triggered
-/// channels honor aura origin and the NOT_A_PROC exception").
+/// doesn't; a triggered bolt's does, and a triggered channel's, as
+/// mangos's `Spell::cast` raises it for every cast (Thistle Tea's
+/// "caster-suppressed spells cannot trigger", "helpful casts with no unit
+/// target use the caster for their proc", "positive item casts ... cannot
+/// trigger"; its "triggered channels honor aura origin and the NOT_A_PROC
+/// exception" raises none for a triggered bolt).
 #[tokio::test]
 async fn a_suppressed_cast_procs_nothing_and_a_buff_procs_at_its_caster() {
     let realm = fast_realm(data);
@@ -358,8 +360,7 @@ async fn a_suppressed_cast_procs_nothing_and_a_buff_procs_at_its_caster() {
                 Some(Guid::new(0x4000_0000_0000_0123)),
             );
             let item = charges(m, a, ON_CAST);
-            // Triggered, a bolt procs nothing; a channel that is no
-            // proc's own does.
+            // Triggered, a bolt's end procs as a cast's, and a channel's.
             spells::cast_triggered(m, a, BOLT, Some(kobold));
             let triggered = charges(m, a, ON_CAST);
             spells::interrupt(m, a);
@@ -368,7 +369,7 @@ async fn a_suppressed_cast_procs_nothing_and_a_buff_procs_at_its_caster() {
         })
         .await
         .unwrap();
-    assert_eq!(out, ((3, 0), (2, 1), 2, 2, 1));
+    assert_eq!(out, ((3, 0), (2, 1), 2, 1, 0));
 }
 
 /// Unstable Power starts at twelve stacks and loses one a cast, a nova on

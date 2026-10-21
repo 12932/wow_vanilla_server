@@ -70,6 +70,9 @@ pub const EFFECT_DESTROY_ALL_TOTEMS: u32 = 110;
 pub const EFFECT_SUMMON_DEMON: u32 = 112;
 pub const EFFECT_APPLY_AREA_AURA_PET: u32 = 119;
 
+/// How long a summoned demon (`EFFECT_SUMMON_DEMON`) lasts.
+pub const DEMON_LASTS: Duration = Duration::from_secs(3600);
+
 /// Tame Beast's channel ticks this dummy, which tames.
 pub const SPELL_TAME_BEAST: u32 = 1515;
 pub const SPELL_TAME_BEAST_TICK: u32 = 13535;
@@ -162,6 +165,9 @@ pub struct PetState {
     /// A totem's slot (fire, earth, water, air), and the spell it casts.
     pub totem_slot: Option<usize>,
     pub totem_spell: u32,
+    /// The reach of a totem's party aura, with its shaman's modifiers as
+    /// they were when it was set down; 0 for none.
+    pub totem_radius: f32,
     pub next_think: Instant,
     pub regen_at: Instant,
     pub happiness_at: Instant,
@@ -213,6 +219,7 @@ impl PetState {
             expires: None,
             totem_slot: None,
             totem_spell: 0,
+            totem_radius: 0.0,
             next_think: now,
             regen_at: now + Duration::from_secs(2),
             happiness_at: now + hunter::HAPPINESS_TICK,
@@ -558,7 +565,15 @@ pub fn effect_by(
                 return;
             }
             for i in 0..count {
-                totems::summon_guardian(map, caster, entry, s, i == 0, at(i), item);
+                let g = totems::summon_guardian(map, caster, entry, s, i == 0, at(i), item);
+                // A summoned demon (Inferno's) lasts an hour or until it dies
+                // (mangos-classic's `EffectSummonDemon`:
+                // `TEMPSPAWN_TIMED_OR_DEAD_DESPAWN` of 3,600,000).
+                if e.effect == EFFECT_SUMMON_DEMON
+                    && let Some(g) = g
+                {
+                    totems::lasts(map, g, DEMON_LASTS);
+                }
             }
         }
         EFFECT_SUMMON_CRITTER => totems::summon_critter(map, caster, e.misc_value.max(0) as u32, s),

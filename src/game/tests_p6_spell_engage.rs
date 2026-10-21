@@ -101,7 +101,7 @@ fn engages_as(
         kit::apply(m, a, a, HIDDEN);
     }
     if triggered {
-        crate::game::map::spells::cast_triggered(m, a, spell, Some(kobold));
+        crate::game::map::spells::cast_by_aura(m, a, spell, Some(kobold));
     } else {
         cast_fresh(m, a, spell, at(kobold));
     }

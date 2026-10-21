@@ -38,10 +38,15 @@ pub(crate) enum Dr {
     Knockout,
     Banish,
     Horror,
+    /// A root an aura or a proc gave (Improved Wing Clip's, Entrapment's).
+    TriggeredRoot,
 }
 
-/// A spell's diminishing returns group, as Thistle Tea follows vmangos.
-pub(crate) fn dr_group(s: &SpellTemplate) -> Option<Dr> {
+/// A spell's diminishing returns group, as Thistle Tea follows vmangos: a
+/// stun or a root an aura or a proc cast (`by_aura`) is a group apart
+/// from those cast, but a charge's (mangos-classic's
+/// `GetDiminishingReturnsGroupForSpell` with `m_triggeredByAuraSpell`).
+pub(crate) fn dr_group(s: &SpellTemplate, by_aura: bool) -> Option<Dr> {
     let flags = s.family_flags as u32;
     match (s.family_name, s.id) {
         (8, _) if flags & 0x20_0000 != 0 => return Some(Dr::KidneyShot),
@@ -77,7 +82,17 @@ pub(crate) fn dr_group(s: &SpellTemplate) -> Option<Dr> {
     ]
     .into_iter()
     .find(|(m, _)| mechanics.contains(m))
-    .map(|(_, g)| g)
+    .map(|(_, g)| match (g, by_aura) {
+        (Dr::ControlledStun, true) => Dr::TriggeredStun,
+        (Dr::ControlledRoot, true) => Dr::TriggeredRoot,
+        (g, _) => g,
+    })
+}
+
+/// The diminishing returns groups an aura of `s` may be of: as cast, and
+/// as an aura's (the holder doesn't say which it was).
+fn groups_of(s: &SpellTemplate) -> [Option<Dr>; 2] {
+    [dr_group(s, false), dr_group(s, true)]
 }
 
 /// The duration a crowd control lasts on `target` after its diminishing
@@ -88,11 +103,12 @@ fn diminished(
     target: Guid,
     s: &SpellTemplate,
     duration: Option<u32>,
+    by_aura: bool,
 ) -> Option<Option<u32>> {
     let Some(ms) = duration else {
         return Some(duration);
     };
-    let Some(group) = dr_group(s) else {
+    let Some(group) = dr_group(s, by_aura) else {
         return Some(duration);
     };
     let all = matches!(
@@ -145,28 +161,44 @@ const DR_RECOVERY: Duration = Duration::from_secs(15);
 fn group_on(map: &Map, target: Guid, group: Dr) -> bool {
     let data = &map.realm.data;
     auras::auras(map, target).is_some_and(|a| {
-        a.holders
-            .iter()
-            .any(|h| !h.positive && data.spells.get(h.spell).and_then(dr_group) == Some(group))
+        a.holders.iter().any(|h| {
+            !h.positive
+                && data
+                    .spells
+                    .get(h.spell)
+                    .is_some_and(|s| groups_of(s).contains(&Some(group)))
+        })
     })
 }
 
 /// An aura came off `target`: if it was the last of its diminishing
 /// group there, the group starts to recover.
 pub fn dr_aura_gone(map: &mut Map, target: Guid, spell: u32) {
-    let Some(group) = map.realm.data.spells.get(spell).and_then(dr_group) else {
+    let Some(s) = map.realm.data.spells.get(spell) else {
         return;
     };
-    if group_on(map, target, group) {
-        return;
-    }
     let now = map.now;
-    if let Some(c) = map.caster_mut(target)
-        && let Some(e) = c.diminishing.iter_mut().find(|(g, _, _)| *g == group as u8)
-    {
-        e.2 = Some(now + DR_RECOVERY);
+    for group in groups_of(s).into_iter().flatten() {
+        if group_on(map, target, group) {
+            continue;
+        }
+        // The group whose clock waits for its aura (not one already
+        // running).
+        if let Some(c) = map.caster_mut(target)
+            && let Some(e) = c
+                .diminishing
+                .iter_mut()
+                .find(|(g, _, r)| *g == group as u8 && r.is_none())
+        {
+            e.2 = Some(now + DR_RECOVERY);
+        }
     }
 }
+
+/// `SPELL_EFFECT_SPAWN`, and the flag of a unit still spawning in (not to
+/// be fought, mangos's `UNIT_FLAG_SPAWNING`).
+pub const EFFECT_SPAWN: u32 = 46;
+pub const UNIT_FLAG_SPAWNING: u32 = 0x2;
 
 /// A finisher's duration at `combo` points: from the base at none to the
 /// most at five, a fifth of the way for each, as mangos's
@@ -304,6 +336,7 @@ pub fn run(
                     spell: Some(s.id),
                     school: s.school_mask(),
                     ranged: s.dmg_class == 3,
+                    origin: l.origin(s),
                     ..Default::default()
                 },
             );
@@ -427,14 +460,18 @@ fn apply_auras(
     l: &Landing,
     item: Option<Guid>,
 ) {
-    if !aura_effects.is_empty() && map.unit_view(target).is_some_and(|u| u.alive) {
+    if !aura_effects.is_empty()
+        && map
+            .unit_view(target)
+            .is_some_and(|u| u.alive || held_by_the_dead(s))
+    {
         let duration = aura_duration(map, caster, s, &l.mods, l.combo);
         // The target's returns before, should the aura not go on.
         let returns = map.caster(target).map(|c| c.diminishing.clone());
         let duration = if auras::positive(s) || target == caster {
             Some(duration)
         } else {
-            diminished(map, caster, target, s, duration)
+            diminished(map, caster, target, s, duration, l.by_aura)
         };
         let Some(duration) = duration else {
             outcome::send_miss(map, caster, target, s.id, outcome::Hit::Immune);
@@ -492,6 +529,7 @@ fn apply_auras(
                     offhand: false,
                     ranged: s.dmg_class == 3,
                     extra_attack: false,
+                    origin: l.origin(s),
                 },
             );
         }
@@ -501,6 +539,17 @@ fn apply_auras(
             super::threat(map, caster, target, s, 0.0, &l.mods, false);
         }
     }
+}
+
+/// Whether `s`'s auras go on a corpse: one that lasts through death, is
+/// for the dead alone, or may be cast at the dead (mangos-classic's
+/// `AddSpellAuraHolder`: `IsDeathPersistentSpell`, `IsDeathOnlySpell`,
+/// `SPELL_ATTR_EX2_ALLOW_DEAD_TARGET`); any other is shed.
+pub fn held_by_the_dead(s: &SpellTemplate) -> bool {
+    s.attr(3, sd::ATTR_EX3_DEATH_PERSISTENT)
+        || s.attr(3, sd::ATTR_EX3_ONLY_ON_GHOSTS)
+        || s.attr(2, sd::ATTR_EX2_ALLOW_DEAD_TARGET)
+        || s.id == 2584
 }
 
 /// A weapon's speed for normalized damage: 1.7 for daggers, 3.3 for
@@ -686,6 +735,16 @@ fn effect(
             crate::game::map::combat::grant_extra_attacks(map, caster, s.id, amount.max(1) as u32);
             super::log::extra_attacks(map, caster, s.id, caster, amount.max(1) as u32);
         }
+        // A spawn-in: the Rookery Whelp's and Birth's (26262) caster is
+        // done spawning, and may be fought (mangos-classic's `EffectSpawn`
+        // clearing `UNIT_FLAG_SPAWNING` for these two only).
+        EFFECT_SPAWN => {
+            if matches!(s.id, 15_750 | 26_262)
+                && let Some(f) = map.unit_fields_mut(caster)
+            {
+                f.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_SPAWNING, false);
+            }
+        }
         // The ritual's summons: for its target, by its owner.
         crate::game::map::objects::EFFECT_SUMMON_PLAYER => {
             let who = t.unit.filter(|u| *u != caster).unwrap_or(target);
@@ -795,6 +854,7 @@ fn effect(
                     offhand: false,
                     ranged: s.dmg_class == 3,
                     extra_attack: false,
+                    origin: l.origin(s),
                 },
             );
         }
@@ -842,6 +902,10 @@ fn effect(
             }) {
                 map.send_to_observers(target, &frame, true);
             }
+            // Half of what it gives, of any power, is its caster's threat on
+            // those fighting the target, as a heal's (mangos's
+            // `EnergizeBySpell`: `threatAssist`).
+            combat::heal_threat(map, caster, target, s.id, amount.max(0) as u32);
             super::scripts::after_energize(map, caster, s);
         }
         // A pool the target has shown, alive, and a power that is one
@@ -2008,7 +2072,10 @@ pub fn tick_areas(map: &mut Map) {
                     heal(map, area.caster, g, area.spell, h as u32, true);
                 }
                 AURA_PERIODIC_TRIGGER_SPELL if e.trigger_spell != 0 => {
-                    cast_triggered(map, area.caster, e.trigger_spell, Some(g));
+                    // Frost Trap's pulse is its trap's activation, for
+                    // Entrapment (mangos-classic's dummy 18350 rolling it).
+                    super::class_scripts::periodic_triggered(map, g, &area_holder(&area, s));
+                    super::cast_by_aura(map, area.caster, e.trigger_spell, Some(g));
                 }
                 _ => {
                     // A slow, a debuff: on those inside while they stay.

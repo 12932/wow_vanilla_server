@@ -478,33 +478,40 @@ fn diminishing_groups_go_by_family_then_mechanic_in_order() {
         s.effects[0].mechanic = effect_mechanic;
         s
     };
-    assert_eq!(dr_group(&spell(0, 0, 17, 0)), Some(Dr::Polymorph));
+    assert_eq!(dr_group(&spell(0, 0, 17, 0), false), Some(Dr::Polymorph));
     assert_eq!(
-        dr_group(&spell(0, 0, 7, 12)),
+        dr_group(&spell(0, 0, 7, 12), false),
         Some(Dr::ControlledStun),
         "a stun first"
     );
-    assert_eq!(dr_group(&spell(0, 0, 0, 30)), Some(Dr::Knockout));
-    assert_eq!(dr_group(&spell(0, 0, 11, 0)), None);
-    assert_eq!(dr_group(&spell(8, 0x20_0000, 12, 0)), Some(Dr::KidneyShot));
-    assert_eq!(dr_group(&spell(8, 0x100_0000, 5, 0)), None, "Blind");
+    assert_eq!(dr_group(&spell(0, 0, 0, 30), false), Some(Dr::Knockout));
+    assert_eq!(dr_group(&spell(0, 0, 11, 0), false), None);
+    assert_eq!(
+        dr_group(&spell(8, 0x20_0000, 12, 0), false),
+        Some(Dr::KidneyShot)
+    );
+    assert_eq!(dr_group(&spell(8, 0x100_0000, 5, 0), false), None, "Blind");
     let mut pounce = spell(3, 0, 12, 0);
     pounce.spell_visual = 4325;
-    assert_eq!(dr_group(&pounce), None);
-    assert_eq!(dr_group(&spell(9, 0x8, 0, 0)), Some(Dr::Freeze));
+    assert_eq!(dr_group(&pounce, false), None);
+    assert_eq!(dr_group(&spell(9, 0x8, 0, 0), false), Some(Dr::Freeze));
     assert_eq!(
-        dr_group(&spell(11, 0x8000_0000, 0, 0)),
+        dr_group(&spell(11, 0x8000_0000, 0, 0), false),
         Some(Dr::ControlledRoot)
     );
     let mut seduction = spell(5, 0, 1, 0);
     seduction.id = 6358;
-    assert_eq!(dr_group(&seduction), Some(Dr::WarlockFear));
+    assert_eq!(dr_group(&seduction, false), Some(Dr::WarlockFear));
     assert_eq!(
-        dr_group(&spell(5, 0x8000_0000, 5, 0)),
+        dr_group(&spell(5, 0x8000_0000, 5, 0), false),
         Some(Dr::WarlockFear)
     );
-    assert_eq!(dr_group(&spell(5, 0x8000_0000, 11, 0)), None, "a curse");
-    assert_eq!(dr_group(&spell(4, 0x2, 11, 0)), None, "Hamstring");
+    assert_eq!(
+        dr_group(&spell(5, 0x8000_0000, 11, 0), false),
+        None,
+        "a curse"
+    );
+    assert_eq!(dr_group(&spell(4, 0x2, 11, 0), false), None, "Hamstring");
 }
 
 /// A shadow bolt of 100, of the warlock's family flag 2, one of a high

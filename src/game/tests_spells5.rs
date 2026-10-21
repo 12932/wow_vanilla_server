@@ -636,6 +636,7 @@ async fn effect_mechanics_taunts_and_fade() {
                 let cr = m.creature_mut(c).unwrap();
                 cr.threat = vec![(mage, 100.0), (w, 10.0)];
                 cr.combat.victim = mage;
+                cr.combat.attacking = true;
             }
             spells::cast_triggered(m, w, 355, Some(a));
             let taunted = (threat(m, a), m.creature(a).unwrap().combat.victim == w);

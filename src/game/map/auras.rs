@@ -2396,9 +2396,9 @@ fn removed(map: &mut Map, target: Guid, h: &Holder) {
         body_held(map, target);
     }
     crate::game::map::captured::ended(map, h.spell, h.caster);
-    if h.caster == target {
-        crate::game::map::spells::cooldowns::aura_gone(map, target, h.spell);
-    }
+    // A cooldown waiting for the aura is its caster's, whomever it was on
+    // (mangos's `SpellAuraHolder` removal: `caster->AddCooldown`).
+    crate::game::map::spells::cooldowns::aura_gone(map, h.caster, h.spell);
     let expired = h.expires.is_some_and(|t| t <= map.now);
     crate::game::map::spells::redemption::aura_gone(map, target, h.spell, expired);
     crate::game::map::spells::class_scripts::aura_gone(map, target, h);
@@ -3148,6 +3148,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                         offhand: false,
                         ranged: false,
                         extra_attack: false,
+                        origin: Default::default(),
                     },
                 );
             }
@@ -3220,10 +3221,11 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 periodic_log(map, h, target, aura_type);
             }
             // Half of what it gave is its caster's threat on those fighting
-            // the target, as a heal's is (mangos's `threatAssist`): a
-            // percentage of mana's, and an energize's of rage or energy
-            // (Bloodrage's). Thistle Tea's energize of mana makes none.
-            if percent || (a.kind == AURA_PERIODIC_ENERGIZE && power != 0) {
+            // the target, as a heal's is (mangos's `PeriodicTick`:
+            // `threatAssist` of the gain): a percentage of mana's, and an
+            // energize's of any power (Bloodrage's rage, a mana tick).
+            // Thistle Tea's energize of mana makes none.
+            if percent || a.kind == AURA_PERIODIC_ENERGIZE {
                 crate::game::map::combat::heal_threat(
                     map,
                     h.caster,
@@ -3334,7 +3336,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     origin: Some(target),
                     ..Default::default()
                 };
-                crate::game::map::spells::cast_triggered_with(map, h.caster, a.trigger, targets);
+                crate::game::map::spells::cast_by_aura_with(map, h.caster, a.trigger, targets);
                 return;
             }
             let aim = if h.caster == target {
@@ -3363,7 +3365,7 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
             if at_enemy && aim == h.caster {
                 return;
             }
-            crate::game::map::spells::cast_triggered(map, h.caster, a.trigger, Some(aim));
+            crate::game::map::spells::cast_by_aura(map, h.caster, a.trigger, Some(aim));
         }
         _ => {}
     }

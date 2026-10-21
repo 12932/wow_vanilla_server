@@ -883,6 +883,25 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   (Thistle Tea; mangos sends it and refuses); cast movement's tolerance 0.01 yd (mangos exact, Thistle Tea 0.5);
   hidden spells stay in the spellbook (mangos). Left `gap`: cross-map resurrection, Map.dbc's linked zone, a
   map-bound item at login, a converted item's new guid, and a few more (a second pass).
+- **10b, spells (0.1.65):** about 46 rows settled, eleven fixes, several **reversing earlier Thistle Tea calls for
+  mangos's** (yours to check): **an aura's or a proc's spell procs only auras that take procs' spells, unless it is
+  `NOT_A_PROC`** (mangos's `IsTriggeredAtSpellProcEvent`: Hellfire's flames no longer proc ordinary auras, Arcane
+  Missiles' missiles do, from a proc too), starts no fight and has its own diminishing groups; **triggered casts
+  raise cast-end procs** (each Arcane Missile spends a stack of Unstable Power: round 7b's Thistle Tea call
+  reversed, `cast_proc_test.exs:29` now `wrong-for-1.12`); **mana given makes half its worth in threat** (mangos's
+  `EnergizeBySpell` and `PeriodicTick`: bugs5's Thistle Tea call in DECISIONS.md reversed); a trap's or a script's
+  spell starts a fight (round 2c's "script-triggered casts start none" replaced); an item's spell of no class
+  family procs nothing; the client's source location (0x20) is the ground when no destination is sent; a player's
+  missile holds them in a fight from launch for its flight and half a second; an effect immunity with
+  `IMMUNITY_TO_HOSTILE_AND_FRIENDLY_EFFECTS` keeps helpful effects off (a flag carrier can't be summoned); a
+  lockout tells the client only what it holds longer (mangos's `LockOutSpells`); cooldowns waiting for an aura
+  start as it goes, with the item's times and the caster's modifiers (mangos's `AddCooldown`); a Stuck goes on
+  through a long fall. **Its calls kept as Thistle Tea's:** effect immunity's one-side rule (another area's rows
+  rest on it); a spell an effect triggers procs like a cast. **Merge:** demon summons keep 10e's placement and
+  take 10b's hour (`TEMPSPAWN_TIMED_OR_DEAD_DESPAWN`); round 9's proc test
+  (`tests_p9_world_spells::a_spell_from_a_proc_procs_only_what_may_proc_from_procs`) rewritten to mangos's rule,
+  each section counted from its own start. 27 rows left (casting, ranges, stack rules; wvs's extra yard at a cast's
+  start differs from mangos and was left, as it may be on purpose).
 - **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
   merged first, is kept; the others' copies go at their merges.
 
@@ -1003,7 +1022,8 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
 | 10f: creature AI, round 10 | 93.0% | 0.1.62 |
 | 10d: combat and movement, round 10 | 93.1% | 0.1.63 |
 | 10a: the player, round 10 | 93.5% | 0.1.64 |
+| 10b: spells, round 10 | 93.8% | 0.1.65 |
 
-**Running now:** 10m, 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
+**Running now:** 11h (entities, a second pass), 12q (phase 4's open questions, by mangos-classic, started early in a free slot). **Your word, 2026-10-21 03:00:** finish and merge these, start no more, then stop and recuperate.
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.

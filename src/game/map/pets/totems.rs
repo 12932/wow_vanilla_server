@@ -212,6 +212,17 @@ pub fn summon_totem(
         .spells
         .duration(s, u32::from(level))
         .map(|ms| mods.apply_ms(crate::game::map::spells::mods::OP_DURATION, ms));
+    // Its party aura's reach with its shaman's radius modifiers, as they
+    // are now: mangos's `AreaAura` takes `SPELLMOD_RADIUS` from its
+    // caster's modifier owner once, as the totem casts it (Thistle Tea's
+    // snapshot at `Totems.prepare`).
+    let radius = data.spells.get(spell).map_or(0.0, |t| {
+        let m = crate::game::map::spells::mods::for_spell(map, owner, t);
+        (0..3)
+            .filter(|i| t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY)
+            .map(|i| crate::game::map::spells::targets::radius(map, t, i, &m))
+            .fold(0.0f32, f32::max)
+    });
     if let Some(c) = map.creature_mut(g) {
         c.speeds.run = 0.0;
         c.speeds.walk = 0.0;
@@ -233,6 +244,7 @@ pub fn summon_totem(
         if let Some(st) = c.pet.as_deref_mut() {
             st.totem_slot = slot;
             st.totem_spell = spell;
+            st.totem_radius = radius;
             st.summon_spell = s.id;
             st.react = REACT_PASSIVE;
             st.expires = duration.map(|ms| now + Duration::from_millis(u64::from(ms)));
@@ -316,7 +328,7 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
     if s.next_think > now {
         return;
     }
-    let (owner, spell) = (s.owner, s.totem_spell);
+    let (owner, spell, kept) = (s.owner, s.totem_spell, s.totem_radius);
     let data = map.realm.data.clone();
     let Some(t) = data.spells.get(spell) else {
         if let Some(s) = state_mut(map, g) {
@@ -331,13 +343,15 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         if let Some(s) = state_mut(map, g) {
             s.next_think = now + AURA_EVERY;
         }
-        let mut radius = 0.0f32;
-        for e in t
-            .effects
-            .iter()
-            .filter(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
-        {
-            radius = radius.max(data.spells.radius(e.radius_index));
+        let mut radius = kept;
+        if radius <= 0.0 {
+            for e in t
+                .effects
+                .iter()
+                .filter(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
+            {
+                radius = radius.max(data.spells.radius(e.radius_index));
+            }
         }
         let radius = if radius > 0.0 { radius } else { 30.0 };
         let near = party_near(map, owner, at, radius);
@@ -451,9 +465,9 @@ pub fn summon_guardian(
     replace: bool,
     at: Option<Vector3d>,
     item: Option<Guid>,
-) {
+) -> Option<Guid> {
     if entry == 0 {
-        return;
+        return None;
     }
     // A player's cast replaces their guardians of its kind (Thistle Tea's
     // `Guardians.prepare`); a creature's add up, to sixteen.
@@ -474,7 +488,7 @@ pub fn summon_guardian(
             }
         }
     } else if same.len() >= 16 {
-        return;
+        return None;
     }
     let now = map.now;
     let data = map.realm.data.clone();
@@ -508,6 +522,15 @@ pub fn summon_guardian(
         p.owned.guardians.push(g);
     }
     crate::game::map::item_scripts::guardian_summoned(map, g, entry);
+    Some(g)
+}
+
+/// Summon `g` lasts `time` from now.
+pub fn lasts(map: &mut Map, g: Guid, time: Duration) {
+    let now = map.now;
+    if let Some(st) = map.creature_mut(g).and_then(|c| c.pet.as_deref_mut()) {
+        st.expires = Some(now + time);
+    }
 }
 
 /// A companion: it follows, and fights nothing. Summoning the one out

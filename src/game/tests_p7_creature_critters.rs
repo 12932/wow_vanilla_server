@@ -118,7 +118,7 @@ fn world() -> GameData {
             base_points: 1,
             base_dice: 1,
             die_sides: 1,
-            target_a: 6,
+            target_a: 25,
             ..Default::default()
         },
     );

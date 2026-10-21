@@ -487,10 +487,11 @@ fn with_spells(mut d: GameData) -> GameData {
         ..Default::default()
     };
     // Distract as the client's data has it (1725): ten seconds on the
-    // enemies within ten yards of the point.
+    // enemies within ten yards of the point, of no threat.
     s.radii.insert(13, 10.0);
     let distract = SpellTemplate {
         targets: 0x40,
+        attributes: [0, 0x2_0520, 0, 0, 0],
         ..spell(
             DISTRACT,
             "Distract",
