@@ -29,9 +29,10 @@ pub fn needed_level(name: &str) -> Option<u8> {
     Some(match name {
         "guid" | "pos" | "threat" => MODERATOR,
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
-        | "kill" | "respawn" | "move" | "modify" | "rested" | "start" | "talents" | "tgm"
-        | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
-        | "event" => GAME_MASTER,
+        | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "weather"
+        | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion" | "event" => {
+            GAME_MASTER
+        }
         _ => return None,
     })
 }

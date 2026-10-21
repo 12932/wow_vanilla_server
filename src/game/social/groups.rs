@@ -2,8 +2,15 @@
 //! leader, assistants and subgroups, the loot method, ready checks, target
 //! icons, rolls and pings, and the stats each member's map sends the
 //! members who can't see them.
+//!
+//! A group is kept in the store (a record of kind [`KIND_GROUP`]) as its
+//! roster changes, and comes back at start-up, as mangos's `groups` and
+//! `group_member` tables do: its members, leader, assistants, subgroups,
+//! loot rules and icons. Invitations aren't kept.
 
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use ahash::AHashMap;
 use rand::RngExt;
@@ -20,6 +27,9 @@ pub const SMSG_PARTY_MEMBER_STATS: u16 = 0x07E;
 pub const SMSG_PARTY_MEMBER_STATS_FULL: u16 = 0x2F2;
 pub const MSG_RAID_TARGET_UPDATE: u16 = 0x321;
 pub const MSG_RAID_READY_CHECK: u16 = 0x322;
+
+/// A group's record in the store.
+pub const KIND_GROUP: &str = "group";
 
 pub const PARTY_SIZE: usize = 5;
 pub const RAID_SIZE: usize = 40;
@@ -38,9 +48,23 @@ pub const STAT_POSITION: u32 = 0x100;
 pub const STAT_AURAS: u32 = 0x200;
 pub const STAT_AURAS_2: u32 = 0x400;
 pub const STAT_PLAYER: u32 = 0x7FF;
+// A member's pet's (mangos's `GROUP_UPDATE_FLAG_PET_*`).
+pub const STAT_PET_GUID: u32 = 0x0800;
+pub const STAT_PET_NAME: u32 = 0x1000;
+pub const STAT_PET_MODEL: u32 = 0x2000;
+pub const STAT_PET_CUR_HP: u32 = 0x4000;
+pub const STAT_PET_MAX_HP: u32 = 0x8000;
+pub const STAT_PET_POWER_TYPE: u32 = 0x1_0000;
+pub const STAT_PET_CUR_POWER: u32 = 0x2_0000;
+pub const STAT_PET_MAX_POWER: u32 = 0x4_0000;
+pub const STAT_PET_AURAS: u32 = 0x8_0000;
+pub const STAT_PET_AURAS_2: u32 = 0x10_0000;
+pub const STAT_PET: u32 = 0x1F_F800;
 
 // Member status bits.
 pub const STATUS_ONLINE: u8 = 0x1;
+pub const STATUS_PVP: u8 = 0x2;
+pub const STATUS_PVP_FFA: u8 = 0x10;
 pub const STATUS_DEAD: u8 = 0x4;
 pub const STATUS_GHOST: u8 = 0x8;
 pub const STATUS_AFK: u8 = 0x40;
@@ -76,6 +100,33 @@ pub struct Group {
     /// raid's (mangos's `SendUpdate` passes one whose `GetGroup` isn't
     /// this).
     pub away: Vec<Guid>,
+    /// Since when (Unix seconds) the leader has been offline, as far as
+    /// the sweep knows (mangos's `m_leaderLastOnline`); `None` while they
+    /// are on.
+    pub leader_away_since: Option<i64>,
+}
+
+/// A group as the store keeps it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct GroupRecord {
+    raid: bool,
+    leader: u64,
+    members: Vec<SlotRecord>,
+    loot_method: u8,
+    looter: u64,
+    threshold: u8,
+    icons: [u64; 8],
+    round_robin: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SlotRecord {
+    guid: u64,
+    name: String,
+    subgroup: u8,
+    assistant: bool,
 }
 
 impl Group {
@@ -99,6 +150,7 @@ impl Group {
             round_robin: Guid::zero(),
             battleground: false,
             away: Vec::new(),
+            leader_away_since: None,
         }
     }
 
@@ -123,7 +175,110 @@ impl Group {
             round_robin: Guid::zero(),
             battleground: true,
             away: Vec::new(),
+            leader_away_since: None,
         }
+    }
+
+    fn record(&self) -> GroupRecord {
+        GroupRecord {
+            raid: self.raid,
+            leader: self.leader.guid(),
+            members: self
+                .members
+                .iter()
+                .map(|m| SlotRecord {
+                    guid: m.guid.guid(),
+                    name: m.name.to_string(),
+                    subgroup: m.subgroup,
+                    assistant: m.assistant,
+                })
+                .collect(),
+            loot_method: self.loot_method.as_int(),
+            looter: self.looter.guid(),
+            threshold: self.threshold.as_int(),
+            icons: self.icons.map(|g| g.guid()),
+            round_robin: self.round_robin.guid(),
+        }
+    }
+
+    /// The group a record kept, if it is one: two members at least, its
+    /// leader among them.
+    fn from_record(id: u32, r: GroupRecord, now: i64) -> Option<Self> {
+        let members: Vec<Slot> = r
+            .members
+            .into_iter()
+            .filter(|m| m.guid != 0)
+            .map(|m| Slot {
+                guid: Guid::new(m.guid),
+                name: Arc::from(m.name),
+                subgroup: m.subgroup.min(SUBGROUPS - 1),
+                assistant: m.assistant,
+            })
+            .collect();
+        let leader = Guid::new(r.leader);
+        if members.len() < 2 || !members.iter().any(|m| m.guid == leader) {
+            return None;
+        }
+        let looter = Guid::new(r.looter);
+        Some(Self {
+            id,
+            raid: r.raid,
+            leader,
+            looter: if members.iter().any(|m| m.guid == looter) {
+                looter
+            } else {
+                leader
+            },
+            members,
+            formed: true,
+            invited: Vec::new(),
+            loot_method: GroupLootSetting::try_from(r.loot_method)
+                .unwrap_or(GroupLootSetting::GroupLoot),
+            threshold: threshold(
+                ItemQuality::try_from(r.threshold).unwrap_or(ItemQuality::Uncommon),
+            ),
+            icons: r.icons.map(Guid::new),
+            round_robin: Guid::new(r.round_robin),
+            // Everyone is offline at start-up: the leader's five minutes
+            // start now.
+            leader_away_since: Some(now),
+            battleground: false,
+            away: Vec::new(),
+        })
+    }
+
+    /// Kept in the store as it is now; a battleground side's raid ends
+    /// with its match, and isn't (mangos keeps no battleground group).
+    fn save(&self, realm: &Realm) {
+        if self.formed && !self.battleground {
+            realm
+                .store
+                .put_record(KIND_GROUP, u64::from(self.id), &self.record());
+        }
+    }
+
+    /// Who leads next, as mangos's `Group::_chooseLeader`: the first
+    /// member online (in a raid, the first assistant online before them),
+    /// else (unless `offline`, the leader replaced for being away, when
+    /// no one is) the first member.
+    fn next_leader(&self, realm: &Realm, offline: bool) -> Option<Guid> {
+        let mut first_online = None;
+        for m in self.members.iter().filter(|m| m.guid != self.leader) {
+            if realm.registry.online(m.guid).is_none() {
+                continue;
+            }
+            if self.raid && !m.assistant {
+                first_online.get_or_insert(m.guid);
+                continue;
+            }
+            return Some(m.guid);
+        }
+        first_online.or_else(|| {
+            (!offline)
+                .then(|| self.members.iter().find(|m| m.guid != self.leader))
+                .flatten()
+                .map(|m| m.guid)
+        })
     }
 
     pub fn is_member(&self, g: Guid) -> bool {
@@ -257,8 +412,23 @@ fn empty_list() -> SMSG_GROUP_LIST {
     }
 }
 
+/// A member's pet's stats (or the unit they charm), as mangos's
+/// `BuildPartyMemberStatsChangedPacket` sends them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PetStats {
+    pub guid: Guid,
+    pub name: Arc<str>,
+    pub model: u32,
+    pub health: u32,
+    pub max_health: u32,
+    pub power_type: u8,
+    pub power: u32,
+    pub max_power: u32,
+    pub auras: [u32; 48],
+}
+
 /// A member's stats as their map last sent them.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MemberStats {
     pub status: u8,
     pub health: u32,
@@ -271,9 +441,31 @@ pub struct MemberStats {
     pub x: f32,
     pub y: f32,
     pub auras: [u32; 48],
+    pub pet: Option<PetStats>,
+}
+
+/// An aura mask and its spells, as 1.12 lays them out: a `u32` mask of the
+/// first 32 slots, or a `u16` of the 16 past them, then each spell.
+fn write_auras(b: &mut Body, auras: &[u32], wide: bool) {
+    let bits = (0..auras.len())
+        .filter(|i| auras[*i] != 0)
+        .fold(0u32, |m, i| m | 1 << i);
+    if wide {
+        b.u32(bits);
+    } else {
+        b.u16(bits as u16);
+    }
+    for a in auras.iter().filter(|a| **a != 0) {
+        b.u16(*a as u16);
+    }
 }
 
 impl MemberStats {
+    /// Every stat it has: the player's, and its pet's if one is out.
+    pub fn all(&self) -> u32 {
+        STAT_PLAYER | if self.pet.is_some() { STAT_PET } else { 0 }
+    }
+
     /// What changed from `old`, as stats flags.
     pub fn changed(&self, old: &MemberStats) -> u32 {
         let mut mask = 0;
@@ -299,6 +491,25 @@ impl MemberStats {
         );
         set(self.auras[..32] != old.auras[..32], STAT_AURAS);
         set(self.auras[32..] != old.auras[32..], STAT_AURAS_2);
+        match (&self.pet, &old.pet) {
+            (Some(p), Some(o)) if p.guid == o.guid => {
+                set(p.name != o.name, STAT_PET_NAME);
+                set(p.model != o.model, STAT_PET_MODEL);
+                set(p.health != o.health, STAT_PET_CUR_HP);
+                set(p.max_health != o.max_health, STAT_PET_MAX_HP);
+                set(
+                    p.power_type != o.power_type,
+                    STAT_PET_POWER_TYPE | STAT_PET_CUR_POWER | STAT_PET_MAX_POWER,
+                );
+                set(p.power != o.power, STAT_PET_CUR_POWER);
+                set(p.max_power != o.max_power, STAT_PET_MAX_POWER);
+                set(p.auras[..32] != o.auras[..32], STAT_PET_AURAS);
+                set(p.auras[32..] != o.auras[32..], STAT_PET_AURAS_2);
+            }
+            (None, None) => {}
+            // A pet out, gone or another: all of it (zeros for none).
+            _ => mask |= STAT_PET,
+        }
         mask
     }
 
@@ -336,22 +547,44 @@ impl MemberStats {
             b.u16(self.x as i16 as u16).u16(self.y as i16 as u16);
         }
         if mask & STAT_AURAS != 0 {
-            let bits = (0..32)
-                .filter(|i| self.auras[*i] != 0)
-                .fold(0u32, |m, i| m | 1 << i);
-            b.u32(bits);
-            for a in self.auras[..32].iter().filter(|a| **a != 0) {
-                b.u16(*a as u16);
-            }
+            write_auras(&mut b, &self.auras[..32], true);
         }
         if mask & STAT_AURAS_2 != 0 {
-            let bits = (0..16)
-                .filter(|i| self.auras[32 + *i] != 0)
-                .fold(0u16, |m, i| m | 1 << i);
-            b.u16(bits);
-            for a in self.auras[32..].iter().filter(|a| **a != 0) {
-                b.u16(*a as u16);
-            }
+            write_auras(&mut b, &self.auras[32..], false);
+        }
+        // The pet's, zeros for none (mangos's: a pet gone is told so).
+        let pet = self.pet.as_ref();
+        let none = [0u32; 48];
+        if mask & STAT_PET_GUID != 0 {
+            b.u64(pet.map_or(0, |p| p.guid.guid()));
+        }
+        if mask & STAT_PET_NAME != 0 {
+            b.cstr(pet.map_or("", |p| &p.name));
+        }
+        if mask & STAT_PET_MODEL != 0 {
+            b.u16(pet.map_or(0, |p| p.model) as u16);
+        }
+        if mask & STAT_PET_CUR_HP != 0 {
+            b.u16(pet.map_or(0, |p| p.health.min(0xFFFF)) as u16);
+        }
+        if mask & STAT_PET_MAX_HP != 0 {
+            b.u16(pet.map_or(0, |p| p.max_health.min(0xFFFF)) as u16);
+        }
+        if mask & STAT_PET_POWER_TYPE != 0 {
+            b.u8(pet.map_or(0, |p| p.power_type));
+        }
+        if mask & STAT_PET_CUR_POWER != 0 {
+            b.u16(pet.map_or(0, |p| p.power.min(0xFFFF)) as u16);
+        }
+        if mask & STAT_PET_MAX_POWER != 0 {
+            b.u16(pet.map_or(0, |p| p.max_power.min(0xFFFF)) as u16);
+        }
+        let pet_auras = pet.map_or(&none, |p| &p.auras);
+        if mask & STAT_PET_AURAS != 0 {
+            write_auras(&mut b, &pet_auras[..32], true);
+        }
+        if mask & STAT_PET_AURAS_2 != 0 {
+            write_auras(&mut b, &pet_auras[32..], false);
         }
         b.frame(if full {
             SMSG_PARTY_MEMBER_STATS_FULL
@@ -382,6 +615,34 @@ pub struct Groups {
 }
 
 impl Groups {
+    /// The groups kept in the store.
+    pub fn load(records: &[(String, u64, String)]) -> Self {
+        let mut g = Self::default();
+        let now = now();
+        for (_, id, data) in records.iter().filter(|(k, _, _)| k == KIND_GROUP) {
+            // Every id counts, read or not (`Mails::load`).
+            let id = *id as u32;
+            g.next_id = g.next_id.max(id);
+            let Some(r) =
+                crate::game::store::parse_record::<GroupRecord>(KIND_GROUP, id.into(), data)
+            else {
+                continue;
+            };
+            let Some(gr) = Group::from_record(id, r, now) else {
+                continue;
+            };
+            // A member in two (a record written twice over): the first.
+            if gr.members.iter().any(|m| g.of.contains_key(&m.guid)) {
+                continue;
+            }
+            for m in &gr.members {
+                g.of.insert(m.guid, id);
+            }
+            g.groups.insert(id, gr);
+        }
+        g
+    }
+
     pub fn group_of(&self, g: Guid) -> Option<&Group> {
         self.of
             .get(&g)
@@ -521,10 +782,19 @@ impl Groups {
         let gr = &mut self.groups.get_mut(&id).unwrap();
         let leader_left = gr.leader == g;
         if leader_left {
-            gr.leader = gr.members[0].guid;
-            if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER {
-                name: gr.members[0].name.to_string(),
-            }) {
+            // To one online, an assistant first in a raid (mangos's
+            // `_chooseLeader`), not whoever joined first.
+            let next = gr.next_leader(realm, false).unwrap_or(gr.members[0].guid);
+            gr.leader = next;
+            gr.leader_away_since = None;
+            if let Some(s) = gr.members.iter_mut().find(|m| m.guid == next) {
+                s.assistant = false;
+            }
+            let name = gr
+                .slot(next)
+                .map(|s| s.name.to_string())
+                .unwrap_or_default();
+            if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER { name }) {
                 gr.broadcast(realm, &frame, None);
             }
             crate::game::instances::group_changed(realm, Some((id, g)), Some((id, gr.leader)));
@@ -532,6 +802,7 @@ impl Groups {
         if gr.looter == g {
             gr.looter = gr.leader;
         }
+        gr.save(realm);
         gr.send_update(realm);
         Left::Removed {
             id,
@@ -548,6 +819,7 @@ impl Groups {
         };
         if gr.formed {
             crate::game::instances::group_changed(realm, Some((id, gr.leader)), None);
+            realm.store.delete_record(KIND_GROUP, u64::from(id));
         }
         for m in &gr.members {
             // One in a battleground's raid has their own group no more.
@@ -605,6 +877,12 @@ impl Left {
     }
 }
 
+/// A loot threshold as 1.12's client offers it, Uncommon to Artifact: a
+/// Poor or Common one (a bad packet's) rolls on every grey.
+fn threshold(q: ItemQuality) -> ItemQuality {
+    q.max(ItemQuality::Uncommon)
+}
+
 fn result(realm: &Realm, to: Guid, operation: PartyOperation, member: &str, result: PartyResult) {
     send_to(
         realm,
@@ -637,6 +915,24 @@ pub fn invite(realm: &Realm, me: &Online, name: &str) {
             PartyOperation::Invite,
             name,
             PartyResult::PlayerWrongFaction,
+        );
+        return;
+    }
+    // In two copies of one dungeon: refused, as mangos's
+    // `HandleGroupInviteOpcode` refuses it ("not so appropriated but no
+    // other option for classic").
+    let (mine, theirs) = (me.map().key, them.map().key);
+    if mine.instance != 0
+        && theirs.instance != 0
+        && mine.instance != theirs.instance
+        && mine.map == theirs.map
+    {
+        result(
+            realm,
+            me.guid,
+            PartyOperation::Invite,
+            name,
+            PartyResult::AlreadyInGroup,
         );
         return;
     }
@@ -768,6 +1064,7 @@ pub fn accept(realm: &Realm, me: &Online) {
     if gr.looter.is_zero() {
         gr.looter = gr.leader;
     }
+    gr.save(realm);
     gr.send_update(realm);
     if forms {
         crate::game::instances::group_changed(realm, None, Some((id, gr.leader)));
@@ -782,7 +1079,7 @@ pub fn accept(realm: &Realm, me: &Online) {
         .collect();
     for o in others {
         if let Some(s) = groups.stats.get(&o) {
-            me.outbound.send_frame(s.packet(o, STAT_PLAYER, true));
+            me.outbound.send_frame(s.packet(o, s.all(), true));
         }
     }
     groups.stats.remove(&me.guid);
@@ -932,20 +1229,68 @@ pub fn set_leader(realm: &Realm, me: &Online, to: Guid) {
     if gr.leader != me.guid || !gr.is_member(to) || realm.registry.online(to).is_none() {
         return;
     }
-    let id = gr.id;
+    let id = change_leader(realm, gr, to);
+    drop(groups);
+    // A party queued at a meeting stone stays queued (mangos's
+    // `ChangeLeader` leaves the LFG queue be).
+    crate::game::map::meeting_stones::leader_changed(realm, id, to);
+}
+
+/// The lead to `to`, told to everyone, as mangos's `Group::ChangeLeader`.
+/// The group's id.
+fn change_leader(realm: &Realm, gr: &mut Group, to: Guid) -> u32 {
+    let (id, from) = (gr.id, gr.leader);
     gr.leader = to;
+    gr.leader_away_since = None;
     if let Some(s) = gr.members.iter_mut().find(|m| m.guid == to) {
         s.assistant = false;
     }
-    crate::game::instances::group_changed(realm, Some((id, me.guid)), Some((id, to)));
+    crate::game::instances::group_changed(realm, Some((id, from)), Some((id, to)));
     let name = gr.slot(to).map(|s| s.name.to_string()).unwrap_or_default();
     if let Some(frame) = encode(&SMSG_GROUP_SET_LEADER { name }) {
         gr.broadcast(realm, &frame, None);
     }
+    gr.save(realm);
     gr.send_update(realm);
-    // A party queued at a meeting stone stays queued (mangos's
-    // `ChangeLeader` leaves the LFG queue be).
-    crate::game::map::meeting_stones::leader_changed(realm, id, to);
+    id
+}
+
+/// Unix seconds now.
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// The sweep: [`replace_offline_leaders`] now.
+pub fn sweep(realm: &Realm) {
+    replace_offline_leaders(realm, now());
+}
+
+/// A leader offline `[players] group_offline_leader_secs` (300) hands the
+/// lead to a member online, as mangos's `Group::UpdateOfflineLeader`
+/// (`Group.OfflineLeaderDelay`); with no one online, it waits. `now` in
+/// Unix seconds.
+pub fn replace_offline_leaders(realm: &Realm, now: i64) {
+    let delay = realm.config().players.group_offline_leader_secs as i64;
+    let mut changed = Vec::new();
+    {
+        let mut groups = realm.social.groups.lock();
+        for gr in groups.groups.values_mut().filter(|gr| gr.formed) {
+            if realm.registry.online(gr.leader).is_some() {
+                gr.leader_away_since = None;
+                continue;
+            }
+            let since = *gr.leader_away_since.get_or_insert(now);
+            if now - since < delay {
+                continue;
+            }
+            if let Some(to) = gr.next_leader(realm, true) {
+                changed.push((change_leader(realm, gr, to), to));
+            }
+        }
+    }
+    for (id, to) in changed {
+        crate::game::map::meeting_stones::leader_changed(realm, id, to);
+    }
 }
 
 /// `CMSG_LOOT_METHOD`.
@@ -963,7 +1308,8 @@ pub fn loot_method(realm: &Realm, me: &Online, m: &CMSG_LOOT_METHOD) {
     } else {
         gr.leader
     };
-    gr.threshold = m.loot_threshold;
+    gr.threshold = threshold(m.loot_threshold);
+    gr.save(realm);
     gr.send_update(realm);
 }
 
@@ -984,6 +1330,7 @@ pub fn convert_to_raid(realm: &Realm, me: &Online) {
         PartyResult::Success,
     );
     gr.raid = true;
+    gr.save(realm);
     gr.send_update(realm);
     let (id, members): (u32, Vec<Guid>) = (gr.id, gr.members.iter().map(|m| m.guid).collect());
     drop(groups);
@@ -1010,6 +1357,7 @@ pub fn change_subgroup(realm: &Realm, me: &Online, name: &str, subgroup: u8) {
         return;
     };
     s.subgroup = subgroup;
+    gr.save(realm);
     gr.send_update(realm);
 }
 
@@ -1033,6 +1381,7 @@ pub fn swap_subgroups(realm: &Realm, me: &Online, a: &str, b: &str) {
     let (si, sj) = (gr.members[i].subgroup, gr.members[j].subgroup);
     gr.members[i].subgroup = sj;
     gr.members[j].subgroup = si;
+    gr.save(realm);
     gr.send_update(realm);
 }
 
@@ -1071,6 +1420,7 @@ pub fn join_directly(realm: &Realm, leader: &Online, member: &Online) -> bool {
     if gr.looter.is_zero() {
         gr.looter = gr.leader;
     }
+    gr.save(realm);
     gr.send_update(realm);
     if forms {
         crate::game::instances::group_changed(realm, None, Some((id, gr.leader)));
@@ -1093,6 +1443,7 @@ pub fn set_assistant(realm: &Realm, me: &Online, who: Guid, on: bool) {
         return;
     };
     s.assistant = on;
+    gr.save(realm);
     gr.send_update(realm);
 }
 
@@ -1169,6 +1520,7 @@ pub fn target_icon(realm: &Realm, me: &Online, update: Option<(u8, Guid)>) {
         }
     }
     gr.icons[usize::from(index)] = target;
+    gr.save(realm);
     let mut b = Body::default();
     b.u8(0).u8(index).u64(target.guid());
     gr.broadcast(realm, &b.frame(MSG_RAID_TARGET_UPDATE), None);
@@ -1314,7 +1666,10 @@ pub fn logged_out(realm: &Realm, g: Guid) {
     }
     groups.stats.remove(&g);
     groups.seen_by.remove(&g);
-    if let Some(gr) = groups.group_of(g) {
+    if let Some(gr) = groups.group_of_mut(g) {
+        if gr.leader == g {
+            gr.leader_away_since = Some(now());
+        }
         gr.send_update(realm);
         let offline = MemberStats::default();
         gr.broadcast(realm, &offline.packet(g, STAT_STATUS, false), Some(g));
@@ -1474,7 +1829,7 @@ pub fn bg_closed(realm: &Realm, instance: u32) {
 pub fn request_stats(realm: &Realm, me: &Online, of: Guid) {
     let groups = realm.social.groups.lock();
     let frame = match groups.stats.get(&of) {
-        Some(s) if realm.registry.online(of).is_some() => s.packet(of, STAT_PLAYER, true),
+        Some(s) if realm.registry.online(of).is_some() => s.packet(of, s.all(), true),
         _ => MemberStats::default().packet(of, STAT_STATUS, true),
     };
     me.outbound.send_frame(frame);
@@ -1494,6 +1849,7 @@ impl Default for MemberStats {
             x: 0.0,
             y: 0.0,
             auras: [0; 48],
+            pet: None,
         }
     }
 }

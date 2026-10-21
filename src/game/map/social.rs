@@ -74,16 +74,18 @@ pub fn message(map: &mut Map, g: Guid, m: CMSG_MESSAGECHAT) {
 /// to the speaker, and their AFK or DND message back.
 fn whisper(map: &Map, me: &Online, to: &str, text: &str, language: Language, tag: PlayerChatTag) {
     let realm = &map.realm;
-    let target = realm
-        .registry
-        .online_by_name(to)
-        .filter(|t| same_side(me, t));
-    let Some(t) = target else {
+    let Some(t) = realm.registry.online_by_name(to) else {
         me.outbound.send(&SMSG_CHAT_PLAYER_NOT_FOUND {
             name: to.to_owned(),
         });
         return;
     };
+    // One on the other side is there, but can't be whispered: "wrong
+    // faction", not "not found" (mangos's `SendWrongFactionNotice`).
+    if !same_side(me, &t) {
+        me.outbound.send(&SMSG_CHAT_WRONG_FACTION {});
+        return;
+    }
     if text.trim().is_empty() {
         return;
     }
@@ -557,7 +559,44 @@ fn logged_out(realm: &crate::game::Realm, g: Guid) {
     groups::logged_out(realm, g);
 }
 
-fn stats_of(p: &crate::game::map::player::Player) -> MemberStats {
+/// The stats of `g`'s pet out, or of the unit they charm (mangos's
+/// `GetCharm`).
+fn pet_stats_of(map: &Map, g: Guid) -> Option<groups::PetStats> {
+    let pet = crate::game::map::pets::pet_of(map, g)?;
+    let c = map.creature(pet)?;
+    let f = &c.fields;
+    let name = c
+        .pet
+        .as_ref()
+        .map(|s| s.name.as_str())
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            map.realm
+                .data
+                .creature_templates
+                .get(&c.entry)
+                .map(|t| t.name.as_str())
+        })
+        .unwrap_or_default();
+    let power_type = f.get_byte(UNIT_FIELD_BYTES_0, 3);
+    let mut auras = [0u32; 48];
+    for (i, a) in auras.iter_mut().enumerate() {
+        *a = f.get_u32(UNIT_FIELD_AURA + i as u16);
+    }
+    Some(groups::PetStats {
+        guid: pet,
+        name: Arc::from(name),
+        model: f.get_u32(UNIT_FIELD_DISPLAYID),
+        health: f.get_u32(UNIT_FIELD_HEALTH),
+        max_health: f.get_u32(UNIT_FIELD_MAXHEALTH),
+        power_type,
+        power: f.get_u32(UNIT_FIELD_POWER1 + u16::from(power_type)),
+        max_power: f.get_u32(UNIT_FIELD_MAXPOWER1 + u16::from(power_type)),
+        auras,
+    })
+}
+
+fn stats_of(map: &Map, p: &crate::game::map::player::Player) -> MemberStats {
     use crate::game::map::death::Death;
     let f = &p.fields;
     let power_type = p.power_type();
@@ -574,9 +613,20 @@ fn stats_of(p: &crate::game::map::player::Player) -> MemberStats {
     } else {
         0
     };
+    // Flagged for PvP, or free-for-all (mangos's `GetGroupMemberStatus`).
+    let pvp = if f.has_flag(UNIT_FIELD_FLAGS, crate::game::map::player::UNIT_FLAG_PVP) {
+        groups::STATUS_PVP
+    } else {
+        0
+    } | if f.has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_FFA_PVP) {
+        groups::STATUS_PVP_FFA
+    } else {
+        0
+    };
     MemberStats {
         status: groups::STATUS_ONLINE
             | away
+            | pvp
             | match p.death {
                 Death::Alive => 0,
                 Death::Dead { .. } => groups::STATUS_DEAD,
@@ -592,6 +642,7 @@ fn stats_of(p: &crate::game::map::player::Player) -> MemberStats {
         x: p.position().x,
         y: p.position().y,
         auras,
+        pet: pet_stats_of(map, p.guid),
     }
 }
 
@@ -630,7 +681,7 @@ pub fn push_member_stats(map: &mut Map) {
                 .copied()
                 .filter(|o| p.observers.contains(o))
                 .collect();
-            Some((g, others, stats_of(p), seen))
+            Some((g, others, stats_of(map, p), seen))
         })
         .collect();
     type Kept = (Option<MemberStats>, Vec<Guid>);
@@ -638,20 +689,20 @@ pub fn push_member_stats(map: &mut Map) {
         let mut groups = realm.social.groups.lock();
         read.iter()
             .map(|(g, _, now, seen)| {
-                let before = groups.stats.insert(*g, *now);
+                let before = groups.stats.insert(*g, now.clone());
                 let was_seen = groups.seen_by.insert(*g, seen.clone()).unwrap_or_default();
                 (before, was_seen)
             })
             .collect()
     };
     for ((g, others, now, seen), (before, was_seen)) in read.iter().zip(kept) {
-        let mask = before.map_or(groups::STAT_PLAYER, |b| now.changed(&b));
+        let mask = before.as_ref().map_or(now.all(), |b| now.changed(b));
         let frame = (mask != 0).then(|| now.packet(*g, mask, before.is_none()));
         let mut all = None;
         for o in others.iter().filter(|o| !seen.contains(o)) {
             if was_seen.contains(o) {
                 // Just out of sight: everything.
-                let all = all.get_or_insert_with(|| now.packet(*g, groups::STAT_PLAYER, false));
+                let all = all.get_or_insert_with(|| now.packet(*g, now.all(), false));
                 crate::game::social::send_frame(&realm, *o, all);
             } else if let Some(frame) = &frame {
                 crate::game::social::send_frame(&realm, *o, frame);

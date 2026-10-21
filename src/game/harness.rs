@@ -485,6 +485,21 @@ impl Client {
         }
     }
 
+    /// The bodies of every frame of `opcode` received so far and not yet
+    /// taken, in order, taken now: none is no failure.
+    pub fn take_frames(&mut self, opcode: u16) -> Vec<Vec<u8>> {
+        self.drain();
+        let mut out = Vec::new();
+        self.frames.retain(|f| {
+            let of = u16::from_le_bytes([f[2], f[3]]) == opcode;
+            if of {
+                out.push(f[4..].to_vec());
+            }
+            !of
+        });
+        out
+    }
+
     pub fn clear(&mut self) {
         self.drain();
         self.backlog.clear();

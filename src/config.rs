@@ -601,6 +601,10 @@ settings! {
         /// The chance, in percent, a blow dealt or taken wears a point off
         /// a random piece of a player's gear.
         durability_loss_chance_damage: f32 = crate::game::map::vendor::HIT_WEAR_CHANCE, Clamp(0.0, 100.0), Live, "DurabilityLossChance.Damage";
+        /// Seconds a group's leader may be offline before the lead goes
+        /// to a member online (a raid's assistant first); with no one
+        /// online, it waits.
+        group_offline_leader_secs: u64 = 300, Clamp(0.0, 86_400.0), Live, "Group.OfflineLeaderDelay";
     }
 }
 
@@ -757,6 +761,11 @@ settings! {
         /// The GM level a command needs, by its name, over the server's own
         /// (0 player to 3 administrator), as `{ kick = 2, announce = 2 }`.
         command_levels: BTreeMap<String, u8> = BTreeMap::new(), Any, Live, "";
+        /// Players' commands: `.help`, `.commands`, `.save`, `.start`,
+        /// `.dismount`, `.server info|motd`, `.gm ingame`, `.account` and
+        /// `.account password <old> <new> <new>`. Off, a player's "." line
+        /// is chat.
+        player_commands: bool = true, Any, Live, "PlayerCommands";
     }
 }
 

@@ -304,6 +304,16 @@ mod tests_p12h_skills;
 #[cfg(test)]
 mod tests_p12i_bg;
 #[cfg(test)]
+mod tests_p12j_chat;
+#[cfg(test)]
+mod tests_p12j_commands;
+#[cfg(test)]
+mod tests_p12j_groups;
+#[cfg(test)]
+mod tests_p12j_guilds;
+#[cfg(test)]
+mod tests_p12j_zones;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;

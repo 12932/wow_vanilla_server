@@ -283,6 +283,7 @@ New characters, the level cap, the realm's type, and what is left of the dead.
 | `death_sickness_level` | The level from which a spirit healer's resurrection brings sickness: a minute at this level, a minute more a level, ten at most. Above the level cap, never. | `11` | 1 to 100, clamped | live | `Death.SicknessLevel` |
 | `max_primary_trade_skill` | Primary professions (alchemy, mining, tailoring, ...) a player may learn. | `2` | 0 to 10, clamped | live | `MaxPrimaryTradeSkill` |
 | `durability_loss_chance_damage` | The chance, in percent, a blow dealt or taken wears a point off a random piece of a player's gear. | `0.5` | 0 to 100, clamped | live | `DurabilityLossChance.Damage` |
+| `group_offline_leader_secs` | Seconds a group's leader may be offline before the lead goes to a member online (a raid's assistant first); with no one online, it waits. | `300` | 0 to 86400, clamped | live | `Group.OfflineLeaderDelay` |
 
 ### `[environment]`
 
@@ -374,6 +375,7 @@ GM commands and GMs' characters.
 |---|---|---|---|---|---|
 | `start_level` | The level a GM's new characters start at, if above `[players] start_level`. | `1` | 1 to 60, clamped | live | `GM.StartLevel` |
 | `command_levels` | The GM level a command needs, by its name, over the server's own (0 player to 3 administrator), as `{ kick = 2, announce = 2 }`. | `{}` |  | live |  |
+| `player_commands` | Players' commands: `.help`, `.commands`, `.save`, `.start`, `.dismount`, `.server info\|motd`, `.gm ingame`, `.account` and `.account password <old> <new> <new>`. Off, a player's "." line is chat. | `true` |  | live | `PlayerCommands` |
 
 ### `[spawn]`
 

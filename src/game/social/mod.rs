@@ -60,12 +60,18 @@ pub struct Social {
 impl Social {
     /// The services, with what the store kept of them.
     pub fn load(records: &[(String, u64, String)]) -> Self {
+        let groups = groups::Groups::load(records);
+        let mut instances = crate::game::instances::Instances::load(records);
+        // A group's copies are its own again; those of a group not kept,
+        // no one's.
+        instances.orphan_groups(|id| groups.formed(id));
         Self {
+            groups: Mutex::new(groups),
+            instances: Mutex::new(instances),
             guilds: Mutex::new(guilds::Guilds::load(records)),
             battlegrounds: Mutex::new(crate::game::battlegrounds::Battlegrounds::load(records)),
             mail: Mutex::new(mail::Mails::load(records)),
             auctions: Mutex::new(auction::Auctions::load(records)),
-            instances: Mutex::new(crate::game::instances::Instances::load(records)),
             tickets: Mutex::new(crate::game::map::tickets::Tickets::load(records)),
             arena: Mutex::new(crate::game::map::arena::History::load(records)),
             honor: Mutex::new(crate::game::honor::Ledger::load(
@@ -168,7 +174,7 @@ pub fn store_watch(realm: &Realm) {
 type Sweep = (&'static str, fn(&Realm));
 
 /// Everything time drives outside the maps.
-const SWEEPS: [Sweep; 11] = [
+const SWEEPS: [Sweep; 12] = [
     ("the store watch", store_watch),
     ("the auction sweep", auction::sweep),
     ("the mail sweep", mail::sweep),
@@ -186,6 +192,7 @@ const SWEEPS: [Sweep; 11] = [
         crate::game::map::meeting_stones::sweep,
     ),
     ("the pvp sweep", crate::game::map::pvp::sweep),
+    ("the group sweep", groups::sweep),
 ];
 
 /// Everything time drives outside the maps.

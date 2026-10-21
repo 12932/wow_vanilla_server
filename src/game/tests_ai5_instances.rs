@@ -344,11 +344,16 @@ async fn a_group_takes_its_leaders_copy_and_an_orphaned_one() {
     assert!(crate::game::social::groups::join_directly(&realm, &ao, &co));
     go(&realm, &mut c, DUNGEON).await;
     assert_eq!(key_of(&realm, c.guid), solo, "the orphan, adopted");
-    // A restart: the group's copy is saved, its owner is not.
+    // A restart: the group's copy is saved, and its owner while the group
+    // is kept too (round 12: groups are kept); a group not kept leaves it
+    // no one's.
     let save = instances::save_of(&realm, solo.instance).unwrap();
     assert!(matches!(save.owner, Some(instances::Owner::Group(_))));
     let record = serde_json::to_string(&save).unwrap();
-    let loaded = instances::Instances::load(&[(instances::KIND_INSTANCE.to_owned(), 1, record)]);
+    let mut loaded =
+        instances::Instances::load(&[(instances::KIND_INSTANCE.to_owned(), 1, record)]);
+    assert_eq!(loaded.saves[&solo.instance].owner, save.owner);
+    loaded.orphan_groups(|_| false);
     assert_eq!(loaded.saves[&solo.instance].owner, None);
 }
 

@@ -182,6 +182,34 @@ impl Accounts {
         Ok(())
     }
 
+    /// Whether `password` is the account's: a login's proofs worked out
+    /// on both sides, the server's from its verifier.
+    pub fn check_password(&self, name: &str, password: &str) -> bool {
+        let (Some(n), Some(p), Some(account)) =
+            (normalized(name), normalized(password), self.find(name))
+        else {
+            return false;
+        };
+        let proof = SrpVerifier::from_database_values(n.clone(), account.verifier, account.salt)
+            .into_proof();
+        let Ok(server_key) = wow_srp::PublicKey::from_le_bytes(*proof.server_public_key()) else {
+            return false;
+        };
+        let challenge = wow_srp::client::SrpClientUser::new(n, p).into_challenge(
+            wow_srp::GENERATOR,
+            wow_srp::LARGE_SAFE_PRIME_LITTLE_ENDIAN,
+            server_key,
+            *proof.salt(),
+        );
+        let Ok(client_key) = wow_srp::PublicKey::from_le_bytes(*challenge.client_public_key())
+        else {
+            return false;
+        };
+        proof
+            .into_server(client_key, *challenge.client_proof())
+            .is_ok()
+    }
+
     pub fn set_gm_level(&self, name: &str, level: u8) -> bool {
         self.lock()
             .execute(

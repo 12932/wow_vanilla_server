@@ -505,6 +505,9 @@ pub fn update_zone(map: &mut Map, guid: Guid) {
     crate::game::map::pvp::free_for_all(map, guid);
     if new_zone {
         crate::game::map::world_states::send_init(map, guid);
+        if let Some(online) = map.players.get(&guid).map(|p| p.online.clone()) {
+            crate::game::social::channels::zone_changed(&map.realm, &online, zone);
+        }
     }
 }
 
