@@ -193,3 +193,76 @@ async fn prowl_from_the_pets_bar_goes_on_the_pet_with_nothing_to_attack() {
         .unwrap();
     assert!(prowled);
 }
+
+/// Thistle Tea's "engineering guardian passives derive health and damage
+/// from DBC" (`spell_guardian_dbc_test.exs`): the Mechanical Dragonling
+/// (2678, from 4073), the Mithril one (8615, from 12749) and the Arcanite
+/// one (12473, from 19804) come with their passives (23051, 23050, 23052),
+/// worth 300, 500 and 700 more health and 50, 90 and 115 more damage a
+/// blow (a creature's flat physical damage done is added as it swings,
+/// `combat::weapon_damage`); the passive taken off, they are their own. A
+/// guardian of no passive (the imp, 416) has none.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_dragonlings_passives_give_their_health_and_damage() {
+    if !have_data() {
+        return;
+    }
+    assert_eq!(crate::game::map::item_scripts::guardian_passive(416), None);
+    let realm = realm();
+    let (_c, g, map) = player(&realm, "P10P4", "Engineer", Race::Gnome, Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let foe = dummy(m, g, 60, 3.0);
+            [
+                (4073u32, 2678u32, 23_051u32),
+                (12_749, 8615, 23_050),
+                (19_804, 12_473, 23_052),
+            ]
+            .map(|(summon, entry, passive)| {
+                spells::cast_triggered(m, g, summon, Some(g));
+                let it = m
+                    .creatures
+                    .iter()
+                    .find(|(_, c)| c.entry == entry && c.alive())
+                    .map(|(_, c)| c.guid)
+                    .expect("the dragonling");
+                let stats = |m: &Map| {
+                    use rand::SeedableRng;
+                    let blow = |seed: u64| {
+                        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+                        let hand = combat::Hand::Main;
+                        combat::weapon_damage(m, it, foe, hand, &mut rng).0 as f32
+                    };
+                    let f = m.unit_fields(it).unwrap();
+                    (f.get_u32(UNIT_FIELD_MAXHEALTH), blow(1), blow(2))
+                };
+                let with = (has(m, it, passive), stats(m));
+                auras::remove_spell(m, it, passive, None);
+                let own = stats(m);
+                m.remove_creature(it);
+                (
+                    entry,
+                    with.0,
+                    with.1.0 - own.0,
+                    with.1.1 - own.1,
+                    with.1.2 - own.2,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    for ((entry, on, health, min, max), want) in
+        out.into_iter()
+            .zip([(300u32, 50.0f32), (500, 90.0), (700, 115.0)])
+    {
+        assert!(on, "{entry}: its passive");
+        assert_eq!(health, want.0, "{entry}: health");
+        assert!(
+            (min - want.1).abs() < 0.01 && (max - want.1).abs() < 0.01,
+            "{entry}: two blows {min} {max} for {}",
+            want.1
+        );
+    }
+}
