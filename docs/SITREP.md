@@ -794,6 +794,28 @@ showed a difference. Phase 2 takes what is left.
   the quest mechanics, the single items), and mark only Thistle Tea's internals `not-applicable`. Anything a phase
   can't settle goes into `THISTLE_TEA_DIFFERENCES.md` with its reason in phase 4.
 
+## Round 10: phase 2, the rest of the gaps
+Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), resumed where they stopped.
+- **10e, the world (0.1.59):** 44 of 57 rows settled (32 covered, 9 `wrong-for-1.12`, 3 not-applicable), six fixes:
+  an event the world drives off stays off through its schedule's turns; `.invasion attack <zone>` (and
+  `invasion::attack`) sends the Scourge to a zone at once; an Alterac mine's supplies with no match are refused; a
+  script-made formation whose leader dies is led on by its first living member, and kept with it once the corpse
+  is gone (mangos's formation code); `spell_script_target.inverseEffectMask` loaded and applied per effect (Summon
+  Felhunter, Clean Up Stink Bomb); demon (112) and possessed (73) summons stand where their effect's target puts
+  them (an Inferno lands where aimed); target 46 takes the script's place as its destination and is refused with
+  nothing in reach. **Its calls, for you to check:** a script formation's leader leaving alive still disbands it;
+  a target-46 spell with no `spell_script_target` rows keeps the place it was sent (1.12's guard summons such as
+  11475 have none), where mangos fails it; each compass effect keeps its own spot (mangos keeps the last's), left
+  for a later change; mangos's 90° minion spot (target 32) left at 45° as wvs and Thistle Tea; a database group
+  whose leader left for good keeps pointing at the leader's spawn (Thistle Tea; mangos promotes). `wrong-for-1.12`
+  (wvs is mangos's): Blessing of Protection on a flag carrier, a swimmer's dry destination, dungeon copies' guids,
+  Golemagg's Trust's 30 yards in 3D, an undetected miss flagging, a compass destination, three script-place rows.
+  13 rows stay `gap` (objects' casts, caps and masks; an item cast turned to its script's creature; a trap
+  re-checked on its owner's PvP change), for phase 3. Merged without a second fast-suite run: the branch's code
+  is master's, which the agent tested (master had moved by a docs commit only).
+- **`inverseEffectMask` was done three times** (10c, 10e, 10h: the matrix has the row in three areas). 10e's,
+  merged first, is kept; the others' copies go at their merges.
+
 ## Answered
 - **#57, #58, #51, #56** (2026-10-20): mangos's for each: a passive party aura shown on its caster too (to do); a buff that shapeshifting cancels allowed on a shapeshifted target; a creature-owned pet's death gives nothing; unlearning a profession keeps its quests.
 - **M2 and M3** (2026-10-20): to fix now (`fix/m2m3`); **M4** deferred, low severity.
@@ -904,7 +926,9 @@ showed a difference. Phase 2 takes what is left.
 | 8g, 8i and your two answers (fix/userdec) | 87.1% | 0.1.29 |
 | M2 and M3 (fix/m2m3) | merged | 0.1.30 |
 | 8h, 8j, 8k and 8l: round 8 done | 87.8% | 0.1.31 |
+| Round 9 phase 1 (six areas) | 91.8% | 0.1.58 |
+| 10e: the world, round 10 | 92.2% | 0.1.59 |
 
-**Running now:** nothing: paused before round 9 (your word, 2026-10-20). Round 8 is in.
+**Running now:** round 10 (phase 2): 10a, 10b, 10c, 10f, 10h and 10m; 10d and 10l next (six at most).
 
 Their results go into [DECISIONS.md](DECISIONS.md) and this table as they merge.
