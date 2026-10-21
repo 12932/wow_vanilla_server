@@ -34,6 +34,7 @@ pub mod log;
 pub mod mods;
 pub mod outcome;
 pub mod redemption;
+pub mod righteousness;
 pub mod scripts;
 pub mod sight;
 pub mod single_target;
