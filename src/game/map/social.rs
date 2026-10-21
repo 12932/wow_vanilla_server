@@ -510,6 +510,12 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     groups::logged_in(&map.realm, g);
 }
 
+/// A player's client has gone, they lingering in the world: their friends
+/// hear they are offline (`friends::told_offline`).
+pub fn friends_told_offline(realm: &crate::game::Realm, g: Guid) {
+    friends::told_offline(realm, g);
+}
+
 /// A player has gone from the world, however they went (a logout, their
 /// client gone, let go with a map, reaped, or dropped by a panic): they
 /// leave the social world ([`logged_out`]), then the online list. Every

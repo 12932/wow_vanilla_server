@@ -1241,12 +1241,57 @@ impl Map {
         false
     }
 
-    /// A player's client has gone: they leave, saved.
+    /// A player's client has gone: they stay in the world as they are,
+    /// fighting and attackable, for [`RealmConfig::disconnect_linger`]
+    /// (mangos's `SetOffline`, `ShouldDisconnect`'s 60 s), for a login of
+    /// theirs to take them over (`login::take_over`); then they leave,
+    /// saved. Their friends hear they have gone at once, as mangos's
+    /// `SetOffline` tells them. A second word of it changes nothing: the
+    /// linger runs from the first, through a change of map. Before, they
+    /// left at once, so closing the client ended a fight lost.
     pub fn handle_disconnect(&mut self, guid: Guid) {
-        if let Some(p) = self.take_player(guid) {
-            debug!("{} disconnected from {}", p.name, self.key);
+        let now = self.now;
+        let Some(p) = self.players.get(&guid) else {
+            return;
+        };
+        if self.cfg.disconnect_linger.is_zero() || p.linger_until.is_some_and(|t| t <= now) {
+            return self.leave_now(guid);
+        }
+        self.start_linger(guid);
+    }
+
+    /// Their linger starts, if it hasn't and there is one: a client gone,
+    /// or replaced by another connection of the account, which has the
+    /// linger to take them over (mangos's `SetOffline` as a new socket
+    /// takes the session).
+    pub fn start_linger(&mut self, guid: Guid) {
+        let linger = self.cfg.disconnect_linger;
+        let until = self.now + linger;
+        let Some(p) = self.players.get_mut(&guid) else {
+            return;
+        };
+        if linger.is_zero() || p.linger_until.is_some() {
+            return;
+        }
+        debug!("{}'s client has gone from {}; lingering", p.name, self.key);
+        p.linger_until = Some(until);
+        social::friends_told_offline(&self.realm, guid);
+    }
+
+    /// A player leaves the world now, saved: kicked, or at their linger's
+    /// end.
+    pub fn leave_now(&mut self, guid: Guid) {
+        if let Some(p) = self.depart(guid) {
+            debug!("{} left {}", p.name, self.key);
             self.save_and_go_offline(p);
         }
+    }
+
+    /// Take a player leaving the world out of the map: released first if
+    /// dead and not released (`death::release_at_logout`).
+    pub fn depart(&mut self, guid: Guid) -> Option<Player> {
+        death::release_at_logout(self, guid);
+        self.take_player(guid)
     }
 
     /// A player handed on to this map by a copy that stopped as they were on
@@ -1782,10 +1827,15 @@ impl Map {
     fn update_players(&mut self) {
         let now = self.now;
         let mut logouts = Vec::new();
+        let mut gone = Vec::new();
         let mut saves = Vec::new();
         for p in self.players.values_mut() {
             if p.logout_at.is_some_and(|t| t <= now) {
                 logouts.push(p.guid);
+                continue;
+            }
+            if p.linger_until.is_some_and(|t| t <= now) {
+                gone.push(p.guid);
                 continue;
             }
             if p.teleport
@@ -1799,6 +1849,9 @@ impl Map {
         }
         for g in logouts {
             login::complete_logout(self, g);
+        }
+        for g in gone {
+            self.leave_now(g);
         }
         for g in saves {
             self.save_player(g);

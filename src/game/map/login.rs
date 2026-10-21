@@ -19,6 +19,10 @@ use crate::game::session::Control;
 
 /// How long a logout takes outside an inn.
 pub const LOGOUT_DELAY: Duration = Duration::from_secs(20);
+/// How long a player whose client has gone stays in the world, attackable,
+/// for it to come back (mangos's `WorldSession::ShouldDisconnect`, 60 s
+/// from `SetOffline`).
+pub const DISCONNECT_LINGER: Duration = Duration::from_secs(60);
 
 /// The packets a client gets on entering the world, up to its own create
 /// block. Everything around it follows at the next update.
@@ -232,6 +236,9 @@ pub fn take_over(
         p.teleport = None;
         p.awaiting_worldport = false;
         p.quest_objects.clear();
+        // Back before their client's linger ran out (mangos's
+        // `HandlePlayerReconnect` stops the logout timer).
+        p.linger_until = None;
     }
     let _ = old.session.send(Control::TakenOver);
     old.outbound.close();
@@ -444,7 +451,7 @@ pub fn arrived(map: &Map, g: Guid) {
 /// The logout is due: save the character and hand the session back to the
 /// character screen, which tells the client.
 pub fn complete_logout(map: &mut Map, guid: Guid) {
-    let Some(mut p) = map.take_player(guid) else {
+    let Some(mut p) = map.depart(guid) else {
         return;
     };
     p.logout_at = None;

@@ -151,6 +151,9 @@ pub fn test_config() -> RealmConfig {
         // Logouts over at once (a test sets the real delay where it waits
         // on it).
         logout_delay: Duration::ZERO,
+        // A client gone leaves the world at once (a test of the linger
+        // sets it).
+        disconnect_linger: Duration::ZERO,
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
         bg_auto_leave: crate::game::battlegrounds::AUTO_LEAVE,
