@@ -177,6 +177,8 @@ mod tests_p10_spell;
 #[cfg(test)]
 mod tests_p11j_loot;
 #[cfg(test)]
+mod tests_p11j_quests;
+#[cfg(test)]
 mod tests_p10_spell_cast;
 #[cfg(test)]
 mod tests_p10_world;
