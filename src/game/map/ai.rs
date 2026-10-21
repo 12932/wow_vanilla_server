@@ -105,6 +105,23 @@ pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
     aggro_reach(detection, level, lv, modifier) * map.cfg.creatures.aggro_rate
 }
 
+/// [`attack_distance`] of `g` at a unit of `level`: how far it looks for
+/// one.
+pub fn attack_distance_at(map: &Map, g: Guid, level: u32) -> f32 {
+    use crate::game::map::auras::AURA_MOD_DETECT_RANGE;
+    let Some(c) = map.creature(g) else {
+        return 0.0;
+    };
+    let detection = map
+        .realm
+        .data
+        .creature_template(c.entry)
+        .map_or(20.0, |t| t.detection_range);
+    let modifier = c.auras.sum(AURA_MOD_DETECT_RANGE) as f32;
+    let own = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    aggro_reach(detection, own, level, modifier) * map.cfg.creatures.aggro_rate
+}
+
 /// The unit flags that put a unit out of any fight: not attackable (both),
 /// not selectable, on a flight.
 const UNTARGETABLE: u32 = 0x2 | 0x1_0000 | 0x0200_0000 | 0x0010_0000;

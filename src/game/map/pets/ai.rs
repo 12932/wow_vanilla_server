@@ -14,8 +14,12 @@ use crate::game::map::creature::Motion;
 
 /// How often a pet thinks about its spells and what to fight.
 const THINK_EVERY: Duration = Duration::from_millis(500);
-/// How far from its master an aggressive pet looks for a fight.
-const AGGRO_YARDS: f32 = 20.0;
+/// How far above or below an aggressive pet a unit it takes on may be
+/// (mangos's `CREATURE_Z_ATTACK_RANGE_MELEE`).
+const AGGRO_HEIGHT: f32 = 3.0;
+/// How far an aggressive pet whose template has no detection range looks
+/// for a fight.
+const NO_RANGE_YARDS: f32 = 20.0;
 /// A fight further than this from the master is given up.
 const LEASH_YARDS: f32 = 80.0;
 /// A chase paths again when its quarry has moved this far.
@@ -360,8 +364,37 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
     if pick.is_some() || !aggressive {
         return pick;
     }
+    // As far as it would notice each, as a creature's aggro radius
+    // (mangos's `PetAI::MoveInLineOfSight` by `GetAttackDistance`: its
+    // detection range, a yard more for each level the other is below it,
+    // up to 25), within three yards' height, and none held by a stun,
+    // fear or confusion (`IsCrowdControlled`): where it looked twenty
+    // yards round, whatever their levels. One whose template gives it no
+    // range looks those twenty yards still.
+    let level = map
+        .unit_fields(g)
+        .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
+    let ranged = map
+        .creature(g)
+        .and_then(|c| map.realm.data.creature_template(c.entry))
+        .is_some_and(|t| t.detection_range >= 1.0);
+    let reach = |v: Guid| {
+        if ranged {
+            crate::game::map::ai::attack_distance(map, g, v)
+        } else {
+            NO_RANGE_YARDS
+        }
+    };
+    let search = if ranged {
+        crate::game::map::ai::attack_distance_at(map, g, level.saturating_sub(25))
+    } else {
+        NO_RANGE_YARDS
+    };
+    let controlled = crate::game::map::player::UNIT_FLAG_STUNNED
+        | crate::game::map::auras::UNIT_FLAG_CONFUSED
+        | crate::game::map::auras::UNIT_FLAG_FLEEING;
     map.grid
-        .around(pos.x, pos.y, AGGRO_YARDS)
+        .around(pos.x, pos.y, search)
         .filter(|v| (guid::is_unit(*v) || guid::is_player(*v)) && *v != g && *v != owner)
         .filter(|v| {
             // Hostile creatures, and enemy players the rules let it fight;
@@ -377,9 +410,11 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
                             .creature_template(c.entry)
                             .is_some_and(|t| t.civilian)
                 }) && combat::hostile(map, *v, owner));
-            foe && map
-                .position_of(*v)
-                .is_some_and(|p| dist(p, pos) <= AGGRO_YARDS)
+            foe && map.position_of(*v).is_some_and(|p| {
+                dist(p, pos) <= reach(*v) && (p.z - pos.z).abs() <= AGGRO_HEIGHT
+            }) && !map
+                .unit_fields(*v)
+                .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & controlled != 0)
                 && combat::can_attack(map, g, *v)
                 && !avoids_breaking(map, g, *v)
                 // Where its habitat lets it go (Thistle Tea's
