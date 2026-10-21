@@ -37,7 +37,7 @@ pub use ai::{attack as attack_target, stop as stop_where};
 pub use control::{button, handle, learn, send_spells, unpack};
 pub use hunter::{
     NPC_FLAG_STABLEMASTER, TAMER_SPELLS, beast_for, change_loyalty, give_pet, list_stable,
-    pet_xp_to_level, untrain_offer,
+    pet_xp_to_level, untrain_offer, untrainable,
 };
 pub use inherit::master_mods_changed;
 /// A family's passives, learned when tamed: for the tests.

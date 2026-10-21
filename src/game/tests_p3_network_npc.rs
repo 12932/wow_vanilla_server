@@ -400,6 +400,9 @@ async fn gossip_options_talk_open_the_bank_and_flight_map_and_run_their_scripts(
             ..Default::default()
         });
         crate::game::map::quests::refresh_log(p, &d);
+        // The node here known: a first look at a flight master's menu
+        // learns it, and shows no menu (mangos's `SendPreparedGossip`).
+        crate::game::map::npc::learn_node(&mut p.row.state.taxi_mask, 2);
     })
     .await;
     a.send(CMSG_GOSSIP_HELLO { guid: npc }).await;

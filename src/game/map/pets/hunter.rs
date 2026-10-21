@@ -629,7 +629,7 @@ fn untrain_cost(last: u32, at: i64, now: i64) -> u32 {
 /// Whether `pet` is `hunter`'s own tamed beast with more than one spell to
 /// forget (mangos's `HandlePetUnlearnOpcode`, Thistle Tea's
 /// `PetUntraining.quote`).
-fn untrainable(map: &Map, hunter: Guid, pet: Guid) -> bool {
+pub fn untrainable(map: &Map, hunter: Guid, pet: Guid) -> bool {
     state(map, pet)
         .is_some_and(|s| s.owner == hunter && s.kind == Kind::Hunter && s.spells.len() > 1)
 }

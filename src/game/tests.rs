@@ -1550,6 +1550,16 @@ mod npcs {
         let mut gossip = creature(4000, "Talker", 0x1 | 0x4);
         gossip.gossip_menu_id = 77;
         add(gossip, 40, 1.0);
+        // Something to sell: a vendor with nothing isn't offered as one
+        // (mangos's `PrepareGossipMenu`).
+        d.vendors.insert(
+            4000,
+            vec![VendorItem {
+                slot: 1,
+                item: 5000,
+                ..Default::default()
+            }],
+        );
         let mut trainer = creature(4001, "Trainer", 0x10);
         trainer.trainer_class = 1;
         add(trainer, 41, 2.0);
