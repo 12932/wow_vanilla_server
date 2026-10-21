@@ -357,6 +357,8 @@ async fn a_pet_held_in_its_fight_by_a_foe_has_no_health_back_until_it_ends() {
             f.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
             f.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
             combat::engage(m, wolf, pet);
+            // Its threat on the wolf's list is what holds it.
+            m.creature_mut(wolf).unwrap().threat.push((pet, 1.0));
             let f = m.unit_fields_mut(pet).unwrap();
             let half = f.get_u32(UNIT_FIELD_MAXHEALTH) / 2;
             f.set_u32(UNIT_FIELD_HEALTH, half);

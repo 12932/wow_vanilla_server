@@ -271,7 +271,18 @@ fn still_fights(map: &Map, g: Guid, owner: Guid, v: Guid) -> bool {
 /// to stay takes on of its own accord only what stands within its reach,
 /// as Thistle Tea's `Targeting.within_stay_range?` has it.
 fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
-    let pick = acquire_any(map, g, owner, aggressive);
+    // A creature's own pet takes no fight up while its master goes home,
+    // and takes its foes by its threat list first (Thistle Tea's
+    // `TargetSelection.next` for NPC pets; mangos's `GuardianAI`, a
+    // `CreatureEventAI` on its own list).
+    let creatures = !guid::is_player(owner);
+    if creatures && map.creature(owner).is_some_and(|c| c.evading) {
+        return None;
+    }
+    let pick = creatures
+        .then(|| by_threat(map, g, owner))
+        .flatten()
+        .or_else(|| acquire_any(map, g, owner, aggressive));
     let stays = state(map, g).is_some_and(|s| s.command == COMMAND_STAY);
     if !stays {
         return pick;
@@ -286,6 +297,19 @@ fn acquire(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid> {
         // The nearest is out of reach; none nearer is in it.
         _ => None,
     }
+}
+
+/// The foe highest on a creature's pet's threat list it may fight (the
+/// lower guid of two as high), but one under crowd control it leaves be.
+fn by_threat(map: &Map, g: Guid, owner: Guid) -> Option<Guid> {
+    map.creature(g)?
+        .threat
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t != owner && still_fights(map, g, owner, *t))
+        .filter(|(t, _)| !avoids_breaking(map, g, *t))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.guid().cmp(&a.0.guid())))
+        .map(|(t, _)| t)
 }
 
 /// Whether `v` is held by crowd control that damage would break
@@ -882,33 +906,52 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     }
 }
 
-/// A pet nothing fights leaves its fight this long after its last blow.
-/// (mangos has a pet leave with its master, `HandleExitCombat`; wvs's
-/// pets keep their own window.)
-const CALM_AFTER: Duration = Duration::from_secs(6);
-
-/// Out of the fight: the combat flag goes when nothing fights it.
+/// Out of the fight, as a player is (your call on #20, mangos's
+/// `CombatManager::Update` for a player-controlled unit, Thistle Tea's
+/// `PetCombat.reconcile`): once no living creature here holds it on its
+/// threat list or attacks it, and its PvP timer (5 s after its last blow
+/// with another player's side) has run out; looked at every
+/// [`combat::COMBAT_CHECK`], and at once as that timer ends. There is no
+/// timer against creatures: a foe that died, went, evaded, left its fight
+/// or came back anew holds it no more. Its own threat list goes with its
+/// fight.
 fn calm(map: &mut Map, g: Guid, now: Instant) {
-    let fighting = map.combat(g).is_some_and(|c| {
-        c.attackers
-            .iter()
-            .any(|a| map.unit_view(*a).is_some_and(|u| u.alive))
+    let in_combat = map.unit_fields(g).is_some_and(|f| {
+        f.has_flag(
+            UNIT_FIELD_FLAGS,
+            crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+        )
     });
-    let since = map
-        .combat(g)
-        .and_then(|c| c.last_action)
-        .is_some_and(|t| now.duration_since(t) < CALM_AFTER);
-    if !fighting
-        && !since
-        && map.unit_fields(g).is_some_and(|f| {
-            f.has_flag(
-                UNIT_FIELD_FLAGS,
-                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
-            )
-        })
+    let Some(c) = map.combat(g) else {
+        return;
+    };
+    if !in_combat
+        || c.combat_until.is_some_and(|t| t > now)
+        || c.next_check.is_some_and(|t| t > now)
     {
-        combat::leave_combat(map, g);
+        return;
     }
+    let held = !map
+        .awake_where(
+            |c| {
+                c.alive()
+                    && !c.evading
+                    && ((c.combat.attacking && c.combat.victim == g)
+                        || c.threat.iter().any(|(t, _)| *t == g))
+            },
+            |k, _| k,
+        )
+        .is_empty();
+    if let Some(c) = map.combat_mut(g) {
+        c.next_check = Some(now + combat::COMBAT_CHECK);
+    }
+    if held {
+        return;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        c.threat.clear();
+    }
+    combat::leave_combat(map, g);
 }
 
 /// Turn to `other`, as a creature does in a fight: its observers are told

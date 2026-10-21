@@ -270,7 +270,13 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
 /// there reads it). On one, whoever struck it was held in their fight
 /// while both lived.
 pub fn keeps_threat(c: &crate::game::map::creature::Creature) -> bool {
-    c.pet.is_none()
+    use crate::game::map::pets::Kind;
+    // A creature's own pet or guardian keeps one, and fights by it
+    // (mangos's `CanHaveThreatList`: "unless they are controlled by a
+    // creature"; Thistle Tea's NPC pets' threat order).
+    c.pet
+        .as_deref()
+        .is_none_or(|s| !guid::is_player(s.owner) && !matches!(s.kind, Kind::Totem | Kind::Critter))
 }
 
 /// Creatures forget `g` (feigning death, vanishing): its threat goes, and
