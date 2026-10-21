@@ -608,6 +608,12 @@ max_primary_trade_skill = 2
 # Default 0.5. Range 0 to 100, clamped. Changes at a reload. mangos: DurabilityLossChance.Damage.
 durability_loss_chance_damage = 0.5
 
+# Seconds a group's leader may be offline before the lead goes
+# to a member online (a raid's assistant first); with no one
+# online, it waits.
+# Default 300. Range 0 to 86400, clamped. Changes at a reload. mangos: Group.OfflineLeaderDelay.
+group_offline_leader_secs = 300
+
 # Water and lava: how long a player has before they come to harm,
 # and lava's burn.
 [environment]

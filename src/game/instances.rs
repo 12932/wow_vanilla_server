@@ -153,12 +153,6 @@ impl Instances {
                         parse_record::<InstanceSave>(KIND_INSTANCE, id.into(), data)
                     {
                         save.id = id;
-                        // Groups don't outlive a restart, and their ids come
-                        // again: a group's copy is left without an owner, for
-                        // its old leader's next group to take up.
-                        if matches!(save.owner, Some(Owner::Group(_))) {
-                            save.owner = None;
-                        }
                         // Empty since the restart, as far as the sweep can
                         // tell: it has as long from now as a copy left
                         // empty has. Its stored time is its last kill or
@@ -181,6 +175,21 @@ impl Instances {
             }
         }
         i
+    }
+
+    /// The copies of groups that aren't, `kept` telling which are, left
+    /// without an owner, for their old leader's next group to take up:
+    /// the groups kept in the store keep theirs across a restart, as
+    /// mangos's `group_instance` binds.
+    pub fn orphan_groups(&mut self, kept: impl Fn(u32) -> bool) {
+        for save in self.saves.values_mut() {
+            if let Some(Owner::Group(g)) = save.owner
+                && !kept(g)
+            {
+                self.owned.remove(&(Owner::Group(g), save.map));
+                save.owner = None;
+            }
+        }
     }
 
     /// A new copy's id.

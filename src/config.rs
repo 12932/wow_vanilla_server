@@ -595,6 +595,10 @@ settings! {
         /// The chance, in percent, a blow dealt or taken wears a point off
         /// a random piece of a player's gear.
         durability_loss_chance_damage: f32 = crate::game::map::vendor::HIT_WEAR_CHANCE, Clamp(0.0, 100.0), Live, "DurabilityLossChance.Damage";
+        /// Seconds a group's leader may be offline before the lead goes
+        /// to a member online (a raid's assistant first); with no one
+        /// online, it waits.
+        group_offline_leader_secs: u64 = 300, Clamp(0.0, 86_400.0), Live, "Group.OfflineLeaderDelay";
     }
 }
 
