@@ -127,6 +127,8 @@ mod tests_p10_core_loot;
 #[cfg(test)]
 mod tests_p10_core_power;
 #[cfg(test)]
+mod tests_p10_core_pvp;
+#[cfg(test)]
 mod tests_p10_core_real;
 #[cfg(test)]
 mod tests_p10_core_regen;
