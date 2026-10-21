@@ -288,7 +288,8 @@ pub fn summon(
     ritual_target: Option<Guid>,
 ) -> Option<Guid> {
     let data = map.realm.data.clone();
-    let t = data.gameobject_templates.get(&entry)?;
+    // The slot's object goes first, whether or not the new one can be made
+    // (mangos's `EffectSummonObject` clears the slot before `Create`).
     if slot != 0
         && let Some(o) = owner
     {
@@ -303,6 +304,7 @@ pub fn summon(
             despawn(map, g);
         }
     }
+    let t = data.gameobject_templates.get(&entry)?;
     let g = spawn_object(map, t, owner, at, orientation);
     let now = map.now;
     let expires = (ms > 0).then(|| now + Duration::from_millis(u64::from(ms)));

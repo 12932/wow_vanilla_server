@@ -390,6 +390,73 @@ async fn a_dungeon_pulse_draws_in_its_players_and_their_pets_however_far() {
     assert!(warlock && imp, "the warlock and her imp: {out:?}");
 }
 
+const STONE: u32 = 990_223;
+/// No such object.
+const MISSING: u32 = 990_224;
+
+/// An object summoned into a slot of its owner's sends the one there away,
+/// even when the new one can't be made (its template missing): the slot
+/// is left empty (mangos's `EffectSummonObject` clears the slot before
+/// `Create`; Thistle Tea's "failed replacement clears its slot"). wvs
+/// returned before replacing and kept the old one. A summon into the slot
+/// that works replaces it.
+#[tokio::test]
+async fn a_slots_object_goes_even_when_its_replacement_cant_be_made() {
+    let mut d = data();
+    d.gameobject_templates.insert(
+        STONE,
+        crate::game::data::GameObjectTemplate {
+            entry: STONE,
+            kind: 5,
+            display_id: 1,
+            name: "Stone".into(),
+            size: 1.0,
+            ..Default::default()
+        },
+    );
+    let realm = crate::game::harness::realm_with(d);
+    let (_a, me, map) = enter(&realm, "A", "Ritualist", Race::Human, Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            let at = m.position_of(me).unwrap();
+            let summon = |m: &mut Map, entry: u32| {
+                crate::game::map::objects::summon(m, Some(me), entry, at, 0.0, 0, 1, 1, None)
+            };
+            let in_slot = |m: &Map| {
+                m.objects
+                    .summoned
+                    .iter()
+                    .filter(|x| x.owner == Some(me) && x.slot == 1)
+                    .map(|x| x.guid)
+                    .collect::<Vec<_>>()
+            };
+            let first = summon(m, STONE).unwrap();
+            let second = summon(m, STONE).unwrap();
+            let replaced = (in_slot(m), m.gameobject(first).is_some());
+            let failed = summon(m, MISSING);
+            (
+                second,
+                replaced,
+                failed,
+                in_slot(m),
+                m.gameobject(second).is_some(),
+            )
+        })
+        .await
+        .unwrap();
+    let (second, replaced, failed, left, kept) = out;
+    assert_eq!(
+        replaced,
+        (vec![second], false),
+        "the second replaces the first"
+    );
+    assert_eq!(failed, None, "no such object");
+    assert!(
+        left.is_empty() && !kept,
+        "the slot is empty: {left:?} {kept}"
+    );
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
