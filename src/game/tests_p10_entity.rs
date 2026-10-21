@@ -497,6 +497,112 @@ async fn a_creatures_reach_takes_the_water_the_terrain_has_a_player_in() {
     assert_eq!(out.1, (true, false), "in the terrain's water: the fish's");
 }
 
+const GROUND: u32 = 990_227;
+const TOUCH: u32 = 990_228;
+
+/// A ground area's ticks on a creature are no spell hitting it: an EventAI
+/// "hit by spell" event of the area's spell never fires as the area
+/// lands on it again and again, though one of a spell cast at it does
+/// (Thistle Tea's "ground aura refreshes apply without recipient or
+/// caster spell-hit callbacks"; mangos's `SpellHit` is a cast's, which a
+/// persistent area's dynamic object makes no more of).
+#[tokio::test]
+async fn a_ground_areas_ticks_fire_no_spell_hit_event() {
+    use crate::game::data::scripts::{AiEvent, EF_REPEATABLE, EVENT_HIT_BY_SPELL, ScriptStep};
+    let mut d = data();
+    let none = SpellEffect::default();
+    let mut ground = effect(27, 0, 0);
+    ground.aura = crate::game::map::auras::AURA_PERIODIC_DAMAGE;
+    ground.amplitude = 1000;
+    ground.radius_index = 9;
+    let mut area = spell(GROUND, "Ground", [ground, none, none]);
+    area.duration_index = 4;
+    d.spells.spells.insert(GROUND, area);
+    d.spells
+        .spells
+        .insert(TOUCH, spell(TOUCH, "Touch", [effect(2, 0, 6), none, none]));
+    let event = |id: u32, spell: u32, script: u32| AiEvent {
+        id,
+        creature: crate::game::tests_pets::WOLF,
+        kind: EVENT_HIT_BY_SPELL,
+        chance: 100,
+        flags: EF_REPEATABLE,
+        params: [spell as i32, 0, 0, 0],
+        actions: [script, 0, 0],
+        ..Default::default()
+    };
+    d.scripts.ai_events.insert(
+        crate::game::tests_pets::WOLF,
+        vec![event(1, GROUND, 951), event(2, TOUCH, 952)],
+    );
+    for (script, phase) in [(951, 1), (952, 2)] {
+        d.scripts.ai_scripts.insert(
+            script,
+            vec![ScriptStep {
+                command: 44,
+                datalong: [phase, 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+    }
+    let realm = crate::game::harness::realm_with(d);
+    let (_a, me, map) = enter(&realm, "A", "Caster", Race::Human, Class::Mage).await;
+    learn(&map, me, &[GROUND, TOUCH]);
+    let out = map
+        .query(move |m| {
+            let wolf = crate::game::tests_pets::place_in(
+                m,
+                me,
+                crate::game::tests_pets::WOLF,
+                0x70_0005,
+                5.0,
+            );
+            let at = m.position_of(wolf).unwrap();
+            let max = m.unit_fields(wolf).unwrap().get_u32(UNIT_FIELD_MAXHEALTH) * 100;
+            let f = m.unit_fields_mut(wolf).unwrap();
+            f.set_u32(UNIT_FIELD_MAXHEALTH, max);
+            f.set_u32(UNIT_FIELD_HEALTH, max);
+            let there = crate::game::map::spells::Targets {
+                dest: Some(at),
+                ..Default::default()
+            };
+            crate::game::map::spells::cast(m, me, GROUND, there, None);
+            let health = |m: &Map| m.unit_fields(wolf).unwrap().get_u32(UNIT_FIELD_HEALTH);
+            let before = health(m);
+            for _ in 0..3 {
+                let now = m.now;
+                for a in &mut m.spells.areas {
+                    a.next_tick = now;
+                }
+                m.spells.area_ticked.clear();
+                crate::game::map::spells::update(m);
+            }
+            let ticked = before - health(m);
+            let after_area = crate::game::map::event_ai::phase(m, wolf);
+            crate::game::map::spells::cast(
+                m,
+                me,
+                TOUCH,
+                crate::game::map::spells::Targets {
+                    unit: Some(wolf),
+                    ..Default::default()
+                },
+                None,
+            );
+            (
+                ticked,
+                after_area,
+                crate::game::map::event_ai::phase(m, wolf),
+            )
+        })
+        .await
+        .unwrap();
+    let (ticked, after_area, after_touch) = out;
+    assert!(ticked > 0, "the area ticked on it");
+    assert_eq!(after_area, 0, "no spell-hit event from the area");
+    assert_eq!(after_touch, 2, "a spell cast at it fires its event");
+}
+
 const AHEAD: u32 = 990_215;
 const AT_PLACE: u32 = 990_216;
 
