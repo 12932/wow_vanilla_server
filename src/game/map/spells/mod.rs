@@ -1183,6 +1183,7 @@ fn resolve(
             e.target_a != 0
                 && (o.target_a, o.target_b, o.radius_index, o.chain_target)
                     == (e.target_a, e.target_b, e.radius_index, e.chain_target)
+                && targets::script_masks_alike(&map.realm.data, s.id, *j, index)
         });
         let these = match alike {
             Some((_, v)) => v.clone(),

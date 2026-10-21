@@ -125,6 +125,8 @@ mod tests_p10_world;
 #[cfg(test)]
 mod tests_p10_world_groups;
 #[cfg(test)]
+mod tests_p10_world_spells;
+#[cfg(test)]
 mod tests_p10_world_system;
 #[cfg(test)]
 mod tests_p3_ai_commands;

@@ -688,7 +688,15 @@ fn object_targets(
     t: &Targets,
 ) -> Vec<Guid> {
     let named = |o: &GameObject| {
-        crate::game::map::spells::targets::script_target(map, caster, s.id, &[0], o.entry, o.guid)
+        crate::game::map::spells::targets::script_target(
+            map,
+            caster,
+            s.id,
+            index,
+            &[0],
+            o.entry,
+            o.guid,
+        )
     };
     let e = &s.effects[index];
     if let Some(area) = [e.target_b, e.target_a]
