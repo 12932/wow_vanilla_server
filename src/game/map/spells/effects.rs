@@ -1105,10 +1105,13 @@ fn effect(
             }
         }
         // A spell that doesn't exist isn't learned (mangos's `addSpell`).
+        // A creature's lesson naming no target is the unit's it is cast at
+        // (a quest giver's reward, mangos's `RewardQuest`).
         EFFECT_LEARN_SPELL
             if e.trigger_spell != 0 && map.realm.data.spells.get(e.trigger_spell).is_some() =>
         {
-            learn(map, target, e.trigger_spell)
+            let to = lands_on(map, caster, target, &e, t);
+            learn(map, to, e.trigger_spell)
         }
         EFFECT_TRIGGER_SPELL if e.trigger_spell != 0 => {
             cast_triggered(map, caster, e.trigger_spell, Some(target));

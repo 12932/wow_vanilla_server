@@ -1054,8 +1054,31 @@ pub fn use_goober(map: &mut Map, player: Guid, object: Guid) -> bool {
     {
         return true;
     }
+    dismount_on_use(map, player, object);
     goober(map, player, object, &t, false);
     true
+}
+
+/// A player using an object by hand comes off their mount, but at a trap
+/// or an object one may use mounted: a mailbox, or a quest giver, page,
+/// quest object or spell caster whose template says so (mangos's
+/// `GameObject::Use` and `IsUsableMounted`, Thistle Tea's "dismounts
+/// through the shared aura lifecycle unless the template permits mounts").
+pub fn dismount_on_use(map: &mut Map, player: Guid, object: Guid) {
+    let Some(t) = template(map, object) else {
+        return;
+    };
+    let mounted_ok = match t.kind {
+        19 => true,
+        crate::game::map::world::GO_QUESTGIVER => t.data[8] != 0,
+        GO_TEXT => t.data[3] != 0,
+        GO_GOOBER => t.data[17] != 0,
+        GO_SPELLCASTER => t.data[3] != 0,
+        _ => false,
+    };
+    if t.kind != GO_TRAP && !mounted_ok && map.players.contains_key(&player) {
+        crate::game::map::mounts::dismount(map, player);
+    }
 }
 
 /// A quest giver, a page or a quest object about to be used (Thistle

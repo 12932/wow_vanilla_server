@@ -1219,21 +1219,31 @@ fn store_planned(
         p.items.push(item);
         last = Some((p.items.len() - 1, u32::from(slot)));
     }
-    for frame in batch.finish() {
-        p.outbound.send_frame(frame);
-    }
+    let frames = batch.finish();
     // The new items are known; their slots go out with the next update.
     // The stacks they joined are told their counts then.
     for item in &mut p.items[first_new..] {
         item.fields.clear_dirty();
     }
     p.refresh_inventory(&data);
-    let notify = alert;
-    if notify && let Some((i, slot)) = last {
-        p.outbound
-            .send(&push_result(g, &p.items[i], slot, count, creation));
-    }
+    let push = match last {
+        Some((i, slot)) if alert => Some(push_result(g, &p.items[i], slot, count, creation)),
+        _ => None,
+    };
+    // The quests' progress first, then the items' creates, then the push
+    // (mangos's `StoreNewItem`: `ItemAddedQuestCheck`, then `StoreItem`'s
+    // create; Thistle Tea's "the progress packet precedes the item's
+    // create block").
     crate::game::map::quests::items_added(map, g, entry, count);
+    let Some(p) = map.players.get(&g) else {
+        return Ok(());
+    };
+    for frame in frames {
+        p.outbound.send_frame(frame);
+    }
+    if let Some(push) = push {
+        p.outbound.send(&push);
+    }
     Ok(())
 }
 

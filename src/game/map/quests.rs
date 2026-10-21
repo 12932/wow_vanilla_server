@@ -582,6 +582,13 @@ pub fn status_query(map: &Map, player: Guid, giver: Guid) {
 
 /// `CMSG_QUESTGIVER_HELLO`: the giver's quests, or the one there is.
 pub fn hello(map: &mut Map, player: Guid, giver: Guid) {
+    // A battleground NPC's own menu, as a quest giver's hello reaches it
+    // too: the client of one with no gossip flag sends this (mangos's
+    // `HandleQuestgiverHelloOpcode` tries the script's `OnGossipHello`
+    // first; Thistle Tea's match gossip by the quest hello).
+    if guid::is_unit(giver) && crate::game::map::battleground::gossip_hello(map, player, giver) {
+        return;
+    }
     if !near_giver(map, player, giver) {
         return;
     }
@@ -1255,10 +1262,10 @@ pub fn event_happens(map: &mut Map, player: Guid, quest: u32) {
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
+    let in_log = p.journal.slot_of(quest).is_some();
     if let Some(slot) = p.journal.slot_of(quest) {
         p.journal.log[slot].explored = true;
         check(map, player, quest);
-        return;
     }
     let Some(q) = data
         .npc
@@ -1268,18 +1275,61 @@ pub fn event_happens(map: &mut Map, player: Guid, quest: u32) {
     else {
         return;
     };
-    let takes = map
-        .players
-        .get(&player)
-        .is_some_and(|p| can_take(p, q, &data));
+    // mangos's `CanCompleteQuest` for a flag quest: a few checks, not
+    // the log's (one in it is rewarded and leaves it too).
+    let takes = map.players.get(&player).is_some_and(|p| {
+        if in_log {
+            !rewarded(p, &data, quest)
+                && p.level() >= q.min_level
+                && (q.required_races == 0 || q.required_races & (1 << (p.row.race - 1)) != 0)
+                && (q.required_classes == 0 || q.required_classes & (1 << (p.row.class - 1)) != 0)
+                && (q.required_skill == 0
+                    || crate::game::map::skills::value_with_bonuses(p, q.required_skill)
+                        >= q.required_skill_value)
+                && dependencies_met(p, q, &data)
+        } else {
+            can_take(p, q, &data)
+        }
+    });
     if !takes || !condition_ok(map, player, player, quest) {
         return;
+    }
+    auto_reward(map, player, q);
+}
+
+/// A flag quest rewarded by its event, silently (mangos's `RewardQuest`
+/// with no announcement, from `CompleteQuest`): its money (or a max
+/// level's), experience, items, reputation and spell; out of the log if
+/// it was in it, never offered again.
+fn auto_reward(map: &mut Map, player: Guid, q: &Quest) {
+    let data = map.realm.data.clone();
+    for (item, count) in q.rewards.iter().filter(|(i, _)| *i != 0) {
+        let _ = inventory::add_item(map, player, *item, (*count).max(1), true);
     }
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
-    p.journal.rewarded.insert(quest);
+    let level = p.level();
+    let max_level = crate::game::map::stats::max_level();
+    let (xp, money) = if level >= max_level {
+        (0, q.reward_money.max(0) as u32 + q.reward_money_max_level)
+    } else {
+        (
+            crate::config::scaled(quest_xp(q, level), map.cfg.rates.xp_quest),
+            q.reward_money.max(0) as u32,
+        )
+    };
+    let cost = q.reward_money.min(0).unsigned_abs();
+    let after = p.money().saturating_add(money).saturating_sub(cost);
+    p.set_money(after);
+    if let Some(slot) = p.journal.slot_of(q.id) {
+        p.journal.clear(slot);
+    }
+    p.journal.rewarded.insert(q.id);
     refresh_log(p, &data);
+    if xp > 0 {
+        crate::game::map::stats::give_xp(map, player, xp, None);
+    }
     let cast = if q.reward_spell_cast != 0 {
         q.reward_spell_cast
     } else {
@@ -1553,7 +1603,27 @@ pub fn choose_reward(map: &mut Map, player: Guid, giver: Guid, quest: u32, choic
         q.reward_spell
     };
     if cast != 0 {
-        crate::game::map::spells::cast_triggered(map, player, cast, Some(player));
+        // A creature giver casts a lesson, a made item or a spell at a
+        // unit or friend on the player; else the player casts it on
+        // themselves (mangos's `RewardQuest`, Thistle Tea's
+        // `QuestRewards.cast_spell`).
+        // An item made for its caster (Mooncloth Boots, 19435, of quest
+        // 6032) stays the player's to cast, or the giver would make it for
+        // itself.
+        use crate::game::map::spells::{EFFECT_CREATE_ITEM, EFFECT_LEARN_SPELL};
+        let by_giver = guid::is_unit(giver)
+            && map.creature(giver).is_some()
+            && data.spells.get(cast).is_some_and(|s| {
+                s.effects.iter().any(|e| {
+                    matches!(e.effect, EFFECT_LEARN_SPELL | EFFECT_CREATE_ITEM)
+                        || matches!(e.target_a, 21 | 25)
+                }) && !s
+                    .effects
+                    .iter()
+                    .any(|e| e.effect == EFFECT_CREATE_ITEM && e.target_a == 1)
+            });
+        let caster = if by_giver { giver } else { player };
+        crate::game::map::spells::cast_triggered(map, caster, cast, Some(player));
     }
     crate::game::map::reputation::quest_rewarded(map, player, &q);
     crate::game::map::battleground::quest_rewarded(map, player, quest);
