@@ -193,6 +193,8 @@ mod tests_p11i_views;
 #[cfg(test)]
 mod tests_p11i_spells;
 #[cfg(test)]
+mod tests_p11i_world;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
