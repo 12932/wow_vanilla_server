@@ -990,3 +990,34 @@ One map's rows with its writers awake are within the noise: run three times more
 - **The order of lines.** No longer under one lock, two maps' lines in the same channel can reach two members in
   different orders, and a line can arrive after the notice of a leave or a kick that came after it was said. One
   map's lines arrive in the order it said them.
+
+## The movement drill (2026-10-21)
+
+peon's `--mode drill` (`scripts/drill.sh` in peon; its results and the full table in peon's `results/2026-10-21/`):
+N Alliance bots, level 30, geared, undying (`.god on`, a load test's god mode: blows land, health stays at 1 or more),
+spread over a 60-yard disc of open sand in Tanaris's Waterspring Field, run north 10 s, back 10 s, then about at
+random 120 s with jumps, side-steps and back-steps. The server on cores 0-15, on loopback (`[network] auth_address`,
+`world_address`), with `WVS_STATS_FILE` (a JSON line a second: each update's time and steps, events, queues, bytes
+out, disconnects, CPU, RSS; [PROFILING.md](PROFILING.md)); peon on 16-31, never past 46% of them. Kalimdor, at random:
+
+| Bots | Update p50 / p99 / max ms | Broadcasts got / due | Latency p50 / p99 ms | Packets out a second | CPU | Map thread busy |
+|---|---|---|---|---|---|---|
+| 50 | 2.0 / 3.4 / 66 | 100.7% | 0 / 2 | 11,269 | 0.20 | 5% |
+| 200 | 2.8 / 5.5 / 6.4 | 100.8% | 0 / 3 | 169,933 | 1.33 | 10% |
+| 880 | 18.8 / 32.0 / 85 | 100.8% | 4 / 32 | 3.2 million | 9.14 | 78% |
+| 1,000 | 23.6 / 39.4 / 115 | 100.8% | 11 / 49 | 4.1 million | 8.88 | 91% |
+| 1,100 | 38.9 / 68.5 / 164 | 100.8% | 27 / 118 | 5.0 million | 8.85 | 99% |
+| 1,200 | 56.6 / 297 / 482 | 96.4% | 4,391 / 6,357 | 5.7 million | 9.75 | 100% |
+| 1,500 | 74.0 / 349 / 566 | 55.3% | 35,127 / 59,245 | 5.2 million | 9.32 | 100% |
+| 2,000 | 109 / 891 / 1,191 | 27.3% | (over 10 s) | 4.5 million | 8.85 | 101% |
+
+The knee is about 1,000 bots in one spot (the runs out and back, the crowd in step, break first: p99 237 ms at 1,000).
+Kalimdor's one thread gives out, on two costs that grow with the square of the crowd: `visibility` (three quarters
+of the update at 880; 1.22 ms a refresh of a player among 2,000, about 0.6 µs a player in sight, in the Tracy capture
+at 2,000) and the movement handlers' fan-out to every observer (about 110 ns an observer a packet). Past it the map's
+mailbox grows without bound (825,000 events at 2,000) and broadcasts fall a minute behind; at about 5 million packets a
+second the outbound path (about 2 µs of CPU a packet) fills clients' queues to their budget. RSS stayed at 2.7 to
+3.5 GB. The fixes, most valuable first: visibility refreshes budgeted per update and made cheaper (one pass a pair,
+known pairs well inside sight skipped); the fan-out batched per observer or moved off the map's thread; back-pressure
+on the mailbox (a mover's queued heartbeats coalesced); the writer's cost a packet; a crowd's creates and the login's
+GM commands at arrival (placement held at about 45 a second).
