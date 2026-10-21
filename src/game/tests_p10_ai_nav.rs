@@ -102,3 +102,91 @@ async fn a_special_path_keeps_its_points_heights_and_an_ordinary_one_the_ground(
         }
     }
 }
+
+/// Thistle Tea's loaded random-point movement "Horde defenders and
+/// Mindless Undead request the authored region without fixed facing": the
+/// six steps of vmangos's scripts 945704, 945804 (Horde Defenders and Axe
+/// Throwers, the Barrens) and 1103003, 1103004 (Stratholme's Mindless
+/// Undead) are moves to a random point within five yards of their place
+/// (script command 3, its type 3), at a run, on the navmesh, and take no
+/// facing there.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_horde_defenders_and_mindless_undead_run_to_a_point_of_their_region() {
+    let db = harness::real_data("db");
+    if !db.join("vmangos.sqlite").exists() {
+        return;
+    }
+    let Some(realm) = nav_realm(harness::load_real(&db)) else {
+        return;
+    };
+    let steps: Vec<(u32, crate::game::data::scripts::ScriptStep)> = [
+        (1, 945_704u32),
+        (1, 945_804),
+        (0, 1_103_003),
+        (0, 1_103_004),
+    ]
+    .into_iter()
+    .flat_map(|(map, id)| {
+        realm.data.scripts.ai_scripts[&id]
+            .iter()
+            .cloned()
+            .map(move |s| (map, s))
+    })
+    .collect();
+    assert_eq!(steps.len(), 6);
+    let mut c = harness::Client::connect(&realm, "Region");
+    c.enter("Region", Race::Human, Class::Warrior).await;
+    let mut walked = 0;
+    let mut here: Option<(u32, crate::game::map::MapHandle)> = None;
+    for (map_id, step) in steps {
+        assert_eq!((step.command, step.datalong[0], step.o), (3, 3, 5.0));
+        let at = Vector3d {
+            x: step.x,
+            y: step.y,
+            z: step.z,
+        };
+        let map = match here.take() {
+            Some((id, map)) if id == map_id => {
+                super::tests_p3_scripts::relocate(&map, &mut c, at).await;
+                map
+            }
+            _ => super::tests_p3_scripts::go(&realm, &mut c, map_id, at).await,
+        };
+        here = Some((map_id, map.clone()));
+        let out = map
+            .query(move |m| {
+                let g = super::tests_p3_scripts::summon(m, HORDE_DEFENDER, at, 0.0);
+                let step = crate::game::data::scripts::ScriptStep {
+                    condition: 0,
+                    ..step
+                };
+                crate::game::map::scripts::execute(m, &step, g, g);
+                let c = m.creature(g).unwrap();
+                let walk = match &c.motion {
+                    Motion::Moving(w) => Some((w.destination(), w.run, w.face)),
+                    _ => None,
+                };
+                let face = event_ai::scripted(m, g)
+                    .and_then(|s| s.scripted_move)
+                    .and_then(|s| s.face);
+                crate::game::map::scripts::despawn(m, g);
+                (walk, face)
+            })
+            .await
+            .unwrap();
+        let (walk, face) = out;
+        // Within five yards of its place, or (already there) at rest.
+        if let Some((to, run, arrival_face)) = walk {
+            walked += 1;
+            let d = ((to.x - at.x).powi(2) + (to.y - at.y).powi(2)).sqrt();
+            assert!(d <= 5.0 + 0.1, "{}: within five yards: {d}", step.id);
+            assert!(run, "{}: at a run", step.id);
+            assert_eq!((arrival_face, face), (None, None), "{}: no facing", step.id);
+        }
+    }
+    assert!(walked > 0, "some walk");
+}
+
+/// A creature to send on the steps.
+const HORDE_DEFENDER: u32 = 9_457;
