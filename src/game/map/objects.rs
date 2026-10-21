@@ -222,7 +222,7 @@ pub fn same_group(map: &Map, a: Guid, b: Guid) -> bool {
 }
 
 fn present(map: &Map, g: Guid) -> bool {
-    map.players.contains_key(&g) || map.creature(g).is_some()
+    map.players.contains_key(&g) || map.creature(g).is_some() || map.gameobject(g).is_some()
 }
 
 fn send(map: &Map, object: Guid, m: &impl wow_world_messages::vanilla::ServerMessage) {

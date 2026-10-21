@@ -1190,11 +1190,15 @@ async fn the_object_commands() {
                 .find(|(_, o)| o.entry == BOX)
                 .map(|(_, o)| (o.guid, o.position, o.orientation));
             let (box_guid, box_at, box_o) = boxed.unwrap();
+            // Its summoner's (attached), it goes at its time as its
+            // summoner's objects do.
             let gone_at = m
-                .object_resets
+                .objects
+                .summoned
                 .iter()
-                .find(|(_, g, _)| *g == box_guid)
-                .map(|(t, _, _)| t.duration_since(now));
+                .find(|s| s.guid == box_guid && s.owner == Some(host))
+                .and_then(|s| s.expires)
+                .map(|t| t.duration_since(now));
             (
                 state,
                 opened,
