@@ -249,6 +249,8 @@ mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
+mod tests_p11_entity_summons;
+#[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]
 mod tests_p3_ai_events;
