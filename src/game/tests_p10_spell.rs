@@ -50,6 +50,9 @@ const PLAIN_MARK: u32 = 998_410;
 /// Inferno's kind: a demon summoned at the destination.
 const SUMMON_DEMON: u32 = 998_411;
 const DEMON: u32 = 9_961;
+/// A repair of 100 at a unit, and a buff keeping repairs off.
+const REPAIR: u32 = 998_412;
+const NO_REPAIRS: u32 = 998_413;
 const R10: u32 = 13;
 const R20: u32 = 920;
 /// `SPELL_EFFECT_SPAWN`, and `UNIT_FLAG_SPAWNING`.
@@ -205,9 +208,37 @@ fn data(d: &mut GameData) {
             ..Default::default()
         },
     );
+    let mut repair = bare(REPAIR, 0);
+    effect(
+        &mut repair,
+        0,
+        SpellEffect {
+            effect: spells::EFFECT_HEAL_MECHANICAL,
+            base_points: 99,
+            base_dice: 1,
+            target_a: 25,
+            ..Default::default()
+        },
+    );
+    let mut no_repairs = bare(NO_REPAIRS, 0);
+    no_repairs.duration_index = LASTS_LONG;
+    // Of friendly effects too.
+    no_repairs.attributes[1] |= 0x1_0000;
+    effect(
+        &mut no_repairs,
+        0,
+        aura(
+            auras::AURA_EFFECT_IMMUNITY,
+            spells::EFFECT_HEAL_MECHANICAL as i32,
+            0,
+            1,
+        ),
+    );
     insert(
         d,
         [
+            repair,
+            no_repairs,
             entrap,
             root,
             frost,
@@ -456,4 +487,31 @@ fn only_a_weapons_abilities_roll_with_its_skill() {
             s.equipped_item_class
         );
     }
+}
+
+/// A repair at a kobold with a buff keeping repairs off, friendly
+/// effects too, does nothing, its caster told it is immune; the buff
+/// gone, it repairs 100 (Thistle Tea's "honors effect immunity and its
+/// removal"; mangos-classic's `IsImmuneToSpellEffect`).
+#[tokio::test]
+async fn an_effect_immunity_keeps_a_repair_off_until_it_goes() {
+    let realm = fast_realm(data);
+    let (mut c, g, map) = human(&realm, "P10S6", "Repairer", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, g, 60, &[]);
+            let k = kit::dummy(m, g, 60, 3.0);
+            kit::set_health(m, k, 1_000);
+            kit::apply(m, k, k, NO_REPAIRS);
+            spells::cast_triggered(m, g, REPAIR, Some(k));
+            let kept_off = kit::health(m, k);
+            auras::remove_spell(m, k, NO_REPAIRS, None);
+            spells::cast_triggered(m, g, REPAIR, Some(k));
+            (kept_off, kit::health(m, k))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (1_000, 1_100));
+    assert_eq!(kit::missed(&mut c, REPAIR).await, 7, "immune");
 }

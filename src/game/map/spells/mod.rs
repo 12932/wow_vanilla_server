@@ -1822,6 +1822,23 @@ fn land(
     // resisted on its own roll (Thistle Tea's `EffectImmunity` and
     // `MechanicResistance`).
     let mut effects = effects;
+    // An effect of a kind the target is immune to is kept off it, helpful
+    // or harmful (mangos's `AddUnitTarget` asking `IsImmuneToSpellEffect`
+    // of every one): a flag carrier isn't summoned, a mechanical one held
+    // off its repair isn't repaired. Kept off whole, it says so.
+    if !s.attr(0, sd::ATTR_NO_IMMUNITIES) {
+        let before = effects.iter().filter(|e| **e).count();
+        for (i, on) in effects.iter_mut().enumerate() {
+            if *on && crate::game::map::extra_effects::effect_immune(map, aim, s, i) {
+                *on = false;
+            }
+        }
+        if before > 0 && !effects.iter().any(|e| *e) {
+            outcome::send_miss(map, caster, aim, s.id, Hit::Immune);
+            contact(map, caster, aim, s, l, false);
+            return false;
+        }
+    }
     if aim != caster && !auras::positive(s) {
         let before = effects.iter().filter(|e| **e).count();
         let mut immune = false;

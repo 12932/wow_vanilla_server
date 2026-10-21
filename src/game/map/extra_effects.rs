@@ -62,19 +62,34 @@ pub fn effect(
 }
 
 /// Whether `target` is immune to effect `index` of `s`: an effect
-/// immunity of its kind, of the other polarity.
+/// immunity of its kind, of the other side, or of either if its spell
+/// says so (`SPELL_ATTR_EX_IMMUNITY_TO_HOSTILE_AND_FRIENDLY_EFFECTS`: a
+/// flag carrier isn't summoned), as Thistle Tea's `EffectImmunity` has it
+/// (mangos's `IsImmuneToSpellEffect` asks no side); none for a spell that
+/// ignores immunities.
 pub fn effect_immune(map: &Map, target: Guid, s: &SpellTemplate, index: usize) -> bool {
     let kind = s.effects[index].effect as i32;
+    if kind == 0 || s.attr(0, crate::game::data::spells::ATTR_NO_IMMUNITIES) {
+        return false;
+    }
     let harmful = !auras::positive(s);
+    let data = &map.realm.data;
     auras::auras(map, target).is_some_and(|a| {
         a.holders.iter().any(|h| {
-            h.positive == harmful
-                && h.effects
-                    .iter()
-                    .any(|x| x.kind == AURA_EFFECT_IMMUNITY && x.misc == kind)
+            h.effects
+                .iter()
+                .any(|x| x.kind == AURA_EFFECT_IMMUNITY && x.misc == kind)
+                && (h.positive == harmful
+                    || data
+                        .spells
+                        .get(h.spell)
+                        .is_some_and(|i| i.attr(1, IMMUNITY_TO_HOSTILE_AND_FRIENDLY)))
         })
     })
 }
+
+/// `SPELL_ATTR_EX_IMMUNITY_TO_HOSTILE_AND_FRIENDLY_EFFECTS`.
+const IMMUNITY_TO_HOSTILE_AND_FRIENDLY: u32 = 0x1_0000;
 
 /// A pull: the target, a player, is thrown at the caster at `speed`, to
 /// land at their feet.
