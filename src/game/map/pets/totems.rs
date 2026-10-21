@@ -245,6 +245,22 @@ pub fn summon_totem(
             None => p.owned.loose_totems.push(g),
         }
     }
+    // A creature's totem is its summon: it hears of it as it comes, dies
+    // and goes, as of its guardians (mangos-classic's `Totem`, a
+    // `TemporarySummon`: `JustSummoned`, `SummonedCreatureJustDied` and
+    // `SummonedCreatureDespawn`; Thistle Tea's summon events), where it
+    // heard of none.
+    if guid::is_unit(owner) && map.creature(owner).is_some() {
+        if let Some(c) = map.creature_mut(g) {
+            c.scripted.get_or_insert_with(Default::default).summoner = Some(owner);
+        }
+        if let Some(s) = crate::game::map::event_ai::scripted_mut(map, owner) {
+            s.summoned.push(g);
+        }
+        if !map.ai_spawned.contains(&g) {
+            crate::game::map::event_ai::spawned(map, g);
+        }
+    }
     // Its shaman's spell modifiers from the start, for the spell it works
     // at once (Improved Fire Nova Totem's quicker pulse), as Thistle Tea's
     // totem takes `owner_spell_modifiers` as it is made.

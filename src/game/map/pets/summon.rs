@@ -895,6 +895,15 @@ fn guardian_gone(map: &mut Map, g: Guid) {
 pub fn die(map: &mut Map, g: Guid) {
     let now = map.now;
     guardian_gone(map, g);
+    // A creature's summon (its totem) is heard of by its summoner as it
+    // dies, as its other summons are (`ai::die`).
+    if map
+        .creature(g)
+        .and_then(|c| c.scripted.as_deref())
+        .is_some_and(|s| s.summoner.is_some())
+    {
+        crate::game::map::event_ai::death_heard(map, g);
+    }
     crate::game::map::auras::clear_on_death(map, g);
     crate::game::map::combat::leave_combat(map, g);
     // Stopped where its run has come to now.
