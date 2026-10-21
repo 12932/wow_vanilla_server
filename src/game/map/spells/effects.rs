@@ -1782,6 +1782,10 @@ fn home(map: &Map, g: Guid) -> Option<(u32, Vector3d, f32)> {
 /// Combo points on `target`: a new target starts them over. Points held
 /// only for a while (`retain_combo_points`) are kept for good.
 pub fn add_combo_points(map: &mut Map, caster: Guid, target: Guid, n: u8) {
+    if let Some(owed) = map.spells.deferred_combo.get_mut(&caster) {
+        owed.push((target, n));
+        return;
+    }
     release_retained_combo_points(map, caster);
     if let Some(c) = map.caster_mut(caster) {
         if c.combo_target != target {

@@ -261,6 +261,9 @@ pub struct MapSpells {
     /// Items' temporary enchantments' modifiers (Improved Weapon Totems'
     /// on a weapon totem's): item to the enchantment and its percent.
     pub enchant_modifiers: AHashMap<Guid, (u32, i32)>,
+    /// Combo points owed to a caster whose finisher is landing, given
+    /// once it has taken its own: caster to (target, points).
+    pub deferred_combo: AHashMap<Guid, Vec<(Guid, u8)>>,
     /// Persistent area auras: Blizzard, Rain of Fire, Consecration.
     pub areas: Vec<Area>,
     pub area_auras_at: Option<Instant>,
@@ -1643,6 +1646,11 @@ fn execute(
         shared,
     };
     let one_of = class_scripts::one_of(map, s);
+    // Combo points a finisher's landing gives (Ruthlessness's) wait until
+    // it has taken its own (mangos-classic's `AddTriggeredSpell`).
+    if combo > 0 {
+        map.spells.deferred_combo.entry(caster).or_default();
+    }
     for ((target, effects), (delay, hit)) in resolved.into_iter().zip(flights) {
         let mut effects = class_scripts::effects_for(s, target, &launch.targets, effects, one_of);
         for (i, e) in effects.iter_mut().enumerate() {
@@ -1715,6 +1723,13 @@ fn execute(
     }
     if combo > 0 && (landed_on_main || targets.unit.is_none()) {
         clear_combo_points(map, caster);
+    }
+    if combo > 0
+        && let Some(owed) = map.spells.deferred_combo.remove(&caster)
+    {
+        for (target, n) in owed {
+            add_combo_points(map, caster, target, n);
+        }
     }
     if !triggered {
         mods::spend(map, caster, &m);

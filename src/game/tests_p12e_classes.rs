@@ -229,3 +229,42 @@ async fn frenzied_regeneration_turns_rage_into_health() {
     assert_eq!(out.0, (200, 200), "10 rage for 100 health");
     assert_eq!(out.1, (0, 250), "the 5 left for 50");
 }
+
+/// On the real data: a rogue with Ruthlessness (its third rank, made sure
+/// to proc) and five combo points on a kobold finishes it with
+/// Eviscerate: the finisher takes the five, and Ruthlessness's point is
+/// on the kobold after it, as mangos-classic's `AddTriggeredSpell` defers
+/// it past the finisher's own clearing.
+#[tokio::test]
+#[ignore = "extended"]
+async fn ruthlessness_leaves_its_point_after_the_finisher() {
+    let realm = kit::realm_plus(|d| {
+        if let Some(s) = d.spells.spells.get_mut(&14161) {
+            s.proc_chance = 100;
+        }
+    });
+    let (_c, r, map) = kit::player(&realm, "P12EY", "Ruthless", Race::Human, Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            m.spells.rolls = Some(false);
+            kit::ready(m, r, 60, &[31016, 14161]);
+            let kobold = kit::dummy(m, r, 60, 2.0);
+            crate::game::map::spells::add_combo_points(m, r, kobold, 5);
+            let before = kit::health(m, kobold);
+            cast_fresh(m, r, 31016, at(kobold));
+            let c = m.caster(r).unwrap();
+            (
+                before > kit::health(m, kobold),
+                c.combo_points,
+                c.combo_target == kobold,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(out.0, "Eviscerate hit");
+    assert_eq!(
+        (out.1, out.2),
+        (1, true),
+        "one point on the kobold after it"
+    );
+}
