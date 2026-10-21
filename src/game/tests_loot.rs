@@ -476,7 +476,8 @@ async fn round_robin_hands_the_corpses_out_in_turn() {
         .unwrap();
     // Each kill goes to the next member, round the group.
     assert_eq!(looters, [Some(ga), Some(gb), Some(gc)]);
-    // Only the assigned looter may open a corpse.
+    // Any it fell to may open a corpse, for its gold (mangos's `CanLoot`;
+    // R4-18): its items are the looter's (`tests_p12d_group_loot`).
     let may = map
         .query(move |m| {
             let l = crate::game::map::loot::loot_ref(m, guid::unit(3001, 22)).unwrap();
@@ -484,7 +485,7 @@ async fn round_robin_hands_the_corpses_out_in_turn() {
         })
         .await
         .unwrap();
-    assert_eq!(may, (false, true));
+    assert_eq!(may, (true, true));
 }
 
 /// One player at the start, and the map.

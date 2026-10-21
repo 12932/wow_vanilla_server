@@ -342,9 +342,10 @@ async fn group(leader: &mut Client, member: &mut Client, name: &str) {
 
 /// A corpse's loot sparkles (`UNIT_DYNFLAG_LOOTABLE`) only for those who
 /// may open it, as mangos's per-viewer `Loot::CanLoot` shows it: under
-/// round robin its looter, not the rest of the group it fell to, though
-/// it isn't grey to them (theirs is the kill); nor for one who comes
-/// later from outside it, in their create.
+/// the items under the threshold its current looter's, not the rest of
+/// the group it fell to till the looter lets them go, though it isn't
+/// grey to them (theirs is the kill); nor for one who comes later from
+/// outside it, in their create.
 #[tokio::test]
 async fn a_corpses_loot_shows_only_to_those_who_may_open_it() {
     use crate::game::map::loot::{DYNFLAG_LOOTABLE, Loot};
@@ -363,7 +364,11 @@ async fn a_corpses_loot_shows_only_to_those_who_may_open_it() {
         let b = m.creature_mut(boar).unwrap();
         crate::game::map::tap::take(&realm, b, ga);
         b.loot = Some(Loot {
-            gold: 10,
+            items: vec![crate::game::map::loot::LootSlot {
+                item: 2000,
+                count: 1,
+                ..Default::default()
+            }],
             allowed: vec![ga, gc],
             method: Some(GroupLootSetting::RoundRobin),
             assigned: Some(ga),
@@ -371,6 +376,7 @@ async fn a_corpses_loot_shows_only_to_those_who_may_open_it() {
         });
         b.fields
             .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, true);
+        crate::game::map::loot::refresh_quiet(m, boar);
     })
     .await;
     let mine = flags_of(&mut a, boar).await;

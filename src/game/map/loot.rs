@@ -2,12 +2,16 @@
 //! opened, held on the corpse or object, and taken through the loot
 //! window.
 //!
-//! A group's kill follows its loot method, as Thistle Tea's loot session
-//! does: free for all, round robin (the next member's), master loot (items
-//! at the threshold kept for the master looter to give), and group loot or
-//! need before greed (items at the threshold rolled for, 60 seconds, need
-//! over greed). Quest items drop for each member who needs them; gold is
-//! split among the members near.
+//! A group's kill follows its loot method, as mangos-classic's `Loot`
+//! does: under every method but free for all the group's next member near
+//! is the current looter, the items under the threshold theirs alone till
+//! they close the window, then anyone's it fell to (round robin's items at
+//! the threshold too); master loot keeps the items at the threshold for
+//! the master looter to give (group loot with no master near), group loot
+//! and need before greed roll for them (60 seconds, need over greed).
+//! Quest items, and free-for-all ones, drop for each member who may have
+//! them; a drop no one it may fall to may have isn't rolled; gold is
+//! split among those it fell to.
 
 use crate::config::RatesConfig;
 use std::sync::Arc;
@@ -51,9 +55,18 @@ pub const MAX_ITEMS: usize = 16;
 /// `UNIT_FIELD_FLAGS`: the player has a loot window open.
 const UNIT_FLAG_LOOTING: u32 = 0x400;
 
-/// Loot slot types, as the window shows them.
+/// Loot slot types, as the window shows them (mangos's `LootSlotType`):
+/// to take, to look at (rolled for, or kept for the master looter), the
+/// master looter's to give.
 const SLOT_ALLOW: u8 = 0;
+const SLOT_VIEW: u8 = 1;
 const SLOT_MASTER: u8 = 2;
+/// `ITEM_FLAG_MULTI_DROP`: the item drops for each who may loot it
+/// (mangos's `LootItem::freeForAll`).
+pub const ITEM_FLAG_MULTI_DROP: u32 = 0x800;
+/// `ITEM_EXTRA_IGNORE_QUEST_STATUS`: a quest-starting item that drops
+/// whatever its quest's status.
+const ITEM_EXTRA_IGNORE_QUEST_STATUS: u32 = 0x2;
 
 /// Votes, as the client sends them.
 pub const VOTE_PASS: u8 = 0;
@@ -104,6 +117,15 @@ pub struct LootSlot {
     pub quality: u32,
     /// A condition the viewer must meet to see it.
     pub condition: u32,
+    /// Free for all (`ITEM_FLAG_MULTI_DROP`): each it fell to takes their
+    /// own, as a quest drop (mangos's `freeForAll`).
+    pub ffa: bool,
+    /// The current looter closed the window on it, or a roll on it was
+    /// all passed: anyone's it fell to (mangos's `isReleased`).
+    pub released: bool,
+    /// Not the current looter's to see: anyone's it fell to at once
+    /// (mangos's `currentLooterPass`).
+    pub looter_pass: bool,
 }
 
 /// A roll under way for one slot.
@@ -126,8 +148,13 @@ pub struct Loot {
     pub allowed: Vec<Guid>,
     pub method: Option<GroupLootSetting>,
     pub master: Option<Guid>,
-    /// Round robin's looter.
+    /// The group's current looter: the items under the threshold are
+    /// theirs alone till they close the window (mangos's
+    /// `m_currentLooterGuid`, for every method but free for all).
     pub assigned: Option<Guid>,
+    /// Looted for all: nothing in it anyone it fell to may take, so the
+    /// corpse may be skinned (mangos's `CREATURE_LOOT_STATUS_LOOTED`).
+    pub done: bool,
     pub rolls: Vec<Roll>,
     pub kind: LootKind,
     /// Who has the window open.
@@ -144,35 +171,100 @@ pub struct Loot {
 
 impl Loot {
     pub fn is_empty(&self) -> bool {
-        self.gold == 0 && self.items.iter().all(|s| s.taken || s.quest) && self.rolls.is_empty()
+        self.done
+            || (self.gold == 0
+                && self.items.iter().all(|s| s.taken || s.quest || s.ffa)
+                && self.rolls.is_empty())
     }
 
-    /// Whether `g` may open it.
+    /// Whether `g` has a right to it: its owner, one of the group it fell
+    /// to (mangos's `m_ownerSet`), or one who opened its lock. What in it
+    /// is theirs to take is [`Loot::slot_type`]'s.
     pub fn may_loot(&self, g: Guid) -> bool {
         if self.kind == LootKind::Opened && !self.opened_by.contains(&g) {
             return false;
         }
         if !self.allowed.is_empty() {
-            return self.allowed.contains(&g)
-                && (self.method != Some(GroupLootSetting::RoundRobin)
-                    || self.assigned.is_none_or(|a| a == g));
+            return self.allowed.contains(&g);
         }
         self.owner.is_none_or(|o| o == g)
     }
 
-    /// Whether `g` sees slot `s`, needing `wanted` and meeting the
-    /// conditions `met`.
-    fn visible(&self, s: &LootSlot, g: Guid, wanted: &[u32], met: &[u32]) -> bool {
+    /// Whether `g` would find anything in it: its gold, or an item they
+    /// see (mangos's `Loot::CanLoot`, by `GetLootStatusFor`).
+    pub fn has_for(&self, g: Guid, sight: &Sight) -> bool {
+        self.gold > 0 || (0..self.items.len()).any(|i| self.slot_type(i, g, sight).is_some())
+    }
+
+    /// How `g` sees slot `i`, if at all (mangos's
+    /// `GetSlotTypeForSharedLoot`): to take, to look at, or to give.
+    fn slot_type(&self, i: usize, g: Guid, sight: &Sight) -> Option<u8> {
+        let s = self.items.get(i)?;
+        let master_gives = self.master == Some(g) && s.blocked && self.rolls.is_empty();
         if s.taken
-            || (s.condition != 0 && !met.contains(&s.condition))
+            || (s.condition != 0 && !sight.met.contains(&s.condition) && !master_gives)
             || s.winner.is_some_and(|w| w != g)
+            || (sight.started.contains(&s.item) && self.master != Some(g))
         {
-            return false;
+            return None;
         }
         if s.quest {
-            return wanted.contains(&s.item) && !s.taken_by.contains(&g);
+            return (sight.wanted.contains(&s.item) && !s.taken_by.contains(&g))
+                .then_some(SLOT_ALLOW);
         }
-        !s.blocked || (self.master == Some(g) && self.rolls.is_empty())
+        if s.ffa {
+            return (!s.taken_by.contains(&g)).then_some(SLOT_ALLOW);
+        }
+        if s.winner == Some(g) {
+            return Some(SLOT_ALLOW);
+        }
+        if s.blocked {
+            return if self.rolls.iter().any(|r| r.slot == i) {
+                Some(SLOT_VIEW)
+            } else if master_gives {
+                Some(SLOT_MASTER)
+            } else {
+                None
+            };
+        }
+        match self.method {
+            None | Some(GroupLootSetting::FreeForAll) => Some(SLOT_ALLOW),
+            Some(_) => (s.released || s.looter_pass || self.assigned.is_none_or(|a| a == g))
+                .then_some(SLOT_ALLOW),
+        }
+    }
+}
+
+/// What one viewer may see in a loot: the quest drops they need, the
+/// conditions they meet, and the quest-starting items whose quest they
+/// have begun (mangos's `AllowedForPlayer`).
+#[derive(Debug, Clone, Default)]
+pub struct Sight {
+    pub wanted: Vec<u32>,
+    pub met: Vec<u32>,
+    pub started: Vec<u32>,
+}
+
+/// [`Sight`] of `viewer` on `loot`, on the corpse or object `source`.
+pub fn sight(map: &Map, loot: &Loot, source: Guid, viewer: Guid) -> Sight {
+    let data = &map.realm.data;
+    let started = map.players.get(&viewer).map_or_else(Vec::new, |p| {
+        loot.items
+            .iter()
+            .filter(|s| {
+                data.item(s.item).is_some_and(|t| {
+                    t.start_quest != 0
+                        && t.extra_flags & ITEM_EXTRA_IGNORE_QUEST_STATUS == 0
+                        && crate::game::map::quests::begun(p, t.start_quest)
+                })
+            })
+            .map(|s| s.item)
+            .collect()
+    });
+    Sight {
+        wanted: crate::game::map::quests::wanted(map, viewer),
+        met: conditions_met(map, loot, source, viewer),
+        started,
     }
 }
 
@@ -256,6 +348,10 @@ fn slot_for(data: &GameData, e: &LootEntry, rng: &mut impl rand::Rng) -> LootSlo
         quest: is_quest_item(e),
         quality: data.item(e.item).map_or(0, |t| t.quality),
         condition: e.condition,
+        ffa: !is_quest_item(e)
+            && data
+                .item(e.item)
+                .is_some_and(|t| t.flags & ITEM_FLAG_MULTI_DROP != 0),
         ..Default::default()
     }
 }
@@ -333,6 +429,10 @@ pub fn roll_rated(
     rates: &RatesConfig,
 ) {
     let skip = |e: &LootEntry| is_quest_item(e) && !wanted.contains(&e.item);
+    // An entry whose condition no one it may fall to meets isn't rolled,
+    // and a group's roll falls to another (mangos's
+    // `PlayerOrGroupFulfilsCondition`, in `Process` and `LootGroup::Roll`).
+    let unmet = |e: &LootEntry| e.condition != 0 && !allowed(e.condition);
     if depth > MAX_DEPTH {
         return;
     }
@@ -343,7 +443,10 @@ pub fn roll_rated(
         .collect();
     groups.sort_unstable();
     groups.dedup();
-    for e in entries.iter().filter(|e| e.group == 0 && !skip(e)) {
+    for e in entries
+        .iter()
+        .filter(|e| e.group == 0 && !skip(e) && !unmet(e))
+    {
         if !chance(rng, rated_chance(data, e, rates)) {
             continue;
         }
@@ -359,7 +462,7 @@ pub fn roll_rated(
         let members: Vec<&LootEntry> = entries.iter().filter(|e| e.group == g).collect();
         let mut r = rng.random_range(0.0f32..100.0);
         let mut picked = None;
-        for e in members.iter().filter(|e| e.chance != 0.0) {
+        for e in members.iter().filter(|e| e.chance != 0.0 && !unmet(e)) {
             r -= e.chance.abs();
             if r < 0.0 {
                 picked = Some(**e);
@@ -367,10 +470,19 @@ pub fn roll_rated(
             }
         }
         if picked.is_none() {
-            let equal: Vec<&&LootEntry> = members.iter().filter(|e| e.chance == 0.0).collect();
-            if !equal.is_empty() {
-                picked = Some(**equal[rng.random_range(0..equal.len())]);
-            }
+            // The equally chanced in a random order, the first whose
+            // condition holds; one already in the loot passed over half the
+            // time (mangos's `IsItemAlreadyIn`).
+            let mut equal: Vec<&LootEntry> = members
+                .iter()
+                .copied()
+                .filter(|e| e.chance == 0.0 && !unmet(e))
+                .collect();
+            rand::seq::SliceRandom::shuffle(equal.as_mut_slice(), rng);
+            picked = equal
+                .iter()
+                .find(|e| !out.iter().any(|s| s.item == e.item) || rng.random_bool(0.5))
+                .map(|e| **e);
         }
         let Some(e) = picked.filter(|e| !skip(e)) else {
             continue;
@@ -389,23 +501,24 @@ pub fn roll_rated(
 /// Personal loot rolled from `table` for `owner`: pickpocketing,
 /// skinning, fishing, disenchanting.
 pub fn personal(
-    data: &GameData,
+    map: &Map,
     table: &[LootEntry],
     owner: Guid,
     wanted: &[u32],
     kind: LootKind,
-    rates: &RatesConfig,
 ) -> Loot {
     let mut items = Vec::new();
+    // Its conditions, the owner's to meet.
+    let met = |c: u32| crate::game::map::conditions::met(map, c, None, Some(owner));
     roll_rated(
-        data,
+        &map.realm.data,
         table,
         wanted,
         &mut rand::rng(),
         &mut items,
         0,
-        &|_| false,
-        rates,
+        &met,
+        &map.cfg.rates,
     );
     Loot {
         items,
@@ -478,15 +591,14 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         && t.loot_id != 0
         && let Some(table) = data.loot.creature.get(&t.loot_id)
     {
+        // A condition rolls if one it may fall to meets it.
+        let met = |c: u32| {
+            group
+                .iter()
+                .any(|g| crate::game::map::conditions::met(map, c, Some(creature), Some(*g)))
+        };
         roll_rated(
-            &data,
-            table,
-            &wanted,
-            &mut rng,
-            &mut items,
-            0,
-            &|_| false,
-            &cfg.rates,
+            &data, table, &wanted, &mut rng, &mut items, 0, &met, &cfg.rates,
         );
     }
     let gold = if !allowed {
@@ -508,7 +620,6 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
     if group.len() > 1 && allowed {
         setup_group(map, &mut loot, creature, tapper, tap_group, group);
     }
-    let lootable = !loot.is_empty() || loot.items.iter().any(|s| s.quest);
     let rolls: Vec<usize> = loot.rolls.iter().map(|r| r.slot).collect();
     map.loot_state.picked.remove(&creature);
     map.loot_state.pockets.retain(|(c, _), _| *c != creature);
@@ -537,13 +648,12 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         return;
     };
     c.loot = Some(loot);
-    c.fields
-        .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);
-    refresh_quiet(map, creature);
+    // Nothing on it anyone it fell to may take: it can be skinned at once
+    // (mangos's `IsLootedForAll` at `CreateLoot`).
+    let lootable = refresh_lootable(map, creature);
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    // Nothing on it: it can be skinned at once.
     if !lootable && t.skinning_loot_id != 0 {
         c.fields.set_flag(
             UNIT_FIELD_FLAGS,
@@ -568,7 +678,6 @@ fn setup_group(
     tap_group: Option<u32>,
     near: Vec<Guid>,
 ) {
-    let data = map.realm.data.clone();
     let (method, master, threshold, assigned) = {
         let mut groups = map.realm.social.groups.lock();
         // The group it was tapped for, while it stands; else the tapper's.
@@ -579,9 +688,10 @@ fn setup_group(
             return;
         };
         // The next member near, after the last looter in the group's
-        // order, those away passed over (mangos's `UpdateLooterGuid`,
-        // Thistle Tea's `update_looter/3`).
-        let assigned = (g.loot_method == GroupLootSetting::RoundRobin).then(|| {
+        // order, those away passed over: the current looter, under every
+        // method but free for all (mangos's `SetGroupLootRight`, Thistle
+        // Tea's `update_looter/3`).
+        let assigned = (g.loot_method != GroupLootSetting::FreeForAll).then(|| {
             let order: Vec<Guid> = g.members.iter().map(|m| m.guid).collect();
             let after = order
                 .iter()
@@ -596,19 +706,34 @@ fn setup_group(
         });
         (g.loot_method, g.looter, quality(g.threshold), assigned)
     };
+    // Master loot with no master near is group loot (mangos's).
+    let method = if method == GroupLootSetting::MasterLoot && !near.contains(&master) {
+        GroupLootSetting::GroupLoot
+    } else {
+        method
+    };
     loot.owner = None;
     loot.allowed = near.clone();
     loot.method = Some(method);
     loot.assigned = assigned;
+    // What the current looter may not see is anyone's at once (mangos's
+    // `currentLooterPass`).
+    if let Some(looter) = assigned {
+        let sight = sight(map, loot, creature, looter);
+        for s in &mut loot.items {
+            s.looter_pass = (s.condition != 0 && !sight.met.contains(&s.condition))
+                || sight.started.contains(&s.item);
+        }
+    }
     let rollable: Vec<usize> = loot
         .items
         .iter()
         .enumerate()
-        .filter(|(_, s)| !s.quest && s.quality >= threshold)
+        .filter(|(_, s)| !s.quest && !s.ffa && s.quality >= threshold)
         .map(|(i, _)| i)
         .collect();
     match method {
-        GroupLootSetting::MasterLoot if near.contains(&master) => {
+        GroupLootSetting::MasterLoot => {
             loot.master = Some(master);
             for i in rollable {
                 loot.items[i].blocked = true;
@@ -616,6 +741,7 @@ fn setup_group(
         }
         GroupLootSetting::GroupLoot | GroupLootSetting::NeedBeforeGreed => {
             let now = map.now;
+            let data = map.realm.data.clone();
             for i in rollable {
                 let item = data.item(loot.items[i].item);
                 let condition = loot.items[i].condition;
@@ -788,10 +914,12 @@ fn resolve(map: &mut Map, object: Guid, slot: usize) {
             .u32(s.random_property)
             .u32(0);
         send_to(map, &r.eligible, &b.frame(SMSG_LOOT_ALL_PASSED));
+        // Passed by all: anyone's (mangos's `Finish`, `isReleased`).
         if let Some(l) = loot_mut(map, object)
             && let Some(x) = l.items.get_mut(slot)
         {
             x.blocked = false;
+            x.released = true;
         }
         finish_rolls(map, object);
         return;
@@ -880,6 +1008,7 @@ fn award(
         && let Some(x) = l.items.get_mut(slot)
     {
         x.blocked = false;
+        x.released = true;
     }
     finish_rolls(map, object);
 }
@@ -931,11 +1060,16 @@ fn finish_rolls(map: &mut Map, object: Guid) {
     refresh_lootable(map, object);
 }
 
-fn refresh_lootable(map: &mut Map, object: Guid) {
+/// Whether a corpse still has loot, and its sparkle: while one it fell
+/// to would find anything in it (mangos's `IsLootedForAll`). A corpse
+/// looted for all is [`Loot::done`]: it may be skinned, whatever is left
+/// in it that no one may take.
+pub fn refresh_lootable(map: &mut Map, object: Guid) -> bool {
+    refresh_quiet(map, object);
     // A quest drop is still there while one it fell to hasn't taken theirs
     // (mangos's `IsLootedFor`).
     let open = |l: &Loot, s: &LootSlot| {
-        s.quest
+        (s.quest || s.ffa)
             && !s.taken
             && if !l.allowed.is_empty() {
                 l.allowed.iter().any(|g| !s.taken_by.contains(g))
@@ -943,18 +1077,37 @@ fn refresh_lootable(map: &mut Map, object: Guid) {
                 l.owner.is_none_or(|o| !s.taken_by.contains(&o))
             }
     };
-    let lootable =
-        loot_ref(map, object).is_some_and(|l| !l.is_empty() || l.items.iter().any(|s| open(l, s)));
+    let Some(l) = map.creature(object).and_then(|c| c.loot.as_ref()) else {
+        return false;
+    };
+    let rights: Vec<Guid> = if l.allowed.is_empty() {
+        l.owner.into_iter().collect()
+    } else {
+        l.allowed.clone()
+    };
+    let lootable = if l.done {
+        false
+    } else if rights.is_empty() || l.kind != LootKind::Corpse {
+        !l.is_empty() || l.items.iter().any(|s| open(l, s))
+    } else {
+        rights.iter().any(|g| !l.quiet.contains(g))
+    };
+    let done = !lootable && l.kind == LootKind::Corpse && !rights.is_empty();
     if let Some(c) = map.creature_mut(object) {
         c.fields
             .set_flag(UNIT_DYNAMIC_FLAGS, DYNFLAG_LOOTABLE, lootable);
+        if let Some(l) = c.loot.as_mut()
+            && done
+        {
+            l.done = true;
+        }
     }
-    refresh_quiet(map, object);
+    lootable
 }
 
 /// Who of those a corpse's loot fell to would find nothing in it of
 /// theirs ([`Loot::quiet`]): no gold, no roll, and no slot they see.
-fn refresh_quiet(map: &mut Map, object: Guid) {
+pub fn refresh_quiet(map: &mut Map, object: Guid) {
     let Some(l) = map.creature(object).and_then(|c| c.loot.as_ref()) else {
         return;
     };
@@ -968,11 +1121,7 @@ fn refresh_quiet(map: &mut Map, object: Guid) {
         };
         let mut quiet: Vec<Guid> = who
             .into_iter()
-            .filter(|&g| {
-                let wanted = crate::game::map::quests::wanted(map, g);
-                let met = conditions_met(map, l, object, g);
-                !l.items.iter().any(|s| l.visible(s, g, &wanted, &met))
-            })
+            .filter(|&g| !l.has_for(g, &sight(map, l, object, g)))
             .collect();
         quiet.sort_unstable();
         quiet
@@ -1032,18 +1181,33 @@ pub fn response(
     wanted: &[u32],
     met: &[u32],
 ) -> Arc<[u8]> {
+    let sight = Sight {
+        wanted: wanted.to_vec(),
+        met: met.to_vec(),
+        started: Vec::new(),
+    };
+    response_for(data, g, loot, viewer, &sight)
+}
+
+/// [`response`], by `viewer`'s [`Sight`].
+pub fn response_for(
+    data: &GameData,
+    g: Guid,
+    loot: &Loot,
+    viewer: Guid,
+    sight: &Sight,
+) -> Arc<[u8]> {
     let mut b = Body::default();
     b.u64(g.guid()).u8(loot.kind.wire()).u32(loot.gold);
-    let shown: Vec<(usize, &LootSlot)> = loot
+    let shown: Vec<(usize, &LootSlot, u8)> = loot
         .items
         .iter()
         .enumerate()
-        .filter(|(_, s)| loot.visible(s, viewer, wanted, met))
+        .filter_map(|(i, s)| Some((i, s, loot.slot_type(i, viewer, sight)?)))
         .collect();
     b.u8(shown.len() as u8);
-    for (i, s) in shown {
+    for (i, s, kind) in shown {
         let display = data.item(s.item).map(|t| t.display_id).unwrap_or(0);
-        let kind = if s.blocked { SLOT_MASTER } else { SLOT_ALLOW };
         b.u8(i as u8)
             .u32(s.item)
             .u32(s.count)
@@ -1170,13 +1334,27 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
         close(map, player, open);
     }
     let data = map.realm.data.clone();
-    let wanted = crate::game::map::quests::wanted(map, player);
-    let met = loot_ref(map, target)
-        .map(|l| conditions_met(map, l, target, player))
-        .unwrap_or_default();
+    let Some(sight) = loot_ref(map, target).map(|l| sight(map, l, target, player)) else {
+        return;
+    };
     let Some(loot) = loot_mut(map, target) else {
         return;
     };
+    // A corpse with nothing in it of theirs isn't theirs to open: the
+    // window shuts (mangos's `ShowContentTo`, by `CanLoot`).
+    let nothing = guid::is_unit(target)
+        && loot.kind == LootKind::Corpse
+        && !loot.items.is_empty()
+        && !loot.has_for(player, &sight);
+    if nothing && loot.may_loot(player) {
+        if let Some(p) = map.players.get(&player) {
+            p.outbound.send(&SMSG_LOOT_RELEASE_RESPONSE {
+                guid: target,
+                unknown1: 1,
+            });
+        }
+        return;
+    }
     if !loot.may_loot(player) {
         // A lock not opened by them: the window shuts (Thistle Tea's).
         if loot.kind == LootKind::Opened
@@ -1191,7 +1369,7 @@ pub fn show(map: &mut Map, player: Guid, target: Guid) {
     }
     loot.looters.insert(player);
     let master_list = (loot.master == Some(player)).then(|| loot.allowed.clone());
-    let frame = response(&data, target, loot, player, &wanted, &met);
+    let frame = response_for(&data, target, loot, player, &sight);
     if let Some(p) = map.players.get_mut(&player) {
         p.looting = Some(target);
         p.fields.set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_LOOTING, true);
@@ -1218,17 +1396,17 @@ pub fn take_item(map: &mut Map, player: Guid, slot: u8) {
     let Some(target) = map.players.get(&player).and_then(|p| p.looting) else {
         return;
     };
-    let wanted = crate::game::map::quests::wanted(map, player);
-    let met = loot_ref(map, target)
-        .map(|l| conditions_met(map, l, target, player))
-        .unwrap_or_default();
+    let Some(sight) = loot_ref(map, target).map(|l| sight(map, l, target, player)) else {
+        return;
+    };
     let Some((item, count, property, quest)) = loot_ref(map, target).and_then(|l| {
-        let s = l.items.get(usize::from(slot))?;
-        (l.may_loot(player) && l.visible(s, player, &wanted, &met) && !s.blocked).then_some((
+        let i = usize::from(slot);
+        let s = l.items.get(i)?;
+        (l.may_loot(player) && l.slot_type(i, player, &sight) == Some(SLOT_ALLOW)).then_some((
             s.item,
             s.count,
             s.random_property,
-            s.quest,
+            s.quest || s.ffa,
         ))
     }) else {
         return;
@@ -1257,6 +1435,9 @@ pub fn take_item(map: &mut Map, player: Guid, slot: u8) {
                     p.outbound.send(&SMSG_LOOT_REMOVED { slot });
                 }
             }
+            if guid::is_unit(target) {
+                refresh_lootable(map, target);
+            }
             crate::game::map::instance_script::chest_changed(map, target);
         }
         Err(f) => {
@@ -1272,30 +1453,33 @@ pub fn take_money(map: &mut Map, player: Guid) {
     let Some(target) = map.players.get(&player).and_then(|p| p.looting) else {
         return;
     };
-    let Some((gold, looters, kind)) = loot_mut(map, target).map(|l| {
+    let Some((gold, looters, allowed)) = loot_mut(map, target).map(|l| {
         let gold = if l.may_loot(player) {
             std::mem::take(&mut l.gold)
         } else {
             0
         };
-        (gold, l.looters.iter().copied().collect::<Vec<_>>(), l.kind)
+        (
+            gold,
+            l.looters.iter().copied().collect::<Vec<_>>(),
+            l.allowed.clone(),
+        )
     }) else {
         return;
     };
     if gold == 0 {
         return;
     }
-    // A corpse's or an object's money is the group's near the looter, in
-    // even shares, the remainder lost; a pocket's or a container's is the
-    // looter's (Thistle Tea's `Looting.split_gold`).
-    let at = map.players.get(&player).map(|p| p.position());
-    let shared =
-        kind != LootKind::Pickpocket && (guid::is_unit(target) || guid::is_game_object(target));
-    let sharers = match at {
-        Some(at) if shared => tap_group(map, player, at),
-        _ => vec![player],
+    // A group's kill's money is shared among those it fell to, in even
+    // shares, the remainder lost; any other's (a lone kill, a chest, a
+    // pocket, a container) is the looter's (mangos's `SendGold`, by
+    // `m_ownerSet`).
+    let (sharers, share) = if allowed.is_empty() {
+        (vec![player], gold)
+    } else {
+        let share = gold / allowed.len() as u32;
+        (allowed, share)
     };
-    let share = gold / sharers.len().max(1) as u32;
     for g in &sharers {
         if let Some(p) = map.players.get_mut(g) {
             let money = p.money().saturating_add(share);
@@ -1309,6 +1493,9 @@ pub fn take_money(map: &mut Map, player: Guid) {
         if let Some(p) = map.players.get(&g) {
             p.outbound.send(&SMSG_LOOT_CLEAR_MONEY {});
         }
+    }
+    if guid::is_unit(target) {
+        refresh_lootable(map, target);
     }
     crate::game::map::instance_script::chest_changed(map, target);
 }
@@ -1387,6 +1574,13 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
             }
             // Closed, a lock must be opened again.
             l.opened_by.remove(&player);
+            // The current looter closes it: what's left that isn't rolled
+            // for is anyone's it fell to (mangos's `Loot::Release`).
+            if l.assigned == Some(player) && l.method.is_some() {
+                for s in l.items.iter_mut().filter(|s| !s.blocked) {
+                    s.released = true;
+                }
+            }
             (l.is_empty(), l.kind)
         }
         None => return,
@@ -1419,8 +1613,9 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
             }
             return;
         }
-        refresh_lootable(map, target);
-        if empty && kind == LootKind::Corpse {
+        let lootable = refresh_lootable(map, target);
+        let empty = empty || loot_ref(map, target).is_some_and(|l| l.done);
+        if (empty || !lootable) && kind == LootKind::Corpse {
             crate::game::map::professions::corpse_looted(map, target);
         }
     } else {

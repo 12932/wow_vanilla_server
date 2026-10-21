@@ -939,14 +939,7 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
         return;
     }
     let wanted = crate::game::map::quests::wanted(map, caster);
-    let loot = loot::personal(
-        &data,
-        table,
-        caster,
-        &wanted,
-        LootKind::Skinning,
-        &map.cfg.rates,
-    );
+    let loot = loot::personal(map, table, caster, &wanted, LootKind::Skinning);
     let elite = matches!(t.rank, 1..=3);
     // Skinning the Beast frees the hunter it swallowed.
     if entry == THE_BEAST {
@@ -1001,14 +994,7 @@ pub fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     let wanted = crate::game::map::quests::wanted(map, caster);
     let player_level = map.players.get(&caster).map_or(1, |p| u32::from(p.level()));
     let mut loot = match data.loot.pickpocket.get(&t.pickpocket_loot_id) {
-        Some(table) => loot::personal(
-            &data,
-            table,
-            caster,
-            &wanted,
-            LootKind::Pickpocket,
-            &map.cfg.rates,
-        ),
+        Some(table) => loot::personal(map, table, caster, &wanted, LootKind::Pickpocket),
         None => Loot {
             owner: Some(caster),
             kind: LootKind::Pickpocket,
@@ -1044,16 +1030,11 @@ fn disenchant(map: &mut Map, caster: Guid, item: Guid, spell: u32) {
     };
     // Nothing to roll, or nothing rolled: try again, the item kept
     // (Thistle Tea's).
-    let loot = data.loot.disenchant.get(&t.disenchant_id).map(|table| {
-        loot::personal(
-            &data,
-            table,
-            caster,
-            &[],
-            LootKind::Disenchant,
-            &map.cfg.rates,
-        )
-    });
+    let loot = data
+        .loot
+        .disenchant
+        .get(&t.disenchant_id)
+        .map(|table| loot::personal(map, table, caster, &[], LootKind::Disenchant));
     let Some(loot) = loot.filter(|l| !l.items.is_empty()) else {
         send_failure(map, caster, spell, FAIL_TRY_AGAIN);
         return;
@@ -1298,14 +1279,7 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
     let wanted = crate::game::map::quests::wanted(map, player);
     let loot = match hole_near(map, object) {
         Some((hole, table)) => {
-            let mut l = loot::personal(
-                &data,
-                &table,
-                player,
-                &wanted,
-                LootKind::Fishing,
-                &map.cfg.rates,
-            );
+            let mut l = loot::personal(map, &table, player, &wanted, LootKind::Fishing);
             l.gold = 0;
             // Between its least and most, rolled for the spawn (Thistle
             // Tea's, mangos's).
@@ -1332,12 +1306,11 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) -> bool {
             l
         }
         None => loot::personal(
-            &data,
+            map,
             fishing_loot_at(&data, b.area, b.zone),
             player,
             &wanted,
             LootKind::Fishing,
-            &map.cfg.rates,
         ),
     };
     if let Some(o) = map.gameobject_mut(object) {

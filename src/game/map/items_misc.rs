@@ -266,7 +266,7 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
                     &mut rng,
                     &mut items,
                     0,
-                    &|_| false,
+                    &|c| crate::game::map::conditions::met(map, c, Some(item_guid), Some(g)),
                     rates,
                 );
             }

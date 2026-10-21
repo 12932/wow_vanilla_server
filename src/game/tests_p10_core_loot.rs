@@ -1,7 +1,7 @@
 //! Round 10, against Thistle Tea's `loot/loot_session_test.exs`
 //! (`visible?/2`): a corpse whose only drop is a quest item sparkles for
-//! one it fell to who is on the quest, not for one who isn't, nor for
-//! round robin's other members, as mangos's per-viewer `Loot::CanLoot`.
+//! one it fell to who is on the quest, not for one who isn't, as mangos's
+//! per-viewer `Loot::CanLoot`; under round robin, whoever's turn it is.
 
 use std::collections::BTreeMap;
 
@@ -166,11 +166,12 @@ async fn a_quest_drop_alone_sparkles_for_the_one_on_the_quest_only() {
 }
 
 #[tokio::test]
-async fn round_robins_looter_off_the_quest_sees_no_quest_drop_nor_does_the_other() {
+async fn round_robins_looter_off_the_quest_sees_no_quest_drop_but_the_other_does() {
     // Round robin: the first is Ari's to loot, and she is on the quest;
-    // the second Cy's, who isn't, and Ari isn't its looter: nobody's.
+    // the second Cy's, who isn't: it's passed to Ari, who is (mangos's
+    // `currentLooterPass`; R4-18, Thistle Tea had it nobody's).
     assert_eq!(
         sparkles(GroupLootSetting::RoundRobin, 2).await,
-        vec![(true, false), (false, false)]
+        vec![(true, false), (true, false)]
     );
 }

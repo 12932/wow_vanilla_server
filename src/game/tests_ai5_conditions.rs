@@ -704,8 +704,8 @@ async fn a_spell_script_target_meets_its_condition() {
     assert!(low, "at 4 percent");
 }
 
-/// A loot reference with a condition rolls only if the looter meets it;
-/// with nobody to judge it, not at all.
+/// A loot entry with a condition, a reference or an item, rolls only if
+/// the looter meets it; with nobody to judge it, not at all.
 #[test]
 fn a_conditioned_reference_rolls_only_when_its_condition_holds() {
     use rand::SeedableRng;
@@ -729,12 +729,12 @@ fn a_conditioned_reference_rolls_only_when_its_condition_holds() {
     crate::game::map::loot::roll_for(&d, &table, &[], &mut rng, &mut out, 0, &|c| c == 7);
     assert_eq!(
         items(out),
-        vec![1, 3],
-        "the first reference; the slot keeps its own"
+        vec![1],
+        "the first reference; an item whose condition no one meets doesn't roll (mangos's `PlayerOrGroupFulfilsCondition`)"
     );
     let mut out = Vec::new();
     crate::game::map::loot::roll(&d, &table, &[], &mut rng, &mut out, 0);
-    assert_eq!(items(out), vec![3]);
+    assert_eq!(items(out), Vec::<u32>::new());
 }
 
 static DB: std::sync::LazyLock<std::path::PathBuf> =
