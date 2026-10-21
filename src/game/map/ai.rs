@@ -544,7 +544,10 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
     let boss = template.is_some_and(|t| t.rank == 3) || locks_raid;
     map.dead_creatures.push(creature);
     if let Some(spawn) = spawn {
-        crate::game::instances::spawn_died(&map.realm, map.key, spawn, (!boss).then_some(respawn));
+        // A boss in a copy never comes back; one in the open world (a
+        // world boss) at its time.
+        let never = boss && map.key.instance != 0;
+        crate::game::instances::spawn_died(&map.realm, map.key, spawn, (!never).then_some(respawn));
     }
     if locks_raid && guid::is_player(binder) {
         crate::game::instances::bind_raid(map);

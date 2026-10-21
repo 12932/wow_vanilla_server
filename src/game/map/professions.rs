@@ -1505,6 +1505,7 @@ fn despawn(map: &mut Map, object: Guid) {
         .map_or(300, |s| s.respawn_min.max(1));
     let after = Duration::from_secs(u64::from(secs));
     map.loot_state.respawns.push((map.now + after, spawn));
+    crate::game::instances::object_gone(&map.realm, map.key, spawn, after);
     crate::game::map::instance_script::chest_gone(map, spawn, after);
 }
 
@@ -1576,6 +1577,7 @@ pub fn respawn_nodes(map: &mut Map) {
     let data = map.realm.data.clone();
     use crate::game::map::pools::{self, Member};
     for spawn in due {
+        crate::game::instances::object_back(&map.realm, map.key, spawn);
         // A pooled node's pool picks again: it may come back as another.
         let Some(back) = pools::came_back(map, Member::Object(spawn)) else {
             let Some(s) = data
