@@ -17,6 +17,11 @@ const THINK_EVERY: Duration = Duration::from_millis(500);
 /// How far above or below an aggressive pet's sight goes, beyond both
 /// reaches (mangos's `CREATURE_Z_ATTACK_RANGE_MELEE`).
 const AGGRO_Z_YARDS: f32 = 3.0;
+/// A unit a pet doesn't take on of its own: stunned, confused or fleeing
+/// (mangos's `IsCrowdControlled`).
+const CROWD_CONTROLLED: u32 = crate::game::map::player::UNIT_FLAG_STUNNED
+    | crate::game::map::auras::UNIT_FLAG_CONFUSED
+    | crate::game::map::auras::UNIT_FLAG_FLEEING;
 /// A fight further than this from the master is given up.
 const LEASH_YARDS: f32 = 80.0;
 /// A chase paths again when its quarry has moved this far.
@@ -456,6 +461,11 @@ fn acquire_any(map: &Map, g: Guid, owner: Guid, aggressive: bool) -> Option<Guid
             })
                 && combat::can_attack(map, g, *v)
                 && !avoids_breaking(map, g, *v)
+                // None held by a stun, fear or confusion (mangos's
+                // `!who->IsCrowdControlled()`).
+                && !map
+                    .unit_fields(*v)
+                    .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & CROWD_CONTROLLED != 0)
                 // Where its habitat lets it go (Thistle Tea's
                 // `Acquisition.nearest`, `CreatureMovement.accessible?`).
                 && crate::game::map::creature_motion::may_reach(map, g, *v)

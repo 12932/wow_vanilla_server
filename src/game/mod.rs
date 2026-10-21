@@ -187,15 +187,21 @@ mod tests_p10_world_spells;
 #[cfg(test)]
 mod tests_p10_world_system;
 #[cfg(test)]
-mod tests_p11a_resurrect;
+mod tests_p11_entity;
 #[cfg(test)]
-mod tests_p11b_spells;
+mod tests_p11_entity_ai;
 #[cfg(test)]
 mod tests_p11_entity_more;
 #[cfg(test)]
 mod tests_p11_entity_real;
 #[cfg(test)]
 mod tests_p11_entity_spells;
+#[cfg(test)]
+mod tests_p11_entity_summons;
+#[cfg(test)]
+mod tests_p11a_resurrect;
+#[cfg(test)]
+mod tests_p11b_spells;
 #[cfg(test)]
 mod tests_p11c_checks;
 #[cfg(test)]
@@ -254,8 +260,6 @@ mod tests_p11j_spells;
 mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
-#[cfg(test)]
-mod tests_p11_entity_summons;
 #[cfg(test)]
 mod tests_p3_ai_commands;
 #[cfg(test)]

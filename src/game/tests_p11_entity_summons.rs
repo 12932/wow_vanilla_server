@@ -25,6 +25,7 @@ use crate::game::map::{Map, MapHandle, MapKey, ai, creature_combat, event_ai, ob
 use crate::game::tests_p3_cast_kit as cast_kit;
 use crate::game::tests_p3_combat::{BRUTE, HELPER, PACK, START, data, setup_with, spawn, template};
 use crate::game::tests_p3_entity::{on, spell, step};
+use crate::game::tests_p3_entity_objects::until;
 use crate::game::tests_p3_spells_kit as spell_kit;
 use crate::game::tests_p5_ai_pets::tamed_with;
 use crate::game::tests_parity_motion as motion;
@@ -718,4 +719,292 @@ async fn a_creature_rooted_then_feared_from_afar_stands_until_free() {
         _ => None,
     })
     .await;
+}
+
+/// A lamp raised for a minute whose spell's minute of cooldown waits for
+/// it to go (`SPELL_ATTR_COOLDOWN_ON_EVENT`).
+const LAMP: u32 = 98_630;
+const RAISE_LAMP: u32 = 98_631;
+const LASTS_A_MINUTE: u32 = 98;
+
+fn lamp_data(d: &mut GameData) {
+    d.gameobject_templates.insert(
+        LAMP,
+        crate::game::tests_p3_entity_objects::object(LAMP, objects::GO_GOOBER, "Lamp", &[]),
+    );
+    d.spells.durations.insert(
+        LASTS_A_MINUTE,
+        SpellDuration {
+            base: 60_000,
+            per_level: 0,
+            max: 60_000,
+        },
+    );
+    let mut s = cast_kit::bare(RAISE_LAMP, 0);
+    s.attributes[0] |= 0x200_0000;
+    s.recovery_time = 60_000;
+    s.duration_index = LASTS_A_MINUTE;
+    cast_kit::effect(
+        &mut s,
+        0,
+        SpellEffect {
+            effect: objects::EFFECT_TRANS_DOOR,
+            misc_value: LAMP as i32,
+            target_a: 1,
+            ..Default::default()
+        },
+    );
+    cast_kit::insert(d, [s]);
+}
+
+/// Thistle Tea's "logout saves an activated object cooldown"
+/// (game_object_summons_test.exs:288): a lamp raised by a spell whose
+/// cooldown waits for it, up as its raiser logs out, goes with her, its
+/// cooldown started, so she comes back with it running (mangos-classic's
+/// `RemoveAllGameObjects` as she leaves the world, `AddCooldown` for
+/// `SPELL_ATTR_COOLDOWN_ON_EVENT`), where the lamp went at the next
+/// update, after her save, and the cooldown with it.
+#[tokio::test]
+async fn a_cooldown_waiting_for_its_object_starts_as_its_raiser_logs_out_and_is_kept() {
+    let realm = cast_kit::fast_realm(lamp_data);
+    let (mut c, g, map) = cast_kit::human(&realm, "P11S8", "Lamplighter", Class::Mage).await;
+    let raised = on(&map, move |m| {
+        spell_kit::ready(m, g, 60, &[RAISE_LAMP]);
+        spell_kit::cast_fresh(m, g, RAISE_LAMP, Targets::default());
+        let up = m
+            .objects
+            .summoned
+            .iter()
+            .any(|s| s.owner == Some(g) && s.spell == RAISE_LAMP);
+        let c = m.caster(g).unwrap();
+        (
+            up,
+            c.pending_cooldowns.contains(&RAISE_LAMP),
+            c.cooldowns.contains_key(&RAISE_LAMP),
+        )
+    })
+    .await;
+    assert_eq!(raised, (true, true, false), "up, its cooldown waiting");
+    c.send(CMSG_LOGOUT_REQUEST {}).await;
+    c.wait_for("SMSG_LOGOUT_COMPLETE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_COMPLETE).then_some(())
+    })
+    .await;
+    c.clear();
+    c.login(g).await;
+    crate::game::tests_p3_player2_ammo::handled(&mut c).await;
+    let map = map_of(&realm, g);
+    let back = on(&map, move |m| {
+        let now = m.now;
+        let left = m
+            .caster(g)
+            .and_then(|c| c.cooldowns.get(&RAISE_LAMP))
+            .map(|t| t.saturating_duration_since(now));
+        let lamp = m.objects.summoned.iter().any(|s| s.spell == RAISE_LAMP);
+        (left, lamp)
+    })
+    .await;
+    let (left, lamp) = back;
+    assert!(!lamp, "the lamp went with her");
+    assert!(
+        left.is_some_and(|l| l > Duration::from_secs(50)),
+        "its cooldown running: {left:?}"
+    );
+}
+
+/// A creature's totem, its summoning, and the brute's three scripts, each
+/// setting a stand state: the totem come (1), dead (3), gone (8).
+const STONE_TOTEM: u32 = 98_690;
+const SUMMON_STONE_TOTEM: u32 = 98_691;
+const HEARD: [(u32, u32, u8); 3] = [
+    (98_692, crate::game::data::scripts::EVENT_SUMMONED_UNIT, 1),
+    (
+        98_693,
+        crate::game::data::scripts::EVENT_SUMMONED_JUST_DIED,
+        3,
+    ),
+    (
+        98_694,
+        crate::game::data::scripts::EVENT_SUMMONED_JUST_DESPAWN,
+        8,
+    ),
+];
+
+fn totem_world() -> GameData {
+    use crate::game::data::scripts::{AiEvent, EF_REPEATABLE};
+    let mut d = data();
+    let mut t = template(STONE_TOTEM, 11);
+    t.faction = PACK;
+    d.creature_templates.insert(STONE_TOTEM, t);
+    let mut s = spell(
+        SUMMON_STONE_TOTEM,
+        &[SpellEffect {
+            effect: pets::EFFECT_SUMMON_TOTEM_SLOT1,
+            misc_value: STONE_TOTEM as i32,
+            base_points: 4,
+            base_dice: 1,
+            target_a: 1,
+            ..Default::default()
+        }],
+    );
+    s.duration_index = cast_kit::LASTS_LONG;
+    d.spells.spells.insert(SUMMON_STONE_TOTEM, s);
+    let mut events = Vec::new();
+    for (script, kind, stand) in HEARD {
+        d.scripts.ai_scripts.insert(
+            script,
+            vec![ScriptStep {
+                id: script,
+                command: 28,
+                datalong: [u32::from(stand), 0, 0, 0],
+                ..Default::default()
+            }],
+        );
+        events.push(AiEvent {
+            kind,
+            chance: 100,
+            flags: EF_REPEATABLE,
+            params: [STONE_TOTEM as i32, 0, 0, 0],
+            actions: [script, 0, 0],
+            ..Default::default()
+        });
+    }
+    d.scripts.ai_events.insert(BRUTE, events);
+    d
+}
+
+fn stand_of(m: &Map, g: Guid) -> u8 {
+    m.unit_fields(g)
+        .map_or(0, |f| f.get_byte(UNIT_FIELD_BYTES_1, 0))
+}
+
+/// Thistle Tea's "totems and pets use the same death edge before
+/// shutdown" (mob/summon_lifecycle_test.exs:124), its totem: a brute's
+/// totem is heard of by the brute as it comes, as it dies and as it goes
+/// (its EventAI's summoned-unit, summoned-just-died and
+/// summoned-just-despawn events), as its guardians are (mangos-classic's
+/// `Totem`, a `TemporarySummon`), where a creature's totem was heard of
+/// by no one.
+#[tokio::test]
+async fn a_creatures_totem_is_heard_of_as_it_comes_dies_and_goes() {
+    let (_realm, _a, ga, map) = setup_with(totem_world(), Class::Warrior).await;
+    let brute = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 6.0);
+        let s = m
+            .realm
+            .data
+            .spells
+            .get(SUMMON_STONE_TOTEM)
+            .cloned()
+            .unwrap();
+        pets::effect(m, brute, brute, &s, 0, 1, false, &Default::default());
+        brute
+    })
+    .await;
+    until(&map, "the totem heard of as it comes", move |m| {
+        stand_of(m, brute) == 1
+    })
+    .await;
+    let totem = on(&map, move |m| {
+        let totem = m
+            .creatures
+            .iter()
+            .find(|(_, c)| c.entry == STONE_TOTEM)
+            .map(|(_, c)| c.guid)
+            .unwrap();
+        crate::game::map::combat::kill(m, ga, totem);
+        (totem, stand_of(m, brute))
+    })
+    .await;
+    assert_eq!(totem.1, 3, "heard of as it dies");
+    // Its corpse's time up, it goes.
+    let gone = on(&map, move |m| {
+        let now = m.now;
+        if let Some(s) = pets::state_mut(m, totem.0) {
+            s.expires = Some(now);
+            s.dead_at = Some(now - Duration::from_secs(3600));
+        }
+        m.now += Duration::from_secs(1);
+        pets::update(m);
+        (m.creature(totem.0).is_none(), stand_of(m, brute))
+    })
+    .await;
+    assert_eq!(gone, (true, 8), "heard of as it goes");
+}
+
+/// A brazier spawned beside where Alice comes in, and the post a script
+/// raises.
+const BRAZIER: u32 = 98_695;
+const POST: u32 = 98_696;
+
+fn post_world() -> GameData {
+    let mut d = data();
+    for (entry, name) in [(BRAZIER, "Brazier"), (POST, "Post")] {
+        d.gameobject_templates.insert(
+            entry,
+            crate::game::tests_p3_entity_objects::object(entry, objects::GO_GOOBER, name, &[]),
+        );
+    }
+    d.gameobject_spawns.insert(
+        0,
+        vec![GameObjectSpawn {
+            guid: 61,
+            entry: BRAZIER,
+            map: 0,
+            x: START.0 + 4.0,
+            y: START.1,
+            z: START.2,
+            state: 1,
+            respawn_min: 60,
+            ..Default::default()
+        }],
+    );
+    d
+}
+
+/// Thistle Tea's "an object keeps the objects its scripts raise and takes
+/// them when it goes" (game_object_summons_test.exs:271): a post a
+/// script raises, attached (datalong3 without 1), is made by its raiser,
+/// a brazier or a brute, and goes when its raiser goes; one raised
+/// unattached is no one's and stays (vmangos's `SCRIPT_COMMAND_SUMMON_OBJECT`
+/// by `SummonGameObject` with `attach`, `AddGameObject`), where every
+/// post was no one's and outlasted its raiser.
+#[tokio::test]
+async fn a_raised_object_is_its_raisers_and_goes_with_it_unless_unattached() {
+    let (_realm, _a, ga, map) = setup_with(post_world(), Class::Warrior).await;
+    let out = on(&map, move |m| {
+        let brazier = guid::game_object(BRAZIER, 61);
+        let brute = spawn(m, ga, BRUTE, 20, 6.0);
+        let raise = |m: &mut Map, source: Guid, flags: u32| {
+            let before: Vec<Guid> = m.gameobjects.iter().map(|(_, o)| o.guid).collect();
+            let s = ScriptStep {
+                x: START.0 + 2.0,
+                y: START.1 + 2.0,
+                z: START.2,
+                ..step(76, [POST, 60, flags, 0])
+            };
+            crate::game::map::scripts::execute(m, &s, source, Guid::zero());
+            m.gameobjects
+                .iter()
+                .map(|(_, o)| o)
+                .find(|o| o.entry == POST && !before.contains(&o.guid))
+                .map(|o| (o.guid, o.fields.get_guid(OBJECT_FIELD_CREATED_BY)))
+                .expect("a post")
+        };
+        let by_brazier = raise(m, brazier, 0);
+        let by_brute = raise(m, brute, 0);
+        let loose = raise(m, brute, 1);
+        objects::despawn(m, brazier);
+        crate::game::map::scripts::despawn(m, brute);
+        m.now += Duration::from_secs(1);
+        objects::update(m);
+        let left = [by_brazier.0, by_brute.0, loose.0].map(|g| m.gameobject(g).is_some());
+        (brazier, brute, by_brazier.1, by_brute.1, loose.1, left)
+    })
+    .await;
+    let (brazier, brute, made_by_brazier, made_by_brute, made_loose, left) = out;
+    assert_eq!(made_by_brazier, brazier, "the brazier's");
+    assert_eq!(made_by_brute, brute, "the brute's");
+    assert!(made_loose.is_zero(), "unattached, no one's");
+    assert_eq!(left, [false, false, true], "gone with their raisers");
 }
