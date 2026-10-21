@@ -151,9 +151,16 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
         return None;
     }
     // An addon's line is its payload, never a command (Thistle Tea's
-    // `Chat.handle`): an addon's prefix may start with a dot.
-    let gm = m.language.as_int() != ADDON && map.players.get(&guid).is_some_and(|p| p.gm_level > 0);
-    let gm_line = gm && m.message.starts_with('.');
+    // `Chat.handle`): an addon's prefix may start with a dot. A player's
+    // is one too while `[gm] player_commands` is on (mangos's
+    // `PlayerCommands`); a line of dots ("...") never is (mangos's
+    // `ParseCommands`).
+    let gm = m.language.as_int() != ADDON
+        && map
+            .players
+            .get(&guid)
+            .is_some_and(|p| p.gm_level > 0 || map.cfg.gm.player_commands);
+    let gm_line = gm && m.message.starts_with('.') && !m.message.starts_with("..");
     if !gm_line {
         let Some(language) = resolve_language(map, guid, &m.chat_type, m.language) else {
             // A language not learned (Thistle Tea's `Language.resolve`).
@@ -169,7 +176,7 @@ pub fn message(map: &mut Map, guid: Guid, mut m: CMSG_MESSAGECHAT) -> Option<CMS
         };
         m.language = language;
     }
-    // A player's "." line is chat; a GM's, a command.
+    // A "." line is a command, to those who have them.
     if gm_line && m.message.len() > 1 {
         gm::command(map, guid, &m.message[1..]);
         return None;

@@ -769,6 +769,13 @@ start_level = 1
 # Default {}. Changes at a reload.
 command_levels = {}
 
+# Players' commands: `.help`, `.commands`, `.save`, `.start`,
+# `.dismount`, `.server info|motd`, `.gm ingame`, `.account` and
+# `.account password <old> <new> <new>`. Off, a player's "." line
+# is chat.
+# Default true. Changes at a reload. mangos: PlayerCommands.
+player_commands = true
+
 # Where new characters start, instead of their race's starting zone:
 # peon's heartbeat placement assumes Gurubashi Arena's pit.
 [spawn]

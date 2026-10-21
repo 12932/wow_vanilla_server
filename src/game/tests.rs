@@ -218,13 +218,9 @@ async fn a_logout_waits_twenty_seconds_outside_an_inn_and_can_be_cancelled() {
         matches!(m, ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK).then_some(())
     })
     .await;
-    // A non-GM's "." line is only chat.
+    // A GM's command is no player's (mangos's `PlayerCommands`, round 12).
     a.say(".gps").await;
-    a.wait_for("the line as chat", |m| match m {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => (c.message == ".gps").then_some(()),
-        _ => None,
-    })
-    .await;
+    a.system_message("There is no such command.").await;
 }
 
 #[tokio::test]
@@ -4686,14 +4682,16 @@ mod security {
         let realm = players_realm();
         let (_realm, mut a, mut b) = two_near_on(realm.clone()).await;
         a.say(".go -9000 -100 90").await;
-        // It's only chat.
-        let heard = b
-            .wait_for("Alice's line", |m| match m {
-                ServerOpcodeMessage::SMSG_MESSAGECHAT(c) => Some(c.message.clone()),
-                _ => None,
+        // There's no such command for a player (mangos's `LANG_NO_CMD`),
+        // and nothing said.
+        a.system_message("There is no such command.").await;
+        assert!(
+            b.gets(NONE_WITHIN, |m| {
+                matches!(m, ServerOpcodeMessage::SMSG_MESSAGECHAT(_)).then_some(())
             })
-            .await;
-        assert_eq!(heard, ".go -9000 -100 90");
+            .await
+            .is_none()
+        );
         assert!(
             a.gets(NONE_WITHIN, |m| {
                 matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())

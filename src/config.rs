@@ -748,6 +748,11 @@ settings! {
         /// The GM level a command needs, by its name, over the server's own
         /// (0 player to 3 administrator), as `{ kick = 2, announce = 2 }`.
         command_levels: BTreeMap<String, u8> = BTreeMap::new(), Any, Live, "";
+        /// Players' commands: `.help`, `.commands`, `.save`, `.start`,
+        /// `.dismount`, `.server info|motd`, `.gm ingame`, `.account` and
+        /// `.account password <old> <new> <new>`. Off, a player's "." line
+        /// is chat.
+        player_commands: bool = true, Any, Live, "PlayerCommands";
     }
 }
 

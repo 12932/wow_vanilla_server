@@ -372,6 +372,7 @@ GM commands and GMs' characters.
 |---|---|---|---|---|---|
 | `start_level` | The level a GM's new characters start at, if above `[players] start_level`. | `1` | 1 to 60, clamped | live | `GM.StartLevel` |
 | `command_levels` | The GM level a command needs, by its name, over the server's own (0 player to 3 administrator), as `{ kick = 2, announce = 2 }`. | `{}` |  | live |  |
+| `player_commands` | Players' commands: `.help`, `.commands`, `.save`, `.start`, `.dismount`, `.server info\|motd`, `.gm ingame`, `.account` and `.account password <old> <new> <new>`. Off, a player's "." line is chat. | `true` |  | live | `PlayerCommands` |
 
 ### `[spawn]`
 

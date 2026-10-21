@@ -1,4 +1,5 @@
-//! GM commands: a chat line starting with `.`.
+//! GM commands: a chat line starting with `.`; and players' few, as
+//! mangos-classic's `SEC_PLAYER` commands (`PlayerCommands`).
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
@@ -12,6 +13,23 @@ const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, 
 .online, .maps, .save, .announce <text>, .kick <name>, .spawn <entry>, .account create|password <name> <password>, \
 .account gm <name> <level>, .reload config, .ban <account> <minutes|perm> [reason], .unban <account>, .ticket list|<id>|respond <id> <answer>|close <id>, .honor [week|points <n>], .arena start|stop|status|history, .help";
 
+/// The commands a player has, as mangos-classic's `SEC_PLAYER` table
+/// (`Level0.cpp`) has them.
+const PLAYER_HELP: &str = "Commands: .help, .commands, .save, .start, .dismount, .server info|motd, .gm ingame, .account, .account password <old> <new> <new>";
+
+/// The level `name` needs with these `args`: a few of a GM command's are
+/// a player's (`.gm ingame`, `.account`, `.account password <old> <new>
+/// <new>`), as in mangos's tables; else the command's own.
+fn needed_level_with(name: &str, args: &[&str]) -> u8 {
+    use crate::accounts::PLAYER;
+    match (name, args) {
+        ("gm", [sub]) if sub.eq_ignore_ascii_case("ingame") => PLAYER,
+        ("account", []) => PLAYER,
+        ("account", [sub, _, _, _]) if sub.eq_ignore_ascii_case("password") => PLAYER,
+        _ => needed_level(name),
+    }
+}
+
 /// The GM level a command needs: moderators look and talk, game masters
 /// change the world, administrators run accounts.
 pub fn needed_level(command: &str) -> u8 {
@@ -20,9 +38,9 @@ pub fn needed_level(command: &str) -> u8 {
         return level;
     }
     match command {
-        "gps" | "online" | "maps" | "save" | "announce" | "kick" | "gm" | "help" | "ticket" => {
-            MODERATOR
-        }
+        // A player's (mangos's `SEC_PLAYER`).
+        "help" | "commands" | "save" | "start" | "dismount" | "server" => crate::accounts::PLAYER,
+        "gps" | "online" | "maps" | "announce" | "kick" | "gm" | "ticket" => MODERATOR,
         "account" | "ban" | "unban" | "reload" => ADMINISTRATOR,
         // Anyone may ask about the arena; starting and stopping is checked
         // within.
@@ -135,6 +153,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         return;
     };
     let name = name.to_ascii_lowercase();
+    let args: Vec<&str> = words.collect();
     // The config's level for it (`[gm] command_levels`), else the server's.
     let needed = map
         .cfg
@@ -142,17 +161,46 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         .command_levels
         .get(&name)
         .copied()
-        .unwrap_or_else(|| needed_level(&name));
+        .unwrap_or_else(|| needed_level_with(&name, &args));
     if level < needed {
-        chat::send_system(
-            &p.outbound,
-            "You don't have permission to use that command.",
-        );
+        // A player isn't told of a GM's commands (mangos's
+        // `LANG_NO_CMD`).
+        let refusal = if level == crate::accounts::PLAYER {
+            "There is no such command."
+        } else {
+            "You don't have permission to use that command."
+        };
+        chat::send_system(&p.outbound, refusal);
         return;
     }
-    let args: Vec<&str> = words.collect();
     let reply = match name.as_str() {
-        "account" => Some(account(map, &args)),
+        "account" => Some(match args.as_slice() {
+            [] => format!("Your account level is: {level}"),
+            [sub, old, new, again] if sub.eq_ignore_ascii_case("password") => {
+                own_password(map, guid, old, new, again)
+            }
+            _ => account(map, &args),
+        }),
+        "commands" => Some(if level == crate::accounts::PLAYER {
+            PLAYER_HELP.to_owned()
+        } else {
+            format!("{HELP} {} {PLAYER_HELP}", crate::game::map::gm_dev::HELP)
+        }),
+        "server" => Some(server(map, &args)),
+        "dismount" => {
+            let mounted = map.players.get(&guid).is_some_and(|p| {
+                p.fields.get_u32(crate::game::fields::UNIT_FIELD_MOUNTDISPLAYID) != 0
+            });
+            if mounted {
+                crate::game::map::mounts::dismount(map, guid);
+                None
+            } else {
+                Some("You are not mounted.".to_owned())
+            }
+        }
+        "gm" if args.first().is_some_and(|a| a.eq_ignore_ascii_case("ingame")) => {
+            Some(gms_online(map))
+        }
         "ban" => Some(ban(map, &args)),
         "unban" => Some(unban(&args)),
         "reload" => Some(reload(map, guid, &args)),
@@ -222,6 +270,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         "ticket" => Some(crate::game::map::tickets::command(map, guid, &args)),
         "honor" => Some(crate::game::map::pvp::gm(map, guid, &args)),
         "arena" => Some(crate::game::map::arena::command(map, guid, &args)),
+        "help" if level == crate::accounts::PLAYER => Some(PLAYER_HELP.to_owned()),
         "help" => Some(format!("{HELP} {}", crate::game::map::gm_dev::HELP)),
         other => crate::game::map::gm_dev::command(map, guid, other, &args)
             .unwrap_or_else(|| Some(format!("No command {other}. {HELP}"))),
@@ -229,6 +278,71 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
     if let Some(reply) = reply {
         map.system_message(guid, &reply);
     }
+}
+
+/// `.account password <old> <new> <new>`: a player's own, the old one
+/// checked (mangos's `HandleAccountPasswordCommand`).
+fn own_password(map: &Map, guid: Guid, old: &str, new: &str, again: &str) -> String {
+    let Some(accounts) = crate::accounts::get() else {
+        return "There are no accounts here.".into();
+    };
+    let Some(account) = map.players.get(&guid).map(|p| p.account.to_string()) else {
+        return String::new();
+    };
+    if !accounts.check_password(&account, old) {
+        return "The old password is wrong.".into();
+    }
+    if new != again {
+        return "The new passwords don't match.".into();
+    }
+    match accounts.set_password(&account, new) {
+        Ok(()) => "Your password is changed.".into(),
+        Err(e) => e,
+    }
+}
+
+/// `.server info` and `.server motd` (mangos's `HandleServerInfoCommand`,
+/// `HandleServerMotdCommand`).
+fn server(map: &Map, args: &[&str]) -> String {
+    match args.first().map(|a| a.to_ascii_lowercase()).as_deref() {
+        Some("motd") => {
+            let motd = map.realm.config().motd.clone();
+            if motd.is_empty() {
+                "There is no message of the day.".into()
+            } else {
+                format!("Message of the day: {motd}")
+            }
+        }
+        Some("info") | None => {
+            let up = crate::game::uptime_ms() / 1000;
+            format!(
+                "wow_vanilla_server {}. Players online: {}. Server uptime: {}h {}m {}s.",
+                crate::VERSION,
+                map.realm.registry.online_count(),
+                up / 3600,
+                up / 60 % 60,
+                up % 60
+            )
+        }
+        _ => "Use: .server info|motd".into(),
+    }
+}
+
+/// `.gm ingame`: the GMs online (mangos's `HandleGMListIngameCommand`).
+fn gms_online(map: &Map) -> String {
+    let mut names: Vec<String> = map
+        .realm
+        .registry
+        .all_online()
+        .iter()
+        .filter(|o| o.gm)
+        .map(|o| o.name.to_string())
+        .collect();
+    if names.is_empty() {
+        return "There are no GMs currently logged in on this server.".into();
+    }
+    names.sort();
+    format!("Active GMs on server: {}", names.join(", "))
 }
 
 fn parse_f32(s: Option<&&str>) -> Option<f32> {
