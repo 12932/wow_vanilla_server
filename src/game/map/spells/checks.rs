@@ -521,11 +521,15 @@ pub fn check(
         if s.caster_aura_state != 0 && !aura_state(map, caster, s.caster_aura_state) {
             return Some(fail::CASTER_AURASTATE);
         }
-        // A stronger rank of a helpful aura already on the caster.
+        // A stronger rank of a helpful aura already on the unit it is cast
+        // at, the caster or another (a scroll used on a friend: mangos's
+        // `CheckCast`, a higher rank of the chain bounces; Thistle Tea's
+        // "another recipient's current aura prevents scroll
+        // consumption"). An area's is left to each it lands on.
         if auras::positive(s)
-            && t.unit.is_none_or(|u| u == caster)
             && s.effects.iter().any(|e| e.effect == 6)
-            && let Some(a) = auras::auras(map, caster)
+            && !super::outcome::area(s)
+            && let Some(a) = auras::auras(map, t.unit.unwrap_or(caster))
         {
             let data = &map.realm.data;
             let mine = data.spells.ranks.get(&s.id).map(|r| r.rank).unwrap_or(0);

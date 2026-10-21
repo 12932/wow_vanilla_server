@@ -1351,9 +1351,21 @@ pub fn release(map: &mut Map, player: Guid, target: Guid) {
         }
         None => return,
     };
-    if map.loot_state.item_loot.contains_key(&target) {
-        // What's left on an item is lost with the window.
-        map.loot_state.item_loot.remove(&target);
+    if let Some(l) = map.loot_state.item_loot.remove(&target) {
+        // What's left of a disenchant goes into the bags, what doesn't fit
+        // lost (mangos's `Loot::Release`: `AutoStore`, "can be lost if no
+        // space"; Thistle Tea's "automatically stores remaining
+        // materials"); what's left on another item is lost with the
+        // window.
+        if kind == LootKind::Disenchant {
+            for s in l
+                .items
+                .iter()
+                .filter(|s| !s.taken && !s.quest && s.count > 0)
+            {
+                let _ = crate::game::map::inventory::add_item(map, player, s.item, s.count, true);
+            }
+        }
         return;
     }
     if guid::is_unit(target) {

@@ -19,7 +19,7 @@ use crate::game::store::BAG_PLAYER;
 /// Northshire, where humans start.
 const START: (f32, f32, f32) = (-8949.95, -132.493, 83.5312);
 
-const LOOT_ITEM: u32 = 2000;
+pub(super) const LOOT_ITEM: u32 = 2000;
 const CRAFTED: u32 = 2001;
 const ORE: u32 = 2770;
 pub(super) const FISH: u32 = 6291;
@@ -33,7 +33,7 @@ const MINING: u32 = 2575;
 pub(super) const FISHING: u32 = 7620;
 const ENCHANT_STRENGTH: u32 = 900_002;
 const STRENGTH_AURA: u32 = 7507;
-const POISON: u32 = 900_003;
+pub(super) const POISON: u32 = 900_003;
 const POISON_HIT: u32 = 900_004;
 const SET_BONUS: u32 = 900_005;
 
@@ -83,7 +83,7 @@ fn spell(id: u32, effects: &[(u32, i32, i32, u32, u32)]) -> SpellTemplate {
     s
 }
 
-fn data() -> GameData {
+pub(super) fn data() -> GameData {
     let mut d = GameData::empty();
     for t in [
         item(LOOT_ITEM, "Green Blade", 2, 7, 13, 2),
@@ -661,7 +661,7 @@ async fn a_fisher_lands_a_fish() {
 }
 
 /// Equip a new item of `entry` in `slot`; its guid.
-fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) -> Guid {
+pub(super) fn equip(m: &mut Map, g: Guid, entry: u32, slot: u8) -> Guid {
     let data = m.realm.data.clone();
     let counter = m
         .realm
