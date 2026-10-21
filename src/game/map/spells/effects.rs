@@ -2481,6 +2481,19 @@ pub fn refresh_area_auras(map: &mut Map) {
             let Some(t) = data.spells.get(rank) else {
                 continue;
             };
+            // Not over another caster's of the same spell, which stays
+            // (mangos-classic's `AreaAura::Update`, its party case): a
+            // paladin's own aura isn't taken off him by another's.
+            if !t.custom(crate::game::data::spells::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS)
+                && !t.custom(crate::game::data::spells::CUSTOM_SEPARATE_AURA_PER_CASTER)
+                && auras::auras(map, member).is_some_and(|a| {
+                    a.holders
+                        .iter()
+                        .any(|h| h.spell == rank && h.caster != caster)
+                })
+            {
+                continue;
+            }
             let left = expires.map(|t| t.saturating_duration_since(now).as_millis() as u32);
             // The caster's own amounts for its rank, a lower rank's own.
             let effects: Vec<(usize, i32)> = if rank == spell {

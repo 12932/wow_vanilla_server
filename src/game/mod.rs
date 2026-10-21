@@ -263,7 +263,11 @@ mod tests_p11j_world;
 #[cfg(test)]
 mod tests_p12_questions;
 #[cfg(test)]
+mod tests_p12e_casts;
+#[cfg(test)]
 mod tests_p12e_sight;
+#[cfg(test)]
+mod tests_p12e_stacking;
 #[cfg(test)]
 mod tests_p12e_totems;
 #[cfg(test)]
