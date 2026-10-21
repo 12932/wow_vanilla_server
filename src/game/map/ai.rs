@@ -695,6 +695,14 @@ fn respawn(map: &mut Map, g: Guid) {
             Member::Creature(s) => {
                 let same = s == spawn.guid;
                 spawn_creature_with(map, s, faction.filter(|_| same));
+                // A follower comes back in its place by its leader, as it
+                // now stands (or by its spawn, it dead), not at its own
+                // spawn (Thistle Tea's `Formation.respawn_position`).
+                if let Some(g) = crate::game::map::scripts::creature_of_spawn(map, s)
+                    && let Some((at, o)) = crate::game::map::creature_groups::respawn_place(map, g)
+                {
+                    crate::game::map::scripts::place(map, g, at, o);
+                }
                 if same
                     && let Some((r, passive)) = reaction
                     && let Some(g) = crate::game::map::scripts::creature_of_spawn(map, s)

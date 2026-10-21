@@ -377,3 +377,93 @@ async fn a_create_with_a_walks_final_facing_passes_the_client() {
     );
     run_checker(&check_py, &wow_exe, &capture);
 }
+
+/// A walker leading (spawn 90) and its follower (91) three yards behind
+/// it in formation, the follower's own spawn well off its place.
+const WALKER: u32 = 5003;
+
+fn formation_world() -> GameData {
+    use crate::game::data::CreatureTemplate;
+    use crate::game::data::scripts::{GROUP_FORMATION, GroupMember};
+    use crate::game::tests_parity_motion as motion;
+    let mut d = motion::wolf_world();
+    d.creature_templates.insert(
+        WALKER,
+        CreatureTemplate {
+            entry: WALKER,
+            name: "Walker".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            level_min: 2,
+            level_max: 2,
+            faction: 14,
+            unit_class: 1,
+            health_multiplier: 1.0,
+            damage_multiplier: 0.01,
+            base_attack_time: 2000,
+            detection_range: 5.0,
+            ..Default::default()
+        },
+    );
+    let spawns = d.creature_spawns.get_mut(&0).unwrap();
+    spawns.push(motion::spawn(90, WALKER, motion::at(20.0, -40.0)));
+    spawns.push(motion::spawn(91, WALKER, motion::at(10.0, -50.0)));
+    let member = |guid, distance, angle| GroupMember {
+        guid,
+        distance,
+        angle,
+        flags: GROUP_FORMATION,
+    };
+    d.scripts.groups.insert(
+        90,
+        vec![member(90, 0.0, 0.0), member(91, 3.0, std::f32::consts::PI)],
+    );
+    d.scripts.group_of.insert(90, 90);
+    d.scripts.group_of.insert(91, 90);
+    d
+}
+
+/// Thistle Tea's "uses the original leader's live position or spawn when
+/// dead" (formation_environment_test.exs:46): a follower that respawns
+/// comes back in its place three yards behind its leader as the leader
+/// now stands, and, its leader dead, three yards behind the leader's
+/// spawn, not at its own spawn (Thistle Tea's
+/// `Formation.respawn_position`; mangos-classic has no formations).
+#[tokio::test]
+async fn a_follower_respawns_in_its_place_by_its_leader() {
+    use crate::game::map::ai;
+    use crate::game::tests_parity_motion as motion;
+    let (_realm, _a, ga, map) = motion::enter(formation_world()).await;
+    let (l, f) = (
+        crate::game::guid::unit(WALKER, 90),
+        crate::game::guid::unit(WALKER, 91),
+    );
+    let out = map
+        .query(move |m| {
+            let leader_at = motion::at(30.0, -30.0);
+            crate::game::map::scripts::place(m, l, leader_at, 0.0);
+            ai::die(m, f, ga);
+            ai::respawn_now(m, f);
+            let f1 = crate::game::map::scripts::creature_of_spawn(m, 91).unwrap();
+            let by_living = m.creature(f1).unwrap().position;
+            ai::die(m, l, ga);
+            ai::die(m, f1, ga);
+            ai::respawn_now(m, f1);
+            let f2 = crate::game::map::scripts::creature_of_spawn(m, 91).unwrap();
+            let by_spawn = m.creature(f2).unwrap().position;
+            (leader_at, by_living, by_spawn)
+        })
+        .await
+        .unwrap();
+    let (leader_at, by_living, by_spawn) = out;
+    let near = |a: Vector3d, x: f32, y: f32| (a.x - x).abs() < 0.1 && (a.y - y).abs() < 0.1;
+    assert!(
+        near(by_living, leader_at.x - 3.0, leader_at.y),
+        "behind its living leader: {by_living:?}"
+    );
+    let spawn = motion::at(20.0, -40.0);
+    assert!(
+        near(by_spawn, spawn.x - 3.0, spawn.y),
+        "behind its dead leader's spawn: {by_spawn:?}"
+    );
+}

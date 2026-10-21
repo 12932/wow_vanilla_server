@@ -853,6 +853,61 @@ pub fn formation_home(map: &Map, g: Guid) -> Option<Vector3d> {
     Some(place(l.position, l.orientation, distance, angle))
 }
 
+/// Where a follower comes back as it respawns, and its facing: its place
+/// by its leader as the leader now stands, or, the leader dead, by where
+/// the leader's spawn is (Thistle Tea's `Formation.respawn_position`),
+/// on the ground there; `None` for one that follows no one (or leads its
+/// formation meanwhile), which comes back at its own spawn.
+pub fn respawn_place(map: &mut Map, g: Guid) -> Option<(Vector3d, f32)> {
+    let spawn = spawn_of(map, g)?;
+    let data = map.realm.data.clone();
+    if !follows(&data, Some(spawn)) || map.left_groups.contains(&spawn) {
+        return None;
+    }
+    let leader = *data.scripts.group_of.get(&spawn)?;
+    let m = data
+        .scripts
+        .groups
+        .get(&leader)?
+        .iter()
+        .find(|m| m.guid == spawn)?;
+    let (distance, angle) = (m.distance, m.angle);
+    let living = map
+        .acting_leaders
+        .get(&leader)
+        .copied()
+        .or_else(|| creature_of_spawn(map, leader))
+        .filter(|l| *l != g)
+        .and_then(|l| map.creature(l).filter(|c| c.alive()))
+        .map(|l| (l.position, l.orientation));
+    let (at, heading) = match living {
+        Some(here) => here,
+        None => {
+            let s = data
+                .creature_spawns
+                .get(&map.key.map)?
+                .iter()
+                .find(|s| s.guid == leader)?;
+            (
+                Vector3d {
+                    x: s.x,
+                    y: s.y,
+                    z: s.z,
+                },
+                s.orientation,
+            )
+        }
+    };
+    let spot = place(at, heading, distance, angle);
+    let spot = map
+        .nav
+        .as_mut()
+        .and_then(|n| n.ground(spot.x, spot.y, spot.z))
+        .map(|z| Vector3d { z, ..spot })
+        .unwrap_or(spot);
+    Some((spot, heading))
+}
+
 /// Whether a creature walks in a formation behind another, and so doesn't
 /// walk its own way.
 pub fn follows(data: &GameData, spawn: Option<u32>) -> bool {
