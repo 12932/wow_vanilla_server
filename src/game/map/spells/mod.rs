@@ -1431,7 +1431,43 @@ fn execute(
     } else {
         resolved
     };
-    let hits: Vec<Guid> = resolved.iter().map(|(g, _)| *g).collect();
+    // A spell that travels has its hit rolled as it goes, on each unit it
+    // flies to, and keeps it: its misses are the go's, and what lands is
+    // what was rolled, whatever the target's chances to be hit become in
+    // flight (mangos's `Spell::AddUnitTarget`, `missCondition =
+    // SpellHitResult`, applied at `DoAllEffectOnTarget`; Thistle Tea's
+    // saved launch result). One that doesn't rolls as it lands.
+    let travels = travels(map) && s.speed > 0.0;
+    let flights: Vec<(u32, Option<Hit>)> = resolved
+        .iter()
+        .map(|(target, _)| {
+            let delay = if travels && *target != caster {
+                flight_ms(map, caster, *target, s.speed)
+            } else {
+                0
+            };
+            let hit = (delay > 0).then(|| launch_roll(map, caster, *target, s, &m));
+            (delay, hit)
+        })
+        .collect();
+    let missed = |hit: &Option<Hit>| hit.is_some_and(|h| !h.lands() && h != Hit::Reflect);
+    let hits: Vec<Guid> = resolved
+        .iter()
+        .zip(&flights)
+        .filter(|(_, (_, hit))| !missed(hit))
+        .map(|((g, _), _)| *g)
+        .collect();
+    let misses: Vec<SpellMiss> = resolved
+        .iter()
+        .zip(&flights)
+        .filter(|(_, (_, hit))| missed(hit))
+        .filter_map(|((g, _), (_, hit))| {
+            Some(SpellMiss {
+                target: *g,
+                miss_info: miss_info((*hit)?),
+            })
+        })
+        .collect();
     // The cast's result before its go, as mangos's `Spell::cast` sends them
     // (and Thistle Tea queues them).
     if !triggered {
@@ -1450,7 +1486,7 @@ fn execute(
         spell: s.id,
         flags,
         hits,
-        misses: Vec::new(),
+        misses,
         targets: wire_targets(&targets),
     }) {
         map.send_to_observers(caster, &frame, true);
@@ -1493,9 +1529,10 @@ fn execute(
                 at,
             });
         }
+        let object = channel_object(caster, s, &targets, &resolved);
         if let Some(f) = map.unit_fields_mut(caster) {
             f.set_u32(UNIT_CHANNEL_SPELL, s.id);
-            f.set_guid(UNIT_FIELD_CHANNEL_OBJECT, targets.unit.unwrap_or_default());
+            f.set_guid(UNIT_FIELD_CHANNEL_OBJECT, object);
         }
         if let Some(p) = map.players.get(&caster) {
             p.outbound.send(&MSG_CHANNEL_START_Server {
@@ -1540,9 +1577,8 @@ fn execute(
         paid,
         shared,
     };
-    let travels = travels(map) && s.speed > 0.0;
     let one_of = class_scripts::one_of(map, s);
-    for (target, effects) in resolved {
+    for ((target, effects), (delay, hit)) in resolved.into_iter().zip(flights) {
         let mut effects = class_scripts::effects_for(s, target, &launch.targets, effects, one_of);
         for (i, e) in effects.iter_mut().enumerate() {
             if professions & (1 << i) != 0 {
@@ -1554,11 +1590,6 @@ fn execute(
         }
         // A missile or a bolt lands when it gets there (Thistle Tea's
         // `SpellLaunch.delay`).
-        let delay = if travels && target != caster {
-            flight_ms(map, caster, target, s.speed)
-        } else {
-            0
-        };
         if delay > 0 {
             if Some(target) == launch.targets.unit {
                 landed_on_main = true;
@@ -1572,10 +1603,11 @@ fn execute(
                 effects,
                 chain,
                 launch: launch.clone(),
+                hit,
             });
             continue;
         }
-        let landed = land(map, caster, s, target, effects, &mut chain, &launch);
+        let landed = land(map, caster, s, target, effects, &mut chain, &launch, None);
         if landed && Some(target) == launch.targets.unit {
             landed_on_main = true;
         }
@@ -1763,6 +1795,38 @@ pub struct InFlight {
     effects: [bool; 3],
     chain: [f32; 3],
     launch: Launch,
+    /// Its hit, rolled as it went.
+    hit: Option<Hit>,
+}
+
+/// A travelling spell's hit on `target` as it goes: its roll, or the
+/// target's template immunity to it.
+fn launch_roll(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mods) -> Hit {
+    let hit = outcome::roll_hit(map, caster, target, s, m);
+    if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
+        Hit::Immune
+    } else {
+        hit
+    }
+}
+
+/// How a go names a miss.
+fn miss_info(hit: Hit) -> SpellMiss_SpellMissInfo {
+    match hit {
+        Hit::Hit => SpellMiss_SpellMissInfo::None,
+        Hit::Miss => SpellMiss_SpellMissInfo::Miss,
+        Hit::Resist => SpellMiss_SpellMissInfo::Resist,
+        Hit::Dodge => SpellMiss_SpellMissInfo::Dodge,
+        Hit::Parry => SpellMiss_SpellMissInfo::Parry,
+        Hit::Block | Hit::Blocked => SpellMiss_SpellMissInfo::Block,
+        Hit::Evade => SpellMiss_SpellMissInfo::Evade,
+        Hit::Immune => SpellMiss_SpellMissInfo::Immune,
+        Hit::Deflect => SpellMiss_SpellMissInfo::Deflect,
+        Hit::Absorb => SpellMiss_SpellMissInfo::Absorb,
+        Hit::Reflect => SpellMiss_SpellMissInfo::Reflect {
+            reflect_result: SpellMissInfo::None,
+        },
+    }
 }
 
 /// Whether spells take time to get where they go (tests land them at
@@ -1827,11 +1891,14 @@ fn land_arrivals(map: &mut Map) {
             f.effects,
             &mut f.chain,
             &f.launch,
+            f.hit,
         );
     }
 }
 
-/// `s` gets to `target`: the hit, then the effects. Whether it landed.
+/// `s` gets to `target`: the hit (`rolled` as it went, else rolled now),
+/// then the effects. Whether it landed.
+#[allow(clippy::too_many_arguments)]
 fn land(
     map: &mut Map,
     caster: Guid,
@@ -1840,9 +1907,10 @@ fn land(
     effects: [bool; 3],
     chain: &mut [f32; 3],
     l: &Launch,
+    rolled: Option<Hit>,
 ) -> bool {
-    let mut hit = outcome::roll_hit(map, caster, target, s, &l.m);
-    // A creature immune to the spell (its template's masks).
+    let mut hit = rolled.unwrap_or_else(|| outcome::roll_hit(map, caster, target, s, &l.m));
+    // A creature immune to the spell (its template's masks), as it lands.
     if hit.lands() && crate::game::map::creature_combat::spell_immune(map, target, caster, s) {
         hit = Hit::Immune;
     }
@@ -2636,13 +2704,53 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     }
 }
 
-/// A channel ends: its auras from the caster go, its areas go, and the
+/// What a channel is at, for its caster's channel object: the unit it was
+/// aimed at when the cast lands on it; else the first other unit it lands
+/// on (mangos's `SendChannelStart`, "select first not resisted target from
+/// target list for _0_ effect", a target not the caster): a Mend Pet or
+/// Health Funnel cast with its caster or an enemy selected is at the pet,
+/// a channel cast on oneself whose aura goes on a scripted creature at the
+/// creature (Thistle Tea's "keeps pet channels active when the client
+/// selects the caster" and "aims a channel cast on oneself at the scripted
+/// creature its aura lands on"); else the unit it was aimed at, as Thistle
+/// Tea's selected unit for a channel of its caster's own aura. A channel
+/// whose first effect is a persistent area's is at the unit it was aimed
+/// at, as it was.
+fn channel_object(
+    caster: Guid,
+    s: &SpellTemplate,
+    t: &Targets,
+    resolved: &[(Guid, [bool; 3])],
+) -> Guid {
+    let aimed = t.unit.filter(|u| *u != caster);
+    if s.effects[0].effect == EFFECT_PERSISTENT_AREA_AURA
+        || aimed.is_some_and(|u| resolved.iter().any(|(g, _)| *g == u))
+    {
+        return t.unit.unwrap_or_default();
+    }
+    resolved
+        .iter()
+        .map(|(g, _)| *g)
+        .find(|g| *g != caster)
+        .or(t.unit)
+        .unwrap_or_default()
+}
+
+/// A channel ends: its auras from the caster go (on the unit it was aimed
+/// at, on its channel object, on the caster), its areas go, and the
 /// channel fields clear.
 fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
     let target = casting.targets.unit.unwrap_or(g);
     auras::remove_spell(map, target, casting.spell, Some(g));
     if target != g {
         auras::remove_spell(map, g, casting.spell, Some(g));
+    }
+    let object = map
+        .unit_fields(g)
+        .map(|f| f.get_guid(UNIT_FIELD_CHANNEL_OBJECT))
+        .filter(|o| !o.is_zero() && *o != target && *o != g);
+    if let Some(o) = object {
+        auras::remove_spell(map, o, casting.spell, Some(g));
     }
     // A channel at the pet (Mend Pet, Health Funnel) ends on the pet,
     // whatever the client aimed it at.

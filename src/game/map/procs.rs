@@ -730,7 +730,14 @@ fn fire(
                     if !crate::game::map::proc_scripts::deep_wounds(
                         map, owner, other, trigger, hand,
                     ) {
-                        crate::game::map::spells::cast_triggered(map, owner, trigger, Some(other));
+                        let item = cast_item(map, owner, h);
+                        crate::game::map::spells::cast_triggered_from(
+                            map,
+                            owner,
+                            trigger,
+                            Some(other),
+                            item,
+                        );
                     }
                 }
             }
@@ -743,6 +750,28 @@ fn fire(
         }
     }
     fired
+}
+
+/// The item a proc of `owner`'s `h` casts from: the worn item whose own
+/// spell or enchantment's it is, or the item a cast of it used, still
+/// carried; not a set's, which no one piece casts (mangos's
+/// `GetCastItemGuid` of the triggering aura, passed to `CastSpell` by
+/// `TriggerProccedSpell`, and the set's spells applied with no item;
+/// Thistle Tea's "item and enchant procs retain their item identity while
+/// sets have no casting item").
+fn cast_item(map: &Map, owner: Guid, h: &Holder) -> Option<Guid> {
+    let g = h.item?;
+    let p = map.players.get(&owner)?;
+    let item = &p.items[p.item_by_guid(g)?];
+    if !h.equipped {
+        return Some(g);
+    }
+    let data = &map.realm.data;
+    let own = data
+        .item(item.entry)
+        .is_some_and(|t| t.spells.iter().any(|s| s.id == h.spell));
+    let enchanted = crate::game::map::enchant::equip_spells(data, item).contains(&h.spell);
+    (own || enchanted).then_some(g)
 }
 
 /// A proc aura's damage, as Thistle Tea's `ProcDamage` makes it: a school
