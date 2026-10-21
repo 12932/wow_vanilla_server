@@ -19,8 +19,8 @@ use crate::game::map::MapHandle;
 use crate::game::map::pets::{self, ACT_COMMAND, COMMAND_ATTACK, Kind};
 use crate::game::tests_pets::*;
 
-const EYE: u32 = 4277;
-const EYE_OF_KILROGG: u32 = 126;
+pub(crate) const EYE: u32 = 4277;
+pub(crate) const EYE_OF_KILROGG: u32 = 126;
 pub(crate) const MIND_CONTROL: u32 = 605;
 const IMPROVED_IMP: u32 = 18694;
 const MASTER_DEMONOLOGIST: u32 = 23785;

@@ -290,8 +290,9 @@ pub fn moved(
         map.grid.relocate(unit, old_cell, new_cell);
         crate::game::map::visibility::moved(map, unit, anchor, info.position);
         if let Some(frame) = relay(unit, *info) {
-            // Its own client sees it walk too.
-            map.send_to_observers(unit, &frame, true);
+            // Its own client sees it walk too; the client that moved it
+            // knows (mangos's `SendMessageToAllWhoSeeMeMove` sparing it).
+            map.send_to_observers_but(unit, &frame, true, player);
         }
         return true;
     }
@@ -299,8 +300,9 @@ pub fn moved(
         return true;
     };
     // Feared or confused, the server moves it (Thistle Tea's "possessed
-    // creatures reject input").
-    if c.engagement.control.is_some() {
+    // creatures reject input"); dead, nothing moves it (its "dead or
+    // released" refusals), its release coming with the next update.
+    if c.engagement.control.is_some() || !c.alive() {
         return true;
     }
     let (anchor, old_cell) = (c.vis_anchor, c.cell);
@@ -312,7 +314,7 @@ pub fn moved(
     map.grid.relocate(unit, old_cell, new_cell);
     crate::game::map::visibility::moved(map, unit, anchor, info.position);
     if let Some(frame) = relay(unit, *info) {
-        map.send_to_observers(unit, &frame, false);
+        map.send_to_observers_but(unit, &frame, false, player);
     }
     true
 }

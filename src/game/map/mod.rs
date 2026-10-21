@@ -2455,6 +2455,25 @@ impl Map {
         }
     }
 
+    /// [`Map::send_to_observers`], but not to `but` (mangos's
+    /// `SendMessageToAllWhoSeeMeMove` sparing the client that moved it).
+    pub fn send_to_observers_but(&self, object: Guid, frame: &Arc<[u8]>, to_self: bool, but: Guid) {
+        if to_self
+            && object != but
+            && let Some(p) = self.players.get(&object)
+        {
+            p.outbound.send_frame(frame.clone());
+        }
+        let Some(observers) = self.observers(object) else {
+            return;
+        };
+        for o in observers.iter().filter(|o| **o != but) {
+            if let Some(p) = self.players.get(o) {
+                p.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+
     /// Players within `radius` yards of `at`, in three dimensions (Thistle
     /// Tea's `nearby_players`, mangos's `MessageDistDeliverer`).
     pub fn players_near(
