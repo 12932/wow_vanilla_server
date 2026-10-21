@@ -143,7 +143,11 @@ async fn an_auctions_mails_carry_their_invoice_and_name_the_items_suffix() {
     // Bob's: won (1), from Alice.
     let (id, subject, text, flags) = mail_of(&mut b).await;
     assert_eq!(subject, format!("{BLADE}:{BEAR}:1"));
-    assert_eq!(flags & mail::COPIED, mail::COPIED, "not copied onto a letter");
+    assert_eq!(
+        flags & mail::COPIED,
+        mail::COPIED,
+        "not copied onto a letter"
+    );
     assert_eq!(
         text_of(&mut b, id, text).await,
         format!("{:>16x}:2000:2000", guid::counter(ga))
@@ -164,4 +168,83 @@ async fn an_auctions_mails_carry_their_invoice_and_name_the_items_suffix() {
         .get(&id)
         .map(|m| (m.money, m.deliver_at <= mail::now()));
     assert_eq!(money, Some((2_000 - 100 + 60, true)));
+}
+
+/// A search for a suffix finds the items of it alone, and the matches
+/// page in the order of their auctions, as before its names were kept.
+#[tokio::test]
+async fn a_search_finds_a_suffix_and_pages_in_order() {
+    let realm = fast_realm(|d| {
+        data(d);
+        d.crafts
+            .random_property_names
+            .insert(BEAR, "of the Bear".into());
+    });
+    let mut b = Client::connect(&realm, "P12KSEARCH");
+    let gb = b.enter("Seeker", Race::Human, Class::Warrior).await;
+    let map = world(&realm);
+    let auctioneer = map
+        .query(move |m| kit::spawn(m, gb, AUCTIONEER, 10, 3.0))
+        .await
+        .unwrap();
+    b.sees(auctioneer).await;
+    let house = map
+        .query(move |m| crate::game::map::auction::house_of(m, auctioneer) as u32)
+        .await
+        .unwrap();
+    {
+        let mut auctions = realm.social.auctions.lock();
+        for id in [70u32, 3, 55, 12, 90] {
+            let bear = id % 2 == 1;
+            auctions.auctions.insert(
+                id,
+                Auction {
+                    id,
+                    market: 2,
+                    house,
+                    item: crate::game::store::ItemRow {
+                        guid: 9_100 + id,
+                        entry: BLADE,
+                        count: 1,
+                        data: if bear {
+                            format!("rp:{BEAR}")
+                        } else {
+                            String::new()
+                        },
+                        ..Default::default()
+                    },
+                    owner: 999,
+                    start_bid: 10,
+                    expires_at: mail::now() + 3_600,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    let search = async |b: &mut Client, name: &str| {
+        b.clear();
+        b.send(CMSG_AUCTION_LIST_ITEMS {
+            auctioneer,
+            list_start_item: 0,
+            searched_name: name.into(),
+            minimum_level: 0,
+            maximum_level: 0,
+            auction_slot_id: u32::MAX,
+            auction_main_category: u32::MAX,
+            auction_sub_category: u32::MAX,
+            auction_quality: ItemQuality::Poor,
+            usable: 0,
+        })
+        .await;
+        b.wait_for("SMSG_AUCTION_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(r) => {
+                Some(r.auctions.iter().map(|a| a.id).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .await
+    };
+    assert_eq!(search(&mut b, "").await, vec![3, 12, 55, 70, 90]);
+    assert_eq!(search(&mut b, "of the BEAR").await, vec![3, 55]);
+    assert_eq!(search(&mut b, "blade").await, vec![3, 12, 55, 70, 90]);
 }

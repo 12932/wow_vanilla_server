@@ -108,7 +108,11 @@ async fn a_character_flagged_by_a_gm_takes_a_new_name_at_the_character_screen() 
     c.login(g).await;
     let row = {
         logout(&mut c).await;
-        realm.store.load(crate::game::guid::counter(g)).await.unwrap()
+        realm
+            .store
+            .load(crate::game::guid::counter(g))
+            .await
+            .unwrap()
     };
     assert_eq!(row.name, "Kindname");
 }

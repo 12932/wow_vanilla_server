@@ -105,19 +105,19 @@ async fn listed(c: &mut Client, vendor: Guid) -> Vec<(u32, u32)> {
     c.clear();
     c.send(CMSG_LIST_INVENTORY { guid: vendor }).await;
     c.wait_for("SMSG_LIST_INVENTORY", |m| match m {
-        ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) if l.vendor == vendor => Some(
-            l.items
-                .iter()
-                .map(|i| (i.item, i.price.as_int()))
-                .collect(),
-        ),
+        ServerOpcodeMessage::SMSG_LIST_INVENTORY(l) if l.vendor == vendor => {
+            Some(l.items.iter().map(|i| (i.item, i.price.as_int())).collect())
+        }
         _ => None,
     })
     .await
 }
 
 /// A human warrior, no GM, and the vendor before them.
-async fn at_vendor(realm: &std::sync::Arc<crate::game::Realm>, account: &str) -> (Client, Guid, Guid) {
+async fn at_vendor(
+    realm: &std::sync::Arc<crate::game::Realm>,
+    account: &str,
+) -> (Client, Guid, Guid) {
     let (mut c, g, map) = human(realm, account, "Shopper", Class::Warrior).await;
     let vendor = map
         .query(move |m| {

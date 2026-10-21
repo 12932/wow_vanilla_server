@@ -45,8 +45,10 @@ fn data(d: &mut GameData) {
         t
     };
     // mangos's menu 708: a guild master's two options.
-    d.creature_templates
-        .insert(GUILD_MASTER, npc(GUILD_MASTER, 0x1 | 0x200 | 0x400, GUILD_MENU));
+    d.creature_templates.insert(
+        GUILD_MASTER,
+        npc(GUILD_MASTER, 0x1 | 0x200 | 0x400, GUILD_MENU),
+    );
     d.npc.gossip_menus.insert(
         GUILD_MENU,
         GossipMenu {
@@ -153,9 +155,12 @@ async fn a_guild_masters_options_open_the_charter_and_the_tabard_designer() {
     .await;
     let charter = c
         .wait_for("SMSG_PETITION_SHOWLIST", |m| match m {
-            ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(l) if l.npc == npc => {
-                Some(l.petitions.iter().map(|p| p.charter_entry).collect::<Vec<_>>())
-            }
+            ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(l) if l.npc == npc => Some(
+                l.petitions
+                    .iter()
+                    .map(|p| p.charter_entry)
+                    .collect::<Vec<_>>(),
+            ),
             _ => None,
         })
         .await;
@@ -243,9 +248,7 @@ async fn a_flight_masters_node_is_learned_as_its_menu_is_shown() {
         .await;
     assert!(menu_too.is_none(), "the discovery alone");
     let learned = map
-        .query(move |m| {
-            crate::game::map::npc::knows_node(&m.players[&a].row.state.taxi_mask, NODE)
-        })
+        .query(move |m| crate::game::map::npc::knows_node(&m.players[&a].row.state.taxi_mask, NODE))
         .await
         .unwrap();
     assert!(learned);

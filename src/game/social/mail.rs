@@ -593,8 +593,8 @@ pub fn take_item(map: &mut Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
     type R = SMSG_SEND_MAIL_RESULT_MailResult;
     let mut mails = realm.social.mail.lock();
-    let Some((item, cod, sender, subject)) = own_mail(&mut mails, g, id)
-        .map(|m| (m.item.clone(), m.cod, m.sender, m.subject.clone()))
+    let Some((item, cod, sender, subject)) =
+        own_mail(&mut mails, g, id).map(|m| (m.item.clone(), m.cod, m.sender, m.subject.clone()))
     else {
         return;
     };

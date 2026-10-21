@@ -32,7 +32,10 @@ const LASTS_5M: u32 = 961;
 const MINUTE: u64 = 60_000;
 
 fn data(d: &mut GameData) {
-    for (i, ms) in [(LASTS_15M, 15 * MINUTE as i32), (LASTS_5M, 5 * MINUTE as i32)] {
+    for (i, ms) in [
+        (LASTS_15M, 15 * MINUTE as i32),
+        (LASTS_5M, 5 * MINUTE as i32),
+    ] {
         d.spells.durations.insert(
             i,
             SpellDuration {
@@ -72,7 +75,9 @@ fn data(d: &mut GameData) {
 fn minutes_left(m: &crate::game::map::Map, g: Guid, spell: u32) -> Option<u64> {
     kit::holder(m, g, spell).map(|h| {
         h.expires
-            .map_or(u64::MAX, |t| t.saturating_duration_since(m.now).as_millis() as u64)
+            .map_or(u64::MAX, |t| {
+                t.saturating_duration_since(m.now).as_millis() as u64
+            })
             .div_ceil(MINUTE)
     })
 }
@@ -127,9 +132,7 @@ async fn cooldowns_and_debuffs_run_down_while_logged_out() {
         "49 minutes left, not 59: {hearth} ms"
     );
     let left = map
-        .query(move |m| {
-            [DESERTER, SHORT_DEBUFF, BUFF, OFFLINE_BUFF].map(|s| minutes_left(m, a, s))
-        })
+        .query(move |m| [DESERTER, SHORT_DEBUFF, BUFF, OFFLINE_BUFF].map(|s| minutes_left(m, a, s)))
         .await
         .unwrap();
     assert_eq!(left, [Some(5), None, Some(15), Some(5)]);

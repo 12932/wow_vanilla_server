@@ -205,7 +205,10 @@ async fn a_read_mail_keeps_its_time_and_cash_on_delivery_isnt_deleted() {
     assert!(read.flags & mail::READ != 0, "read");
     assert_eq!(read.expires_at, plain.expires_at, "its thirty days kept");
     assert!(read.expires_at - mail::now() > 29 * DAY);
-    assert!(after.iter().any(|m| m.id == cod.id), "cash on delivery stays");
+    assert!(
+        after.iter().any(|m| m.id == cod.id),
+        "cash on delivery stays"
+    );
 }
 
 /// Mail on its way an hour when the realm stops is announced when it
@@ -219,13 +222,7 @@ async fn mail_delayed_across_a_restart_is_announced_when_it_comes() {
     let mut config = harness::test_config();
     config.mail_delay = Duration::from_secs(3_600);
     let (store, startup) = crate::game::store::Store::open(&db).unwrap();
-    let realm = crate::game::Realm::new(
-        config.clone(),
-        store,
-        startup,
-        data_with(data),
-        None,
-    );
+    let realm = crate::game::Realm::new(config.clone(), store, startup, data_with(data), None);
     let (mut a, b, [good, _, _]) = two(&realm).await;
     let gb = b.guid;
     a.send(letter(good, 0, 0)).await;

@@ -725,8 +725,10 @@ fn percent(map: &Map, player: Guid, vendor: Guid) -> u32 {
         pct -= 10;
     }
     let template = |g: Guid| {
-        map.unit_fields(g)
-            .and_then(|x| data.faction_templates.get(&x.get_u32(UNIT_FIELD_FACTIONTEMPLATE)))
+        map.unit_fields(g).and_then(|x| {
+            data.faction_templates
+                .get(&x.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
+        })
     };
     const SERGEANT: u8 = 3;
     let visual = crate::game::map::pvp::current_rank(p).saturating_sub(4);
