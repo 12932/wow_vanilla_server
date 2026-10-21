@@ -450,10 +450,12 @@ pub fn spell_hit_chance(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate
     // school (mangos's `MagicSpellHitChance`, Thistle Tea's
     // `attacker_spell_hit_chance`).
     let versus = a.sum_mask(AURA_MOD_ATTACKER_SPELL_HIT_CHANCE, s.school_mask()) as f32;
+    // A player's pet or charm is missed as a player is (mangos's
+    // `CalculateSpellMissChance`, `UNIT_FLAG_PLAYER_CONTROLLED`).
     magic_hit_chance(
         caster_level,
         target_level,
-        guid::is_player(target),
+        combat::player_controlled(map, target),
         hit_bonus + versus - aoe,
         mechanic,
         binary_resist,

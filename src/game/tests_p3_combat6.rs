@@ -345,7 +345,8 @@ async fn a_creatures_blow_trains_a_players_defense_and_shows_at_once_in_their_av
             let before = (skill(m, ga, 95), dodge(m));
             forced_swing(m, brute, ga, Outcome::Parry);
             let after = (skill(m, ga, 95), dodge(m));
-            // A pet's blows train nothing.
+            // A pet's blows train it too (mangos's `ProcSkillsAndReactives`
+            // asks only that the attacker be no player nor critter).
             let pet = spawn(m, ga, BRUTE, 60, 1.0);
             m.creature_mut(pet).unwrap().owner = Some(crate::game::guid::player(9_999));
             forced_swing(m, pet, ga, Outcome::Hit);
@@ -355,7 +356,7 @@ async fn a_creatures_blow_trains_a_players_defense_and_shows_at_once_in_their_av
         .unwrap();
     assert_eq!(r.0.0 + 1, r.1.0);
     assert!(r.1.1 > r.0.1, "{r:?}");
-    assert_eq!(r.2, r.1.0);
+    assert_eq!(r.2, r.1.0 + 1);
 }
 
 #[tokio::test]
