@@ -1407,6 +1407,9 @@ pub struct RealmConfig {
     /// How long a player whose client has gone stays in the world, for it
     /// to come back (`login::DISCONNECT_LINGER`; tests shorten it).
     pub disconnect_linger: Duration,
+    /// How long a client sent to another map has to acknowledge it before
+    /// it is disconnected (`[world] worldport_ack_timeout_secs`, 0 never).
+    pub worldport_ack_timeout: Duration,
     /// Players a side needs for a match, over the template's.
     pub bg_min_players: Option<u32>,
     pub bg_start_delay: Duration,
@@ -1426,6 +1429,9 @@ pub struct RealmConfig {
     /// The share of the machine's memory past which the sessions stop
     /// reading their clients (`[network] memory_guard_fraction`, 0 never).
     pub memory_guard_fraction: f64,
+    /// The memory guard's longest hold and its rests
+    /// (`[network] memory_guard_most_held_secs` and the rests').
+    pub memory_guard_timings: memory_guard::Timings,
     /// How seldom a `/who`, whois or inspect may come (`session::Cooldowns`):
     /// mangos's 5 s; none in the tests.
     pub packet_cooldown: Duration,
@@ -1532,6 +1538,7 @@ impl RealmConfig {
             instance_unload: Duration::from_secs(c.instances.unload_delay_secs),
             logout_delay: crate::game::map::login::LOGOUT_DELAY,
             disconnect_linger: crate::game::map::login::DISCONNECT_LINGER,
+            worldport_ack_timeout: Duration::from_secs(c.world.worldport_ack_timeout_secs),
             bg_min_players: (b.min_players > 0).then_some(b.min_players),
             bg_start_delay: Duration::from_secs(b.start_delay_secs),
             bg_auto_leave: Duration::from_secs(b.auto_leave_secs),
@@ -1541,6 +1548,11 @@ impl RealmConfig {
             max_queries_per_sec: c.network.max_queries_per_sec,
             max_queued_packets: c.network.max_queued_packets,
             memory_guard_fraction: c.network.memory_guard_fraction,
+            memory_guard_timings: memory_guard::Timings {
+                most_held: Duration::from_secs(c.network.memory_guard_most_held_secs),
+                rest_min: Duration::from_secs(c.network.memory_guard_rest_secs),
+                rest_max: Duration::from_secs(c.network.memory_guard_rest_max_secs),
+            },
             packet_cooldown: session::COOLDOWN,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,

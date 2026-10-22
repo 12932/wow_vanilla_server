@@ -635,6 +635,7 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
         return;
     }
     p.awaiting_worldport = false;
+    p.worldport_sent = None;
     crate::game::transports::settle_aboard(map, guid);
     let at = map
         .players

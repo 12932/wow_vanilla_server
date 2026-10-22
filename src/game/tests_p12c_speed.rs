@@ -76,11 +76,13 @@ pub(crate) async fn beat(a: &Client, flags: MovementInfo_MovementFlags, position
     .await;
 }
 
-/// As if `secs` had gone by since the player's last move was taken: the
-/// map's clock isn't the test's to wait on.
+/// As if `secs` had gone by since the player's last move was taken (and
+/// its knockback, if it is in one): the map's clock isn't the test's to
+/// wait on.
 pub(crate) async fn elapse(map: &MapHandle, g: Guid, secs: f32) {
     on(map, move |m| {
         let p = m.players.get_mut(&g).unwrap();
+        crate::game::map::move_guard::backdate_launch(p, Duration::from_secs_f32(secs));
         p.move_check = p.move_check.map(|(pos, at)| {
             (
                 pos,
@@ -231,7 +233,19 @@ async fn a_slowed_player_is_held_to_the_slow() {
 
 /// Launches `g` at `xy_speed`, acknowledged as the client acknowledges it.
 pub(crate) async fn knocked_back(a: &mut Client, map: &MapHandle, g: Guid, xy_speed: f32) {
-    let impulse = [1.0, 0.0, xy_speed, 10.0];
+    knocked_up(a, map, g, xy_speed, -10.0).await;
+}
+
+/// Launches `g` at `xy_speed` east and `z_speed` (as sent: negative is
+/// up), acknowledged as the client acknowledges it.
+pub(crate) async fn knocked_up(
+    a: &mut Client,
+    map: &MapHandle,
+    g: Guid,
+    xy_speed: f32,
+    z_speed: f32,
+) {
+    let impulse = [1.0, 0.0, xy_speed, z_speed];
     let counter = on(map, move |m| {
         m.players[&g]
             .outbound
@@ -241,18 +255,148 @@ pub(crate) async fn knocked_back(a: &mut Client, map: &MapHandle, g: Guid, xy_sp
     a.send(CMSG_MOVE_KNOCK_BACK_ACK {
         guid: g,
         counter,
-        info: info(launch(xy_speed), at(0.0, 0.0)),
+        info: info(jump(xy_speed, z_speed), at(0.0, 0.0)),
     })
     .await;
+    // Taken before the test backdates it (`elapse` goes to the map at once,
+    // the packet through the session).
+    crate::game::tests_p3_player2_ammo::handled(a).await;
+}
+
+/// [`beat`], and handled.
+async fn beat_handled(a: &mut Client, flags: MovementInfo_MovementFlags, position: Vector3d) {
+    beat(a, flags, position).await;
+    crate::game::tests_p3_player2_ammo::handled(a).await;
 }
 
 fn launch(xy_speed: f32) -> MovementInfo_MovementFlags {
+    jump(xy_speed, -10.0)
+}
+
+fn jump(xy_speed: f32, z_speed: f32) -> MovementInfo_MovementFlags {
     MovementInfo_MovementFlags::new_jumping(MovementInfo_MovementFlags_Jumping {
         cos_angle: 1.0,
         sin_angle: 0.0,
         xy_speed,
-        z_speed: 10.0,
+        z_speed,
     })
+}
+
+/// `dx` east of the start and `dz` above it.
+fn up(dx: f32, dz: f32) -> Vector3d {
+    Vector3d {
+        z: START.2 + dz,
+        ..at(dx, 0.0)
+    }
+}
+
+/// The client's gravity.
+const G: f32 = 19.291_105;
+
+/// A launch of 20 yards a second east and 10 up: its arc is back at its
+/// height in 1.04 s; the guard's flight, 2.54 s.
+const XY: f32 = 20.0;
+const VZ: f32 = 10.0;
+
+/// Where a launch of `XY` and `VZ` has its client `t` seconds in.
+fn arc(t: f32) -> Vector3d {
+    up(XY * t, VZ * t - G * t * t / 2.0)
+}
+
+/// Call 12: a knockback's flight ends at its ballistic time. A legit one,
+/// its packets along its arc every quarter second to its landing, is let
+/// through, and lands where it says.
+#[tokio::test]
+async fn a_knockback_along_its_arc_is_let_through() {
+    let (_realm, mut a, g, map) = alice().await;
+    knocked_up(&mut a, &map, g, XY, -VZ).await;
+    let land = 2.0 * VZ / G;
+    let mut t = 0.0;
+    while t + 0.25 < land {
+        elapse(&map, g, 0.25).await;
+        t += 0.25;
+        beat_handled(&mut a, jump(XY, -VZ), arc(t)).await;
+    }
+    elapse(&map, g, land - t).await;
+    a.send(MSG_MOVE_FALL_LAND_Client {
+        info: info(MovementInfo_MovementFlags::empty(), up(XY * land, 0.0)),
+    })
+    .await;
+    assert_eq!(pulled_back(&mut a).await, None);
+    let x = server_at(&map, g).await.x - START.0;
+    assert!((x - XY * land).abs() < 0.1, "{x}");
+}
+
+/// Knocked off a ledge, the client falls on past its arc's time, as fast
+/// as its launch flung it: a fall as the arc would have it is still its
+/// flight, three and a half seconds of it (the arc alone, 2.54), and
+/// it isn't pulled back.
+#[tokio::test]
+async fn a_knockback_off_a_ledge_falls_on_with_no_correction() {
+    let (_realm, mut a, g, map) = alice().await;
+    knocked_up(&mut a, &map, g, XY, -VZ).await;
+    for i in 1..=7 {
+        elapse(&map, g, 0.5).await;
+        beat_handled(&mut a, jump(XY, -VZ), arc(0.5 * i as f32)).await;
+    }
+    a.send(MSG_MOVE_FALL_LAND_Client {
+        info: info(MovementInfo_MovementFlags::empty(), arc(3.5)),
+    })
+    .await;
+    assert_eq!(pulled_back(&mut a).await, None);
+    let x = server_at(&map, g).await.x - START.0;
+    assert!((x - XY * 3.5).abs() < 0.1, "{x}");
+}
+
+/// The beats, every half second, of a client going on east at the
+/// launch's speed with `flags` at `dz` above the start, for eight seconds,
+/// and when the first was pulled back (none: `None`). Once pulled back,
+/// the client's moves wait for its acknowledgement, so where it was put
+/// tells which.
+async fn goes_on(
+    a: &mut Client,
+    map: &MapHandle,
+    g: Guid,
+    flags: MovementInfo_MovementFlags,
+    dz: f32,
+) -> Option<f32> {
+    for i in 1..=16 {
+        elapse(map, g, 0.5).await;
+        beat_handled(a, flags, up(XY * 0.5 * i as f32, dz)).await;
+    }
+    let back = pulled_back(a).await?;
+    Some((back.x - START.0) / XY + 0.5)
+}
+
+/// A client whose arc has landed, saying it still falls at the launch's
+/// height and going on at its speed, is held back once it is past the arc
+/// and a fall's lag (2 s) late: the flight lasted until it said it landed,
+/// up to ten seconds.
+#[tokio::test]
+async fn going_on_at_the_launchs_speed_past_its_landing_is_held_back() {
+    let (_realm, mut a, g, map) = alice().await;
+    knocked_up(&mut a, &map, g, XY, -VZ).await;
+    let t = goes_on(
+        &mut a,
+        &map,
+        g,
+        MovementInfo_MovementFlags::new_fallingfar(),
+        0.0,
+    )
+    .await;
+    let t = t.expect("held back");
+    assert!((t - 3.5).abs() < 0.01, "at {t} s");
+}
+
+/// A client that says its launch flies on for eight seconds, five yards
+/// over where it began, is refused at its first packet past the arc.
+#[tokio::test]
+async fn a_launch_claimed_for_eight_seconds_is_refused_past_its_arc() {
+    let (_realm, mut a, g, map) = alice().await;
+    knocked_up(&mut a, &map, g, XY, -VZ).await;
+    let t = goes_on(&mut a, &map, g, jump(XY, -VZ), 5.0).await;
+    let t = t.expect("refused");
+    assert!((t - 3.0).abs() < 0.01, "at {t} s: the arc ends at 2.54");
 }
 
 /// review 5's #3: a knockback flung its player faster than they run, and
@@ -265,7 +409,7 @@ async fn a_knockbacks_flight_passes_until_it_lands() {
     knocked_back(&mut a, &map, g, 30.0).await;
     // Fifteen yards in half a second, then nine and the landing.
     elapse(&map, g, 0.5).await;
-    beat(&a, launch(30.0), at(15.0, 0.0)).await;
+    beat_handled(&mut a, launch(30.0), at(15.0, 0.0)).await;
     elapse(&map, g, 0.3).await;
     a.send(MSG_MOVE_FALL_LAND_Client {
         info: info(MovementInfo_MovementFlags::empty(), at(24.0, 0.0)),

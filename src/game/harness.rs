@@ -161,6 +161,7 @@ pub fn test_config() -> RealmConfig {
         // A client gone leaves the world at once (a test of the linger
         // sets it).
         disconnect_linger: Duration::ZERO,
+        worldport_ack_timeout: Duration::from_secs(60),
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
         bg_auto_leave: crate::game::battlegrounds::AUTO_LEAVE,
@@ -170,6 +171,7 @@ pub fn test_config() -> RealmConfig {
         max_queries_per_sec: 2000,
         max_queued_packets: 64,
         memory_guard_fraction: 0.8,
+        memory_guard_timings: crate::game::memory_guard::Timings::default(),
         // A test asks `/who` as often as it likes.
         packet_cooldown: Duration::ZERO,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,

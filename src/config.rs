@@ -195,6 +195,16 @@ settings! {
         /// `max_queued_packets` is on each, never a crash. Logged as it
         /// engages and lets go. 0 never stops.
         memory_guard_fraction: f64 = 0.8, Clamp(0.0, 1.0), Live, "";
+        /// Seconds the memory guard holds the clients back at most: if the
+        /// memory hasn't come down by then (a steady state over the line,
+        /// not queues), it lets go, says so at `error`, and rests.
+        memory_guard_most_held_secs: u64 = crate::game::memory_guard::MOST_HELD.as_secs(), Clamp(1.0, 3600.0), Live, "";
+        /// Seconds the memory guard rests the first time it gives up, before
+        /// it may engage again; each time again, twice as long.
+        memory_guard_rest_secs: u64 = crate::game::memory_guard::REST_MIN.as_secs(), Clamp(1.0, 86_400.0), Live, "";
+        /// Seconds the memory guard's rest doubles up to (at least
+        /// `memory_guard_rest_secs`).
+        memory_guard_rest_max_secs: u64 = crate::game::memory_guard::REST_MAX.as_secs(), Clamp(1.0, 86_400.0), Live, "";
         /// Pings a client may send in a row each less than 27 seconds after
         /// the last (the client pings every 30) before it is disconnected;
         /// 0 never disconnects.
@@ -281,6 +291,12 @@ settings! {
         /// awake creature near it and nothing asking about it; then it is
         /// let go, and read again if it is needed. 0 keeps every tile read.
         tile_unload_secs: u64 = 300, Clamp(0.0, 86_400.0), Live, "GridCleanUpDelay";
+        /// Seconds a client sent to another map (`SMSG_NEW_WORLD`) has to
+        /// say it has loaded it (`MSG_MOVE_WORLDPORT_ACK`) before it is
+        /// disconnected, its player saved and taken out of the world, as
+        /// at a kick. A client loading a big map takes 10 to 30. 0 never
+        /// disconnects (mangos has no such kick).
+        worldport_ack_timeout_secs: u64 = 60, Clamp(0.0, 3600.0), Live, "";
         /// Shown to every player at login.
         motd: String = "Welcome to wow_vanilla_server.".to_owned(), Any, Live, "Motd";
         /// Names no character may take.
