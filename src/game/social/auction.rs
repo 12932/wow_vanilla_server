@@ -476,7 +476,8 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let Some(a) = auctions
         .auctions
         .get_mut(&m.auction_id)
-        .filter(|a| a.market == market_of(house))
+        // Run out, though not yet swept: it is over (`list` hides it).
+        .filter(|a| a.market == market_of(house) && a.expires_at > mail::now())
     else {
         drop(auctions);
         answer(map, R::ErrItemNotFound);
@@ -605,7 +606,9 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     let Some(a) = auctions
         .auctions
         .get(&m.auction_id)
-        .filter(|a| a.owner == guid::counter(g))
+        // Run out with a bid, though not yet swept, it is the bidder's: no
+        // taking it back. Unbid, it comes back to the seller either way.
+        .filter(|a| a.owner == guid::counter(g) && (a.bidder == 0 || a.expires_at > mail::now()))
         .cloned()
     else {
         return;

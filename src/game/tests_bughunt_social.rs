@@ -239,7 +239,8 @@ async fn a_mail_or_letter_is_read_only_by_its_reader() {
     };
     assert_ne!(text_id, id);
     assert_eq!(text_of(&mut c, text_id).await, "", "not Carol's");
-    assert_eq!(text_of(&mut b, text_id).await, "meet me at the bridge");}
+    assert_eq!(text_of(&mut b, text_id).await, "meet me at the bridge");
+}
 
 /// A cash-on-delivery payment that expired untaken went back to the buyer,
 /// who had the item too. It goes away, as mangos's
@@ -345,11 +346,9 @@ async fn the_roster_at_a_logout_shows_the_member_offline() {
     harness::offline(&realm, gb).await;
     let bob_online = a
         .wait_for("SMSG_GROUP_LIST", |m| match m {
-            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => l
-                .members
-                .iter()
-                .find(|m| m.guid == gb)
-                .map(|m| m.is_online),
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => {
+                l.members.iter().find(|m| m.guid == gb).map(|m| m.is_online)
+            }
             _ => None,
         })
         .await;
@@ -389,7 +388,10 @@ async fn a_group_made_in_a_battleground_leaves_its_raid_roster_alone() {
     groups::bg_joined(&realm, gd, "Dave".into(), 2, 0);
     // Alice, in a match, invites Bob.
     group(&mut a, &mut b, "Bob").await;
-    assert!(!sent_roster_with(&mut a, gb).await, "Alice keeps her raid's");
+    assert!(
+        !sent_roster_with(&mut a, gb).await,
+        "Alice keeps her raid's"
+    );
     // Dave, in a match, accepts Carol's invite.
     c.send(CMSG_GROUP_INVITE {
         name: "Dave".into(),
@@ -583,7 +585,11 @@ async fn a_members_stats_are_for_their_group() {
     let mut c = Client::connect(&realm, "C");
     c.enter("Carol", Race::Human, Class::Warrior).await;
     group(&mut a, &mut b, "Bob").await;
-    assert_eq!(member_status(&realm, &mut b, ga).await & 0x01, 0x01, "Bob's to see");
+    assert_eq!(
+        member_status(&realm, &mut b, ga).await & 0x01,
+        0x01,
+        "Bob's to see"
+    );
     assert_eq!(member_status(&realm, &mut c, ga).await, 0, "not Carol's");
 }
 
@@ -610,4 +616,67 @@ async fn a_full_raid_leaves_a_player_in_their_group() {
     a.clear();
     group(&mut b, &mut c, "Carol").await;
     assert!(sent_roster_with(&mut a, gc).await, "Alice hears of Carol");
+}
+
+/// An auction run out but not yet swept (up to five seconds) took a bid or
+/// a buyout, and its seller could cancel one sold: outcomes the clock had
+/// settled. It is over as `list` takes it: not found; one with a bid is
+/// the bidder's.
+#[tokio::test]
+async fn an_auction_run_out_takes_no_bid_nor_cancel() {
+    let realm = harness::realm_with(auction_data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(auctioneer()).await;
+    set_money(&realm, ga, 10_000).await;
+    let over = mail::now() - 1;
+    {
+        let mut auctions = realm.social.auctions.lock();
+        auctions.auctions.insert(1, axe(1, over));
+        let mut mine = axe(2, over);
+        mine.owner = guid::counter(ga);
+        (mine.bidder, mine.bid) = (98, 100);
+        auctions.auctions.insert(2, mine);
+    }
+    a.send(CMSG_AUCTION_PLACE_BID {
+        auctioneer: auctioneer(),
+        auction_id: 1,
+        price: Gold::new(1000),
+    })
+    .await;
+    let result = a
+        .wait_for("SMSG_AUCTION_COMMAND_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => Some(r.action.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        matches!(
+            result,
+            SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction::BidPlaced {
+                result: SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult::ErrItemNotFound
+            }
+        ),
+        "{result:?}"
+    );
+    a.send(CMSG_AUCTION_REMOVE_ITEM {
+        auctioneer: auctioneer(),
+        auction_id: 2,
+    })
+    .await;
+    handled(&mut a).await;
+    // What the sweep does meanwhile is no matter: the seller is sent no
+    // cancel's mail (`item:property:5`), and paid no cut, and the bidder
+    // paid nothing.
+    let me = guid::counter(ga);
+    let cancelled = realm
+        .social
+        .mail
+        .lock()
+        .mails
+        .values()
+        .any(|m| m.receiver == me && m.subject.ends_with(":5"));
+    assert!(!cancelled, "not cancelled");
+    let money = on_map(&realm, move |m| m.players[&ga].money()).await;
+    assert_eq!(money, 10_000, "no buyout");
 }
