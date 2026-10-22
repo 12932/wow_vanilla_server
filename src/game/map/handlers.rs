@@ -15,6 +15,30 @@ const ACTION_BUTTON_MACRO: u8 = 0x40;
 const ACTION_BUTTON_CLICK_MACRO: u8 = 0x41;
 const ACTION_BUTTON_ITEM: u8 = 0x80;
 
+/// What a client still loading a map may send: the acknowledgement, and
+/// what names nothing on the map (mangos-classic handles a
+/// `STATUS_LOGGEDIN` opcode only for a player in the world, which one not
+/// yet arrived from a worldport isn't). Anything else, a cast, a swing or a
+/// loot from a client that held its acknowledgement back, unseen by
+/// everyone, is dropped.
+fn in_transfer(msg: &ClientOpcodeMessage) -> bool {
+    matches!(
+        msg,
+        ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK
+            | ClientOpcodeMessage::CMSG_NAME_QUERY(_)
+            | ClientOpcodeMessage::CMSG_GUILD_QUERY(_)
+            | ClientOpcodeMessage::CMSG_ITEM_QUERY_SINGLE(_)
+            | ClientOpcodeMessage::CMSG_QUERY_TIME
+            | ClientOpcodeMessage::CMSG_CANCEL_TRADE
+            | ClientOpcodeMessage::CMSG_UPDATE_ACCOUNT_DATA(_)
+            | ClientOpcodeMessage::CMSG_REQUEST_ACCOUNT_DATA(_)
+            | ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(_)
+            | ClientOpcodeMessage::CMSG_LOGOUT_REQUEST
+            | ClientOpcodeMessage::CMSG_LOGOUT_CANCEL
+            | ClientOpcodeMessage::CMSG_PLAYER_LOGOUT
+    )
+}
+
 impl Map {
     pub fn handle_packet(&mut self, guid: Guid, msg: ClientOpcodeMessage) {
         let Some(p) = self.players.get(&guid) else {
@@ -52,6 +76,10 @@ impl Map {
         let Some(msg) = crate::game::map::acks::handle(self, guid, msg) else {
             return;
         };
+        if self.players.get(&guid).is_some_and(|p| p.awaiting_worldport) && !in_transfer(&msg) {
+            trace!("{guid} hasn't acknowledged its worldport: {msg} dropped");
+            return;
+        }
         let Some(msg) = crate::game::map::misc::handle_all(self, guid, msg) else {
             return;
         };
