@@ -524,9 +524,10 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
+    // Its corpse lies its decay, but no longer than until it comes back.
     c.life = Life::Dead {
         corpse_until: now + decay.min(respawn),
-        respawn_at: now + respawn.max(decay.min(respawn)),
+        respawn_at: now + respawn,
     };
     let moving = matches!(c.motion, Motion::Moving(_));
     c.motion = Motion::Idle { until: None };
