@@ -2672,6 +2672,9 @@ impl Map {
         if let Some(n) = Self::own_counter_of(guid) {
             self.own_counters.insert((true, n));
         }
+        if g.kind == objects::GO_TRAP {
+            self.objects.trap_objects.insert(guid);
+        }
         let key = self.gameobjects.insert(g);
         self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
@@ -2691,6 +2694,7 @@ impl Map {
         if let Some(n) = Self::own_counter_of(guid) {
             self.own_counters.remove(&(true, n));
         }
+        self.objects.trap_objects.remove(&guid);
         let mut g = self.gameobjects.try_remove(key)?;
         // A script's lock goes with it: one back again starts as its
         // template has it.
