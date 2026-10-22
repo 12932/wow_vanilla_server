@@ -1566,28 +1566,46 @@ fn serve(conn: &Connection, kept: &mut Kept, req: Request) {
             let _ = reply.send(result);
         }
         Request::Delete(account, guid, reply) => {
+            // All or none: a failure part way left the character gone and
+            // its items behind.
             let deleted = (|| -> rusqlite::Result<bool> {
-                let n = conn.execute(
+                let tx = conn.unchecked_transaction()?;
+                let n = tx.execute(
                     "DELETE FROM characters WHERE guid = ?1 AND account = ?2",
                     params![guid, account],
                 )?;
                 if n > 0 {
-                    conn.execute(
-                        "DELETE FROM character_items WHERE owner = ?1",
-                        params![guid],
-                    )?;
-                    conn.execute(
-                        "DELETE FROM character_spells WHERE owner = ?1",
-                        params![guid],
-                    )?;
-                    conn.execute(
-                        "DELETE FROM character_actions WHERE owner = ?1",
-                        params![guid],
+                    for table in ["character_items", "character_spells", "character_actions"] {
+                        tx.execute(
+                            &format!("DELETE FROM {table} WHERE owner = ?1"),
+                            params![guid],
+                        )?;
+                    }
+                    // Its own caches (`account_data::key`'s).
+                    tx.execute(
+                        "DELETE FROM account_data WHERE account = ?1",
+                        params![format!("{account}#{guid}")],
                     )?;
                 }
+                tx.commit()?;
                 Ok(n > 0)
             })()
-            .unwrap_or(false);
+            .unwrap_or_else(|e| {
+                warn!("deleting character {guid}: {e}");
+                false
+            });
+            if deleted {
+                // A save of it kept from before isn't written after, to
+                // bring it back.
+                kept.pending.retain_mut(|s| match s {
+                    Request::Save(row) => row.guid != guid,
+                    Request::Together(rows, _) => {
+                        rows.retain(|r| r.guid != guid);
+                        true
+                    }
+                    _ => true,
+                });
+            }
             let _ = reply.send(deleted);
         }
         Request::Rename(guid, name, at_login, reply) => {
@@ -2015,6 +2033,20 @@ mod tests {
         assert!(store.load(1).await.is_none());
         drop(store);
         let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A character deleted takes its own caches with it (the account's
+    /// stay), and its items, spells and actions, in one transaction.
+    #[tokio::test]
+    async fn a_deleted_character_takes_its_caches() {
+        let (store, _) = Store::open(":memory:").unwrap();
+        store.create(row(1, "Alice")).await.unwrap();
+        store.set_account_data("ACC#1", 4, 1, b"macros".to_vec());
+        store.set_account_data("ACC", 0, 1, b"config".to_vec());
+        assert!(store.delete("ACC", 1).await);
+        assert!(store.account_data("ACC#1").await.is_empty());
+        assert_eq!(store.account_data("ACC").await.len(), 1);
+        assert!(store.load(1).await.is_none());
     }
 
     /// A save or a rename that takes another character's name deletes no
