@@ -645,8 +645,11 @@ pub fn restore(map: &mut Map, player: Guid) {
     // waiting cooldown only for an aura it put back. Else it was locked
     // until the next login.
     for spell in waiting {
-        let back = auras::auras(map, player)
-            .is_some_and(|a| a.holders.iter().any(|h| h.spell == spell && h.caster == player));
+        let back = auras::auras(map, player).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == player)
+        });
         if !back {
             release(map, player, spell, false);
         }

@@ -189,7 +189,12 @@ async fn an_area_ended_by_a_tick_doesnt_tick_another_early() {
             let later = spawn(m, ga, BRUTE, 20, 5.0);
             let at = m.position_of(channeller).unwrap();
             place(m, later, east(at, 30.0));
-            crate::game::tests_p3_aura2::set(m, channeller, crate::game::fields::UNIT_FIELD_HEALTH, 1);
+            crate::game::tests_p3_aura2::set(
+                m,
+                channeller,
+                crate::game::fields::UNIT_FIELD_HEALTH,
+                1,
+            );
             let dest = |p: Vector3d| spells::Targets {
                 dest: Some(p),
                 ..Default::default()
