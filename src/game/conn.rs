@@ -161,6 +161,8 @@ struct Broadcast {
 /// corked, so a map uncorks before it hands a client, or word of one, to
 /// another task (see `map::run`).
 pub struct Cork {
+    /// When what it holds was first parked ([`Cork::park`]).
+    since: Option<std::time::Instant>,
     _not_send: std::marker::PhantomData<*const ()>,
 }
 
@@ -170,8 +172,56 @@ impl Cork {
         CORK.with_borrow_mut(|c| c.depth += 1);
         CORKED.set(true);
         Cork {
+            since: None,
             _not_send: std::marker::PhantomData,
         }
+    }
+
+    /// A cork again over what was parked: what it held stays, and what is
+    /// sent now goes after it. Under another cork, what was parked is
+    /// pushed first.
+    pub fn resume(parked: Parked) -> Self {
+        if CORKED.get() {
+            drop(parked);
+            return Cork::new();
+        }
+        let mut parked = parked;
+        let since = parked.since;
+        let state = std::mem::take(&mut *parked.state);
+        CORK.with_borrow_mut(|c| {
+            let depth = c.depth;
+            *c = state;
+            c.depth = depth;
+        });
+        let mut cork = Cork::new();
+        cork.since = Some(since);
+        cork
+    }
+
+    /// Stop corking without pushing: what the cork holds is kept for a
+    /// later cork on whichever thread ([`Cork::resume`]), or pushed when
+    /// the parked state is dropped. None if it holds nothing, or another
+    /// cork on the thread is alive (which keeps it).
+    pub fn park(self) -> Option<Parked> {
+        let me = std::mem::ManuallyDrop::new(self);
+        let since = me.since.unwrap_or_else(std::time::Instant::now);
+        let state = CORK.with_borrow_mut(|c| {
+            c.depth -= 1;
+            if c.depth > 0 {
+                return None;
+            }
+            let state = std::mem::take(c);
+            Some(state)
+        });
+        let state = state?;
+        CORKED.set(false);
+        if state.slots.is_empty() {
+            return None;
+        }
+        Some(Parked {
+            state: Box::new(state),
+            since,
+        })
     }
 }
 
@@ -188,27 +238,46 @@ impl Drop for Cork {
     }
 }
 
+/// What a cork held, parked between a map's bursts ([`Cork::park`]): sent
+/// on with a later cork, or pushed when dropped.
+pub struct Parked {
+    state: Box<CorkState>,
+    since: std::time::Instant,
+}
+
+impl Parked {
+    /// When it was first parked.
+    pub fn since(&self) -> std::time::Instant {
+        self.since
+    }
+}
+
+impl Drop for Parked {
+    fn drop(&mut self) {
+        push(&mut self.state);
+    }
+}
+
 /// Push what this thread's cork holds now, the cork staying on.
 pub fn uncork() {
     // Uncorked, nothing waits: the last cork's drop pushed it.
     if !CORKED.get() {
         return;
     }
-    let (slots, log, mut bytes) = CORK.with_borrow_mut(|c| {
-        c.by_address.clear();
-        c.by_index.clear();
-        c.reached.clear();
-        c.held.clear();
-        c.gone.clear();
-        c.table = 0;
-        let mut bytes = std::mem::take(&mut c.bytes);
-        bytes.clear();
-        (
-            std::mem::take(&mut c.slots),
-            std::mem::take(&mut c.log),
-            bytes,
-        )
+    let mut state = CORK.with_borrow_mut(|c| {
+        let depth = c.depth;
+        let state = std::mem::take(c);
+        c.depth = depth;
+        state
     });
+    push(&mut state);
+}
+
+/// Push what `state` holds, each client's in one go.
+fn push(state: &mut CorkState) {
+    let slots = std::mem::take(&mut state.slots);
+    let log = std::mem::take(&mut state.log);
+    let mut bytes = Vec::new();
     if slots.is_empty() {
         return;
     }
@@ -259,7 +328,6 @@ pub fn uncork() {
         };
         let _ = out.inner.tx.send(item);
     }
-    CORK.with_borrow_mut(|c| c.bytes = bytes);
 }
 
 /// Send `frame` to the map's clients `to`, `client` naming the queue of
@@ -363,8 +431,6 @@ struct CorkState {
     reached: Clients,
     held: Clients,
     gone: Clients,
-    /// Kept between pushes, for the budget's count.
-    bytes: Vec<usize>,
 }
 
 impl CorkState {
@@ -1674,6 +1740,34 @@ mod tests {
         }
         assert!(rs.try_recv().is_none());
         assert_eq!(opcodes(&mut rb), [3]);
+    }
+
+    /// Parked, what a cork held waits for the next cork, and goes before
+    /// what that one is sent; dropped, it is pushed.
+    #[test]
+    fn a_parked_cork_goes_on_with_the_next_or_is_pushed_when_dropped() {
+        let (a, mut ra) = Outbound::detached();
+        let table = |i: usize| (i == 0).then(|| a.clone());
+        let cork = Cork::new();
+        broadcast(1, &frame(1, &[0; 4]), &clients(&[0]), table);
+        a.send_frame(frame(2, &[0; 4]));
+        let parked = cork.park().expect("it holds something");
+        assert!(ra.rx.is_empty(), "parked, not pushed");
+        // Elsewhere meanwhile, uncorked: on its way at once.
+        assert!(!CORKED.get());
+        let parked = std::thread::spawn(move || {
+            let cork = Cork::resume(parked);
+            cork.park().expect("still")
+        })
+        .join()
+        .unwrap();
+        let cork = Cork::resume(parked);
+        broadcast(1, &frame(3, &[0; 4]), &clients(&[0]), table);
+        let parked = cork.park().unwrap();
+        assert!(ra.rx.is_empty());
+        drop(parked);
+        assert_eq!(opcodes(&mut ra), [1, 2, 3]);
+        assert!(Cork::new().park().is_none(), "an empty cork parks nothing");
     }
 
     #[test]

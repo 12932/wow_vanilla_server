@@ -57,6 +57,13 @@ auth_address = "0.0.0.0:3724"
 # Default "0.0.0.0:8085". Needs a restart.
 world_address = "0.0.0.0:8085"
 
+# Milliseconds a map may keep players' movement before it sends
+# it on, gathering what each client is sent into one write: a
+# crowd's packets cost far less so, a little later. 0 sends each
+# burst of movement as it is handled.
+# Default 0. Range 0 to 50, clamped. Changes at a reload.
+broadcast_batch_ms = 0
+
 # The world: saves, the message of the day, the character store and
 # the data's paths.
 [world]

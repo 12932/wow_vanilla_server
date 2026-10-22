@@ -132,12 +132,9 @@ async fn every_observer_gets_every_movement_packet_in_order_by_default() {
     assert_eq!(moves_until_stop(&mut b, ga).await, RUN);
     assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
     // What follows the corked run, uncorked, comes after it.
+    run(&a, at).await;
     a.say("after the run").await;
-    b.wait_for("the say", |m| match m {
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(_) => Some(()),
-        _ => None,
-    })
-    .await;
+    stop_before_say(&mut b, ga).await;
 }
 
 /// On, an observer past the yards gets one in `every` heartbeats, and
@@ -201,4 +198,34 @@ async fn a_broadcast_follows_comings_and_goings() {
     assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
     let carol = on(&map, move |m| m.clients.index_of(gc)).await;
     assert_eq!(carol, index, "Bob's index, Carol's now");
+}
+
+/// Batched (`[network] broadcast_batch_ms`), a run reaches each observer
+/// whole and in order, and what follows it comes after it.
+#[tokio::test]
+async fn a_batched_run_reaches_each_observer_in_order() {
+    let realm = realm(RealmConfig {
+        broadcast_batch: std::time::Duration::from_millis(20),
+        ..harness::test_config()
+    });
+    let ([a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let at = on(&map, move |m| m.players[&ga].position()).await;
+    run(&a, at).await;
+    a.say("after the run").await;
+    assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
+    // Bob is near enough to hear it (Carol isn't), after the run.
+    stop_before_say(&mut b, ga).await;
+}
+
+/// Of `mover`'s stop and a say, the stop came first.
+async fn stop_before_say(cl: &mut Client, mover: Guid) {
+    let stop_first = cl
+        .wait_for("the stop or the say", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_STOP(s) if s.guid == mover => Some(true),
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(_) => Some(false),
+            _ => None,
+        })
+        .await;
+    assert!(stop_first, "the say overtook the run");
 }

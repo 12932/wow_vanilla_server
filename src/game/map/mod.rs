@@ -844,8 +844,23 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     let mut sampler = crate::game::stats::Sampler::default();
     let mut ticker = tokio::time::interval(UPDATE_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A run of movement packets' broadcasts, kept past its burst for the
+    // next (`[network] broadcast_batch_ms`): pushed at the update, at an
+    // event that isn't a movement packet, or once it has waited so long.
+    let mut parked: Option<crate::game::conn::Parked> = None;
     loop {
+        let flush_at = parked
+            .as_ref()
+            .map(|p| tokio::time::Instant::from_std(p.since() + map.cfg.broadcast_batch));
         tokio::select! {
+            () = async {
+                match flush_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                drop(parked.take());
+            }
             event = rx.recv() => {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
@@ -855,7 +870,8 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // goes uncorked, what was corked pushed first: a call's
                 // answer, a session told, a client handed on, mustn't
                 // overtake what was sent before it.
-                let mut cork = corks(&event).then(crate::game::conn::Cork::new);
+                let mut cork = None;
+                corking(&event, &mut cork, &mut parked);
                 if handle_guarded(&mut map, event) {
                     break;
                 }
@@ -870,11 +886,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
-                            if !corks(&event) {
-                                cork = None;
-                            } else if cork.is_none() {
-                                cork = Some(crate::game::conn::Cork::new());
-                            }
+                            corking(&event, &mut cork, &mut parked);
                             if handle_guarded(&mut map, event) {
                                 stop = true;
                                 break;
@@ -884,7 +896,13 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                         Err(_) => break,
                     }
                 }
-                drop(cork);
+                // Kept for the next burst, while the batch's time lasts.
+                if let Some(c) = cork
+                    && !stop
+                    && !map.cfg.broadcast_batch.is_zero()
+                {
+                    parked = c.park();
+                }
                 if let Some(at) = sampled {
                     sampler.events(handled, at.elapsed());
                 }
@@ -896,7 +914,10 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // What the update sends each client goes in one push at its
                 // end.
                 {
-                    let _cork = crate::game::conn::Cork::new();
+                    let _cork = match parked.take() {
+                        Some(p) => crate::game::conn::Cork::resume(p),
+                        None => crate::game::conn::Cork::new(),
+                    };
                     guarded(&mut map, "the update", Map::update);
                 }
                 if map.stopping {
@@ -919,7 +940,27 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             }
         }
     }
+    drop(parked);
     finish(map, rx).await;
+}
+
+/// The cork for `event`: a movement packet's goes on (or takes up what was
+/// parked); any other event's is none, what was corked or parked pushed
+/// first.
+fn corking(
+    event: &MapEvent,
+    cork: &mut Option<crate::game::conn::Cork>,
+    parked: &mut Option<crate::game::conn::Parked>,
+) {
+    if !corks(event) {
+        *cork = None;
+        *parked = None;
+    } else if cork.is_none() {
+        *cork = Some(match parked.take() {
+            Some(p) => crate::game::conn::Cork::resume(p),
+            None => crate::game::conn::Cork::new(),
+        });
+    }
 }
 
 /// What a map that has stopped does with what is still sent to it: hands
