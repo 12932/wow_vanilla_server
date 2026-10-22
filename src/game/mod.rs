@@ -46,6 +46,8 @@ mod tests_aoe_leeway;
 #[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
+mod tests_arrow_travel;
+#[cfg(test)]
 mod tests_bg5;
 #[cfg(test)]
 mod tests_bg6;
@@ -1413,8 +1415,8 @@ pub struct RealmConfig {
     pub honor_reset_weekday: u8,
     /// Whether spells roll to hit, crit and resist (tests fix them).
     pub spell_rolls: bool,
-    /// Whether bolts and missiles take time to arrive (tests land them at
-    /// once).
+    /// Whether bolts, missiles and shots (Auto Shot's arrows, a wand's)
+    /// take time to arrive (tests land them at once).
     pub spell_travel: bool,
     /// Whether the navmesh's and the terrain's tiles are read off the
     /// maps' threads (`map/tiles.rs`); tests read them at once, as they
