@@ -45,14 +45,13 @@ impl Crowd {
     /// (a first refresh done, its creates sent and dropped). Call within a
     /// tokio runtime.
     pub fn new(n: usize, radius: f32) -> Self {
+        Self::with_config(RealmConfig::default(), n, radius)
+    }
+
+    /// [`Crowd::new`] in a realm of `cfg`.
+    pub fn with_config(cfg: RealmConfig, n: usize, radius: f32) -> Self {
         let (store, startup) = Store::open(":memory:").expect("an in-memory store");
-        let realm = Realm::new(
-            RealmConfig::default(),
-            store,
-            startup,
-            GameData::empty(),
-            None,
-        );
+        let realm = Realm::new(cfg, store, startup, GameData::empty(), None);
         Self::in_realm(&realm, n, radius)
     }
 
@@ -138,6 +137,30 @@ impl Crowd {
     pub fn refresh(&mut self) {
         visibility::refresh_dirty(&mut self.map);
         self.drain();
+    }
+
+    /// What the update's visibility made: each observer's creates (its
+    /// batch's packets) and forgets (sorted), by observer. Taken off, as
+    /// [`Crowd::drain`] would drop them.
+    pub fn sent(&mut self) -> Vec<(Guid, Vec<Vec<u8>>, Vec<Guid>)> {
+        let mut batches: Vec<_> = std::mem::take(&mut self.map.batches).into_iter().collect();
+        batches.sort_unstable_by_key(|(g, _)| *g);
+        let mut forget = std::mem::take(&mut self.map.forget);
+        let mut out: Vec<(Guid, Vec<Vec<u8>>, Vec<Guid>)> = batches
+            .into_iter()
+            .map(|(g, b)| {
+                let frames = b.finish().iter().map(|f| f.to_vec()).collect();
+                (g, frames, forget.remove(&g).unwrap_or_default())
+            })
+            .collect();
+        out.extend(forget.into_iter().map(|(g, f)| (g, Vec::new(), f)));
+        out.sort_unstable_by_key(|(g, _, _)| *g);
+        // A forget's place in its list is a hash set's order (what was
+        // known, who knew it): not the client's concern.
+        for (_, _, f) in &mut out {
+            f.sort_unstable();
+        }
+        out
     }
 
     /// The creates and forgets made, and the clients held for them, let go

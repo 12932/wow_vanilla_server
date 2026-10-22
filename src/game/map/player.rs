@@ -229,6 +229,10 @@ pub struct Player {
     pub views_told: crate::game::map::views::Viewers,
     /// Where visibility was last worked out.
     pub vis_anchor: Vector3d,
+    /// The cell where what a refresh does besides visibility (the zone,
+    /// the tiles ahead) was last done: done again once it has left it
+    /// (`visibility::refresh_dirty`).
+    pub side_cell: Option<CellKey>,
     pub cell: CellKey,
     pub logout_at: Option<Instant>,
     /// Their client gone, they stay in the world until then, for it to
@@ -364,6 +368,7 @@ impl Player {
             observers: AHashSet::new(),
             views_told: Default::default(),
             vis_anchor: position,
+            side_cell: None,
             cell: cell_of(position.x, position.y),
             logout_at: None,
             linger_until: None,

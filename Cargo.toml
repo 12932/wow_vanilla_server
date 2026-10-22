@@ -38,6 +38,8 @@ wow_items = { git = "https://github.com/12932/wow_messages", rev = "361d2ed82f35
 # 1.12 only: no TBC or Wrath headers (and with them no hmac).
 wow_srp = { git = "https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163", default-features = false, features = ["srp-default-math"] }
 walkdir = "2.5.0"
+# Visibility's decisions, worked out across threads (`map/visibility.rs`).
+rayon = "1.12.0"
 
 # The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
 # decoded off the map's thread and handed in (`load_nav_file`).

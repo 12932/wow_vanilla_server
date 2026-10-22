@@ -138,6 +138,10 @@ pub fn test_config() -> RealmConfig {
         instance_visibility_yards: visibility.instances_yards,
         battleground_visibility_yards: visibility.battleground_yards,
         flight_visibility_yards: visibility.flight_yards,
+        // Every refresh in its update, however slow the machine (a test of
+        // the budget sets one).
+        visibility_budget: Duration::from_secs(1),
+        visibility_threads: visibility.refresh_threads,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,

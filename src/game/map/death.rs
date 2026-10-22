@@ -366,6 +366,9 @@ fn repop(map: &mut Map, g: Guid) -> Option<(Vector3d, u32, Team)> {
     p.row.state.released_at = crate::game::map::corpses::unix_ms();
     become_ghost(p, now);
     let (pos, zone, team) = (p.position(), p.zone, p.team);
+    // A ghost sees and is seen otherwise: worked out whole (if the
+    // graveyard is in this map; else the arrival is).
+    map.visibility_dirty.insert(g);
     map.add_corpse(corpse);
     speeds_to_observers(map, g);
     Some((pos, zone, team))

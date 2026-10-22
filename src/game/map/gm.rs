@@ -271,6 +271,9 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
                     on,
                 );
             }
+            // A game master sees what others don't (the concealed, the
+            // stealthed, ghosts): from now, not from their next steps.
+            map.visibility_dirty.insert(guid);
             Some(format!("GM mode {}.", if on { "on" } else { "off" }))
         }
         "ticket" => Some(crate::game::map::tickets::command(map, guid, &args)),

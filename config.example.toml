@@ -141,8 +141,8 @@ auction_deposit_min = 0
 # Default "Location Realm". Needs a restart.
 realm_name = "Location Realm"
 
-# How far players see, in yards. Further costs the server more and
-# the client more.
+# How far players see, in yards (further costs the server more and
+# the client more), and what working it out may take.
 [visibility]
 
 # On the continents.
@@ -161,6 +161,19 @@ battleground_yards = 400.0
 # goes by below. Back to the map's own on landing.
 # Default 400.0. Range 20 to 500, clamped. Changes at a reload.
 flight_yards = 400.0
+
+# How long a map's update may spend on visibility's refreshes, in
+# milliseconds: past it the rest wait for the next update (20 a
+# second), oldest first, so a crowd moving in step can't stall a
+# map. At least one chunk (128) is done each update.
+# Default 10. Range 0 to 1000, clamped. Changes at a reload.
+refresh_budget_ms = 10
+
+# Threads that work out visibility's refreshes for the maps, read
+# only, before each map applies them; 1 works them out on the
+# map's own thread, 0 takes the machine's cores, up to 8.
+# Default 0. Range 0 to 64, clamped. Needs a restart.
+refresh_threads = 0
 
 # Chat: how far it carries, and the flood control. GMs aren't
 # muted.

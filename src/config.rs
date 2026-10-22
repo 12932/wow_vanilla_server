@@ -279,8 +279,8 @@ impl WorldConfig {
 }
 
 settings! {
-    /// How far players see, in yards. Further costs the server more and
-    /// the client more.
+    /// How far players see, in yards (further costs the server more and
+    /// the client more), and what working it out may take.
     pub struct VisibilityConfig in "visibility" {
         /// On the continents.
         continents_yards: f32 = 100.0, Clamp(20.0, 500.0), Live, "Visibility.Distance.Continents";
@@ -291,6 +291,15 @@ settings! {
         /// On a flight master's gryphon or wyvern: further, as the land
         /// goes by below. Back to the map's own on landing.
         flight_yards: f32 = 400.0, Clamp(20.0, 500.0), Live, "";
+        /// How long a map's update may spend on visibility's refreshes, in
+        /// milliseconds: past it the rest wait for the next update (20 a
+        /// second), oldest first, so a crowd moving in step can't stall a
+        /// map. At least one chunk (128) is done each update.
+        refresh_budget_ms: u64 = 10, Clamp(0.0, 1000.0), Live, "";
+        /// Threads that work out visibility's refreshes for the maps, read
+        /// only, before each map applies them; 1 works them out on the
+        /// map's own thread, 0 takes the machine's cores, up to 8.
+        refresh_threads: usize = 0, Clamp(0.0, 64.0), Restart, "";
     }
 }
 

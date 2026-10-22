@@ -29,9 +29,62 @@ pub fn cell_of(x: f32, y: f32) -> CellKey {
     )
 }
 
+/// An object in a cell, with what visibility's quick path needs of it
+/// without looking it up (`visibility::refresh_dirty`): where its
+/// visibility was last worked out (its anchor), and whether it is plain
+/// (who sees it, and whom it sees, turns on distance alone: see
+/// `visibility::plain_now`). An object is plain only once its own refresh
+/// has said so, and its anchor is set then.
+#[derive(Debug, Clone, Copy)]
+pub struct Entry {
+    pub guid: Guid,
+    pub ax: f32,
+    pub ay: f32,
+    pub plain: bool,
+    /// Its place (from 1) in the refreshes under way, 0 if none.
+    pub batch: u32,
+}
+
+/// A cell's objects, and how many of them are players and how many not
+/// plain.
+#[derive(Debug, Default)]
+pub struct Cell {
+    entries: SmallVec<[Entry; 8]>,
+    players: u32,
+    unplain: u32,
+}
+
+impl Cell {
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    pub fn players(&self) -> u32 {
+        self.players
+    }
+
+    pub fn unplain(&self) -> u32 {
+        self.unplain
+    }
+
+    fn push(&mut self, e: Entry) {
+        self.players += u32::from(crate::game::guid::is_player(e.guid));
+        self.unplain += u32::from(!e.plain);
+        self.entries.push(e);
+    }
+
+    fn take(&mut self, guid: Guid) -> Option<Entry> {
+        let i = self.entries.iter().position(|e| e.guid == guid)?;
+        let e = self.entries.swap_remove(i);
+        self.players -= u32::from(crate::game::guid::is_player(e.guid));
+        self.unplain -= u32::from(!e.plain);
+        Some(e)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Grid {
-    cells: AHashMap<CellKey, SmallVec<[Guid; 8]>>,
+    cells: AHashMap<CellKey, Cell>,
 }
 
 impl Grid {
@@ -39,27 +92,90 @@ impl Grid {
         Self::default()
     }
 
+    /// `guid` comes into `cell`: not plain, until its refresh.
     pub fn insert(&mut self, guid: Guid, cell: CellKey) {
-        self.cells.entry(cell).or_default().push(guid);
+        self.cells.entry(cell).or_default().push(Entry {
+            guid,
+            ax: f32::NAN,
+            ay: f32::NAN,
+            plain: false,
+            batch: 0,
+        });
     }
 
     pub fn remove(&mut self, guid: Guid, cell: CellKey) {
         if let Some(c) = self.cells.get_mut(&cell) {
-            if let Some(i) = c.iter().position(|g| *g == guid) {
-                c.swap_remove(i);
-            }
-            if c.is_empty() {
+            c.take(guid);
+            if c.entries.is_empty() {
                 self.cells.remove(&cell);
             }
         }
     }
 
-    /// Move `guid` between cells; a no-op within one.
+    /// Move `guid` between cells, with what is known of it; a no-op within
+    /// one. One not in `from` comes into `to` as new.
     pub fn relocate(&mut self, guid: Guid, from: CellKey, to: CellKey) {
-        if from != to {
-            self.remove(guid, from);
-            self.insert(guid, to);
+        if from == to {
+            return;
         }
+        let taken = self.cells.get_mut(&from).and_then(|c| c.take(guid));
+        if self.cells.get(&from).is_some_and(|c| c.entries.is_empty()) {
+            self.cells.remove(&from);
+        }
+        match taken {
+            Some(e) => self.cells.entry(to).or_default().push(e),
+            None => self.insert(guid, to),
+        }
+    }
+
+    /// `guid`'s entry in `cell`, if it is there.
+    pub fn entry(&self, guid: Guid, cell: CellKey) -> Option<&Entry> {
+        self.cells
+            .get(&cell)
+            .and_then(|c| c.entries.iter().find(|e| e.guid == guid))
+    }
+
+    /// Change `guid`'s entry in `cell`, if it is there, its cell's count of
+    /// those not plain kept.
+    pub fn update(&mut self, guid: Guid, cell: CellKey, f: impl FnOnce(&mut Entry)) {
+        let Some(c) = self.cells.get_mut(&cell) else {
+            return;
+        };
+        let Some(e) = c.entries.iter_mut().find(|e| e.guid == guid) else {
+            return;
+        };
+        let was = e.plain;
+        f(e);
+        match (was, e.plain) {
+            (true, false) => c.unplain += 1,
+            (false, true) => c.unplain -= 1,
+            _ => {}
+        }
+    }
+
+    /// Take nothing as plain, until each object's refresh says so again.
+    pub fn unplain_all(&mut self) {
+        for c in self.cells.values_mut() {
+            for e in &mut c.entries {
+                e.plain = false;
+            }
+            c.unplain = c.entries.len() as u32;
+        }
+    }
+
+    /// The cells of [`Grid::around`], with their keys.
+    pub fn cells_around(
+        &self,
+        x: f32,
+        y: f32,
+        radius: f32,
+    ) -> impl Iterator<Item = (CellKey, &Cell)> + '_ {
+        let (cx, cy) = cell_of(x, y);
+        let r = (radius / CELL_YARDS).ceil() as i32;
+        (cx - r..=cx + r).flat_map(move |ix| {
+            (cy - r..=cy + r)
+                .filter_map(move |iy| self.cells.get(&(ix, iy)).map(|c| ((ix, iy), c)))
+        })
     }
 
     /// Every object in the cells a disc of `radius` around `(x, y)`
@@ -72,7 +188,7 @@ impl Grid {
                 self.cells
                     .get(&(ix, iy))
                     .into_iter()
-                    .flat_map(|c| c.iter().copied())
+                    .flat_map(|c| c.entries.iter().map(|e| e.guid))
             })
         })
     }
@@ -101,7 +217,7 @@ impl Grid {
                     self.cells
                         .get(&(ix, iy))
                         .into_iter()
-                        .flat_map(|c| c.iter().copied())
+                        .flat_map(|c| c.entries.iter().map(|e| e.guid))
                 })
         })
     }
@@ -109,6 +225,16 @@ impl Grid {
     pub fn cell_count(&self) -> usize {
         self.cells.len()
     }
+}
+
+/// The farthest a point in `cell` is from `(x, y)`, squared.
+pub fn farthest2(cell: CellKey, x: f32, y: f32) -> f32 {
+    let far = |v: f32, i: i32| {
+        let low = i as f32 * CELL_YARDS;
+        (v - low).abs().max((low + CELL_YARDS - v).abs())
+    };
+    let (dx, dy) = (far(x, cell.0), far(y, cell.1));
+    dx * dx + dy * dy
 }
 
 #[cfg(test)]

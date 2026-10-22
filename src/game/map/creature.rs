@@ -297,6 +297,10 @@ pub struct Creature {
     /// of sight (`champions.rs`). Set through `Map::keep_awake`.
     pub keep_awake: bool,
     pub vis_anchor: Vector3d,
+    /// The cell where what a refresh does besides visibility (the zone,
+    /// the tiles ahead) was last done: done again once it has left it
+    /// (`visibility::refresh_dirty`).
+    pub side_cell: Option<CellKey>,
     pub cell: CellKey,
     pub life: Life,
     /// Dead and gone from view, waiting to respawn.
@@ -450,6 +454,7 @@ impl Creature {
             observers: AHashSet::new(),
             keep_awake: false,
             vis_anchor: position,
+            side_cell: None,
             cell: cell_of(position.x, position.y),
             life: Life::Alive,
             despawned: false,

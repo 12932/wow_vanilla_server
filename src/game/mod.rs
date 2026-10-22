@@ -125,6 +125,8 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_order;
 #[cfg(test)]
+mod tests_visibility;
+#[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_ai_autocast;
@@ -1334,6 +1336,12 @@ pub struct RealmConfig {
     pub battleground_visibility_yards: f32,
     /// On a flight master's mount.
     pub flight_visibility_yards: f32,
+    /// What an update may spend on visibility's refreshes (`[visibility]
+    /// refresh_budget_ms`).
+    pub visibility_budget: Duration,
+    /// The threads visibility's decisions are worked out on (`[visibility]
+    /// refresh_threads`; 1 none but the map's).
+    pub visibility_threads: usize,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -1418,6 +1426,8 @@ impl RealmConfig {
             instance_visibility_yards: c.visibility.instances_yards,
             battleground_visibility_yards: c.visibility.battleground_yards,
             flight_visibility_yards: c.visibility.flight_yards,
+            visibility_budget: Duration::from_millis(c.visibility.refresh_budget_ms),
+            visibility_threads: c.visibility.refresh_threads,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,

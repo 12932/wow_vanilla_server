@@ -2545,6 +2545,7 @@ dependencies = [
  "parking_lot",
  "postcard",
  "rand 0.10.3",
+ "rayon",
  "rusqlite",
  "rustigator-mapbuild",
  "rustigator-pathfind",

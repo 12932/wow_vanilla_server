@@ -145,7 +145,7 @@ The world: saves, the message of the day, the character store and the data's pat
 
 ### `[visibility]`
 
-How far players see, in yards. Further costs the server more and the client more.
+How far players see, in yards (further costs the server more and the client more), and what working it out may take.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
@@ -153,6 +153,8 @@ How far players see, in yards. Further costs the server more and the client more
 | `instances_yards` | In dungeons and raids. | `170.0` | 20 to 500, clamped | live | `Visibility.Distance.Instances` |
 | `battleground_yards` | In battlegrounds: further, so a battle's far side is in view. | `400.0` | 20 to 500, clamped | live | `Visibility.Distance.BGArenas` |
 | `flight_yards` | On a flight master's gryphon or wyvern: further, as the land goes by below. Back to the map's own on landing. | `400.0` | 20 to 500, clamped | live |  |
+| `refresh_budget_ms` | How long a map's update may spend on visibility's refreshes, in milliseconds: past it the rest wait for the next update (20 a second), oldest first, so a crowd moving in step can't stall a map. At least one chunk (128) is done each update. | `10` | 0 to 1000, clamped | live |  |
+| `refresh_threads` | Threads that work out visibility's refreshes for the maps, read only, before each map applies them; 1 works them out on the map's own thread, 0 takes the machine's cores, up to 8. | `0` | 0 to 64, clamped | restart |  |
 
 ### `[chat]`
 
