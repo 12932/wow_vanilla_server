@@ -19,6 +19,9 @@ use crate::game::session::Control;
 
 /// How long a logout takes outside an inn.
 pub const LOGOUT_DELAY: Duration = Duration::from_secs(20);
+/// The least GM level that logs out at once anywhere (mangos's
+/// `InstantLogout`, a moderator by default).
+pub const INSTANT_LOGOUT_LEVEL: u8 = crate::accounts::MODERATOR;
 /// How long a player whose client has gone stays in the world, attackable,
 /// for it to come back (mangos's `WorldSession::ShouldDisconnect`, 60 s
 /// from `SetOffline`).
@@ -372,6 +375,7 @@ pub fn request_logout(map: &mut Map, guid: Guid) {
         return;
     };
     let instant = p.flight.is_some()
+        || p.gm_level >= INSTANT_LOGOUT_LEVEL
         || p.fields
             .has_flag(PLAYER_FLAGS, crate::game::map::player::PLAYER_FLAGS_RESTING);
     p.outbound.send(&SMSG_LOGOUT_RESPONSE {

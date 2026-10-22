@@ -760,9 +760,11 @@ async fn a_charter_is_bought_near_signed_by_the_uninvited_and_founds_with_enough
     assert!(on(&map, move |m| charters(m, ga)).await.is_empty(), "taken");
 }
 
-/// A realm of `d` whose logouts take their twenty seconds.
+/// A realm of `d` whose logouts take their twenty seconds (players, not
+/// GMs: a GM logs out at once).
 fn slow_logouts(d: crate::game::data::GameData) -> std::sync::Arc<crate::game::Realm> {
     let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
     cfg.logout_delay = crate::game::map::login::LOGOUT_DELAY;
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     crate::game::Realm::new(cfg, store, startup, d, None)

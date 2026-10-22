@@ -1739,3 +1739,26 @@ async fn a_seated_player_casts_nothing_and_an_opener_wants_stealth_neither_spend
         )
     );
 }
+
+/// A moderator or above logs out at once anywhere (mangos's
+/// `InstantLogout`): a player waits the twenty seconds.
+#[tokio::test]
+async fn a_gm_logs_out_at_once_a_player_waits() {
+    let mut cfg = harness::test_config();
+    cfg.logout_delay = crate::game::map::login::LOGOUT_DELAY;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    let gms = Realm::new(cfg, store, startup, data(), None);
+    let mut a = Client::connect(&gms, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    assert_eq!(
+        logout_response(&mut a).await,
+        (LogoutResult::Success, LogoutSpeed::Instant)
+    );
+    let players = logout_realm();
+    let mut b = Client::connect(&players, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    assert_eq!(
+        logout_response(&mut b).await,
+        (LogoutResult::Success, LogoutSpeed::Delayed)
+    );
+}
