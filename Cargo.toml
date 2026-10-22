@@ -38,6 +38,8 @@ wow_items = { git = "https://github.com/12932/wow_messages", rev = "361d2ed82f35
 # 1.12 only: no TBC or Wrath headers (and with them no hmac).
 wow_srp = { git = "https://github.com/gtker/wow_srp.git", rev = "9c5382a2915850efc69f05d7985ab06b3ec13163", default-features = false, features = ["srp-default-math"] }
 walkdir = "2.5.0"
+# Visibility's decisions, worked out across threads (`map/visibility.rs`).
+rayon = "1.12.0"
 
 # The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
 # decoded off the map's thread and handed in (`load_nav_file`).
@@ -125,6 +127,13 @@ harness = false
 # members, from 1 map or 8 (`cargo bench --bench chat`, docs/PERFORMANCE.md).
 [[bench]]
 name = "chat"
+harness = false
+
+# Visibility's refresh in a crowd of 100 to 3,000 players all in sight of
+# each other, moving in step or at random (`cargo bench --bench visibility`,
+# docs/PERFORMANCE.md).
+[[bench]]
+name = "visibility"
 harness = false
 
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,

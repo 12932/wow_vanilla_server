@@ -11,8 +11,10 @@
 //! "bytes_out":..,"disconnects":{"budget":0,"flood":0,"stall":0},
 //! "cpu_secs":..,"rss_kb":..,"maps":[{"map":1,"instance":0,"players":880,
 //! "awake":312,"mailbox":0,"updates_us":[..],"events":4400,"events_us":..,
-//! "biggest_queue":..,"queued":..,"steps_us":{"visibility":..}}]}`, its counters since start-up (the
-//! reader takes differences), `updates_us` the second's.
+//! "biggest_queue":..,"queued":..,"visibility_waiting":..,"steps_us":{"visibility":..}}]}`, its
+//! counters since start-up (the reader takes differences), `updates_us` the second's;
+//! `visibility_waiting` the most objects an update of the second left for the next to work out (over
+//! `[visibility] refresh_budget_ms`, or marked after its visibility).
 
 use std::io::Write;
 use std::sync::Arc;
@@ -71,6 +73,7 @@ struct Sample {
     events_us: u64,
     biggest_queue: usize,
     queued: usize,
+    visibility_waiting: usize,
     /// Each update step's time over the second, by name.
     steps_us: std::collections::BTreeMap<&'static str, u64>,
 }
@@ -82,6 +85,7 @@ pub struct Sampler {
     steps_us: std::collections::BTreeMap<&'static str, u64>,
     events: u64,
     events_us: u64,
+    visibility_waiting: usize,
     due: Instant,
 }
 
@@ -92,6 +96,7 @@ impl Default for Sampler {
             steps_us: std::collections::BTreeMap::new(),
             events: 0,
             events_us: 0,
+            visibility_waiting: 0,
             due: Instant::now() + Duration::from_secs(1),
         }
     }
@@ -112,6 +117,7 @@ impl Sampler {
     /// handed over, with `mailbox` events waiting.
     pub fn update(&mut self, map: &Map, mailbox: usize) {
         self.updates_us.push(micros(map.stats.last_update));
+        self.visibility_waiting = self.visibility_waiting.max(map.visibility_dirty.len());
         STEPS.with(|steps| {
             for (name, took) in steps.borrow_mut().drain(..) {
                 *self.steps_us.entry(name).or_default() += took.as_micros() as u64;
@@ -139,6 +145,7 @@ impl Sampler {
             events_us: std::mem::take(&mut self.events_us),
             biggest_queue: biggest,
             queued,
+            visibility_waiting: std::mem::take(&mut self.visibility_waiting),
             steps_us: std::mem::take(&mut self.steps_us),
         };
         SAMPLES.lock().push(sample);

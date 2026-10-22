@@ -101,6 +101,8 @@ pub mod trinkets;
 pub mod ubrs_stadium;
 pub mod vendor;
 pub mod views;
+#[doc(hidden)]
+pub mod vis_bench;
 pub mod visibility;
 pub mod world;
 pub mod world_states;
@@ -471,7 +473,7 @@ pub struct Map {
     pub tiles_unloading: bool,
     pub grid: Grid,
     /// Objects whose visibility must be worked out at the next update.
-    pub visibility_dirty: ahash::AHashSet<Guid>,
+    pub visibility_dirty: visibility::Dirty,
     /// Objects each observer must be told to forget at the next update.
     pub forget: AHashMap<Guid, Vec<Guid>>,
     /// Each observer's blocks for the coming update.
@@ -1112,7 +1114,7 @@ impl Map {
             terrain: None,
             tiles_unloading: false,
             grid: Grid::new(),
-            visibility_dirty: ahash::AHashSet::new(),
+            visibility_dirty: visibility::Dirty::default(),
             forget: AHashMap::new(),
             batches: AHashMap::new(),
             create_cache: AHashMap::new(),
@@ -1438,7 +1440,7 @@ impl Map {
         }
     }
 
-    fn insert_player(&mut self, mut p: Player) {
+    pub(crate) fn insert_player(&mut self, mut p: Player) {
         p.known.clear();
         p.observers.clear();
         // A bank opened in another world is shut (Thistle Tea's
@@ -1446,6 +1448,7 @@ impl Map {
         p.misc.banker = None;
         p.cell = grid::cell_of(p.position().x, p.position().y);
         p.vis_anchor = p.position();
+        p.side_cell = None;
         // The client's first move is checked from where it came in.
         p.move_check = Some((p.position(), self.now));
         self.grid.insert(p.guid, p.cell);

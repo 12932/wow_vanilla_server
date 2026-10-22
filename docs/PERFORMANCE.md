@@ -1021,3 +1021,102 @@ second the outbound path (about 2 µs of CPU a packet) fills clients' queues to 
 known pairs well inside sight skipped); the fan-out batched per observer or moved off the map's thread; back-pressure
 on the mailbox (a mover's queued heartbeats coalesced); the writer's cost a packet; a crowd's creates and the login's
 GM commands at arrival (placement held at about 45 a second).
+
+## Visibility in a crowd (2026-10-22)
+
+The drill's first cost, visibility's refresh, made cheap (`map/visibility.rs`, `map/grid.rs`). Before, each refresh
+of a player looked at every player in its 7 by 7 cells both ways (do they see it; does it see them), with
+`death::can_see` and several hash lookups a pair, then went through everything the player knew and everyone who knew
+it, and re-ran the zone, the area conditions and the tiles ahead: about 0.1 µs a pair, and a crowd moving in step
+refreshes all at once, so the square of the crowd in one update (92 ms at 880 on one core, 2.3 s at 3,000).
+
+### What changed
+
+1. **The quick path: what a move can't change is skipped.** An object is *plain* when who sees it, and whom it sees,
+   turns on distance alone (`visibility::plain_now`: not stealthed or invisible, not a ghost, not concealed, not a
+   spirit healer, a trap or a transport, not on a flight, not looking from elsewhere, not between maps); between two
+   plain objects `can_see` is always true. Each grid entry now carries its object's *anchor* (where its visibility
+   was last worked out) and whether its own last refresh found it plain; `visibility::moved` takes the flag off once
+   the object strays more than `DRIFT` (16 yards, twice `MOVE_THRESHOLD`) from its anchor or stops being plain, and
+   anything marked to be worked out whole (`visibility_dirty.insert`: an arrival, a teleport, a change of state) is
+   taken as not plain by the others until its own refresh. The invariant (K, in the module's doc): of two plain
+   objects whose anchors are within `radius - DRIFT` of each other, the player knows the other. So a plain object
+   that moved `delta` skips, without a lookup, every plain object whose anchor is within `radius - DRIFT - delta` of
+   it (75 yards at 100, as the brief's "sight less twice the threshold", with the drift's 16 yards spent on the
+   anchors), counting them as known; and two plain objects in the ring beyond are decided without `can_see`.
+2. **One decision a pair.** A chunk's refreshes are numbered in the grid; a pair two of them share is decided by the
+   earlier, both ways.
+3. **Whole cells.** A cell with nothing in it not plain, its farthest corner within `radius - 2 DRIFT - delta`, is
+   skipped without a look at its objects (its counts kept per cell); one wholly past the margin likewise (anything
+   known there shows in the counts, and only then are what the player knows, and who knows it, gone through).
+4. **Side work at a cell crossed.** The zone (`world::update_zone`, with exploration, the area's auras and the
+   free-for-all flag), the creatures' area for conditions and the tiles ahead are done when the object has left the
+   50-yard cell they were last done in (`side_cell`), or its refresh is a whole one; not every 8 yards.
+5. **Decisions across threads.** An update's refreshes go in chunks of 128: the side work on the map's thread, then
+   the decisions, read only (`&Map` is `Sync`), on a rayon pool of `[visibility] refresh_threads` (0: the machine's
+   cores, up to 8; chunks under 16 stay on the map's thread), then applied in order on the map's thread, each
+   checked again as it is applied. The serial and the parallel give the same creates in the same packets and the
+   same forgets, update after update (`tests_visibility::decisions_across_threads_are_the_ones_on_the_maps`).
+6. **A budget an update.** `visibility_dirty` keeps its marks oldest first; past `[visibility] refresh_budget_ms`
+   (10 ms) an update stops between chunks and leaves the rest, oldest first, for the next (at least a chunk an
+   update). The stats file's `visibility_waiting` is the most an update of the second left.
+
+Also: each grid entry is found by its slot, not by a scan of its cell (a crowd's cell has hundreds), and two triggers
+were missing: `.gm on`/`off` changed what a game master sees only at their next steps, and a release to a ghost in
+the same map only at the graveyard's teleport. Both are marked now.
+
+What a client sees is as before, but for the side work's timing: a zone or area change (its world states, channels,
+exploration, area auras) is noticed once the player crosses a cell, up to about 50 yards late, not within 8. Over the
+budget, a refresh waits for a later update.
+
+### Measured
+
+`benches/visibility.rs` (`cargo bench --bench visibility`): a crowd on a disc 60 yards across, all in sight of each
+other (the drill's), and on one 300 across (`wide`: each sees about half the others, many pairs at the edge of sight);
+`in_step` refreshes the whole crowd after a 9-yard step, `random` one in 23 (an update at random), `one` one player.
+`before` is each refresh alone and whole, as before. On 4 cores of a 32-core box (medians):
+
+| Case | 100 | 880 | 2,000 | 3,000 |
+|---|---|---|---|---|
+| `in_step`, before | 0.77 ms | 89 ms | 970 ms | 2.54 s |
+| `in_step`, quick, the map's thread | 0.042 ms | 0.89 ms | 3.7 ms | 7.9 ms |
+| `in_step`, quick, 4 threads | 0.042 ms | 0.50 ms | 1.5 ms | 2.8 ms |
+| `random`, before | 31 µs | 3.8 ms | 50 ms | 113 ms |
+| `random`, quick, 4 threads | 3 µs | 36 µs | 109 µs | 179 µs |
+| `one`, before | 8.4 µs | 144 µs | 629 µs | 1.0 ms |
+| `one`, quick | 1.2 µs | 5.6 µs | 16 µs | 24 µs |
+| `wide` in step, before | 0.50 ms | 41 ms | 276 ms | 801 ms |
+| `wide` in step, quick, the map's thread | 0.11 ms | 8.4 ms | 62 ms | 146 ms |
+| `wide` in step, quick, 4 threads | 0.08 ms | 2.5 ms | 15 ms | 35 ms |
+
+By step, on the map's thread: whole cells halve `in_step` (1.65 to 0.92 ms at 880, 7.5 to 3.8 ms at 2,000); the
+cells past the margin take a quarter off `wide` (85 to 62 ms at 2,000); one decision a pair is within the noise in
+both (the pairs it saves are the cheap ones the quick path decides without `can_see`). What is left in step is the
+skip test itself, about a nanosecond a pair in the crowd's own cells, and each refresh's own bookkeeping (about
+0.5 µs). From 880 to 3,000 in step it grows 5.6 times for 3.4 times the crowd.
+
+The drill at 200 bots (peon's `scripts/drill.sh 200 30`, the server on 4 cores, peon on 4 others, the box shared):
+visibility's mean an update fell from 0.56 / 0.73 / 0.62 ms (out / back / random) to 0.070 / 0.073 / 0.062 ms, and
+Kalimdor's update p50 / p99 from 3.2 / 6.4, 3.9 / 6.5 and 2.7 / 5.8 ms to 2.1 / 4.3, 2.1 / 4.4 and 2.1 / 4.7 ms;
+broadcasts delivered and their latency as before (100.7 to 102.9%, p99 2 to 5 ms).
+
+### How it is tested
+
+`src/game/tests_visibility.rs`, on `vis_bench::Crowd` (a map with no task, the players put in directly): the quick
+path against each refresh alone and whole, after every update of a 200-update walk of 120 players with three changes
+of state an update (invisibility on and off, a ghost and risen, `.gm` on and off, teleports, a view from elsewhere),
+three seeds, every player's knowledge equal; the threads against the map's thread (creates, packets and forgets);
+the budget (a chunk an update, oldest first, the same knowledge at the end); and each change of state among a crowd
+whose pairs the quick path would skip: invisibility, a ghost, `.gm`, a flight (noticed at its first move, nothing
+marking its take-off), a teleport, a view from elsewhere, and a jump past `DRIFT`. The grid's slots have a test of
+their own. The fast suite, the extended suite and the client check pass (`tests_p12l_nefarian`'s class call fails
+before and after).
+
+### Risks, and what is next
+
+- **A change of state with no mark.** The quick path trusts that whatever makes an object stop being plain marks it
+  (`visibility_dirty.insert`, `stealth_changed`) or happens as it moves (`moved` checks). Every such change found has
+  one; one missed would leave a pair as it was until either moves past the quick path's reach.
+- **The zone a cell late** (above).
+- Next: the in-step crowd's remaining cost is the skip test over the crowd's own cells; anchors kept per cell as a
+  bounding box would let more whole cells go. The fan-out of movement (the drill's second cost) is untouched.
