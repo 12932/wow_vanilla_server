@@ -358,8 +358,21 @@ impl Client {
         self.teleport_order
     }
 
+    /// Send a message as the session gets it from the connection's reader.
+    /// A `MSG_MOVE_TELEPORT_ACK` goes as a 1.12.1 client's bytes, through
+    /// the reader's decoding ([`Client::send_wire`]): wow_messages writes
+    /// it unlike the client ([`conn::teleport_ack_body`]).
     pub async fn send(&self, msg: impl Into<ClientOpcodeMessage>) {
         let mut msg = msg.into();
+        if let ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(ack) = &msg {
+            let body = crate::game::conn::teleport_ack_body(ack);
+            assert!(
+                self.send_wire(crate::game::conn::MSG_MOVE_TELEPORT_ACK, &body)
+                    .await,
+                "a teleport's acknowledgement is read"
+            );
+            return;
+        }
         self.at_a_mailbox(&mut msg).await;
         self.tx
             .send(crate::game::conn::Inbound::Msg(msg))
@@ -387,6 +400,17 @@ impl Client {
         if slot.is_zero() && self.realm.registry.online(self.guid).is_some() {
             *slot = mailbox_for(&self.realm, self.guid).await;
         }
+    }
+
+    /// Send a packet's body as a client writes it, decoded as the
+    /// connection's reader decodes it (`conn::decode`): false if it reads
+    /// nothing from it, and nothing is sent.
+    pub async fn send_wire(&self, opcode: u32, body: &[u8]) -> bool {
+        let Ok(Some(inbound)) = crate::game::conn::decode(opcode, body.to_vec()) else {
+            return false;
+        };
+        self.tx.send(inbound).await.expect("the session is running");
+        true
     }
 
     /// Send a packet as raw bytes, as the session gets those wow_messages

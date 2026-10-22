@@ -405,3 +405,40 @@ async fn the_reader_reads_movement_acknowledgements() {
         }
     }
 }
+
+/// `MSG_MOVE_TELEPORT_ACK` as a 1.12.1 client writes it: the whole GUID,
+/// the counter and the time, 16 bytes (mangos-classic's
+/// `HandleMoveTeleportAckOpcode`), read by hand; the packed form wow_messages
+/// writes is still read, by its size.
+#[tokio::test]
+async fn a_teleport_ack_is_read_with_the_whole_guid_or_packed() {
+    let mut r = reader();
+    let full = [
+        &0x0000_0000_0001_0203u64.to_le_bytes()[..],
+        &7u32.to_le_bytes(),
+        &1234u32.to_le_bytes(),
+    ]
+    .concat();
+    match r.msg(0xC7, &full).await {
+        ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(m) => {
+            assert_eq!(m.guid, Guid::new(0x1_0203));
+            assert_eq!(m.movement_counter, 7);
+            assert_eq!(m.time, Duration::from_millis(1234));
+        }
+        other => panic!("{other}"),
+    }
+    // A packed GUID: its mask, its three bytes set.
+    let packed = [
+        &[0b0111, 0x03, 0x02, 0x01][..],
+        &7u32.to_le_bytes(),
+        &1234u32.to_le_bytes(),
+    ]
+    .concat();
+    match r.msg(0xC7, &packed).await {
+        ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(m) => {
+            assert_eq!(m.guid, Guid::new(0x1_0203));
+            assert_eq!((m.movement_counter, m.time.as_millis()), (7, 1234));
+        }
+        other => panic!("{other}"),
+    }
+}
