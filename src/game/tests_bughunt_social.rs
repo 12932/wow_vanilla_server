@@ -409,3 +409,50 @@ async fn a_group_made_in_a_battleground_leaves_its_raid_roster_alone() {
     .await;
     assert!(!sent_roster_with(&mut d, gc).await, "Dave keeps his raid's");
 }
+
+/// `join_all` asked whether a player was queued under one lock, and queued
+/// them under another: two joins at once (their own and their leader's
+/// for the group, on two maps) both passed, and the player held two slots
+/// for one battleground. Joins raced on threads queue them once.
+#[test]
+fn two_joins_at_once_queue_a_player_once() {
+    use crate::game::battlegrounds::{self, Entrant};
+    use crate::game::registry::Team;
+    let realm = harness::realm();
+    let warsong = 2;
+    for round in 0..300u32 {
+        let g = guid::player(10_000 + round);
+        let who = [Entrant {
+            guid: g,
+            team: Team::Alliance,
+            level: 20,
+            deserter: false,
+            inside: false,
+        }];
+        let start = std::sync::Barrier::new(4);
+        let ok = std::thread::scope(|s| {
+            let joins: Vec<_> = (0..4)
+                .map(|_| {
+                    s.spawn(|| {
+                        start.wait();
+                        battlegrounds::join_all(&realm, &who, warsong, 0).is_ok()
+                    })
+                })
+                .collect();
+            joins
+                .into_iter()
+                .filter_map(|j| j.join().ok())
+                .filter(|ok| *ok)
+                .count()
+        });
+        let held = realm
+            .social
+            .battlegrounds
+            .lock()
+            .slots(g)
+            .iter()
+            .filter(|(_, bg)| *bg == warsong)
+            .count();
+        assert_eq!((ok, held), (1, 1), "round {round}");
+    }
+}

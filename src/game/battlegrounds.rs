@@ -468,8 +468,10 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
     }
     let bracket = bracket_for(bg, who[0].level);
     let team = who[0].team;
-    {
-        let bgs = realm.social.battlegrounds.lock();
+    // Asked again under the lock that queues them: a player's own join and
+    // their leader's for the group, on two maps at once, both passed this
+    // before either queued, and had two slots for one battleground.
+    let taken = |bgs: &Battlegrounds| {
         if who
             .iter()
             .any(|e| bgs.queued_for(e.guid, bg) || bgs.match_of_bg(e.guid, bg).is_some())
@@ -479,7 +481,9 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
         if who.iter().any(|e| !bgs.has_slot(e.guid, bg)) {
             return Err(Refused::NoFreeSlot);
         }
-    }
+        Ok(())
+    };
+    taken(&realm.social.battlegrounds.lock())?;
     if who.iter().any(|e| e.deserter) {
         return Err(Refused::Deserter);
     }
@@ -504,6 +508,7 @@ pub fn join_all(realm: &Realm, who: &[Entrant], bg: u32, instance: u32) -> Resul
     let now = Instant::now();
     let direct = {
         let mut bgs = realm.social.battlegrounds.lock();
+        taken(&bgs)?;
         if instance > 0 {
             // The match picked from the list, if it has room for them all.
             let Some(m) = bgs.matches.get_mut(&instance).filter(|m| {
