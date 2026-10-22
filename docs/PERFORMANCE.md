@@ -1252,3 +1252,50 @@ introductions at 2,000, 3.4 ms at the end of the login's event, and 1.1 ms more 
 map's time per newcomer, the visibility refresh's per-pair cost that stage A's quick path cuts. The drill at 200
 bots (the server and peon on 4 cores each, a 1 s ramp, ramp-bound at 165 placed a second) is unchanged: update p99 5.2 ms at
 random, every broadcast delivered within 3 ms p99; its arrival events took 172 µs on average, from 338.
+
+## The drill, more like players (2026-10-22)
+
+The Tanaris drill's bots are now more like a crowd of players (peon's `--mode drill`): every Alliance class, made
+ready as a raider of it is (`.character spells`, the quests' spells and reagents), hunters with their pets out
+(`.pet`, `Call Pet` if it isn't) and warlocks with their Voidwalkers (summoned as they gather, and at random standing
+for it when theirs is gone); half of them (drawn from the seed) with a weapon and a chest enchantment for their class
+(`.gear enchant`, below: Crusader, +15 agility, +30 spell damage or +55 healing; +100 health, +50 mana or +3 stats);
+and over the random phase, priests, mages, druids and paladins buff the players within 28 yd who lack it (Power Word:
+Fortitude, Arcane Intellect, Mark of the Wild; Blessing of Kings for paladins, shamans and druids, Might for warriors,
+rogues and hunters, Wisdom for the rest): `CMSG_SET_SELECTION` and `CMSG_CAST_SPELL` at their highest rank at 30,
+each bot's first at random in the phase's first half, then one every 1.6 to 5 s as the global cooldown, the server's
+answer and its own mana let it, and again where one wears off. The phases and their measures are as they were; the
+summary counts, a phase, the buffs cast, gone off and refused, the pets' calls and summons, and the pets out.
+
+Two fixes on the server's side, for what the drill showed:
+
+- **A unique item isn't worn twice.** A bot wore two of one unique ring: `.gear` fills each finger from the same pool,
+  and the store's way in for a new item worn (`add_item_to` to an equipment slot, also a purchase into one) didn't
+  look at `max_count`, 1.12's only uniqueness (no 1.12 item has mangos's unique-equipped flag, which
+  `CanEquipUniqueItem` checks; mangos's `CanEquipNewItem` checks the count through `CanTakeMoreSimilarItems`).
+  `may_equip_new` now refuses a unique one beside the one carried ("can't carry more"), as every other way in did
+  (loot, quest rewards, mail, trade, `.additem`). `.gear` also skips a unique item whose name is worn already: the
+  battlegrounds' rings are one name at several levels, alike to see.
+- **`.gear enchant <slot> <enchantment>`**, a GM's: the item worn in a slot (0 to 18, or head, chest, mainhand ...)
+  given a lasting enchantment (`SpellItemEnchantment`'s id) in its permanent slot, through the enchanter's path
+  (`enchant::enchant_item`: its stats, procs and glow).
+
+Tested in `tests_gear_unique` (fast: `.gear` over unique rings, the refusals every way, the command) and
+`tests_gear` (the real items at 28, ten `.gear`s, Crusader on the weapon); peon's tests drive a drill bot's casts.
+
+At 200 bots (the server and peon on 4 cores each of a busy 32-core box, a 25 s ramp; three runs): 30 priests, 23 mages,
+20 paladins and 4 druids cast 569 to 576 buffs in the random phase, every one gone off, none refused; 18 hunters and
+19 warlocks had 30 to 33 pets out at the random phase's end (creatures kill some; they come again). The server, at
+random:
+
+| | Before (stage C) | Now |
+|---|---|---|
+| Kalimdor update p50 / p99 ms | 2.8 / 5.2 | 3.1 / 9.8 to 14.3 |
+| Broadcasts got / due | 100.8% | 100.8% |
+| Broadcast latency p50 / p99 ms | 0 / 3 | 1 / 7 to 14 |
+| Packets out a second | 169,933 | 185,331 |
+| CPU | 1.33 | 0.68 |
+
+The update's dearest steps are now the creatures' (despawns about 1 ms an update, auras 0.7 to 1.0, values 0.5, pets
+0.3, as the pets and the buffs' auras come in), not visibility; the before is the earlier drill on a quieter box (its
+cores to itself), so the update's p99 and the latency are the box's as much as the crowd's.
