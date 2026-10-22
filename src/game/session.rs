@@ -960,16 +960,25 @@ impl Session {
         {
             return R::CharCreateNameInUse;
         }
-        let Some(mut row) = self.realm.store.load(guid::counter(g)).await else {
+        let Some(row) = self.realm.store.load(guid::counter(g)).await else {
             return R::CharCreateError;
         };
         if *row.account != *self.account || row.at_login & AT_LOGIN_RENAME == 0 {
             return R::CharCreateError;
         }
+        // Written and awaited, not saved: the store's thread decides who of
+        // two at once has the name (a rename, a character made).
+        match self
+            .realm
+            .store
+            .rename(row.guid, &name, row.at_login & !AT_LOGIN_RENAME)
+            .await
+        {
+            Ok(()) => {}
+            Err(CreateError::NameInUse) => return R::CharCreateNameInUse,
+            Err(CreateError::Failed) => return R::CharCreateError,
+        }
         info!("{} renamed {} to {name}", self.account, row.name);
-        row.name = name.clone();
-        row.at_login &= !AT_LOGIN_RENAME;
-        self.realm.store.save(row);
         self.realm.registry.remove_name(g);
         self.realm.registry.add_name(NameEntry {
             guid: g,
