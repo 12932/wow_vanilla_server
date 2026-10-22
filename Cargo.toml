@@ -127,6 +127,13 @@ harness = false
 name = "chat"
 harness = false
 
+# The outbound path: the writer task, the map's fan-out to observers, and
+# both to loopback sockets (`cargo bench --bench outbound`,
+# docs/PERFORMANCE.md).
+[[bench]]
+name = "outbound"
+harness = false
+
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,
 # wow_messages, the navmesh, compression): the suite takes a third less time,
 # and the crate itself builds as quickly as before. See docs/PERFORMANCE.md.

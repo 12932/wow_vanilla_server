@@ -3,12 +3,12 @@
 //! to the client through an [`Outbound`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Notify, mpsc};
 use tracing::{debug, warn};
 use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, HeaderCrypto};
 use wow_world_messages::Guid;
@@ -39,6 +39,16 @@ pub fn encode<M: ServerMessage>(m: &M) -> Option<Arc<[u8]>> {
     Some(Arc::from(buf))
 }
 
+/// Placeholder until corking lands.
+pub struct Cork;
+
+impl Cork {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Cork
+    }
+}
+
 /// Where packets for one client go: a queue the writer task drains, with
 /// a byte budget. A client too slow to keep its queue under the budget is
 /// disconnected: dropping some of its packets would leave it out of step
@@ -53,8 +63,6 @@ struct OutboundInner {
     /// the writer takes a batch at a time (`recv_many`).
     tx: mpsc::UnboundedSender<Arc<[u8]>>,
     shared: Arc<Shared>,
-    /// The budget's bytes, all of them.
-    capacity: usize,
     overflowed: AtomicBool,
     /// Frames wait in `held` (see [`Outbound::hold`]).
     holding: AtomicBool,
@@ -131,8 +139,12 @@ impl Order {
 
 /// What a queue's two ends share.
 struct Shared {
-    /// Bytes that may still be queued; the writer gives back what it takes.
-    budget: Semaphore,
+    /// Bytes queued and not yet taken by the writer, which takes back what
+    /// it takes: a plain counter (nothing waits on it), one atomic add a
+    /// frame.
+    queued: AtomicUsize,
+    /// The budget's bytes, all of them.
+    capacity: usize,
     /// [`Outbound::close`] was called. tokio's senders can't close their
     /// channel, so from then on the queue's far end takes nothing more, and
     /// what was queued is dropped unwritten.
@@ -170,7 +182,7 @@ impl Shared {
 impl std::fmt::Debug for Outbound {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Outbound")
-            .field("budget", &self.inner.shared.budget.available_permits())
+            .field("queued", &self.inner.shared.queued.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -224,14 +236,14 @@ impl Frames {
 fn queue(budget: usize) -> (Outbound, Frames) {
     let (tx, rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {
-        budget: Semaphore::new(budget),
+        queued: AtomicUsize::new(0),
+        capacity: budget,
         closed: AtomicBool::new(false),
         closing: Notify::new(),
     });
     let outbound = Outbound {
         inner: Arc::new(OutboundInner {
             tx,
-            capacity: shared.budget.available_permits(),
             shared: shared.clone(),
             overflowed: AtomicBool::new(false),
             holding: AtomicBool::new(false),
@@ -302,7 +314,13 @@ impl Outbound {
     /// A queue nothing drains, with an unlimited budget, and the receiving
     /// end for tests to read.
     pub fn detached() -> (Self, Frames) {
-        queue(Semaphore::MAX_PERMITS)
+        queue(usize::MAX >> 1)
+    }
+
+    /// A queue with `budget` bytes, and its far end, for a writer
+    /// ([`run_writer`]) or a test or benchmark to drain.
+    pub fn with_budget(budget: usize) -> (Self, Frames) {
+        queue(budget)
     }
 
     /// Queue a frame the budget has been taken for: false if the client is
@@ -315,26 +333,17 @@ impl Outbound {
     /// over budget, its connection is closed.
     pub fn send_frame(&self, frame: Arc<[u8]>) -> bool {
         if self.inner.holding.load(Ordering::Acquire) {
-            let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
+            let n = frame.len();
             let mut held = self.inner.held.lock();
             // Not released since: it waits behind what is held.
             if self.inner.holding.load(Ordering::Acquire) {
-                return match self.inner.shared.budget.try_acquire_many(n) {
-                    Ok(permit) => {
-                        permit.forget();
-                        held.push(frame);
-                        !self.is_closed()
-                    }
-                    Err(_) => {
-                        drop(held);
-                        if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
-                            crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
-                            warn!("a client's outbound queue is over budget; disconnecting it");
-                        }
-                        self.close();
-                        false
-                    }
-                };
+                if !self.take_budget(n) {
+                    drop(held);
+                    self.overflow();
+                    return false;
+                }
+                held.push(frame);
+                return !self.is_closed();
             }
         }
         self.send_frame_unheld(frame)
@@ -343,21 +352,32 @@ impl Outbound {
     /// Queue a frame past any hold: for what names no object a create could
     /// be waiting for, and is waited on (a pong, a query's answer).
     pub fn send_frame_unheld(&self, frame: Arc<[u8]>) -> bool {
-        let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
-        match self.inner.shared.budget.try_acquire_many(n) {
-            Ok(permit) => {
-                permit.forget();
-                self.enqueue(frame)
-            }
-            Err(_) => {
-                if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
-                    crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
-                    warn!("a client's outbound queue is over budget; disconnecting it");
-                }
-                self.close();
-                false
-            }
+        if !self.take_budget(frame.len()) {
+            self.overflow();
+            return false;
         }
+        self.enqueue(frame)
+    }
+
+    /// `n` bytes of the budget for a frame: false, and nothing taken, if
+    /// they aren't left.
+    fn take_budget(&self, n: usize) -> bool {
+        let shared = &self.inner.shared;
+        let before = shared.queued.fetch_add(n, Ordering::Relaxed);
+        if before.saturating_add(n) <= shared.capacity {
+            return true;
+        }
+        shared.queued.fetch_sub(n, Ordering::Relaxed);
+        false
+    }
+
+    /// Over budget: the client is disconnected, and counted once.
+    fn overflow(&self) {
+        if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
+            crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
+            warn!("a client's outbound queue is over budget; disconnecting it");
+        }
+        self.close();
     }
 
     /// From now on, what is sent waits, in the order it was sent, for
@@ -421,9 +441,7 @@ impl Outbound {
 
     /// Bytes queued for the writer, not yet written.
     pub fn queued_bytes(&self) -> usize {
-        self.inner
-            .capacity
-            .saturating_sub(self.inner.shared.budget.available_permits())
+        self.inner.shared.queued.load(Ordering::Relaxed)
     }
 
     /// Closed, or the writer has gone.
@@ -614,7 +632,7 @@ pub const MAX_AUTH_SESSION: usize = 8 * 1024;
 /// progress for `stall`: a client that doesn't read (its window shut, its
 /// acknowledgements still coming) holds its socket and its frames no
 /// longer than that, nor past the close.
-pub(crate) async fn run_writer<W>(
+pub async fn run_writer<W>(
     mut write: W,
     mut encrypter: EncrypterHalf,
     mut frames: Frames,
@@ -640,7 +658,7 @@ pub(crate) async fn run_writer<W>(
         scratch.clear();
         let mut written = 0u64;
         let mut drained = 0usize;
-        for buf in &staging {
+        for buf in staging.drain(..) {
             drained += buf.len();
             if buf.len() < 4 {
                 continue;
@@ -656,11 +674,15 @@ pub(crate) async fn run_writer<W>(
                 );
                 continue;
             }
-            scratch.extend_from_slice(&encrypter.encrypt_server_header(size, opcode));
-            scratch.extend_from_slice(&buf[4..]);
+            // The frame's first four bytes are the header as the client reads
+            // it, size and opcode: copied whole, and the header encrypted
+            // where it lands.
+            let at = scratch.len();
+            scratch.extend_from_slice(&buf);
+            encrypter.encrypt(&mut scratch[at..at + 4]);
             written += 1;
         }
-        shared.budget.add_permits(drained);
+        shared.queued.fetch_sub(drained, Ordering::Relaxed);
         if scratch.is_empty() {
             continue;
         }
@@ -674,6 +696,10 @@ pub(crate) async fn run_writer<W>(
         }
         PACKETS_OUT.fetch_add(written, Ordering::Relaxed);
         crate::game::stats::BYTES_OUT.fetch_add(scratch.len() as u64, Ordering::Relaxed);
+        // A burst of creates doesn't keep its megabytes for good.
+        if scratch.capacity() > SCRATCH_KEPT {
+            scratch = Vec::with_capacity(16 * 1024);
+        }
     }
     // The senders, the reader and the session see the queue closed, and
     // what it held is let go.
@@ -685,6 +711,9 @@ pub(crate) async fn run_writer<W>(
     // same, as the write was.
     let _ = tokio::time::timeout(stall, write.shutdown()).await;
 }
+
+/// The most of its buffer a writer keeps between bursts.
+const SCRATCH_KEPT: usize = 1 << 20;
 
 /// Write all of `buf`, or fail once a write has taken nothing for `stall`.
 async fn write_within<W>(write: &mut W, mut buf: &[u8], stall: Duration) -> std::io::Result<()>
