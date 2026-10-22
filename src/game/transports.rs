@@ -714,7 +714,7 @@ pub fn restore(map: &mut crate::game::map::Map) {
         let Some(template) = realm.data.gameobject_templates.get(&r.entry) else {
             continue;
         };
-        map.add_gameobject(object(template, &r, on, pos));
+        map.add_gameobject(object(template, r, on, pos));
         map.globals.push(r.guid);
     }
 }

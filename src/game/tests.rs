@@ -4359,7 +4359,7 @@ pub(crate) mod transports {
         };
         let (booty_bay, ratchet) = (stop(0), stop(1));
         // Docked at Booty Bay, a minute before it leaves.
-        skip_to(&route, booty_bay.arrive_ms + 1000);
+        skip_to(route, booty_bay.arrive_ms + 1000);
         let mut a = Client::connect(&realm, "A");
         let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
         assert!(
@@ -4400,7 +4400,7 @@ pub(crate) mod transports {
         })
         .await;
         // A second and a half before it crosses (its round's end).
-        skip_to(&route, route.period - 1500);
+        skip_to(route, route.period - 1500);
         let by = a
             .wait_for("SMSG_TRANSFER_PENDING aboard", |m| match m {
                 ServerOpcodeMessage::SMSG_TRANSFER_PENDING(t) => t
@@ -4467,7 +4467,7 @@ pub(crate) mod transports {
             "{docked:?}"
         );
         // Standing still on deck, she is carried there with it.
-        skip_to(&route, ratchet.arrive_ms + 1000);
+        skip_to(route, ratchet.arrive_ms + 1000);
         let at_dock = move |m: &crate::game::map::Map| {
             let at = m.players[&ga].position();
             m.globals.contains(&boat)
@@ -4498,7 +4498,7 @@ pub(crate) mod transports {
                 .expect("a stop")
         };
         let (booty_bay, ratchet) = (stop(0), stop(1));
-        skip_to(&route, booty_bay.arrive_ms + 1000);
+        skip_to(route, booty_bay.arrive_ms + 1000);
         let mut a = Client::connect(&realm, "A");
         let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
         assert!(a.sees_within(boat, Duration::from_secs(20)).await);
@@ -4541,7 +4541,7 @@ pub(crate) mod transports {
         })
         .await;
         // Docked at Ratchet, on Kalimdor.
-        skip_to(&route, ratchet.arrive_ms + 1000);
+        skip_to(route, ratchet.arrive_ms + 1000);
         let pose = route.pose_at(crate::game::uptime_ms());
         assert_eq!(pose.map, 1);
         a.clear();
