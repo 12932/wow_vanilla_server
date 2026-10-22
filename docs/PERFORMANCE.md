@@ -1273,8 +1273,8 @@ Two fixes on the server's side, for what the drill showed:
   and the store's way in for a new item worn (`add_item_to` to an equipment slot, also a purchase into one) didn't
   look at `max_count`, 1.12's only uniqueness (no 1.12 item has mangos's unique-equipped flag, which
   `CanEquipUniqueItem` checks; mangos's `CanEquipNewItem` checks the count through `CanTakeMoreSimilarItems`).
-  `may_equip_new` now refuses a unique one beside the one carried ("can't carry more"), as every other way in did
-  (loot, quest rewards, mail, trade, `.additem`). `.gear` also skips a unique item whose name is worn already: the
+  `may_equip_new` now refuses a unique one beside the one carried ("can't carry more"), as the way into the bags
+  (`plan`, `plan_at`: `.additem`, loot and the rest) did. `.gear` also skips a unique item whose name is worn already: the
   battlegrounds' rings are one name at several levels, alike to see.
 - **`.gear enchant <slot> <enchantment>`**, a GM's: the item worn in a slot (0 to 18, or head, chest, mainhand ...)
   given a lasting enchantment (`SpellItemEnchantment`'s id) in its permanent slot, through the enchanter's path
