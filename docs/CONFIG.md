@@ -103,6 +103,14 @@ says so (`[visibility] battleground_yards` is 400 here and 533 in mangos).
 
 *Live* keys change at a reload; *restart* keys need a restart.
 
+### `[server]`
+
+The server's process.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `nice` | The server's niceness at start-up, -20 (the most CPU) to 19, on its every thread. Under 0 it needs the right (`CAP_SYS_NICE`: `setcap cap_sys_nice+ep`, a `nice` limit in limits.conf, systemd's `Nice=`); refused, it is logged and the server runs as started. With `sched_autogroup` on (as on many desktops), it weighs the server only against the rest of its session. | `0` | -20 to 19, clamped | restart |  |
+
 ### `[network]`
 
 Connections: queues, timeouts and limits.
@@ -116,6 +124,7 @@ Connections: queues, timeouts and limits.
 | `max_packets_per_sec` | Packets a client may send a second, sustained (three seconds' worth at once); a client that floods is disconnected. | `100` | 10 to 100000, clamped | restart |  |
 | `max_queries_per_sec` | Read-only queries (names, creatures, objects, items, quests, texts, times) a client may send a second, sustained (three seconds' worth at once), apart from the packets: a client walking into a crowd asks after everyone in it at once. One that floods them is disconnected. | `1000` | 10 to 1000000, clamped | restart |  |
 | `max_queued_packets` | Packets of a client's that may wait for its map at once. One more is not read from the client until the map has taken one: a map that falls behind holds its clients back, rather than queueing without end (a heartbeat waiting with nothing behind it is replaced by the client's next, and takes no more room). | `64` | 8 to 65536, clamped | restart |  |
+| `memory_guard_fraction` | The share of the machine's memory (its RAM, or the cgroup's limit if less) past which the server stops reading its clients until it is a twentieth under: back-pressure on the whole, as `max_queued_packets` is on each, never a crash. Logged as it engages and lets go. 0 never stops. | `0.8` | 0 to 1, clamped | live |  |
 | `max_overspeed_pings` | Pings a client may send in a row each less than 27 seconds after the last (the client pings every 30) before it is disconnected; 0 never disconnects. | `2` | 0 to 1000, clamped | restart | `MaxOverspeedPings` |
 | `auth_address` | Where the login server listens, `ip:port`. Every interface by default (decision 53); `127.0.0.1:3724` keeps it to this machine, as a load test should. | `"0.0.0.0:3724"` | any | restart | |
 | `world_address` | Where the world server listens, `ip:port`. Without `WOW_REALM_ADDRESS`, the realm list sends clients to `localhost` on its port. | `"0.0.0.0:8085"` | any | restart | |

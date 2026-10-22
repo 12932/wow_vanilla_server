@@ -7,6 +7,7 @@ pub mod auth;
 pub mod config;
 pub mod game;
 pub mod numeric;
+pub mod priority;
 pub mod server;
 pub mod setup;
 pub mod tracy;

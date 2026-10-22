@@ -189,6 +189,12 @@ settings! {
         /// queueing without end (a heartbeat waiting with nothing behind it
         /// is replaced by the client's next, and takes no more room).
         max_queued_packets: usize = 64, Clamp(8.0, 65_536.0), Restart, "";
+        /// The share of the machine's memory (its RAM, or the cgroup's
+        /// limit if less) past which the server stops reading its clients
+        /// until it is a twentieth under: back-pressure on the whole, as
+        /// `max_queued_packets` is on each, never a crash. Logged as it
+        /// engages and lets go. 0 never stops.
+        memory_guard_fraction: f64 = 0.8, Clamp(0.0, 1.0), Live, "";
         /// Pings a client may send in a row each less than 27 seconds after
         /// the last (the client pings every 30) before it is disconnected;
         /// 0 never disconnects.
@@ -888,10 +894,24 @@ pub fn scaled(v: u32, rate: f32) -> u32 {
     }
 }
 
+settings! {
+    /// The server's process.
+    pub struct ServerSection in "server" {
+        /// The server's niceness at start-up, -20 (the most CPU) to 19, on
+        /// its every thread. Under 0 it needs the right (`CAP_SYS_NICE`:
+        /// `setcap cap_sys_nice+ep`, a `nice` limit in limits.conf,
+        /// systemd's `Nice=`); refused, it is logged and the server runs as
+        /// started. With `sched_autogroup` on (as on many desktops), it
+        /// weighs the server only against the rest of its session.
+        nice: i32 = 0, Clamp(-20.0, 19.0), Restart, "";
+    }
+}
+
 /// The whole config: a field per section, named as its section.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
+    pub server: ServerSection,
     pub network: NetworkConfig,
     pub world: WorldConfig,
     pub visibility: VisibilityConfig,
@@ -915,6 +935,7 @@ pub struct ServerConfig {
 
 /// Every section, in the order they are printed.
 pub const SECTIONS: &[&Section] = &[
+    &ServerSection::SECTION,
     &NetworkConfig::SECTION,
     &WorldConfig::SECTION,
     &VisibilityConfig::SECTION,

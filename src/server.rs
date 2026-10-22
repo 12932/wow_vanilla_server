@@ -75,6 +75,7 @@ async fn async_main(start: Start) -> u8 {
     }
     crate::config::install(cfg);
     let cfg = crate::config::config();
+    crate::priority::apply(cfg.server.nice);
     // Before anything touches the store: one server a store, and the
     // world's port ours. A second server (the next process started before
     // the last has gone) stops here, not after it has migrated the store

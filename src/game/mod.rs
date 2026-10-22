@@ -20,6 +20,7 @@ pub mod instances;
 pub mod invasion;
 pub mod jaina;
 pub mod map;
+pub mod memory_guard;
 pub mod omen;
 pub mod registry;
 pub mod respawns;
@@ -1390,6 +1391,9 @@ pub struct RealmConfig {
     /// Packets of a client's that may wait for its map at once
     /// (`[network] max_queued_packets`).
     pub max_queued_packets: usize,
+    /// The share of the machine's memory past which the sessions stop
+    /// reading their clients (`[network] memory_guard_fraction`, 0 never).
+    pub memory_guard_fraction: f64,
     /// How seldom a `/who`, whois or inspect may come (`session::Cooldowns`):
     /// mangos's 5 s; none in the tests.
     pub packet_cooldown: Duration,
@@ -1469,6 +1473,7 @@ impl RealmConfig {
             max_packets_per_sec: c.network.max_packets_per_sec,
             max_queries_per_sec: c.network.max_queries_per_sec,
             max_queued_packets: c.network.max_queued_packets,
+            memory_guard_fraction: c.network.memory_guard_fraction,
             packet_cooldown: session::COOLDOWN,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
@@ -1836,6 +1841,7 @@ pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
         tokio::spawn(plot_realm(realm.clone()));
     }
     stats::start(&realm);
+    memory_guard::start(&realm);
     info!("wow_vanilla_server {}", crate::VERSION);
     info!(
         "world: listening on {}",

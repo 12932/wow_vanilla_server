@@ -326,10 +326,16 @@ impl Session {
             /// The connection is closed (over budget, taken over, its
             /// writer gone): the session goes with it.
             Closed,
+            /// The memory guard let go, or changed.
+            Guard,
         }
+        // The memory guard: while it is on, the client isn't read.
+        let mut guard = crate::game::memory_guard::watch();
         loop {
+            let held = *guard.borrow_and_update();
             let next = tokio::select! {
-                msg = inbound.recv() => Next::Packet(msg),
+                msg = inbound.recv(), if !held => Next::Packet(msg),
+                _ = guard.changed(), if held => Next::Guard,
                 ctl = self.control_rx.recv() => Next::Control(ctl),
                 () = outbound.closed() => Next::Closed,
             };
@@ -361,6 +367,7 @@ impl Session {
                         break;
                     }
                 }
+                Next::Guard => {}
                 Next::Packet(None) | Next::Control(None) | Next::Closed => break,
             }
         }
