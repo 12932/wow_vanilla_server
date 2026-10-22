@@ -551,9 +551,12 @@ async fn dispels_by_the_stack_diminishing_recovery_and_shared_areas() {
             let blizzard = data.spells.get(10).unwrap().clone();
             let (a, b) = (dummy(m, mage, 60, 10.0), dummy(m, mage, 60, 40.0));
             let now = m.now;
+            // Each its own dynamic object, as a cast's are.
+            let mut object = 0xF110_0000_0000_9000u64;
             for (target, n) in [(a, 2), (b, 1)] {
                 let at = m.position_of(target).unwrap();
                 for _ in 0..n {
+                    object += 1;
                     m.spells.areas.push(spells::Area {
                         caster: mage,
                         spell: blizzard.id,
@@ -564,7 +567,7 @@ async fn dispels_by_the_stack_diminishing_recovery_and_shared_areas() {
                         ends: now + Duration::from_secs(8),
                         next_tick: now,
                         period: Duration::from_secs(1),
-                        object: Guid::zero(),
+                        object: Guid::new(object),
                     });
                 }
             }
