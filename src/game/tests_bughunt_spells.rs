@@ -584,3 +584,77 @@ async fn a_cast_at_a_target_gone_fails_for_its_watchers() {
     })
     .await;
 }
+
+/// A ground area's ticks roll their hit with their caster's modifiers (a
+/// talent's spell hit, as Arcane Focus's), as its spell's other hits do
+/// (review 3's R3-20): a low caster with +78% hit lands nearly every tick
+/// on one far above them, rather than the 22% at worst.
+#[tokio::test]
+async fn ground_ticks_roll_with_their_casters_hit() {
+    use super::tests_p3_spells_kit::{dummy, health, pass, set_health};
+    use crate::game::map::spells;
+    const GROUND: u32 = 991_020;
+    const FOCUS: u32 = 991_021;
+    let realm = fast_realm(|d| {
+        d.spells.radii.insert(96, 5.0);
+        let mut ground = bare(GROUND, 4);
+        ground.family_name = 3;
+        ground.family_flags = 1;
+        ground.duration_index = LASTS_LONG;
+        ground.effects[0] = crate::game::data::spells::SpellEffect {
+            effect: spells::EFFECT_PERSISTENT_AREA_AURA,
+            aura: auras::AURA_PERIODIC_DAMAGE,
+            amplitude: 1_000,
+            base_points: 9,
+            base_dice: 1,
+            target_a: 18,
+            radius_index: 96,
+            bonus_coefficient: -1.0,
+            ..Default::default()
+        };
+        let mut focus = bare(FOCUS, 0);
+        focus.family_name = 3;
+        focus.duration_index = LASTS_LONG;
+        let mut e = aura(
+            auras::AURA_ADD_FLAT_MODIFIER,
+            spells::mods::OP_RESIST_MISS_CHANCE as i32,
+            78,
+            1,
+        );
+        e.item_type = 1;
+        effect(&mut focus, 0, e);
+        insert(d, [ground, focus]);
+    });
+    let (_c, g, map) = human(&realm, "BHGT", "Focused", Class::Mage).await;
+    let hits = map
+        .query(move |m| {
+            ready(m, g, 10, &[]);
+            m.spells.rolls = Some(true);
+            let f = m.realm.data.spells.get(FOCUS).unwrap().clone();
+            apply_template(m, g, g, &f);
+            let k = dummy(m, g, 60, 4.0);
+            set_health(m, k, 100_000);
+            let at = m.position_of(k);
+            spells::cast_triggered_with(
+                m,
+                g,
+                GROUND,
+                spells::Targets {
+                    dest: at,
+                    ..Default::default()
+                },
+            );
+            let mut hits = 0;
+            for _ in 0..20 {
+                let before = health(m, k);
+                pass(m, 1_000);
+                if health(m, k) < before {
+                    hits += 1;
+                }
+            }
+            hits
+        })
+        .await
+        .unwrap();
+    assert!(hits >= 15, "{hits} of 20 landed");
+}

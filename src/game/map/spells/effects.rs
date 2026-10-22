@@ -2181,7 +2181,10 @@ pub fn tick_areas(map: &mut Map) {
                     // going on (mangos's `PeriodicTick` for a persistent
                     // area, Thistle Tea's ground ticks); an aura's DoT
                     // doesn't.
-                    let hit = outcome::roll_hit(map, area.caster, g, s, &Mods::default());
+                    // With the caster's modifiers (Arcane Focus,
+                    // Suppression), as its spell's other hits.
+                    let m = super::mods::for_spell(map, area.caster, s);
+                    let hit = outcome::roll_hit(map, area.caster, g, s, &m);
                     if !hit.lands() {
                         outcome::send_miss(map, area.caster, g, area.spell, hit);
                         continue;
