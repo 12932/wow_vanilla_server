@@ -580,14 +580,24 @@ async fn a_creature_just_spawned_lets_those_about_it_be_for_six_seconds() {
             put(m, ga, off(0.0, 0.0, 0.0));
             hardy(m, ga);
             let start = m.now;
-            let calm = creature_at(m, ga, crate::game::tests_p7_combat::WATCHER, off(4.0, 0.0, 0.0));
+            let calm = creature_at(
+                m,
+                ga,
+                crate::game::tests_p7_combat::WATCHER,
+                off(4.0, 0.0, 0.0),
+            );
             let seen = turns(m, 8_000, |m| (m.now, p3_attacking(m, calm, ga)));
             let first = seen
                 .iter()
                 .find(|(_, on)| *on)
                 .map(|(at, _)| at.duration_since(start));
             // Attacked inside its grace, it fights at once.
-            let struck = creature_at(m, ga, crate::game::tests_p7_combat::WATCHER, off(-4.0, 0.0, 0.0));
+            let struck = creature_at(
+                m,
+                ga,
+                crate::game::tests_p7_combat::WATCHER,
+                off(-4.0, 0.0, 0.0),
+            );
             ai::attacked(m, struck, ga);
             let fights = turns(m, 500, |m| p3_attacking(m, struck, ga))
                 .into_iter()

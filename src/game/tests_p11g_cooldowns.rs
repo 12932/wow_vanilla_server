@@ -419,3 +419,283 @@ async fn a_rank_cast_tells_its_client_of_every_known_rank_of_its_category() {
         .await;
     }
 }
+
+/// Food and drink as the data has them: Food's and Drink's spells wait a
+/// minute for their categories (11 and 59) and have no global cooldown;
+/// the items that cast them have none of their own and a second for the
+/// category (Tough Jerky, Tough Hunk of Bread, Refreshing Spring Water).
+/// And a spell on the global cooldown, cast between.
+const FOOD: u32 = 60_911;
+const OTHER_FOOD: u32 = 60_912;
+const DRINK: u32 = 60_913;
+const JERKY: u32 = 60_914;
+const BREAD: u32 = 60_915;
+const WATER: u32 = 60_916;
+const ON_GCD: u32 = 60_917;
+const FOOD_CATEGORY: u32 = 11;
+const DRINK_CATEGORY: u32 = 59;
+
+fn food(d: &mut GameData) {
+    let spell = |id: u32, category: u32| {
+        let mut s = bare(id, 0);
+        s.category = category;
+        s.category_recovery_time = 60_000;
+        s.duration_index = LASTS_15S;
+        effect(&mut s, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        s
+    };
+    let mut on_gcd = bare(ON_GCD, 0);
+    on_gcd.start_recovery_category = spells::GCD_SPELLS;
+    on_gcd.start_recovery_time = 1_500;
+    effect(&mut on_gcd, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+    insert(
+        d,
+        [
+            spell(FOOD, FOOD_CATEGORY),
+            spell(OTHER_FOOD, FOOD_CATEGORY),
+            spell(DRINK, DRINK_CATEGORY),
+            on_gcd,
+        ],
+    );
+    for (entry, spell, category) in [
+        (JERKY, FOOD, FOOD_CATEGORY),
+        (BREAD, OTHER_FOOD, FOOD_CATEGORY),
+        (WATER, DRINK, DRINK_CATEGORY),
+    ] {
+        let mut t = crate::game::data::items::ItemTemplate {
+            entry,
+            name: format!("Made-up {entry}"),
+            display_id: 1000,
+            stackable: 20,
+            ..Default::default()
+        };
+        t.spells[0] = crate::game::data::items::ItemSpell {
+            id: spell,
+            cooldown: 0,
+            category,
+            category_cooldown: 1_000,
+            ..Default::default()
+        };
+        d.items.insert(entry, t);
+    }
+}
+
+/// `item` (at `at`) used: whether its spell went, and what its client
+/// was told of cooldowns meanwhile: the `SMSG_SPELL_COOLDOWN` entries and
+/// how many `SMSG_ITEM_COOLDOWN`s.
+async fn eat(c: &mut Client, at: (u8, u8), spell: u32) -> (bool, Vec<(u32, u64)>, usize) {
+    c.clear();
+    c.send(CMSG_USE_ITEM {
+        bag_index: at.0,
+        bag_slot: at.1,
+        spell_index: 0,
+        targets: spells::wire_targets(&Default::default()),
+    })
+    .await;
+    let result = c
+        .wait_frame("SMSG_CAST_RESULT", spells::SMSG_CAST_RESULT, |b| {
+            b[..4] == spell.to_le_bytes()
+        })
+        .await;
+    let went = result[4] == 0;
+    if went {
+        c.wait_for("the go", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == spell => Some(()),
+            _ => None,
+        })
+        .await;
+    } else {
+        assert_eq!(result[5], spells::fail::NOT_READY, "refused as not ready");
+    }
+    // What else comes of it.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut told = Vec::new();
+    while let Some(x) = c
+        .gets(std::time::Duration::ZERO, |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(s) => Some(
+                s.cooldowns
+                    .iter()
+                    .map(|x| (x.id, x.cooldown_time.as_millis() as u64))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .await
+    {
+        told.extend(x);
+    }
+    let items = c.take_frames(0x0B0).len();
+    (went, told, items)
+}
+
+/// The user's "eating food should not have a cooldown, only the initial
+/// eat should have a 1 second GCD, same goes for drink": a player eats
+/// Jerky, and the go names the Jerky; no `SMSG_ITEM_COOLDOWN` is sent
+/// (that is an equip's: the client starts thirty seconds on the item's
+/// spell for it), and what `SMSG_SPELL_COOLDOWN` says is a second at most.
+/// Bread, of the same category, is refused for that second, and goes
+/// after it; Water, of another category, goes at once, as does a spell on
+/// the global cooldown, which eating doesn't start. The server holds the
+/// category a second, not the spell's minute (mangos's `AddCooldown`: an
+/// item's times of zero or more over its spell's).
+#[tokio::test]
+async fn food_and_drink_wait_a_second_for_their_category_and_no_more() {
+    let realm = fast_realm(food);
+    let (mut c, g, map) = human(&realm, "P11GFOOD", "Glutton", Class::Warrior).await;
+    let (jerky, bread, water) = map
+        .query(move |m| {
+            kit::ready(m, g, 60, &[ON_GCD]);
+            let at = |m: &mut Map, entry| {
+                let (_, bag, slot) = give(m, g, entry);
+                (bag, slot)
+            };
+            (at(m, JERKY), at(m, BREAD), at(m, WATER))
+        })
+        .await
+        .unwrap();
+    let jerky_guid = map
+        .query(move |m| m.players[&g].items[m.players[&g].item_at(jerky.0, jerky.1).unwrap()].guid)
+        .await
+        .unwrap();
+    c.clear();
+    c.send(CMSG_USE_ITEM {
+        bag_index: jerky.0,
+        bag_slot: jerky.1,
+        spell_index: 0,
+        targets: spells::wire_targets(&Default::default()),
+    })
+    .await;
+    let named = c
+        .wait_for("the Jerky's go", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == FOOD => Some(s.cast_item),
+            _ => None,
+        })
+        .await;
+    assert_eq!(named, jerky_guid, "the go names the Jerky");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut told = Vec::new();
+    while let Some(x) = c
+        .gets(std::time::Duration::ZERO, |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(s) => Some(s.cooldowns.clone()),
+            _ => None,
+        })
+        .await
+    {
+        told.extend(
+            x.into_iter()
+                .map(|x| (x.id, x.cooldown_time.as_millis() as u64)),
+        );
+    }
+    assert!(
+        told.iter().all(|(id, ms)| *id == FOOD && *ms <= 1_000),
+        "a second at most, for the Food alone: {told:?}"
+    );
+    assert_eq!(c.take_frames(0x0B0).len(), 0, "no SMSG_ITEM_COOLDOWN");
+    let held = map
+        .query(move |m| (left(m, g, FOOD, FOOD_CATEGORY), left(m, g, OTHER_FOOD, 0).0))
+        .await
+        .unwrap();
+    assert_eq!(held.0.0, None, "no wait of the Food's own");
+    assert!(
+        held.0.1.is_some_and(|ms| ms <= 1_000),
+        "the category's second, not a minute: {held:?}"
+    );
+    assert_eq!(held.1, None);
+    // The Bread waits out the second; the Water and a spell on the global
+    // cooldown don't.
+    assert_eq!(
+        eat(&mut c, bread, OTHER_FOOD).await,
+        (false, vec![], 0),
+        "the Bread refused"
+    );
+    let drank = eat(&mut c, water, DRINK).await;
+    assert!(drank.0, "drinking after eating: {drank:?}");
+    assert!(
+        drank.1.iter().all(|(id, ms)| *id == DRINK && *ms <= 1_000),
+        "{drank:?}"
+    );
+    assert_eq!(drank.2, 0, "no SMSG_ITEM_COOLDOWN");
+    c.clear();
+    c.send(CMSG_CAST_SPELL {
+        spell: ON_GCD,
+        targets: spells::wire_targets(&Default::default()),
+    })
+    .await;
+    c.wait_for(
+        "a spell on the global cooldown, after eating",
+        |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == ON_GCD => Some(()),
+            _ => None,
+        },
+    )
+    .await;
+    // A second on (the cooldowns put back by one, not the map's clock run
+    // on), the Bread goes.
+    map.query(move |m| {
+        let c = m.caster_mut(g).unwrap();
+        let back = std::time::Duration::from_millis(1_100);
+        for t in c
+            .cooldowns
+            .values_mut()
+            .chain(c.category_cooldowns.values_mut())
+        {
+            *t = t.checked_sub(back).unwrap_or(*t);
+        }
+    })
+    .await
+    .unwrap();
+    let ate = eat(&mut c, bread, OTHER_FOOD).await;
+    assert!(ate.0, "the Bread after a second: {ate:?}");
+    assert_eq!(ate.2, 0, "no SMSG_ITEM_COOLDOWN");
+}
+
+/// The same on the real world's food and drink: Tough Jerky (117) and
+/// Tough Hunk of Bread (4540), both Food (433, a minute for category 11 in
+/// Spell.dbc), and Refreshing Spring Water (159, Drink, 430): each a
+/// second for its category, from the item, and no `SMSG_ITEM_COOLDOWN`.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_real_food_and_drink_wait_a_second() {
+    let d = crate::game::harness::load_real(&crate::game::harness::real_data("db"));
+    let realm = crate::game::harness::realm_with(d);
+    let (mut c, g, map) = human(&realm, "P11GREALFOOD", "Gourmand", Class::Warrior).await;
+    let (jerky, bread, water) = map
+        .query(move |m| {
+            let at = |m: &mut Map, entry| {
+                let (_, bag, slot) = give(m, g, entry);
+                (bag, slot)
+            };
+            (at(m, 117), at(m, 4540), at(m, 159))
+        })
+        .await
+        .unwrap();
+    let ate = eat(&mut c, jerky, 433).await;
+    assert!(ate.0, "the Jerky eaten: {ate:?}");
+    assert!(ate.1.iter().all(|(_, ms)| *ms <= 1_000), "{ate:?}");
+    assert_eq!(ate.2, 0, "no SMSG_ITEM_COOLDOWN");
+    let held = map.query(move |m| left(m, g, 433, 11)).await.unwrap();
+    assert_eq!(held.0, None, "no wait of Food's own");
+    assert!(held.1.is_some_and(|ms| ms <= 1_000), "a second: {held:?}");
+    assert!(
+        !eat(&mut c, bread, 433).await.0,
+        "the Bread waits the second"
+    );
+    let drank = eat(&mut c, water, 430).await;
+    assert!(drank.0, "drinking after eating: {drank:?}");
+    assert_eq!(drank.2, 0, "no SMSG_ITEM_COOLDOWN");
+    map.query(move |m| {
+        let c = m.caster_mut(g).unwrap();
+        let back = std::time::Duration::from_millis(1_100);
+        for t in c
+            .cooldowns
+            .values_mut()
+            .chain(c.category_cooldowns.values_mut())
+        {
+            *t = t.checked_sub(back).unwrap_or(*t);
+        }
+    })
+    .await
+    .unwrap();
+    let again = eat(&mut c, bread, 433).await;
+    assert!(again.0, "the Bread after a second: {again:?}");
+}

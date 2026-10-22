@@ -270,12 +270,11 @@ pub fn equipped(map: &mut Map, player: Guid, item: Guid) {
     }
 }
 
-/// A spell cast from an item went off: its cooldowns start, a charge goes
+/// A spell cast from an item went off: a charge goes
 /// (an item whose charges are spent and that is used up goes with it), and
 /// an item bound on use is bound.
 pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
     let data = map.realm.data.clone();
-    let now = map.now;
     let Some(p) = map.players.get_mut(&player) else {
         return;
     };
@@ -285,27 +284,13 @@ pub fn used(map: &mut Map, player: Guid, item: Guid, spell: u32) {
     let Some(t) = data.item(p.items[i].entry).cloned() else {
         return;
     };
-    let Some(index) = t.spells.iter().position(|s| s.id == spell) else {
+    if !t.spells.iter().any(|s| s.id == spell) {
         return;
-    };
-    let s = t.spells[index];
-    if s.cooldown > 0 {
-        p.caster
-            .cooldowns
-            .insert(spell, now + Duration::from_millis(s.cooldown.max(0) as u64));
     }
-    if s.category > 0 && s.category_cooldown > 0 {
-        p.caster.category_cooldowns.insert(
-            s.category,
-            now + Duration::from_millis(s.category_cooldown.max(0) as u64),
-        );
-    }
-    if s.cooldown > 0 || s.category_cooldown > 0 {
-        p.outbound.send(&SMSG_ITEM_COOLDOWN {
-            guid: item,
-            id: spell,
-        });
-    }
+    // Its cooldowns are `cooldowns::start`'s, with the item's times and its
+    // caster's modifiers, as mangos's `AddCooldown` has them once; and no
+    // `SMSG_ITEM_COOLDOWN`, which is an equip's thirty seconds to the
+    // client.
     if t.bonding == BIND_ON_USE {
         bind(&mut p.items[i]);
     }
