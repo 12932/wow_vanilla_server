@@ -1055,8 +1055,9 @@ pub fn cast(
             ammo_inventory_type: inventory_type,
         });
     }
+    // Its caster in the item's place when no item cast it, as the go.
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_START {
-        cast_item: item.unwrap_or_default(),
+        cast_item: item.unwrap_or(caster),
         caster,
         spell,
         flags,
@@ -1546,8 +1547,13 @@ fn execute(
             ammo_inventory_type: inventory_type,
         });
     }
+    // Not cast from an item, the go names its caster in the item's place
+    // (mangos's `SendSpellGo`): a player's client, seeing its own cast
+    // there, starts the spell's cooldown and its category's from its own
+    // Spell.dbc; any other GUID there it takes for an item, and with no
+    // such item it starts none.
     if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_GO {
-        cast_item: item.unwrap_or_default(),
+        cast_item: item.unwrap_or(caster),
         caster,
         spell: s.id,
         flags,

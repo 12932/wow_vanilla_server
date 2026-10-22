@@ -503,7 +503,8 @@ async fn a_missile_takes_its_bonus_before_spending_a_stack() {
 /// sets have no casting item", as mangos's `CastItemCombatSpell` and
 /// `TriggerProccedSpell` cast with the item: a weapon's blow casts its
 /// buff from the weapon, so a main hand's and an off hand's are two; a
-/// trinket's proc casts from the trinket; a set's, from no item.
+/// trinket's proc casts from the trinket; a set's, from no item (its go
+/// naming the caster there).
 #[tokio::test]
 async fn an_items_proc_is_cast_from_its_item_and_a_sets_from_none() {
     let realm = fast_realm(data);
@@ -559,5 +560,7 @@ async fn an_items_proc_is_cast_from_its_item_and_a_sets_from_none() {
     assert!(two, "a buff from each weapon");
     assert_eq!(go(&mut c, MIGHT).await.unwrap().cast_item, blade);
     assert_eq!(go(&mut c, ZAP).await.unwrap().cast_item, charm);
-    assert_eq!(go(&mut c, SET_ZAP).await.unwrap().cast_item, Guid::zero());
+    // From no item, the go names the caster in the item's place (mangos's
+    // `SendSpellGo`).
+    assert_eq!(go(&mut c, SET_ZAP).await.unwrap().cast_item, a);
 }

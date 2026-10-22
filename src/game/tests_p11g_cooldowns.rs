@@ -321,3 +321,101 @@ async fn a_cooldown_waiting_for_an_object_is_started_and_saved_at_logout() {
     let back = map.query(move |m| left(m, a, RAISE, 0).0).await.unwrap();
     assert!(back.is_some_and(|ms| ms > 50_000), "{back:?}");
 }
+
+/// A spell whose wait is its category's alone, in three ranks, as Frost
+/// Nova's (Spell.dbc's category 35, 25 seconds, no wait of its own), and a
+/// spell of another category.
+const NOVA: [u32; 3] = [60_907, 60_908, 60_909];
+const NOVA_CATEGORY: u32 = 97;
+const OTHER: u32 = 60_910;
+
+/// A rank of Frost Nova cast holds its other ranks: the server refuses
+/// them, and its client is told of each known rank of the category in the
+/// cast's `SMSG_SPELL_COOLDOWN` (a time there is a spell's own to the
+/// client: it greys only the spells named), as mangos's
+/// `AddSpellAndCategoryCooldowns` holds each; the go names the caster in
+/// the item's place, so the client starts the category's wait itself as
+/// well (mangos's `SendSpellGo`). A spell of another category is not told.
+/// `.debug cooldowns` clears each rank.
+#[tokio::test]
+async fn a_rank_cast_tells_its_client_of_every_known_rank_of_its_category() {
+    let realm = fast_realm(|d| {
+        let ranks = NOVA.map(|id| {
+            let mut s = bare(id, 16);
+            s.category = NOVA_CATEGORY;
+            s.category_recovery_time = 25_000;
+            effect(&mut s, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+            s
+        });
+        let mut other = bare(OTHER, 16);
+        other.category = NOVA_CATEGORY + 1;
+        other.category_recovery_time = 25_000;
+        effect(&mut other, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, ranks);
+        insert(d, [other]);
+    });
+    let (mut c, g, map) = human(&realm, "P11G4", "Novice", Class::Mage).await;
+    map.query(move |m| {
+        kit::ready(m, g, 60, &[NOVA[0], NOVA[1], NOVA[2], OTHER]);
+    })
+    .await
+    .unwrap();
+    c.clear();
+    c.send(CMSG_CAST_SPELL {
+        spell: NOVA[0],
+        targets: spells::wire_targets(&Default::default()),
+    })
+    .await;
+    let named = c
+        .wait_for("SMSG_SPELL_GO", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(s) if s.spell == NOVA[0] => Some(s.cast_item),
+            _ => None,
+        })
+        .await;
+    assert_eq!(named, g, "the go names its caster in the item's place");
+    let mut told = c
+        .wait_for("SMSG_SPELL_COOLDOWN", |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(s) if s.guid == g => Some(
+                s.cooldowns
+                    .iter()
+                    .map(|x| (x.id, x.cooldown_time.as_millis() as u64))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .await;
+    told.sort_unstable();
+    assert_eq!(
+        told,
+        NOVA.map(|id| (id, 25_000)).to_vec(),
+        "every known rank, the category's time, nothing of another category"
+    );
+    for rank in [NOVA[1], NOVA[2]] {
+        c.send(CMSG_CAST_SPELL {
+            spell: rank,
+            targets: spells::wire_targets(&Default::default()),
+        })
+        .await;
+        let f = c
+            .wait_frame("SMSG_CAST_RESULT", 0x130, |f| {
+                u32::from_le_bytes(f[0..4].try_into().unwrap()) == rank
+            })
+            .await;
+        assert_eq!(
+            (f[4], f[5]),
+            (2, spells::fail::NOT_READY),
+            "{rank} refused as cooling down"
+        );
+    }
+    // `.debug cooldowns` lets the client have each rank back: none has a
+    // wait of its own, the category's held them all.
+    c.clear();
+    c.say(".debug cooldowns").await;
+    for rank in NOVA {
+        c.wait_for("SMSG_CLEAR_COOLDOWN", |m| match m {
+            ServerOpcodeMessage::SMSG_CLEAR_COOLDOWN(x) if x.id == rank => Some(()),
+            _ => None,
+        })
+        .await;
+    }
+}
