@@ -967,10 +967,11 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // What the update sends each client goes in one push at its
                 // end.
                 {
-                    let _cork = match parked.take() {
+                    let cork = match parked.take() {
                         Some(p) => crate::game::conn::Cork::resume(p),
                         None => crate::game::conn::Cork::new(),
                     };
+                    cork.feed(&map.clients.feed);
                     guarded(&mut map, "the update", Map::update);
                 }
                 if map.stopping {
@@ -1014,7 +1015,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // answer, a session told, a client handed on, mustn't
                 // overtake what was sent before it.
                 let mut cork = None;
-                corking(&event, &mut cork, &mut parked);
+                corking(&event, &mut cork, &mut parked, &map.clients.feed);
                 if handle_guarded(&mut map, event) {
                     break;
                 }
@@ -1034,7 +1035,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
-                            corking(&event, &mut cork, &mut parked);
+                            corking(&event, &mut cork, &mut parked, &map.clients.feed);
                             if handle_guarded(&mut map, event) {
                                 stop = true;
                                 break;
@@ -1071,15 +1072,18 @@ fn corking(
     event: &MapEvent,
     cork: &mut Option<crate::game::conn::Cork>,
     parked: &mut Option<crate::game::conn::Parked>,
+    feed: &Arc<crate::game::conn::Feed>,
 ) {
     if !corks(event) {
         *cork = None;
         *parked = None;
     } else if cork.is_none() {
-        *cork = Some(match parked.take() {
+        let c = match parked.take() {
             Some(p) => crate::game::conn::Cork::resume(p),
             None => crate::game::conn::Cork::new(),
-        });
+        };
+        c.feed(feed);
+        *cork = Some(c);
     }
 }
 
@@ -1670,6 +1674,7 @@ impl Map {
         // The client's first move is checked from where it came in.
         p.move_check = Some((p.position(), self.now));
         self.grid.insert(p.guid, p.cell);
+        self.clients.renew(p.guid);
         self.players.insert(p.guid, p);
     }
 
@@ -2771,7 +2776,7 @@ impl Map {
 
     /// `frame` to the clients `to` ([`crate::game::conn::broadcast`]).
     pub fn broadcast(&self, frame: &Arc<[u8]>, to: &Arc<crate::game::conn::Clients>) {
-        crate::game::conn::broadcast(self.clients.id, frame, to, |i| {
+        crate::game::conn::broadcast(&self.clients.feed, frame, to, |i| {
             let g = self.clients.guid(i)?;
             self.players.get(&g).map(|p| p.outbound.clone())
         });

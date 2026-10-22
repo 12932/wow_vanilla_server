@@ -148,10 +148,11 @@ mod writer {
             .with_inputs(|| {
                 let (out, frames) = Outbound::with_budget(1 << 30);
                 let f = heartbeat();
+                let feed = conn::Feed::new(1);
                 {
                     let _cork = conn::Cork::new();
                     for _ in 0..FRAMES {
-                        conn::broadcast(1, &f, &all, |i| (i == 0).then(|| out.clone()));
+                        conn::broadcast(&feed, &f, &all, |i| (i == 0).then(|| out.clone()));
                     }
                 }
                 (out, frames, encrypter())
@@ -271,13 +272,14 @@ mod fanout {
         let (outs, mut frames) = queues(n);
         let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
         let all = Arc::new(all_of(n));
+        let feed = conn::Feed::new(1);
         bencher
             .counter(ItemsCount::new(MOVERS * n))
             .with_inputs(|| empty(&mut frames))
             .bench_local_values(|()| {
                 let _cork = conn::Cork::new();
                 for m in &movers {
-                    conn::broadcast(1, m, &all, |i| outs.get(i).cloned());
+                    conn::broadcast(&feed, m, &all, |i| outs.get(i).cloned());
                 }
             });
     }
@@ -456,6 +458,7 @@ mod delivered {
         let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
         let per_round = (MOVERS * heartbeat().len()) as u64;
         let all = Arc::new(all_of(n));
+        let feed = conn::Feed::new(1);
         bencher
             .counter(ItemsCount::new(MOVERS * n))
             .bench_local(|| {
@@ -464,7 +467,7 @@ mod delivered {
                     let _cork = (how != How::Direct).then(conn::Cork::new);
                     for m in &movers {
                         if how == How::Broadcast {
-                            conn::broadcast(1, m, &all, |i| clients.outs.get(i).cloned());
+                            conn::broadcast(&feed, m, &all, |i| clients.outs.get(i).cloned());
                         } else {
                             for o in &clients.outs {
                                 o.send_frame(m.clone());

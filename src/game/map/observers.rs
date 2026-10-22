@@ -103,9 +103,8 @@ impl Observers {
     /// broadcast's to find, by its index.
     fn build(&self, table: &ClientTable) -> Clients {
         let mut c = Clients::default();
-        let mut t = lock(&table.inner);
         for &g in &self.set {
-            c.insert(t.index_of(g));
+            c.insert(table.index_of(g));
         }
         c
     }
@@ -169,6 +168,9 @@ impl Observers {
 pub struct ClientTable {
     /// Unique among maps, so a cork knows whose numbering it holds.
     pub id: usize,
+    /// The map's broadcasts, published for its clients to read
+    /// ([`crate::game::conn::Feed`]), in this numbering.
+    pub feed: Arc<crate::game::conn::Feed>,
     inner: Mutex<TableInner>,
 }
 
@@ -200,8 +202,10 @@ impl TableInner {
 impl Default for ClientTable {
     fn default() -> Self {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
-            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            id,
+            feed: crate::game::conn::Feed::new(id),
             inner: Mutex::new(TableInner::default()),
         }
     }
@@ -210,7 +214,18 @@ impl Default for ClientTable {
 impl ClientTable {
     /// `g`'s index, given one now if they have none.
     pub fn index_of(&self, g: Guid) -> usize {
-        lock(&self.inner).index_of(g)
+        let mut t = lock(&self.inner);
+        let known = t.index.get(&g).copied();
+        match known {
+            Some(i) => i,
+            None => {
+                let i = t.index_of(g);
+                drop(t);
+                // An index given out again: its client is looked for.
+                self.feed.found(i);
+                i
+            }
+        }
     }
 
     /// `g`'s index, if they have one.
@@ -229,6 +244,19 @@ impl ClientTable {
         if let Some(i) = t.index.remove(&g) {
             t.guids[i] = None;
             t.free.push(i);
+            drop(t);
+            // Its client reads what was published so far, and no more.
+            self.feed.unsubscribe(i);
+        }
+    }
+
+    /// `g`'s client is another (a login taking a player over), or they are
+    /// back in the map: the one the feed knows reads no more, and the next
+    /// broadcast that reaches them finds theirs.
+    pub fn renew(&self, g: Guid) {
+        if let Some(i) = self.get(g) {
+            self.feed.unsubscribe(i);
+            self.feed.found(i);
         }
     }
 

@@ -257,6 +257,8 @@ pub fn take_over(
     let at = p.position();
     p.move_check = Some((at, map.now));
     map.players.insert(guid, p);
+    // Their feed is the new client's from the next broadcast.
+    map.clients.renew(guid);
     crate::game::instances::send_saved(&map.realm, guid, &new.outbound);
     crate::game::map::social::logged_in(map, guid);
     // The pet's bar, if they have a pet or a charm.
