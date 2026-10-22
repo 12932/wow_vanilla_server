@@ -1085,34 +1085,18 @@ pub fn in_melee_range(a: &UnitView, b: &UnitView) -> bool {
     dist(a.position, b.position) <= melee_range(a, b) + leeway
 }
 
-/// Whether `a` and `b` touch: their combat reaches meet, on the ground
-/// (Thistle Tea's `contact_distance`). A chasing creature halts there.
-pub fn in_contact(a: &UnitView, b: &UnitView) -> bool {
-    let (dx, dy) = (a.position.x - b.position.x, a.position.y - b.position.y);
-    (dx * dx + dy * dy).sqrt() <= a.combat_reach + b.combat_reach
-}
-
-/// How far inside its melee range a chasing creature aims to stop
-/// (Thistle Tea's `@chase_distance_inset`): there it is in reach as the
-/// client measures it, not on the edge.
-pub const CHASE_INSET: f32 = 0.5;
-
 /// How far from its victim a creature chases to, for a melee range of
-/// `reach` (Thistle Tea's `chase_target_distance`).
+/// `reach`: half of it (mangos-classic's `CHASE_DEFAULT_RANGE_FACTOR`), so
+/// that a victim walking on has half the reach to go before it is out of
+/// reach again. Aimed at the reach's edge (Thistle Tea's half a yard
+/// inside it), every half yard its victim stepped sent it a new path.
 pub fn chase_distance(reach: f32) -> f32 {
-    (reach - CHASE_INSET).max(0.0)
+    (reach * 0.5).max(0.0)
 }
 
-/// How far its victim may go from where a chaser last aimed before it
-/// paths again (Thistle Tea's `chase_rechase_distance`): three quarters of
-/// the reach, less the victim's bounding radius.
 /// Within this of its victim, an attack owed needn't face it (Thistle
 /// Tea's overlap distance).
 const OVERLAP_YARDS: f32 = 1.4;
-
-pub fn rechase_distance(reach: f32, bounding: f32) -> f32 {
-    (reach * 0.75 - bounding).max(0.0)
-}
 
 /// Whether `a` faces `b` within `arc` radians.
 pub fn in_arc(a: &UnitView, b: &UnitView, arc: f32) -> bool {
