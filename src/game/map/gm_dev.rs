@@ -16,7 +16,7 @@ use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
 .character level <n>, .character spells, .gear [raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
-.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], .god [on|off], \
+.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
 events [start|stop <id>]|explore|position [guid]|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
@@ -1102,18 +1102,71 @@ fn start(map: &mut Map, g: Guid) -> Option<String> {
     None
 }
 
+const TALENTS_USAGE: &str = "Usage: .talents reset | .talents learn <talent>[:<ranks>] ...";
+
+/// `.talents reset`: the selected player's (or the GM's) talents
+/// unlearned, their points back. `.talents learn <talent>[:<ranks>] ...`:
+/// each talent (`Talent.dbc`'s id) learned up to that many ranks (1 by
+/// default), in order, a point a rank, as `CMSG_LEARN_TALENT` would learn
+/// it: with the points, the tier open and what it needs learned; the rest
+/// refused, and named.
 fn talents(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
-    if args.first() != Some(&"reset") {
-        return Some("Usage: .talents reset".into());
-    }
     let data = map.realm.data.clone();
     let to = player_target(map, g);
-    let spells = crate::game::map::misc::talent_spells(map.players.get(&to)?, &data);
-    crate::game::map::misc::forget_spells(map, to, &spells);
-    if let Some(p) = map.players.get_mut(&to) {
-        crate::game::map::spells::refresh_talent_points(p, &data);
+    match args {
+        ["reset"] => {
+            let spells = crate::game::map::misc::talent_spells(map.players.get(&to)?, &data);
+            crate::game::map::misc::forget_spells(map, to, &spells);
+            if let Some(p) = map.players.get_mut(&to) {
+                crate::game::map::spells::refresh_talent_points(p, &data);
+            }
+            Some(format!("Unlearned {} talent spells.", spells.len()))
+        }
+        ["learn", words @ ..] if !words.is_empty() => {
+            // A talent's ranks the player has.
+            let has = |map: &Map, id: u32| {
+                let (Some(t), Some(p)) = (data.spells.talents.get(&id), map.players.get(&to))
+                else {
+                    return 0;
+                };
+                t.ranks
+                    .iter()
+                    .rposition(|r| *r != 0 && p.spells.contains(r))
+                    .map_or(0, |i| i as u32 + 1)
+            };
+            let (mut learned, mut refused) = (0u32, Vec::new());
+            for w in words {
+                let (id, ranks) = match w.split_once(':') {
+                    Some((id, r)) => (id.parse::<u32>().ok(), r.parse::<u32>().ok()),
+                    None => (w.parse::<u32>().ok(), Some(1)),
+                };
+                let (Some(id), Some(ranks @ 1..=5)) = (id, ranks) else {
+                    return Some(TALENTS_USAGE.into());
+                };
+                while has(map, id) < ranks {
+                    let before = has(map, id);
+                    crate::game::map::spells::learn_talent(map, to, id, before);
+                    if has(map, id) == before {
+                        refused.push(format!("{id}:{}", before + 1));
+                        break;
+                    }
+                    learned += 1;
+                }
+            }
+            let left = map.players.get(&to).map_or(0, |p| {
+                crate::game::map::spells::free_talent_points(p, &data)
+            });
+            Some(if refused.is_empty() {
+                format!("Talents: learned {learned} ranks, {left} points left.")
+            } else {
+                format!(
+                    "Talents: learned {learned} ranks, {left} points left; refused {}.",
+                    refused.join(" ")
+                )
+            })
+        }
+        _ => Some(TALENTS_USAGE.into()),
     }
-    Some(format!("Unlearned {} talent spells.", spells.len()))
 }
 
 fn tgm(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {

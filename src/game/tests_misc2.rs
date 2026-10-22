@@ -368,6 +368,33 @@ async fn gm_commands_give_items_quests_spells_levels_and_money() {
     a.system_message("zone").await;
 }
 
+/// `.talents learn`: each talent to its ranks, a point a rank, as the
+/// client learns them; without the points, or past a talent's last rank,
+/// refused and named; then reset.
+#[tokio::test]
+async fn gm_talents_learn_spends_points_as_the_client_does() {
+    let (realm, mut a) = setup().await;
+    let g = a.guid;
+    // Level 1: no points.
+    gm(&mut a, ".talents learn 1").await;
+    a.system_message("refused 1:1").await;
+    assert!(!on_map(&realm, move |m| m.players[&g].spells.contains(&TALENT)).await);
+    gm(&mut a, ".character level 12").await;
+    gm(&mut a, ".talents learn 1:1").await;
+    a.system_message("learned 1 ranks, 2 points left").await;
+    assert!(on_map(&realm, move |m| m.players[&g].spells.contains(&TALENT)).await);
+    // Its one rank had, a second is refused; a word that isn't one is
+    // its usage.
+    gm(&mut a, ".talents learn 1:2").await;
+    a.system_message("learned 0 ranks, 2 points left; refused 1:2")
+        .await;
+    gm(&mut a, ".talents learn arms").await;
+    a.system_message("Usage: .talents").await;
+    gm(&mut a, ".talents reset").await;
+    a.system_message("Unlearned").await;
+    assert!(!on_map(&realm, move |m| m.players[&g].spells.contains(&TALENT)).await);
+}
+
 #[tokio::test]
 async fn gm_commands_act_on_the_selected_creature() {
     let (realm, mut a) = setup().await;
