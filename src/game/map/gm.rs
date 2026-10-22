@@ -9,7 +9,7 @@ use crate::game::guid;
 use crate::game::map::creature::Creature;
 use crate::game::map::{Map, MapKey, chat};
 
-const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, .die, .revive, .levelup [n], .gm [on|off], .speed <multiplier>, \
+const HELP: &str = "Commands: .go [xyz] <x> <y> <z> [map], .tele <place>, .gps, .hyperspawn, .die, .revive, .levelup [n], .gm [on|off], .speed <multiplier>, \
 .online, .maps, .save, .announce <text>, .kick <name>, .rename [name], .spawn <entry>, .account create|password <name> <password>, \
 .account gm <name> <level>, .reload config, .ban <account> <minutes|perm> [reason], .unban <account>, .ticket list|<id>|respond <id> <answer>|close <id>, .honor [week|points <n>], .arena start|stop|status|history, .help";
 
@@ -40,7 +40,9 @@ pub fn needed_level(command: &str) -> u8 {
     match command {
         // A player's (mangos's `SEC_PLAYER`).
         "help" | "commands" | "save" | "start" | "dismount" | "server" => crate::accounts::PLAYER,
-        "gps" | "online" | "maps" | "announce" | "kick" | "gm" | "ticket" => MODERATOR,
+        "gps" | "hyperspawn" | "online" | "maps" | "announce" | "kick" | "gm" | "ticket" => {
+            MODERATOR
+        }
         "account" | "ban" | "unban" | "reload" => ADMINISTRATOR,
         // Anyone may ask about the arena; starting and stopping is checked
         // within.
@@ -213,6 +215,7 @@ pub fn command(map: &mut Map, guid: Guid, text: &str) {
         "reload" => Some(reload(map, guid, &args)),
         "go" => go(map, guid, &args),
         "gps" => gps(map, guid),
+        "hyperspawn" => crate::game::map::hyperspawn::report(map, guid),
         "speed" => speed(map, guid, &args),
         "online" => Some(format!(
             "{} players online, {} characters.",

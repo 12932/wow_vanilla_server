@@ -417,11 +417,17 @@ pub fn despawn(map: &mut Map, g: Guid) {
                 .and_then(|v| v.iter().find(|x| x.guid == s))
         })
         .map_or(0, |x| x.respawn_min);
-    despawn_then(
-        map,
-        g,
-        (respawn > 0).then(|| Duration::from_secs(u64::from(respawn))),
-    );
+    // A quest object sooner in a busy pocket (`[hyperspawn]`).
+    let spot = map
+        .gameobject(g)
+        .map(crate::game::map::hyperspawn::Spot::of);
+    let back = (respawn > 0).then(|| {
+        let base = Duration::from_secs(u64::from(respawn));
+        spot.map_or(base, |s| {
+            crate::game::map::hyperspawn::object_used(map, s, base)
+        })
+    });
+    despawn_then(map, g, back);
 }
 
 /// An object goes as [`despawn`] has it, and a spawned one comes back

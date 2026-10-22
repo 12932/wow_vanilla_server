@@ -957,6 +957,56 @@ settings! {
     }
 }
 
+settings! {
+    /// Hyperspawn: in the races' starting areas, the faster creatures die
+    /// in a pocket (a square of the map, `pocket_yards` across), the faster
+    /// they come back. Each pocket keeps its kills a minute, decaying over
+    /// `window_secs`, per spawn it has; a death's respawn is its normal one
+    /// (`[rates] respawn_time` applied) divided by a factor that is 1 at or
+    /// under `quiet_rate` and rises by `gain` for each kill a minute per
+    /// spawn over it, to `max_factor`, never under `floor_secs`. Fixed at
+    /// the death. Rares, elites, bosses, named creatures (a template with
+    /// one spawn on its map), quest givers, scripted creatures and summons
+    /// are left as they are. A GM's `.hyperspawn` shows the pocket they
+    /// stand in.
+    pub struct HyperspawnConfig in "hyperspawn" {
+        /// Hyperspawn on.
+        enabled: bool = true, Any, Live, "";
+        /// The areas it is on in (`AreaTable.dbc`, as the navmesh gives a
+        /// point's): 9 Northshire Valley, 34 Echo Ridge Mine and 59
+        /// Northshire Vineyards; 132 Coldridge Valley; 188 Shadowglen, 256
+        /// Aldrassil and 257 Shadowthread Cave; 363 the Valley of Trials and
+        /// 365 Burning Blade Coven; 220 Red Cloud Mesa, 221 Camp Narache and
+        /// 358 Brambleblade Ravine; 154 Deathknell and 155 Night Web's
+        /// Hollow.
+        areas: Vec<u32> = vec![9, 34, 59, 132, 188, 256, 257, 363, 365, 220, 221, 358, 154, 155], Any, Live, "";
+        /// The shortest respawn it gives, in seconds (the global 5 s floor
+        /// is not its).
+        floor_secs: f32 = 2.0, Clamp(0.0, 3600.0), Live, "";
+        /// The most a respawn is divided by.
+        max_factor: f32 = 150.0, Clamp(1.0, 100_000.0), Live, "";
+        /// Seconds over which a pocket's kills decay (the exponential's
+        /// time constant: a kill counts e times less after it).
+        window_secs: u64 = 120, Clamp(1.0, 86_400.0), Live, "";
+        /// Kills a minute per spawn of the pocket at or under which a
+        /// respawn is its normal one.
+        quiet_rate: f32 = 0.2, Clamp(0.0, 1000.0), Live, "";
+        /// What the factor rises by for each kill a minute per spawn over
+        /// `quiet_rate`.
+        gain: f32 = 40.0, Clamp(0.0, 100_000.0), Live, "";
+        /// The side of a pocket, in yards (the map's grid cell is 50).
+        pocket_yards: f32 = 50.0, Clamp(5.0, 533.0), Live, "";
+        /// Quest objects (the chests and plants a quest has gathered, and
+        /// those a quest has used) come back faster too, by the rate they
+        /// are used at in their pocket, on the same curve.
+        objects: bool = true, Any, Live, "";
+        /// The longest, in seconds, a hastened creature's corpse with loot
+        /// left on it (or a skin) holds its respawn back: one looted clean
+        /// comes back at its time, one no one loots after this.
+        loot_wait_secs: u64 = 30, Clamp(0.0, 3600.0), Live, "";
+    }
+}
+
 /// `v` at `rate`, rounded down (as mangos scales); at 1, `v` itself.
 pub fn scaled(v: u32, rate: f32) -> u32 {
     if rate == 1.0 {
@@ -1004,6 +1054,7 @@ pub struct ServerConfig {
     pub gm: GmConfig,
     pub spawn: SpawnConfig,
     pub arena: ArenaConfig,
+    pub hyperspawn: HyperspawnConfig,
 }
 
 /// Every section, in the order they are printed.
@@ -1029,6 +1080,7 @@ pub const SECTIONS: &[&Section] = &[
     &GmConfig::SECTION,
     &SpawnConfig::SECTION,
     &ArenaConfig::SECTION,
+    &HyperspawnConfig::SECTION,
 ];
 
 pub fn section(name: &str) -> Option<&'static Section> {

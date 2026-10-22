@@ -124,6 +124,8 @@ mod tests_gifts;
 #[cfg(test)]
 mod tests_guards;
 #[cfg(test)]
+mod tests_hyperspawn;
+#[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
 mod tests_kill_visual;
@@ -1458,6 +1460,7 @@ pub struct RealmConfig {
     pub events: crate::config::EventsConfig,
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
+    pub hyperspawn: crate::config::HyperspawnConfig,
     /// `[network] broadcast_batch_*`: each map's window.
     pub broadcast_batch: crate::game::map::batch::BatchConfig,
 }
@@ -1523,6 +1526,7 @@ impl RealmConfig {
             events: c.events.clone(),
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),
+            hyperspawn: c.hyperspawn.clone(),
             broadcast_batch: crate::game::map::batch::BatchConfig::from_config(&c.network),
         }
     }

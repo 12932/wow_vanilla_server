@@ -1188,4 +1188,57 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     least is **10 ms** (the old fixed window): you'd rather keep the CPU down than have the lower latency (2 ms halved
     880 bots' p99 to ~17 ms at twice the CPU). It still widens to 40 ms under load. Lower the minimum for latency.
 
+77. **Hyperspawn, your design** (2026-10-22; `feat/hyperspawn`, `map/hyperspawn.rs`, `[hyperspawn]`): in the races'
+    starting areas, the faster creatures die, the faster they respawn. mangos-classic and Thistle Tea have nothing
+    like it.
+    - **Your choices:** the starting subzones only, as a list of area ids; kill rate the only signal (no player
+      counts); creatures' respawns and quest objects' (by their own rate of use) brought forward, no spawns added; a
+      floor of 2 s at peak demand, the global `[rates] respawn_time` and its 5 s floor unchanged elsewhere.
+    - **The areas**, checked against `dbc.sqlite`'s `AreaTable` and against what the navmesh gives the starting
+      spawns' places (`tests_hyperspawn`, extended): your six ids were right (9 Northshire Valley, 132 Coldridge
+      Valley, 188 Shadowglen, 363 the Valley of Trials, 221 Camp Narache, 154 Deathknell), but the navmesh puts much
+      of the starting areas in their sibling subzones, so the defaults add them: 34 Echo Ridge Mine (Northshire's
+      kobolds) and 59 Northshire Vineyards (its Defias and Milly's Harvest); 256 Aldrassil and 257 Shadowthread Cave
+      (Shadowglen's tree and spider cave); 365 Burning Blade Coven (the Valley of Trials' cave); 220 Red Cloud Mesa
+      and 358 Brambleblade Ravine (Camp Narache's 4 spawns are its quest givers: Red Cloud Mesa has the 223 starting
+      creatures, the ravine Sharptusk's quilboar); 155 Night Web's Hollow (Deathknell's spiders). Coldridge Pass
+      (800), the road out to Kharanos, is left out. The navmesh gives the deep ends of Echo Ridge Mine and of the
+      Burning Blade Coven their zones' ids (Elwynn Forest's 12, Durotar's 14): their 8 Kobold Laborers and 5 Vile
+      Familiars aren't sped up, as the whole zone would be with them.
+    - **Pockets:** a square of the map, 50 yards (the grid's cell; `pocket_yards`), keyed by the spawn's home, not
+      where it died. Each keeps a score that a kill adds one to and that decays as e^(-t/120 s) (`window_secs`),
+      worked out lazily from its last time: O(1) a death, nothing swept. Kills a minute are the score × 60 / window;
+      over the pocket's spawns (counted once per map, at its first death in an area: those hyperspawn would speed
+      up), kills a minute per spawn.
+    - **The curve**, linear: `factor = 1 + gain × max(0, rate − quiet_rate)`, capped at `max_factor`; the respawn is
+      `base / factor`, no less than `floor_secs`, no more than `base` (`base` the normal one, the global rate and
+      its 5 s floor in it). Defaults: `quiet_rate` 0.2 kills a minute per spawn (a spawn killed every five minutes,
+      what a 5-minute respawn allows without hyperspawn, so the first pressure starts it), `gain` 40, `max_factor`
+      150 (a 5-minute respawn to its 2 s floor). A pocket of 8 at a 5-minute base: 0 kills a minute, factor 1,
+      300 s; 10 a minute (1.25 a spawn), factor 43, 7.0 s; 30 a minute (3.75 a spawn), factor 143, 2.1 s; the floor
+      from 31.4 a minute. Starting creatures' own respawns are mostly 3 minutes (vmangos), so 30 a minute gives them
+      2 s too. The kills feed back (faster respawns, more kills) until the players' demand is met, and decay when
+      they leave: two windows after 80 kills in a pocket of 8, its factor is 20, after four, 1.
+    - **Fixed at the death:** a creature already waiting keeps its time. Shortening the waiting ones would mean
+      finding a pocket's dead, a scan; left out.
+    - **The corpse:** wvs respawns a creature in its corpse's place, so a 2 s respawn would take a kill's loot from
+      under its looter. A hastened creature's corpse lies as long as it would have (its decay, no longer than its
+      normal respawn), at most `loot_wait_secs` (30) past its hastened time, and holds its respawn back while it has
+      loot or a skin on it, or someone looking in it: looted clean, it comes back at once. (A new key, not in your
+      list: the only way to keep both the floor and the loot.)
+    - **Exempt:** a template's rank (elites 1, rare elites 2, bosses 3, rares 4); quest givers (`npc_flags` 2);
+      scripted creatures (a `script_name`); named creatures, taken as a template with one spawn on its map
+      (Garrick Padfoot, Grik'nir the Cold, Sarkoth, Chief Sharptusk Thornmantle are rank 0); summons, pets, owned
+      units and anything without a world spawn; copies (instance maps). Exempt kills don't count in the pocket.
+    - **Quest objects** (`objects`, on): a chest whose loot has a quest item (Milly's Harvest, Cactus Apples,
+      Moonpetal Lilies, Hyacinth Mushrooms, Webwood Eggs, Equipment Boxes), or a goober a quest uses; their own
+      score per pocket, over the pocket's quest objects, on the same curve. Herbs, veins and treasure chests aren't
+      quest objects.
+    - **Seeing it:** `.hyperspawn` (moderator) gives the area where the GM stands, whether it is a hyperspawn area,
+      and its pocket's spawns, kills a minute, factor and what a 5-minute respawn comes to, for creatures and quest
+      objects. `WVS_STATS_FILE`'s line has each map's `hot_pockets` (factor 2 or more).
+    - **Where the area comes from:** the navmesh (or the terrain tiles) at the spawn's place, kept per spawn once
+      given; without either on a continent, what the map last worked out of the creature's or object's place, if
+      anything. So a server without its navmesh and terrain has hyperspawn only where that is known.
+
 ## Left for later, and why

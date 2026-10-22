@@ -513,12 +513,15 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
     // `Corpse.Decay.*`).
     let decay = cfg.creatures.corpse_decay(template.map_or(0, |t| t.rank));
     let respawn = respawn_delay(&data, c.spawn_guid, cfg.rates.respawn_time);
+    // Sooner in a busy pocket of a starting area (`[hyperspawn]`).
+    let (respawn, corpse) =
+        crate::game::map::hyperspawn::creature_died(map, creature, respawn, decay.min(respawn));
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
     c.life = Life::Dead {
-        corpse_until: now + decay.min(respawn),
-        respawn_at: now + respawn.max(decay.min(respawn)),
+        corpse_until: now + corpse,
+        respawn_at: now + respawn,
     };
     let moving = matches!(c.motion, Motion::Moving(_));
     c.motion = Motion::Idle { until: None };
@@ -608,10 +611,13 @@ pub fn update_dead(map: &mut Map) {
         else {
             continue;
         };
-        if respawn_at <= now {
+        if respawn_at <= now && crate::game::map::hyperspawn::respawn_due(map, g, corpse_until) {
             respawn(map, g);
             continue;
         }
+        let Some(c) = map.creature_mut(g) else {
+            continue;
+        };
         if corpse_until <= now && !c.despawned {
             c.despawned = true;
             let (entry, summoner) = (c.entry, c.scripted.as_deref().and_then(|s| s.summoner));

@@ -12,12 +12,13 @@
 //! "cpu_secs":..,"rss_kb":..,"maps":[{"map":1,"instance":0,"players":880,
 //! "awake":312,"mailbox":0,"updates_us":[..],"events":4400,"events_us":..,
 //! "biggest_queue":..,"queued":..,"visibility_waiting":..,"steps_us":{"visibility":..},
-//! "batch_ms":10.0,"batch_busy":0.42,"batch_cpu":0.31}]}`, its
+//! "batch_ms":10.0,"batch_busy":0.42,"batch_cpu":0.31,"hot_pockets":0}]}`, its
 //! counters since start-up (the reader takes differences), `updates_us` the second's;
 //! `visibility_waiting` the most objects an update of the second left for the next to work out (over
 //! `[visibility] refresh_budget_ms`, or marked after its visibility); `batch_ms` the map's broadcast
 //! window as the second ends, `batch_busy` the smoothed share of its thread's time that steers it,
-//! `batch_cpu` the server's smoothed CPU share over its cores, which steers it too.
+//! `batch_cpu` the server's smoothed CPU share over its cores, which steers it too; `hot_pockets` hyperspawn's
+//! pockets on the map at a factor of 2 or more.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -91,6 +92,8 @@ struct Sample {
     batch_busy: f64,
     /// The server's smoothed CPU share, as the window last read it.
     batch_cpu: f64,
+    /// Hyperspawn's pockets at a factor of 2 or more (`[hyperspawn]`).
+    hot_pockets: usize,
 }
 
 /// What a map's actor keeps of its second, until it hands it over.
@@ -165,6 +168,7 @@ impl Sampler {
             batch_ms: map.batch.window().as_secs_f64() * 1000.0,
             batch_busy: (map.batch.busy() * 1000.0).round() / 1000.0,
             batch_cpu: (map.batch.cpu() * 1000.0).round() / 1000.0,
+            hot_pockets: crate::game::map::hyperspawn::hot_pockets(map),
         };
         SAMPLES.lock().push(sample);
     }
