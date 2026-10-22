@@ -820,7 +820,9 @@ pub fn save_of(realm: &Realm, id: u32) -> Option<InstanceSave> {
 }
 
 fn change_save(realm: &Realm, key: MapKey, f: impl FnOnce(&mut InstanceSave)) {
-    if key.instance == 0 {
+    // A battleground's match is never resumed: what dies in it isn't saved
+    // (in Alterac Valley, hundreds of writes a match, kept past its end).
+    if key.instance == 0 || crate::game::battlegrounds::bg_of_map(key.map).is_some() {
         return;
     }
     let mut inst = realm.social.instances.lock();
