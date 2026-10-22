@@ -2560,15 +2560,19 @@ pub fn periodic_damage_of(
     leech: bool,
 ) {
     let data = map.realm.data.clone();
-    let s = data
-        .spells
-        .get(h.spell)
-        .cloned()
-        .unwrap_or_else(|| SpellTemplate {
-            id: h.spell,
-            school: h.school.trailing_zeros(),
-            ..Default::default()
-        });
+    // Borrowed from the data, not cloned each tick.
+    let made_up;
+    let s = match data.spells.get(h.spell) {
+        Some(s) => s,
+        None => {
+            made_up = SpellTemplate {
+                id: h.spell,
+                school: h.school.trailing_zeros(),
+                ..Default::default()
+            };
+            &made_up
+        }
+    };
     let index = s
         .effects
         .iter()
@@ -2588,7 +2592,7 @@ pub fn periodic_damage_of(
         map,
         h.caster,
         target,
-        &s,
+        s,
         index,
         outcome::Kind::Dot,
         h.stacks,
@@ -2600,7 +2604,7 @@ pub fn periodic_damage_of(
         0.5
     };
     let amount = crate::game::map::reputation::dither(amount, roll).max(0) as u32;
-    let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
+    let resisted = outcome::partial_resist(map, h.caster, target, s, amount, true);
     let (left, absorbed) =
         auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
@@ -2633,7 +2637,7 @@ pub fn periodic_damage_of(
         // DOT (`GetSpellThreatMultiplier`, then `CalcThreat`).
         let multiplier = data.spells.threat.get(&s.id).map_or(1.0, |t| t.1.max(0.0));
         let by_mods =
-            mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0 * multiplier;
+            mods::for_spell(map, h.caster, s).apply(mods::OP_THREAT, 100.0) / 100.0 * multiplier;
         let threat = left as f32 * combat::threat_multiplier(map, h.caster, h.school);
         combat::deal_periodic_damage(
             map,
@@ -2694,7 +2698,7 @@ pub fn periodic_damage_of(
             map,
             h.caster,
             left.min(had) as f32 * mult,
-            &s,
+            s,
             index,
             outcome::Kind::Dot,
             h.stacks,
