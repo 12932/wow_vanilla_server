@@ -1619,3 +1619,27 @@ Execute) on the first button, out through its exit (area trigger 119) to Westfal
 book and bars over every frame received (`Book`), which must be the server's after; and, in the fast suite, a
 spell learned and a button set after a login, kept across a far teleport and not told again at a near one. Without
 the fix all four fail, the client's model book back to the login's. The fast and extended suites pass.
+## A kill's impact (2026-10-22)
+
+The report: Smite kills a level 1 rat at once, but its impact never plays on the rat. Nothing was changed: what wvs
+sends for a kill is right, and in mangos-classic's order. Recorded by `tests_kill_visual`, a level 60 priest's Smite
+(rank 8) on a level 1 Rat (a critter) and on a level 1 Young Wolf (a beast), in the real world, and a bolt of the
+same shape (no speed, a cast time) on a critter and a beast in the fast suite. Her client gets `SMSG_SPELL_START`,
+`SMSG_CAST_RESULT`, then `SMSG_SPELL_GO` with the victim in its hits (the caster in the cast item's place, the
+victim in its targets), then `SMSG_SPELLNONMELEEDAMAGELOG`, `SMSG_ATTACKSTOP`, and only then, in the update's
+values, the victim's health at 0. Nothing forgets the victim: the corpse stays, a critter's as a beast's. That is
+mangos-classic's `Spell::cast` (`SendCastResult`, `SendSpellGo`, then `handle_immediate`'s `DoAllEffectOnTarget`,
+whose damage log and `Unit::Kill` come before the map's object updates carry the death). Smite has no speed in
+either database, so neither server holds its damage back.
+
+The 1.12.1 client (build 5875) plays the impact from the go alone. `SMSG_SPELL_GO` is registered at `0x6E717A`,
+handled by `0x6E7640` and read by `0x6E7A70`. For a spell of no speed in the client's Spell.dbc (Smite's is 0), it
+calls `0x6E8BF0`, which looks up each unit in the go's hit list and starts the visual's impact kit on it right away
+(`0x60EDF0`, kind 1). Smite's visual is 128, its impact kit 291, with `HolySmite_Low_Chest` on the chest attachment
+(the Rat's model has that attachment, as the Wolf's does). Nothing on that path looks at the unit's health or
+death. The go's cast flags only matter for the ammunition (0x20), how its hits and misses are merged (0x400), the combat log
+(0x1, 0x1000) and a trade skill's recast (0x41). So the `0x100` mangos sets on a go, and the `0x2` it sets on a
+start, which wvs leaves at 0, change nothing the client shows. The client is told about the hit while the rat is
+alive and known to it. What becomes of the impact after the death arrives is the client's own rendering, and a
+mangos-classic server would get the same result. The real-world tests run their packets through the client
+check too.
