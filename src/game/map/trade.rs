@@ -436,11 +436,15 @@ pub fn accept(map: &mut Map, g: Guid) {
     };
     let to_them = take(map, g, mine);
     let to_me = take(map, with, theirs);
-    for row in &to_them {
-        let _ = crate::game::map::inventory::attach_item(map, with, row);
-    }
-    for row in &to_me {
-        let _ = crate::game::map::inventory::attach_item(map, g, row);
+    // Room was planned for them; an item that still finds none is mailed
+    // to its new owner, never lost.
+    for (to, rows) in [(with, &to_them), (g, &to_me)] {
+        for row in rows {
+            if let Err(e) = crate::game::map::inventory::attach_item(map, to, row) {
+                tracing::warn!(?e, entry = row.entry, "a traded item found no room; mailed");
+                crate::game::map::inventory::mail_back(&map.realm, to, row.clone());
+            }
+        }
     }
     crate::game::map::trade_spells::perform(map, &casts);
     let money = |map: &Map, s: Guid| {
