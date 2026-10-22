@@ -2128,3 +2128,47 @@ async fn a_matchs_end_raises_its_dead_and_stops_its_fighting() {
         "Grom risen, Alice and the creature out of the fight, it immune and stunned"
     );
 }
+
+/// An invitation to a match not yet taken goes with the match's end: the
+/// invited hear their slot is free, and taking it up then brings them
+/// nowhere, rather than out of the world into a finished match.
+#[tokio::test]
+async fn a_matchs_end_takes_back_its_invitations() {
+    let (realm, _a, _b, map) = in_the_basin().await;
+    let mut c = player(&realm, "C", "Carol", Race::Human).await;
+    queue(&c, Map::ArathiBasin).await;
+    c.wait_frame(
+        "the invitation",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() >= 17 && f[13] == 2,
+    )
+    .await;
+    map.query(|m| bg::finish(m, 0)).await;
+    c.wait_frame(
+        "the slot free",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() < 17,
+    )
+    .await;
+    c.send(CMSG_BATTLEFIELD_PORT {
+        map: Map::ArathiBasin,
+        action: BattlefieldPortAction::EnterBattle,
+    })
+    .await;
+    let went = c
+        .gets(Duration::from_millis(400), |m| match m {
+            ServerOpcodeMessage::SMSG_NEW_WORLD(_) => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(went.is_none(), "not into a finished match");
+    let carol = c.guid;
+    let member = realm
+        .social
+        .battlegrounds
+        .lock()
+        .matches
+        .values()
+        .any(|m| m.members.contains_key(&carol) || m.invited.contains_key(&carol));
+    assert!(!member);
+}

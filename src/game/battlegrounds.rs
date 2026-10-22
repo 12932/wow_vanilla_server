@@ -897,16 +897,27 @@ pub fn strayed(map: &mut Map, g: Guid) {
 }
 
 /// The match on `key` is over.
+///
+/// Its invitations not yet taken go with it, each one's slot told it is
+/// free, so that no one is taken out of the world (or of a queue) into a
+/// match that is over.
 pub fn ended(realm: &Realm, key: MapKey) {
-    if let Some(m) = realm
-        .social
-        .battlegrounds
-        .lock()
-        .matches
-        .get_mut(&key.instance)
+    let mut lapsed: Vec<(Guid, u32)> = Vec::new();
     {
+        let mut bgs = realm.social.battlegrounds.lock();
+        let Some(m) = bgs.matches.get_mut(&key.instance) else {
+            return;
+        };
         m.ended = true;
         m.ended_at = Some(Instant::now());
+        let bg = m.bg;
+        let invited: Vec<Guid> = m.invited.drain().map(|(g, _)| g).collect();
+        for g in invited {
+            lapsed.push((g, bgs.free_slot(g, bg).unwrap_or(0)));
+        }
+    }
+    for (g, slot) in lapsed {
+        send_frame(realm, g, &none_frame(slot));
     }
 }
 
