@@ -115,3 +115,37 @@ async fn a_client_still_loading_a_map_acts_on_nothing_there() {
     .await;
     assert_eq!(Some(!after), before);
 }
+
+/// mangos-classic's `UF_FLAG_PUBLIC` has a unit's aura state, the spell
+/// that made it, its NPC flags and its emote state: another player sees a
+/// dancer dance (Thistle Tea's "retains dancing for observers"), and a
+/// target under a fifth of its health lights Execute.
+#[tokio::test]
+async fn another_player_sees_a_players_emote_and_aura_states() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let start = crate::game::tests_p3_combat::START;
+    a.heartbeat(start.0, start.1, start.2).await;
+    let (mut b, _) = crate::game::tests_p3_entity::bob(&realm, ga).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    const DANCE: u32 = 10;
+    const HEALTHLESS_20: u32 = 1 << 1;
+    map.call(move |m| {
+        if let Some(p) = m.players.get_mut(&ga) {
+            p.fields.set_u32(UNIT_NPC_EMOTESTATE, DANCE);
+            p.fields.set_u32(UNIT_FIELD_AURASTATE, HEALTHLESS_20);
+        }
+    });
+    let seen = b
+        .wait_for("Alice's states", |m| {
+            harness::values(m).into_iter().find_map(|(of, mask)| match mask {
+                UpdateMask::Player(p) if of == ga => {
+                    Some((p.unit_npc_emotestate()?, p.unit_aurastate()?))
+                }
+                _ => None,
+            })
+        })
+        .await;
+    assert_eq!(seen, (DANCE as i32, HEALTHLESS_20 as i32));
+}
