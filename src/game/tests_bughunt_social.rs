@@ -680,3 +680,76 @@ async fn an_auction_run_out_takes_no_bid_nor_cancel() {
     let money = on_map(&realm, move |m| m.players[&ga].money()).await;
     assert_eq!(money, 10_000, "no buyout");
 }
+
+/// The money on a mail went to its taker whole, past the most a player may
+/// hold, and what was past it was lost (the review's finding; the user's
+/// call 6). What fits is taken and the rest left in the mail, in memory,
+/// in the store and in the list the client is sent; with no room, nothing.
+#[tokio::test]
+async fn mail_money_past_the_cap_is_left_in_the_mail() {
+    use crate::game::map::inventory::MAX_MONEY;
+    type Two = SMSG_SEND_MAIL_RESULT_MailResultTwo;
+    const GOLD: u32 = 10_000;
+    let realm = harness::realm();
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let id = mail::post(
+        &realm,
+        mail::Mail {
+            kind: mail::NORMAL,
+            sender: 99,
+            receiver: guid::counter(gb),
+            subject: "Takings".into(),
+            money: 50 * GOLD,
+            deliver_at: mail::now() - 1,
+            expires_at: mail::now() + 30 * mail::DAY,
+            ..Default::default()
+        },
+    );
+    set_money(&realm, gb, MAX_MONEY - 10 * GOLD).await;
+    async fn take(b: &mut Client, id: u32) -> Two {
+        b.clear();
+        b.send(CMSG_MAIL_TAKE_MONEY {
+            mailbox: Guid::zero(),
+            mail_id: id,
+        })
+        .await;
+        b.wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => match r.action {
+                SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => Some(result2),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await
+    }
+    let r = take(&mut b, id).await;
+    assert!(matches!(r, Two::Ok), "{r:?}");
+    let listed = b
+        .wait_for("SMSG_MAIL_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(l) => l
+                .mails
+                .iter()
+                .find(|m| m.message_id == id)
+                .map(|m| m.money.as_int()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(listed, 40 * GOLD, "the list sent shows what is left");
+    let money = on_map(&realm, move |m| m.players[&gb].money()).await;
+    assert_eq!(money, MAX_MONEY, "Bob takes what fits");
+    let kept = realm.social.mail.lock().mails[&id].money;
+    assert_eq!(kept, 40 * GOLD, "the rest stays in the mail");
+    let stored = realm
+        .store
+        .record(mail::KIND_MAIL, u64::from(id))
+        .await
+        .expect("the mail stored");
+    let stored: mail::Mail = serde_json::from_str(&stored).expect("a mail");
+    assert_eq!(stored.money, 40 * GOLD, "and in the store");
+
+    // At the cap: nothing taken, an error.
+    let r = take(&mut b, id).await;
+    assert!(matches!(r, Two::ErrInternalError), "{r:?}");
+    assert_eq!(realm.social.mail.lock().mails[&id].money, 40 * GOLD);
+}
