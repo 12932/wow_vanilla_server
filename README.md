@@ -104,6 +104,7 @@ player's `.` line is just chat.
 | `.speed <multiplier>` | 2 | Run speed |
 | `.spawn <entry>` | 2 | Spawn a creature |
 | `.die`, `.revive`, `.levelup [n]` | 2 | On the target, or oneself |
+| `.durability [off\|on]` | 2 | Off mends everything you own (bank too), free, broken gear working again, and nothing wears until on; kept on the character. No argument says which |
 | `.arena start [countdown s] [max minutes]`, `.arena stop` | 2 | Gurubashi Arena's last man standing, with everyone alive on the pit's floor |
 | `.arena status`, `.arena history` | 0 | The battle on, and the last champions |
 | `.account create\|password <name> <password>`, `.account gm <name> <level>` | 3 | Accounts |
