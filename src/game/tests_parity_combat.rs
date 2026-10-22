@@ -623,7 +623,7 @@ fn shown_at(seen: &[Seen], t: Instant) -> Option<Vector3d> {
 
 /// The kobold's reach (the user's report): a rogue who strikes a kobold,
 /// runs 25 yards and stops is chased, and the kobold's run ends where it
-/// aimed, half a yard inside its reach, as the client plays it: it doesn't
+/// aimed, inside its reach, as the client plays it: it doesn't
 /// stop on the reach's edge, where the client, showing a creature on the
 /// move a little behind, would have it out of reach. Each swing after
 /// comes from within reach as the client shows the kobold.
@@ -682,32 +682,34 @@ async fn a_chased_rogue_is_struck_only_from_within_reach() {
         stops, 0,
         "its run ends where it aimed, not stopped short: {seen:?}"
     );
+    let (resting, range, rests_at) = map
+        .query(move |m| {
+            let c = m.creature(kobold).unwrap();
+            (
+                dist(c.position, m.players[&ga].position()),
+                reach(m, kobold, ga),
+                c.position,
+            )
+        })
+        .await
+        .unwrap();
     for t in &swings {
-        // A little after, as the client shows the swing.
-        let shown = shown_at(&seen, *t + Duration::from_millis(20)).expect("seen moving");
+        // A little after, as the client shows the swing; where it rests,
+        // if its last path came before she stopped (it ended in her reach
+        // of where she stopped, and no other was needed).
+        let shown = shown_at(&seen, *t + Duration::from_millis(20)).unwrap_or(rests_at);
         assert!(
             dist(shown, me) <= 5.0 + 0.01,
             "a swing from {} yards: {seen:?}",
             dist(shown, me)
         );
     }
-    let (resting, range) = map
-        .query(move |m| {
-            let c = m.creature(kobold).unwrap();
-            (
-                dist(c.position, m.players[&ga].position()),
-                reach(m, kobold, ga),
-            )
-        })
-        .await
-        .unwrap();
     assert!(resting <= range, "it rests in reach: {resting} of {range}");
 }
 
-/// The chase's distances (Thistle Tea's `chase_target_distance` and
-/// `chase_rechase_distance`): it aims half a yard inside its reach, and
-/// paths again only once its victim is three quarters of the reach (less
-/// its bounding radius) from where it aimed, or it has stopped.
+/// The chase's distances (mangos-classic's `ChaseMovementGenerator`): it
+/// aims at half its reach from its victim, and paths again only once its
+/// victim is out of reach of where it is headed.
 #[tokio::test]
 async fn a_chaser_aims_inside_its_reach_and_paths_again_only_when_its_victim_has_gone() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;
@@ -727,12 +729,11 @@ async fn a_chaser_aims_inside_its_reach_and_paths_again_only_when_its_victim_has
             let range = reach(m, kobold, ga);
             let (first, goal) = spline(m).expect("it chases");
             let aimed = dist(goal, at(-16.0, 0.0));
-            // Two yards: within three quarters of its reach, less the
-            // victim's bounding radius.
+            // Two yards aside: still in reach of where it is headed.
             set(m, -16.0, 2.0);
             step(m, 1);
             let kept = spline(m).map(|s| s.0) == Some(first);
-            set(m, -16.0, 4.0);
+            set(m, -16.0, 6.0);
             step(m, 1);
             let again = spline(m).is_some_and(|s| s.0 != first);
             (range, aimed, kept, again)
@@ -745,15 +746,13 @@ async fn a_chaser_aims_inside_its_reach_and_paths_again_only_when_its_victim_has
         "aims {aimed} of {range}"
     );
     assert!(kept, "two yards on, the same path");
-    assert!(again, "four yards on, a new one");
+    assert!(again, "six yards on, a new one");
 }
 
 #[test]
-fn the_chase_distances_are_thistle_teas() {
-    assert_eq!(combat::chase_distance(5.0), 4.5);
-    assert_eq!(combat::chase_distance(0.3), 0.0);
-    assert!((combat::rechase_distance(5.0, 0.388) - 3.362).abs() < 1e-4);
-    assert_eq!(combat::rechase_distance(0.4, 1.0), 0.0);
+fn the_chase_distance_is_half_the_reach() {
+    assert_eq!(combat::chase_distance(5.0), 2.5);
+    assert_eq!(combat::chase_distance(12.0), 6.0);
 }
 
 /// What came to a client of a creature's moves and attack starts, in order.

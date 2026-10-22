@@ -1428,23 +1428,37 @@ fn fight_step(map: &mut Map, g: Guid) {
             crate::game::map::creature_combat::reach(map, g, true);
         }
         // On its way in, a chaser runs on to where it aimed, inside its
-        // reach, until it touches its victim (Thistle Tea's
-        // `halt_at_contact`): it doesn't stop on the reach's edge. A step
-        // about its victim goes on to its end. A walk that isn't a chase
-        // (a wander, its path) stops as the fight begins in reach
-        // (`interrupt_idle_movement`).
+        // reach: it doesn't stop on the reach's edge. It stops short only
+        // once its victim, moved since, has come nearer it than where it
+        // is headed (mangos-classic's `ChaseMovementGenerator`, its
+        // destination past its target in reach: no running on behind
+        // them). A step about its victim goes on to its end. A walk that
+        // isn't a chase (a wander, its path) stops as the fight begins in
+        // reach (`interrupt_idle_movement`).
         let (moving, spreading, chasing) = map.creature(g).map_or((false, false, false), |c| {
+            let chasing = match (&c.motion, c.chase_target_at) {
+                (Motion::Moving(w), Some(aimed)) => {
+                    let ahead = dist(me.position, w.destination());
+                    aimed == them.position || ahead <= dist(me.position, them.position)
+                }
+                _ => false,
+            };
             (
                 matches!(c.motion, Motion::Moving(_)),
                 c.engagement.spreading,
-                c.chase_target_at.is_some(),
+                chasing,
             )
         });
-        let runs_on =
-            chase && moving && (spreading || (chasing && !combat::in_contact(&me, &them)));
+        let runs_on = chase && moving && (spreading || chasing);
+        // Turning to its victim a little it sends nothing: the client
+        // turns a creature to its target itself (mangos's `SetInFront` as
+        // it fights, "client change orientation by self"). Only one that
+        // has its victim off its front is told turned (Thistle Tea's
+        // `face_melee_victim`, on bad facing alone). A move for each turn,
+        // at every bite the victim had stepped for, jerked it.
         if !runs_on && moving {
             stop_moving(map, g);
-            face(map, g, victim);
+            turn_to(map, g, victim, faces(&me, &them));
         }
         if !moving && let Some(c) = map.creature_mut(g) {
             c.engagement.spreading = false;
@@ -1455,7 +1469,7 @@ fn fight_step(map: &mut Map, g: Guid) {
                 .creature(g)
                 .is_some_and(|c| c.combat.next_swing.is_none_or(|t| t <= now));
             if !runs_on && (due || !faces(&me, &them)) {
-                face(map, g, victim);
+                turn_to(map, g, victim, faces(&me, &them));
             }
             combat::try_swing(map, g);
             // Still in reach, attacking: its stand renews its leash.
@@ -1470,28 +1484,22 @@ fn fight_step(map: &mut Map, g: Guid) {
         }
         return;
     }
-    // Chase: path again once the victim has gone far enough from where it
-    // aimed (Thistle Tea's re-chase distance), or it has stopped.
+    // Chase: path again once the victim is out of reach of where it is
+    // headed, or of where it stands (mangos-classic's
+    // `ChaseMovementGenerator::RequiresNewPosition`, the combined reach
+    // from the spline's end): not for every step its victim takes.
     let Some(c) = map.creature(g) else {
         return;
     };
     let reach = combat::melee_range(&me, &them);
-    let bounding = map
-        .unit_fields(victim)
-        .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0));
     let habitat = crate::game::map::creature_motion::habitat(map, g);
     let flies = habitat.fly;
-    // A flyer, or a swimmer under the water, goes after its victim's
-    // height as well: it paths again when only that changes (Thistle
-    // Tea's aquatic chase).
-    let stale = c.chase_target_at.is_none_or(|at| {
-        let moved = if flies || habitat.swims {
-            dist(at, them.position)
-        } else {
-            planar(at, them.position)
-        };
-        moved > combat::rechase_distance(reach, bounding)
-    }) || !matches!(c.motion, Motion::Moving(_));
+    let headed = match &c.motion {
+        Motion::Moving(w) if c.chase_target_at.is_some() => Some(w.destination()),
+        Motion::Moving(_) => None,
+        Motion::Idle { .. } => Some(me.position),
+    };
+    let stale = headed.is_none_or(|at| dist(at, them.position) > reach);
     if !stale {
         return;
     }
@@ -1767,6 +1775,25 @@ fn announce(map: &mut Map, g: Guid, victim: Guid) {
         {
             p.outbound.send_frame(frame);
         }
+    }
+}
+
+/// A creature fighting turns to `target`: telling no one if it `faced` it
+/// already, near enough (its client turns it to its target itself,
+/// mangos's `SetInFront`); else as [`face`] does.
+fn turn_to(map: &mut Map, g: Guid, target: Guid, faced: bool) {
+    if !faced {
+        face(map, g, target);
+        return;
+    }
+    let (Some(at), Some(to)) = (map.position_of(g), map.position_of(target)) else {
+        return;
+    };
+    if planar(at, to) < 0.01 {
+        return;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        c.orientation = (to.y - at.y).atan2(to.x - at.x);
     }
 }
 

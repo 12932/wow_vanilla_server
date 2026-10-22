@@ -352,9 +352,9 @@ async fn a_script_ends_or_goes_on_by_a_living_creature_near() {
 /// Thistle Tea's `ChaseWatch`: "notifies chasers only after the target
 /// crosses their movement threshold", "updates the watched position after
 /// notifying" and `unwatch` "removes a chaser from all target watches": a
-/// creature chasing its victim paths again only once the victim has gone
-/// past its re-chase distance from where it last aimed, aiming from there
-/// on; and leaving the fight, it watches no one.
+/// creature chasing its victim paths again only once the victim is out of
+/// its reach of where it is headed (mangos-classic's threshold), aiming
+/// from there on; and leaving the fight, it watches no one.
 #[tokio::test]
 async fn a_chaser_paths_again_only_past_its_rechase_distance() {
     use crate::game::map::creature::Motion;

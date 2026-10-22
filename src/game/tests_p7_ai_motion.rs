@@ -159,16 +159,17 @@ async fn a_creature_steps_aside_from_its_kind_on_its_own_clock_three_times_till_
     assert_eq!(reset, (false, 0, true), "its victim moving: counted afresh");
 }
 
-/// Thistle Tea's `halt_at_contact` "keeps moving outside the contact
-/// ring", "halts, faces the target, and emits a stop when riding a spline
-/// into contact", "does not interrupt a spread move" and "clears the
-/// spreading flag once stationary"; `interrupt_idle_movement` "halts a
-/// wander spline when combat starts within melee range" and "leaves
-/// combat movement untouched", and the tree "interrupts a wander spline
-/// when combat begins": a chaser in reach runs on until it touches its
-/// victim, and there stops, turned to it, its watchers told; a step about
-/// its victim goes on to its end, and once it stands it is a step no
-/// more. A wander the fight finds in reach stops at once.
+/// mangos-classic's chase, its run cut short once its victim has come
+/// nearer it than where it is headed; Thistle Tea's `halt_at_contact`
+/// "does not interrupt a spread move" and "clears the spreading flag once
+/// stationary"; `interrupt_idle_movement` "halts a wander spline when
+/// combat starts within melee range" and "leaves combat movement
+/// untouched", and the tree "interrupts a wander spline when combat
+/// begins": a chaser in reach of a victim who stands runs on to where it
+/// aimed; one she comes nearer than that stops, turned to her, its
+/// watchers told; a step about its victim goes on to its end, and once it
+/// stands it is a step no more. A wander the fight finds in reach stops
+/// at once.
 #[tokio::test]
 async fn a_chaser_runs_on_to_contact_a_step_about_goes_on_and_a_wander_stops_as_the_fight_begins() {
     let (realm, _a, ga, map) = world(data()).await;
@@ -191,25 +192,25 @@ async fn a_chaser_runs_on_to_contact_a_step_about_goes_on_and_a_wander_stops_as_
             ai::attacked(m, k, ga);
             turns(m, 1);
             let chasing = moving(m, k) && m.creature(k).unwrap().chase_target_at.is_some();
-            // She comes to it: in its reach, not touching it, it runs on.
+            // In her reach, she standing, it runs on to where it aimed.
+            let her = m.position_of(ga).unwrap();
+            let mut runs_on = false;
+            for _ in 0..200 {
+                turns(m, 1);
+                let (me, them) = (m.unit_view(k).unwrap(), m.unit_view(ga).unwrap());
+                if crate::game::map::combat::in_melee_range(&me, &them) {
+                    runs_on = moving(m, k) && dist(me.position, her) > 3.0;
+                    break;
+                }
+            }
+            // She comes nearer it than where it is headed: it stops,
+            // turned to her.
             let here = m.position_of(k).unwrap();
             stand(
                 m,
                 ga,
                 Vector3d {
-                    x: here.x - 4.0,
-                    ..here
-                },
-            );
-            turns(m, 1);
-            let runs_on = moving(m, k);
-            // Touching: it stops, turned to her.
-            let here = m.position_of(k).unwrap();
-            stand(
-                m,
-                ga,
-                Vector3d {
-                    x: here.x - 2.0,
+                    x: here.x - 1.0,
                     ..here
                 },
             );
