@@ -303,10 +303,11 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
             };
+            // Its tap stays: a creature's loot recipient goes only as it
+            // evades or respawns (mangos-classic's `TriggerEvadeEvents`,
+            // `Creature::Respawn`; Thistle Tea's `Engagement.leave`), not
+            // as its tapper dies, feigns or vanishes and it fights on.
             cr.threat.retain(|(t, _)| *t != g);
-            if cr.tapped_by == Some(g) {
-                crate::game::map::tap::clear(cr);
-            }
             if cr.combat.victim != g {
                 continue;
             }

@@ -184,3 +184,37 @@ async fn a_possessed_players_kill_is_their_controllers() {
     .await;
     assert_eq!(b.wait_for("his own kill's XP", xp_for(next)).await, alone);
 }
+
+/// Bug hunt (combat): a creature's tap went as its tapper left its list
+/// (died, feigned death, vanished), so the next to strike it took a kill
+/// they had no part of. Its tap stays until it evades or respawns
+/// (mangos-classic's `TriggerEvadeEvents`, Thistle Tea's
+/// `Engagement.leave`): the kill is still the tapper's.
+#[tokio::test]
+async fn a_tap_outlasts_its_tapper_leaving_the_fight() {
+    let realm = harness::realm_with(crate::game::tests_p3_combat::data());
+    let mut a = player(&realm, "Alice").await;
+    let mut b = player(&realm, "Bob").await;
+    let (ga, gb) = (a.guid, b.guid);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (brute, kept) = on(&map, move |m: &mut Map| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        combat::engage(m, ga, brute);
+        combat::deal_damage(m, ga, brute, 1);
+        combat::engage(m, gb, brute);
+        combat::deal_damage(m, gb, brute, 1);
+        // Alice feigns death: off its list, it fights Bob on.
+        crate::game::map::ai::forget(m, ga);
+        let kept = m.creature(brute).and_then(|c| c.tapped_by);
+        combat::deal_damage(m, gb, brute, 1_000_000);
+        (brute, kept)
+    })
+    .await;
+    assert_eq!(kept, Some(ga), "still Alice's");
+    a.wait_for("the kill's XP", xp_for(brute)).await;
+    assert_eq!(
+        b.gets(Duration::from_millis(100), xp_for(brute)).await,
+        None,
+        "not Bob's"
+    );
+}
