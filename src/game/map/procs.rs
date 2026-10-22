@@ -503,6 +503,16 @@ fn run(
     let trigger_spell = e.spell.and_then(|id| data.spells.get(id));
     let mut rng = rand::rng();
     for h in candidates {
+        // Still on, as it is now: an earlier proc may have taken it off
+        // or spent it (mangos skips a holder `IsDeleted`).
+        let Some(h) = auras::auras(map, owner).and_then(|a| {
+            a.holders
+                .iter()
+                .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+                .cloned()
+        }) else {
+            continue;
+        };
         let Some(s) = data.spells.get(h.spell) else {
             continue;
         };

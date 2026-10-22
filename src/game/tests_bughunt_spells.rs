@@ -658,3 +658,82 @@ async fn ground_ticks_roll_with_their_casters_hit() {
         .unwrap();
     assert!(hits >= 15, "{hits} of 20 landed");
 }
+
+/// A proc that takes another proc aura off (a dispel) keeps that one from
+/// firing in the same event, as mangos skips a holder removed meanwhile
+/// (review 3's R3-26).
+#[tokio::test]
+async fn an_aura_taken_off_by_a_proc_doesnt_proc_after() {
+    use super::tests_p3_spells_kit::dummy;
+    use crate::game::map::{procs, spells};
+    const CLEANSE: u32 = 991_030;
+    const CLEANSER: u32 = 991_031;
+    const MARKER: u32 = 991_032;
+    const MARK: u32 = 991_033;
+    const MECHANIC: u32 = 7;
+    let realm = fast_realm(|d| {
+        let proc_trigger = |id: u32, trigger: u32| {
+            let mut s = bare(id, 0);
+            s.duration_index = LASTS_LONG;
+            s.proc_flags = procs::PROC_DONE_MELEE;
+            s.proc_chance = 100;
+            effect(
+                &mut s,
+                0,
+                crate::game::data::spells::SpellEffect {
+                    trigger_spell: trigger,
+                    ..aura(auras::AURA_PROC_TRIGGER_SPELL, 0, 0, 1)
+                },
+            );
+            s
+        };
+        let mut cleanse = bare(CLEANSE, 0);
+        effect(
+            &mut cleanse,
+            0,
+            crate::game::data::spells::SpellEffect {
+                effect: spells::EFFECT_DISPEL_MECHANIC,
+                misc_value: MECHANIC as i32,
+                target_a: 1,
+                ..Default::default()
+            },
+        );
+        let mut marker = proc_trigger(MARKER, MARK);
+        marker.mechanic = MECHANIC;
+        let mut mark = bare(MARK, 0);
+        mark.duration_index = LASTS_LONG;
+        effect(&mut mark, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, [proc_trigger(CLEANSER, CLEANSE), cleanse, marker, mark]);
+    });
+    let (_c, g, map) = human(&realm, "BHPS", "Procced", Class::Warrior).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            for id in [CLEANSER, MARKER] {
+                let s = m.realm.data.spells.get(id).unwrap().clone();
+                apply_template(m, g, g, &s);
+            }
+            let k = dummy(m, g, 60, 3.0);
+            procs::trigger(
+                m,
+                procs::Event {
+                    actor: g,
+                    target: k,
+                    actor_flags: procs::PROC_DONE_MELEE,
+                    target_flags: procs::PROC_TAKEN_MELEE,
+                    ex: procs::EX_NORMAL_HIT,
+                    damage: 10,
+                    school: 1,
+                    ..Default::default()
+                },
+            );
+            (has(m, g, MARKER), has(m, g, MARK))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (false, false),
+        "the marker cleansed, and no mark from it"
+    );
+}
