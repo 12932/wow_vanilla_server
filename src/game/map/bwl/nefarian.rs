@@ -445,11 +445,7 @@ pub fn creature_event(map: &mut Map, g: Guid, entry: u32, event: Event) {
         {
             select_tunnels(map);
             if get_data(map, NEFARIAN) != DONE {
-                // One to speak to at his table (vmangos's `Reset`; the
-                // world's faction for him is a foe's).
-                step(map, g, 22, [FACTION_FRIENDLY, 0, 0, 0]);
-                flags(map, g, UNIT_NPC_FLAGS, NPC_FLAG_GOSSIP, true);
-                flags(map, g, UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE, false);
+                at_table(map, g);
             }
         }
         (NPC_NEFARIAN, Event::Death) => set_data(map, NEFARIAN, DONE),
@@ -511,11 +507,29 @@ fn cleanup(map: &mut Map) {
     for b in bones {
         crate::game::map::objects::despawn(map, b);
     }
-    if let Some(n) = nefarius(map)
-        && !alive(map, n)
-    {
-        crate::game::map::ai::respawn_now(map, n);
+    if let Some(n) = nefarius(map) {
+        if alive(map, n) {
+            at_table(map, n);
+        } else {
+            crate::game::map::ai::respawn_now(map, n);
+        }
     }
+}
+
+/// Nefarius as he waits at his table, one to speak to (vmangos's `Reset`;
+/// the world's faction for him is a foe's): friendly, not to be struck,
+/// his menu offered, and moving in a fight again. The friendly faction is
+/// set as his own, not as a script's for a while, so that the faction his
+/// rising sets gives way to it at his fight's end, not to the world's.
+fn at_table(map: &mut Map, n: Guid) {
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, n) {
+        s.temp_faction = None;
+        s.no_combat_movement = false;
+    }
+    scripts::set_faction(map, n, FACTION_FRIENDLY);
+    flags(map, n, UNIT_NPC_FLAGS, NPC_FLAG_GOSSIP, true);
+    flags(map, n, UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE, false);
+    flags(map, n, UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER, true);
 }
 
 fn say(text: u32) -> ScriptStep {

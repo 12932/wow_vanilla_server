@@ -320,4 +320,20 @@ async fn nefarians_lair_lost_is_put_back() {
         .await,
         "Nefarius at his table to begin again"
     );
+    // As he was before the fight: friendly, not to be struck, and his
+    // menu to begin the fight again offered.
+    let table = map
+        .query(move |m| {
+            m.unit_fields(nef).map(|f| {
+                (
+                    f.get_u32(crate::game::fields::UNIT_FIELD_FACTIONTEMPLATE),
+                    f.get_u32(crate::game::fields::UNIT_FIELD_FLAGS) & 0x100,
+                )
+            })
+        })
+        .await
+        .flatten();
+    assert_eq!(table, Some((35, 0x100)), "friendly, immune to players");
+    hello(&mut c, nef).await;
+    option(&mut c, nef, "I've made no mistakes.").await;
 }
