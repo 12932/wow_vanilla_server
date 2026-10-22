@@ -554,6 +554,11 @@ async fn linkens_boomerang_disarms_and_stuns_and_both_wear_off() {
         let hurt = kit::health(m, b) < 100_000;
         let mut combos = Vec::new();
         for (disarm, stun) in [(false, false), (true, false), (false, true), (true, true)] {
+            // The boomerang's own hit may proc either (its chance): each
+            // case starts with neither.
+            for spell in [BOOMERANG_DISARM, BOOMERANG_STUN] {
+                crate::game::map::auras::remove_spell(m, b, spell, None);
+            }
             if disarm {
                 spells::cast_triggered(m, a, BOOMERANG_DISARM, Some(b));
             }

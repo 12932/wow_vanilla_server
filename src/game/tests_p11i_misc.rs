@@ -308,11 +308,7 @@ async fn a_teleport_no_spell_made_ends_the_fight_and_a_spells_short_one_keeps_it
         (pet, boar, at, fighting)
     })
     .await;
-    assert_eq!(
-        fighting,
-        (true, true, true),
-        "fighting"
-    );
+    assert_eq!(fighting, (true, true, true), "fighting");
     // A spell's: Blink's ten yards keep it.
     let short = Vector3d {
         x: start.x + 10.0,
