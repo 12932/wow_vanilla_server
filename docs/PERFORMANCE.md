@@ -1643,3 +1643,41 @@ start, which wvs leaves at 0, change nothing the client shows. The client is tol
 alive and known to it. What becomes of the impact after the death arrives is the client's own rendering, and a
 mangos-classic server would get the same result. The real-world tests run their packets through the client
 check too.
+
+## A charmed creature against its own kind (2026-10-22)
+
+The report: an Alliance priest's Mind Control takes Kartra Bloodsnarl (Orgrimmar's Alterac Valley battlemaster),
+but she can't attack an Orgrimmar Grunt, nor any other Horde NPC. Her faction wasn't the cause: wvs already gives a
+charmed creature its charmer's faction template while it is held, as mangos-classic's `SetFactionTemporary`
+does, and with the priest's template she and the grunt are enemies. The cause was her immunity. vmangos marks
+Kartra `IMMUNE_TO_NPC` (`static_flags1` 0x40, so `UNIT_FLAG_IMMUNE_TO_NPC`, 0x200). `combat::can_attack` follows
+mangos's `Unit::CanAttack`: a unit immune to creatures attacks no creature, and no creature attacks it. wvs kept
+that flag through the charm, so the bar's Attack got "can't attack" for every Horde NPC, and they ignored her.
+
+mangos-classic's `TakeCharmOf` and `TakePossessOf` put the charmer's immunity flags on the charmed unit for the
+charm, and `ResetCharmState` puts its own back afterwards (its immunities and its PvP flag, saved by
+`SetCharmState`). wvs now does the same in `pets::charmed` and `let_go`. While the charm lasts, a creature has its
+charmer's `UNIT_FLAG_IMMUNE_TO_PLAYER`, `UNIT_FLAG_IMMUNE_TO_NPC` and `UNIT_FLAG_PVP` (`pets::CHARM_FLAGS`; the
+PvP flag already followed the charmer's at each step). When it is let go it has its own back. Before, a creature
+flagged for PvP, as Kartra is, lost the flag for good once it was let go. mangos-classic's own line sets the
+charmed unit's flag only when the two differ (`SetFlag`, never a clear). Followed literally, Kartra would stay
+immune. The restore in `ResetCharmState` shows the intent, and the report shows what players expect.
+
+Two more things stopped a possessed creature from fighting:
+
+- **It swung once.** No AI runs for a possessed creature, and nothing else drove its swing. So the first blow
+  landed and the rest never came. The controlled units' step now swings it while it attacks (mangos's
+  `PossessedAI::UpdateAI`, `DoMeleeAttackIfReady`).
+- **The possessor's own attack.** Right-clicking an enemy sends `CMSG_ATTACKSWING`, and wvs swung the priest at it,
+  not the unit he possesses. It now swings the possessed unit (`pets::possessed_by_hand`), as mangos's
+  `HandleAttackSwingOpcode` swings `GetMover()`.
+
+`tests_charm_faction` covers this through the protocol. On the small world, a Horde battlemaster immune to
+creatures and flagged for PvP, under the priest's Mind Control, takes the priest's side. The bar's
+`CMSG_PET_ACTION` Attack sends her at a Horde guard. She strikes him and he fights back. Then the priest's own
+`CMSG_ATTACKSWING` swings her, she swings again when her swing is due, and once she is let go she is her own
+again: her faction, her immunity, her PvP flag, and no enemy of the guard's. The real-world twin (extended) does
+the same with a level 60 Human priest's Mind Control (rank 3) on the real Kartra Bloodsnarl and an Orgrimmar Grunt.
+Only the held creature's `UNIT_FIELD_FLAGS` values change in what is sent, not any packet's layout. The fast suite
+passes, and so do the extended tests for pets, charm, possession, Mind Control and the client check
+(`tests_client_emu`).
