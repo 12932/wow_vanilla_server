@@ -1449,6 +1449,7 @@ fn execute(
 ) {
     // A cast ending: the charged cast-time modifiers it began with.
     let began_with = map.spells.ending_began_with.take();
+    let instant = began_with.is_none();
     // An aura's cast, or a proc's; what it casts in turn is its own.
     let by_aura = BY_AURA.replace(false) || crate::game::map::procs::in_proc();
     // What a triggered cast is checked for still (mangos-classic's
@@ -1490,7 +1491,13 @@ fn execute(
             spell_cost(map, caster, s, &m)
         };
         paid = cost;
+        // An instant that fails here never went off: its global cooldown
+        // is given back, as mangos's checks refuse it before one starts
+        // (Arcane Shot with no ammunition).
         if let Some(r) = checks::at_launch(map, caster, s, cost) {
+            if instant {
+                give_back_gcd(map, caster, s.id);
+            }
             return launch_failed(map, caster, s.id, r);
         }
         // A ranged ability (Arcane Shot, Multi-Shot, Aimed Shot) spends a
@@ -1500,6 +1507,9 @@ fn execute(
             if let Err(r) = ammunition
                 && map.players.contains_key(&caster)
             {
+                if instant {
+                    give_back_gcd(map, caster, s.id);
+                }
                 return launch_failed(map, caster, s.id, r);
             }
         }
@@ -2813,19 +2823,7 @@ pub fn interrupt(map: &mut Map, g: Guid) {
         return;
     };
     if casting.channel_until.is_none() {
-        let category = map
-            .realm
-            .data
-            .spells
-            .get(casting.spell)
-            .map_or(0, |s| s.start_recovery_category);
-        if let Some(c) = map.caster_mut(g) {
-            if category == GCD_SPELLS {
-                c.gcd_until = None;
-            } else {
-                c.other_gcds.retain(|(cat, _)| *cat != category);
-            }
-        }
+        give_back_gcd(map, g, casting.spell);
     }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
@@ -3085,6 +3083,24 @@ pub fn combat_began(map: &mut Map, g: Guid) {
 pub fn cancel(map: &mut Map, g: Guid) {
     interrupt(map, g);
     crate::game::map::combat::cancel_queued(map, g);
+}
+
+/// The global cooldown `spell` started is given back (mangos's
+/// `ResetGCD`): a cast that never went off.
+fn give_back_gcd(map: &mut Map, g: Guid, spell: u32) {
+    let category = map
+        .realm
+        .data
+        .spells
+        .get(spell)
+        .map_or(0, |s| s.start_recovery_category);
+    if let Some(c) = map.caster_mut(g) {
+        if category == GCD_SPELLS {
+            c.gcd_until = None;
+        } else {
+            c.other_gcds.retain(|(cat, _)| *cat != category);
+        }
+    }
 }
 
 /// `CMSG_CANCEL_CAST`: the cast or channel of `spell` stops, if that is

@@ -511,3 +511,33 @@ async fn a_failed_cast_doesnt_dismount() {
         .unwrap();
     assert_eq!(out, (true, true, true, true, false, true));
 }
+
+/// An instant ranged ability that fails as it goes for want of a ranged
+/// weapon or ammunition gives its global cooldown back, as mangos's checks
+/// refuse it before one starts (review 3's R3-23).
+#[tokio::test]
+async fn an_instant_failed_at_launch_gives_its_global_cooldown_back() {
+    use super::tests_p3_spells_kit::{at, dummy};
+    use crate::game::map::spells;
+    const SHOT: u32 = 991_000;
+    let realm = fast_realm(|d| {
+        let mut shot = bare(SHOT, 0);
+        shot.attributes[0] |= 0x2;
+        shot.dmg_class = 3;
+        shot.start_recovery_category = spells::GCD_SPELLS;
+        shot.start_recovery_time = 1_500;
+        effect(&mut shot, 0, damage(10));
+        insert(d, [shot]);
+    });
+    let (_c, g, map) = human(&realm, "BHGC", "Shooter", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[SHOT]);
+            let k = dummy(m, g, 60, 4.0);
+            spells::cast(m, g, SHOT, at(k), None);
+            m.caster(g).unwrap().gcd_until
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, None, "no global cooldown for a shot not loosed");
+}
