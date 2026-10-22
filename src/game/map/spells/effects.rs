@@ -2097,17 +2097,26 @@ pub fn tick_areas(map: &mut Map) {
         .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
     // The tick due as an area ends is had before it goes (mangos's
     // `Aura::Update` keeps the last tick): Blizzard's eighth wave.
-    let due: Vec<usize> = (0..map.spells.areas.len())
-        .filter(|i| {
-            let a = &map.spells.areas[*i];
-            a.next_tick <= now && (a.next_tick <= a.ends || a.ends > now)
-        })
+    // Each found again by its object and effect as its turn comes: a tick
+    // may end another area (its channeller killed), which moves the rest.
+    let due: Vec<(Guid, usize)> = map
+        .spells
+        .areas
+        .iter()
+        .filter(|a| a.next_tick <= now && (a.next_tick <= a.ends || a.ends > now))
+        .map(|a| (a.object, a.index))
         .collect();
     let data = map.realm.data.clone();
-    for i in due {
-        let Some(area) = map.spells.areas.get(i).cloned() else {
+    for (object, index) in due {
+        let Some(i) = map
+            .spells
+            .areas
+            .iter()
+            .position(|a| a.object == object && a.index == index)
+        else {
             continue;
         };
+        let area = map.spells.areas[i].clone();
         // On its own cadence, so a late update doesn't lose its last.
         map.spells.areas[i].next_tick = area.next_tick + area.period;
         let Some(s) = data.spells.get(area.spell) else {

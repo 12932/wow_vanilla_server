@@ -24,6 +24,8 @@ const GROUND: u32 = 96_600;
 const DOT: u32 = 96_601;
 const WARD: u32 = 96_602;
 const RADIUS: u32 = 96;
+/// A ground area its caster channels, as Blizzard is.
+const CHANNELLED: u32 = 96_603;
 
 fn data() -> GameData {
     let mut d = crate::game::tests_p3_aura2::data();
@@ -48,6 +50,9 @@ fn data() -> GameData {
         radius_index: RADIUS,
         ..Default::default()
     };
+    let mut channelled = ground.clone();
+    channelled.id = CHANNELLED;
+    channelled.attributes[1] |= crate::game::data::spells::ATTR_EX_CHANNELED;
     let mut dot = aura_spell(DOT, Some(5_000), &[(AURA_PERIODIC_DAMAGE, 0, 1000)]);
     dot.school = 5;
     dot.dmg_class = 1;
@@ -56,6 +61,7 @@ fn data() -> GameData {
         &mut d,
         [
             ground,
+            channelled,
             dot,
             aura_spell(WARD, None, &[(AURA_MOD_RESIST_CHANCE, 0x7F, 0)]),
         ],
@@ -126,4 +132,46 @@ async fn each_ground_tick_rolls_its_hit_on_those_inside() {
     assert_eq!(got.1, 99_900, "the next tick deals its damage");
     assert_eq!(got.2, 99_900, "none out of the area");
     assert_eq!(got.3, 99_900, "the DoT's tick lands");
+}
+
+/// At `at`, `dx` yards east.
+fn east(at: Vector3d, dx: f32) -> Vector3d {
+    Vector3d { x: at.x + dx, ..at }
+}
+
+/// A tick that ends another area (its channeller killed) doesn't shift
+/// which areas tick: one cast later, not yet due, waits for its own time.
+#[tokio::test]
+async fn an_area_ended_by_a_tick_doesnt_tick_another_early() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let channeller = spawn(m, ga, BRUTE, 20, 5.0);
+            let later = spawn(m, ga, BRUTE, 20, 5.0);
+            let at = m.position_of(channeller).unwrap();
+            place(m, later, east(at, 30.0));
+            crate::game::tests_p3_aura2::set(m, channeller, crate::game::fields::UNIT_FIELD_HEALTH, 1);
+            let dest = |p: Vector3d| spells::Targets {
+                dest: Some(p),
+                ..Default::default()
+            };
+            spells::cast_triggered_with(m, ga, GROUND, dest(at));
+            spells::cast(m, channeller, CHANNELLED, dest(east(at, -30.0)), None);
+            let areas = m.spells.areas.len();
+            pass(m, 500);
+            spells::cast_triggered_with(m, ga, GROUND, dest(east(at, 30.0)));
+            pass(m, 500);
+            (
+                areas,
+                health(m, channeller),
+                m.spells.areas.len(),
+                health(m, later),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(got.0, 2, "the ground and the channel");
+    assert_eq!(got.1, 0, "the channeller killed");
+    assert_eq!(got.2, 2, "its area gone, the later one there");
+    assert_eq!(got.3, 100_000, "the later area not yet ticked");
 }
