@@ -101,6 +101,8 @@ pub mod trinkets;
 pub mod ubrs_stadium;
 pub mod vendor;
 pub mod views;
+#[doc(hidden)]
+pub mod vis_bench;
 pub mod visibility;
 pub mod world;
 pub mod world_states;
@@ -1438,7 +1440,7 @@ impl Map {
         }
     }
 
-    fn insert_player(&mut self, mut p: Player) {
+    pub(crate) fn insert_player(&mut self, mut p: Player) {
         p.known.clear();
         p.observers.clear();
         // A bank opened in another world is shut (Thistle Tea's

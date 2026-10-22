@@ -127,6 +127,13 @@ harness = false
 name = "chat"
 harness = false
 
+# Visibility's refresh in a crowd of 100 to 3,000 players all in sight of
+# each other, moving in step or at random (`cargo bench --bench visibility`,
+# docs/PERFORMANCE.md).
+[[bench]]
+name = "visibility"
+harness = false
+
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,
 # wow_messages, the navmesh, compression): the suite takes a third less time,
 # and the crate itself builds as quickly as before. See docs/PERFORMANCE.md.
