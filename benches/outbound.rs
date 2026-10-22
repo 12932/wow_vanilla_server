@@ -137,6 +137,31 @@ mod writer {
             });
     }
 
+    /// Every frame a broadcast of the cork's, the client one of 3,000 in
+    /// each: the writer takes its share of the cork's log.
+    #[divan::bench]
+    fn sink_broadcast(bencher: Bencher) {
+        let rt = current_thread();
+        let all = Arc::new(all_of(3000));
+        bencher
+            .counter(ItemsCount::new(FRAMES))
+            .with_inputs(|| {
+                let (out, frames) = Outbound::with_budget(1 << 30);
+                let f = heartbeat();
+                {
+                    let _cork = conn::Cork::new();
+                    for _ in 0..FRAMES {
+                        conn::broadcast(1, &f, &all, |i| (i == 0).then(|| out.clone()));
+                    }
+                }
+                (out, frames, encrypter())
+            })
+            .bench_local_values(|(out, frames, enc): (Outbound, Frames, EncrypterHalf)| {
+                drop(out);
+                rt.block_on(conn::run_writer(tokio::io::sink(), enc, frames, LONG));
+            });
+    }
+
     /// A frame at a time, each written before the next is sent: a write a
     /// packet, as when packets trickle in.
     #[divan::bench]
