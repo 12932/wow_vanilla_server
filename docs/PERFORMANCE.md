@@ -1079,7 +1079,8 @@ Without the batch an event cost what it did: at 200 bots the fan-out's pushes we
 each observer's writer, one an event. With it, the server's CPU falls by two thirds for 170,000 packets a second, for
 7 ms more latency at the median. At 3,000 bots each moving as the drill's do (about 4 packets a second) the map's
 broadcasts cost about 2 ns a delivery, 38 million deliveries a second, about 8% of its thread, where one by one they
-would cost more than the thread.
+would cost more than the thread; on top of that is a push to each client a batch (at 10 ms, about 360,000 pushes a
+second for 3,000, each with a wake of its writer), which the drills past 1,000 should measure.
 
 `SMSG_COMPRESSED_MOVES` (0x2FB), looked at for carrying other players' movement: mangos-classic never sends it
 (`Handle_ServerSide`), and wow_messages lays it out for monster moves and splines only. In the 1.12.1 client its
