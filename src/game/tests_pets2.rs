@@ -736,6 +736,39 @@ async fn a_possessed_creature_removed_gives_its_master_their_own_back() {
     assert!(sight.is_zero() && charm_field.is_zero());
 }
 
+/// Bug hunt (combat and pets): a creature charmed by a player leaving the
+/// map was let go turning on them: the departing player back on its list,
+/// its tap theirs, a fight with one no longer there. Let go as they leave,
+/// it turns on no one.
+#[tokio::test]
+async fn a_charmed_creature_let_go_as_its_master_leaves_turns_on_no_one() {
+    let realm = harness::realm_with(more());
+    let (_a, ga, map) = enter(&realm, "A", "Charmer", Race::Human, Class::Warlock).await;
+    let wolf = place(&map, ga, WOLF, 0x70_0103, 6.0).await;
+    let r = map
+        .query(move |m| {
+            pets::charmed(m, ga, wolf, false);
+            let held = pets::state(m, wolf).map(|s| s.kind);
+            let _gone = m.take_player(ga);
+            let c = m.creature(wolf).unwrap();
+            (
+                held,
+                c.pet.is_none(),
+                c.threat.len(),
+                c.tapped_by,
+                c.combat.attacking,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, Some(Kind::Charmed));
+    assert_eq!(
+        (r.1, r.2, r.3, r.4),
+        (true, 0, None, false),
+        "free, and fighting no one"
+    );
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());

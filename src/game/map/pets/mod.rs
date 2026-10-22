@@ -946,8 +946,10 @@ pub fn owner_leaving(map: &mut Map, owner: Guid) {
         return;
     };
     let owned = p.owned.clone();
+    // Let go without turning on them: they are gone in a moment, and a
+    // logout or a map's change starts no fight.
     if let Some(c) = owned.charm {
-        release(map, owner, c);
+        let_go(map, owner, c, false);
     }
     for g in owned
         .totems
