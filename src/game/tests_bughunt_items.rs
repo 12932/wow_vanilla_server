@@ -342,3 +342,41 @@ async fn a_clam_in_the_bank_doesnt_open_away_from_a_banker() {
     let open = on_map(&realm, move |m| m.players[&g].misc.item_loot.is_some()).await;
     assert!(!open);
 }
+
+/// mangos's `KilledMonsterCredit` counts for a quest under way only: a
+/// failed one's counters stay, and its client hears nothing.
+#[tokio::test]
+async fn a_failed_quest_gets_no_kill_credit() {
+    let realm = realm();
+    let mut a = alice(&realm).await;
+    let g = a.guid;
+    let boar = on_map(&realm, move |m| {
+        m.players
+            .get_mut(&g)
+            .unwrap()
+            .journal
+            .log
+            .push(crate::game::store::Logged {
+                quest: BOAR_QUEST,
+                failed: true,
+                ..Default::default()
+            });
+        let at = m.players[&g].position();
+        let boar = crate::game::map::scripts::summon(m, Guid::zero(), BOAR, at, 0.0, None)
+            .expect("a boar");
+        crate::game::map::combat::kill(m, g, boar);
+        boar
+    })
+    .await;
+    assert!(
+        a.gets(NONE_WITHIN, |m| match m {
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_KILL(k) => (k.guid == boar).then_some(()),
+            _ => None,
+        })
+        .await
+        .is_none(),
+        "no credit told"
+    );
+    let kills = on_map(&realm, move |m| m.players[&g].journal.log[0].kills[0]).await;
+    assert_eq!(kills, 0);
+}

@@ -1175,7 +1175,9 @@ fn credit(
         let Some(q) = data.npc.quests.get(&p.journal.log[i].quest) else {
             continue;
         };
-        if !eligible(q) || complete(p, q, &p.journal.log[i]) {
+        // Only a quest under way: not done, nor failed (mangos's
+        // `KilledMonsterCredit`, for `QUEST_STATUS_INCOMPLETE`).
+        if !eligible(q) || p.journal.log[i].failed || complete(p, q, &p.journal.log[i]) {
             continue;
         }
         let Some(k) = q
