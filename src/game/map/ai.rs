@@ -432,12 +432,7 @@ pub fn respawn_delay(
     rate: f32,
 ) -> Duration {
     spawn
-        .and_then(|g| {
-            data.creature_spawns
-                .values()
-                .flatten()
-                .find(|s| s.guid == g)
-        })
+        .and_then(|g| data.creature_spawn(g))
         .map(|s| {
             let (lo, hi) = (s.respawn_min, s.respawn_max.max(s.respawn_min));
             let secs = if hi > lo {
@@ -668,11 +663,7 @@ fn respawn(map: &mut Map, g: Guid) {
         .as_deref()
         .and_then(|s| s.reaction.map(|r| (r, s.passive)));
     let data = map.realm.data.clone();
-    let spawn = spawn_guid.and_then(|sg| {
-        data.creature_spawns
-            .get(&map.key.map)
-            .and_then(|v| v.iter().find(|s| s.guid == sg))
-    });
+    let spawn = spawn_guid.and_then(|sg| data.creature_spawn_in(map.key.map, sg));
     if !despawned {
         despawn_from_view(map, g);
         if let Some(s) = summoner {
@@ -756,11 +747,7 @@ fn spawn_creature_with(
     faction: Option<crate::game::map::event_ai::TempFaction>,
 ) {
     let data = map.realm.data.clone();
-    let Some(spawn) = data
-        .creature_spawns
-        .get(&map.key.map)
-        .and_then(|v| v.iter().find(|s| s.guid == spawn_guid))
-    else {
+    let Some(spawn) = data.creature_spawn_in(map.key.map, spawn_guid) else {
         return;
     };
     if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
@@ -2258,5 +2245,30 @@ mod tests {
         );
         // Header, packed guid (4 bytes here), position, id, type.
         assert_eq!(f.len(), 4 + 5 + 12 + 4 + 1);
+    }
+
+    /// Bug hunt (creatures): a death's respawn time searched every spawn
+    /// of every map, and a respawn its map's twice more. A spawn is looked
+    /// up by its guid, on any map or on one, and its time is its own.
+    #[test]
+    fn a_spawn_is_found_by_its_guid_and_its_respawn_time_is_its_own() {
+        use crate::game::data::{CreatureSpawn, GameData};
+        let mut d = GameData::empty();
+        let spawn = |guid, map, secs| CreatureSpawn {
+            guid,
+            map,
+            respawn_min: secs,
+            respawn_max: secs,
+            ..Default::default()
+        };
+        d.creature_spawns
+            .insert(0, vec![spawn(1, 0, 60), spawn(2, 0, 90)]);
+        d.creature_spawns.insert(1, vec![spawn(3, 1, 120)]);
+        assert_eq!(d.creature_spawn(3).map(|s| s.map), Some(1));
+        assert_eq!(d.creature_spawn_in(0, 2).map(|s| s.respawn_min), Some(90));
+        assert!(d.creature_spawn_in(0, 3).is_none(), "not on that map");
+        assert!(d.creature_spawn(4).is_none());
+        assert_eq!(respawn_delay(&d, Some(3), 1.0), Duration::from_secs(120));
+        assert_eq!(respawn_delay(&d, None, 1.0), Duration::from_secs(300));
     }
 }
