@@ -240,3 +240,36 @@ async fn a_mail_or_letter_is_read_only_by_its_reader() {
     assert_ne!(text_id, id);
     assert_eq!(text_of(&mut c, text_id).await, "", "not Carol's");
     assert_eq!(text_of(&mut b, text_id).await, "meet me at the bridge");}
+
+/// A cash-on-delivery payment that expired untaken went back to the buyer,
+/// who had the item too. It goes away, as mangos's
+/// `ReturnOrDeleteOldMails` takes it; a plain mail with money still goes
+/// back.
+#[test]
+fn an_expired_cod_payment_is_not_sent_back() {
+    let realm = harness::realm();
+    let now = mail::now();
+    let (buyer, seller) = (11, 12);
+    let expired = |flags: u32| mail::Mail {
+        kind: mail::NORMAL,
+        sender: buyer,
+        receiver: seller,
+        money: 500,
+        deliver_at: now - 30 * mail::DAY,
+        expires_at: now - 1,
+        flags,
+        ..Default::default()
+    };
+    let payment = mail::post(&realm, expired(mail::COD_PAYMENT));
+    let plain = mail::post(&realm, expired(0));
+    mail::sweep(&realm);
+    let mails = realm.social.mail.lock();
+    assert!(!mails.mails.contains_key(&payment), "the payment is gone");
+    let back: Vec<u32> = mails
+        .mails
+        .values()
+        .filter(|m| m.receiver == buyer)
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(back, vec![plain], "only the plain mail went back");
+}

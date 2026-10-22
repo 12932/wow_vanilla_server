@@ -902,7 +902,11 @@ pub fn sweep(realm: &Realm) {
             continue;
         };
         let keeps = m.item.is_some() || m.money > 0;
-        if m.kind == NORMAL && m.flags & RETURNED == 0 && keeps {
+        // Not a mail already sent back, nor a cash-on-delivery payment:
+        // back, it would pay the buyer, who kept the item, again (mangos's
+        // `ReturnOrDeleteOldMails`, `MAIL_CHECK_MASK_COD_PAYMENT |
+        // MAIL_CHECK_MASK_RETURNED`).
+        if m.kind == NORMAL && m.flags & (RETURNED | COD_PAYMENT) == 0 && keeps {
             send_back(realm, &mut mails, id);
         } else {
             mails.remove(id);
