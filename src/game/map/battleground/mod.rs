@@ -511,9 +511,23 @@ pub fn arrived(map: &mut Map, g: Guid) {
     let Some(team) = map.players.get(&g).map(|p| side(p.team)) else {
         return;
     };
+    // Only a member of the match plays in it: one brought here otherwise
+    // (a GM's teleport, a summon) is on no side's scoreboard, takes no
+    // flag or banner, earns nothing and starts nothing.
+    let member = realm
+        .social
+        .battlegrounds
+        .lock()
+        .matches
+        .get(&key.instance)
+        .is_some_and(|b| b.members.contains_key(&g));
     let Some(m) = map.battleground.as_mut() else {
         return;
     };
+    if !member {
+        tracing::debug!("{g} came into battleground {key:?}, not of its match");
+        return;
+    }
     m.scores.entry(g).or_insert(Score {
         team,
         ..Default::default()
@@ -544,16 +558,7 @@ pub fn arrived(map: &mut Map, g: Guid) {
             .fetch_and(!PLAYER_FLAGS_AFK, std::sync::atomic::Ordering::Relaxed);
     }
     let name = p.online.name.clone();
-    if realm
-        .social
-        .battlegrounds
-        .lock()
-        .matches
-        .get(&key.instance)
-        .is_some_and(|b| b.members.contains_key(&g))
-    {
-        crate::game::social::groups::bg_joined(&realm, g, name, key.instance, team as u8);
-    }
+    crate::game::social::groups::bg_joined(&realm, g, name, key.instance, team as u8);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };

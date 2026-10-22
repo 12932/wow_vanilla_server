@@ -2172,3 +2172,56 @@ async fn a_matchs_end_takes_back_its_invitations() {
         .any(|m| m.members.contains_key(&carol) || m.invited.contains_key(&carol));
     assert!(!member);
 }
+
+/// One brought into a match's map who isn't of its match (a GM's
+/// teleport, a summon) is on no side's scoreboard: no score, no side, so
+/// no flag, banner, honor or credit of it.
+#[tokio::test]
+async fn one_not_of_the_match_who_comes_in_plays_no_part() {
+    let (realm, _a, _b, map) = in_the_basin().await;
+    let mut c = player(&realm, "C", "Carol", Race::Human).await;
+    let carol = c.guid;
+    let key = map.key;
+    let from = realm.registry.online(carol).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            carol,
+            key,
+            Vector3d {
+                x: 0.0,
+                y: 50.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    });
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    // Arrived: her worldport taken in by the copy.
+    let mut arrived = false;
+    for _ in 0..200 {
+        arrived = map
+            .query(move |m| m.players.get(&carol).is_some_and(|p| !p.awaiting_worldport))
+            .await
+            .unwrap_or(false);
+        if arrived {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(arrived, "in the copy");
+    let seen = map
+        .query(move |m| {
+            let b = m.battleground.as_ref().unwrap();
+            (
+                m.players.contains_key(&carol),
+                b.team_of(carol),
+                b.scores.contains_key(&carol),
+            )
+        })
+        .await;
+    assert_eq!(seen, Some((true, None, false)), "here, but of no side");
+}
