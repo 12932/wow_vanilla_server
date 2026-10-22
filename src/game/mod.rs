@@ -120,6 +120,8 @@ mod tests_guards;
 #[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
+mod tests_kill_visual;
+#[cfg(test)]
 mod tests_loot;
 #[cfg(test)]
 mod tests_mailbox;
