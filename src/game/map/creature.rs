@@ -324,6 +324,9 @@ pub struct Creature {
     /// Where the victim was when the chase last pathed.
     pub chase_target_at: Option<Vector3d>,
     pub aggro_check_at: Instant,
+    /// When it came into the world (spawned, respawned, or spawned by a GM):
+    /// for `[creatures] spawn_grace_ms` it looks for no one to attack.
+    pub spawned_at: Option<Instant>,
     /// Its faction is hostile to players: it looks for them.
     pub hostile_to_players: bool,
     pub loot: Option<crate::game::map::loot::Loot>,
@@ -469,6 +472,7 @@ impl Creature {
             evading: false,
             chase_target_at: None,
             aggro_check_at: Instant::now(),
+            spawned_at: None,
             hostile_to_players: false,
             loot: None,
             base: Default::default(),

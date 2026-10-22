@@ -471,6 +471,10 @@ settings! {
         /// attacking, before that renews its leash as a hostile act on it
         /// would (and again each as long, while it stands and attacks).
         leash_standing_ms: u64 = 1250, Clamp(50.0, 600_000.0), Live, "";
+        /// Milliseconds a hostile creature just come into the world (spawned,
+        /// respawned) looks for no one to attack, unless attacked: a
+        /// respawn doesn't catch a player by surprise (0 for none).
+        spawn_grace_ms: u64 = 6000, Clamp(0.0, 600_000.0), Live, "";
         /// Seconds a creature tries for a victim it can't reach before it
         /// goes home.
         unreachable_timeout_secs: u64 = 24, Clamp(1.0, 600.0), Live, "";

@@ -190,6 +190,9 @@ pub fn test_config() -> RealmConfig {
         creatures: crate::config::CreaturesConfig {
             leash_timeout_by_level: vec!["1:12".to_owned()],
             leash_check_ms: 0,
+            // No grace after a spawn: the tests pull at once (its own test
+            // sets it).
+            spawn_grace_ms: 0,
             ..Default::default()
         },
         guards: Default::default(),

@@ -2548,7 +2548,8 @@ impl Map {
         (counter & OWN_MARK != 0).then_some(counter)
     }
 
-    pub fn add_creature(&mut self, c: Creature) -> Guid {
+    pub fn add_creature(&mut self, mut c: Creature) -> Guid {
+        c.spawned_at = Some(self.now);
         let guid = c.guid;
         let cell = c.cell;
         if let Some(n) = Self::own_counter_of(guid) {

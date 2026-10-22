@@ -1170,4 +1170,17 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     `[creatures] leash_check_ms` (1000) from its fight's start, so it goes home up to a second past its time, never
     before: your read of the variation as the server's coarse check, not a random offset.
 
+75. **Your calls of 2026-10-22, the second batch:**
+    - **A spawn's grace:** a hostile creature just come into the world (spawned, respawned, by a GM) looks for no one
+      to attack for `[creatures] spawn_grace_ms` (6000), unless attacked: a respawn mustn't catch a player by
+      surprise. mangos-classic has none.
+    - **A GM's `/who`:** a GM's account isn't held to `/who`'s, whois's and inspect's 5 s cooldown (mangos's
+      `InitOpcodeCooldowns`, kept for players).
+    - **Area reach:** areas and cones count a creature's size for a player's spell (mangos-classic), and reach
+      further when either side runs (`[spells] area_leeway_moving_yards`, 2) or strafes (`area_leeway_strafing_yards`,
+      8/3); a player's size doesn't count against a player's area, and a creature caster's own running gives it
+      leeway.
+    - **Chase and evade:** a creature in melee chases as mangos-classic's `ChaseMovementGenerator`; an evading creature
+      may be attacked, and what hits it evades.
+
 ## Left for later, and why

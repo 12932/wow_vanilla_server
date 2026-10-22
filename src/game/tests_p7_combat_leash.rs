@@ -565,3 +565,41 @@ async fn the_leash_runs_by_level_and_is_looked_at_on_its_tick() {
         "past its time at 11.9 s, home at the next look (12 s), never before"
     );
 }
+
+/// A hostile creature just come into the world lets a player beside it be
+/// for `[creatures] spawn_grace_ms` (6 s), then attacks; one attacked
+/// meanwhile fights at once.
+#[tokio::test]
+async fn a_creature_just_spawned_lets_those_about_it_be_for_six_seconds() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let mut cfg = (*m.cfg).clone();
+            cfg.creatures.spawn_grace_ms = 6000;
+            m.cfg = std::sync::Arc::new(cfg);
+            put(m, ga, off(0.0, 0.0, 0.0));
+            hardy(m, ga);
+            let start = m.now;
+            let calm = creature_at(m, ga, crate::game::tests_p7_combat::WATCHER, off(4.0, 0.0, 0.0));
+            let seen = turns(m, 8_000, |m| (m.now, p3_attacking(m, calm, ga)));
+            let first = seen
+                .iter()
+                .find(|(_, on)| *on)
+                .map(|(at, _)| at.duration_since(start));
+            // Attacked inside its grace, it fights at once.
+            let struck = creature_at(m, ga, crate::game::tests_p7_combat::WATCHER, off(-4.0, 0.0, 0.0));
+            ai::attacked(m, struck, ga);
+            let fights = turns(m, 500, |m| p3_attacking(m, struck, ga))
+                .into_iter()
+                .any(|on| on);
+            (first, fights)
+        })
+        .await
+        .unwrap();
+    let first = r.0.expect("it attacked once its grace was over");
+    assert!(
+        first >= Duration::from_secs(6) && first <= Duration::from_millis(7_500),
+        "not before six seconds: {first:?}"
+    );
+    assert!(r.1, "attacked in its grace, it fights");
+}
