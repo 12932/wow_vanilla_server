@@ -481,7 +481,8 @@ fn prepare(map: &mut Map, g: Guid, full: bool) -> Option<(Vector3d, f32)> {
     if let Some(p) = map.players.get(&g)
         && side(p.side_cell)
     {
-        crate::game::map::tiles::ahead(map, pos);
+        let sees = sight(map, p);
+        crate::game::map::tiles::ahead(map, pos, sees);
     }
     // A boat or zeppelin: everyone in the map knows it.
     if map.globals.contains(&g) {
