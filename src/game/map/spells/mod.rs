@@ -3347,6 +3347,22 @@ pub fn update(map: &mut Map) {
                         result: SpellCastResult::BadTargets,
                     });
                 }
+                // Those who saw it begin see it fail (mangos's
+                // `SendInterrupted`); a target gone gives the global
+                // cooldown back, as mangos's `cancel` at a lost target.
+                if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_FAILED_OTHER {
+                    caster: g,
+                    id: casting.spell,
+                }) {
+                    map.send_to_observers(g, &frame, false);
+                }
+                if casting
+                    .targets
+                    .unit
+                    .is_some_and(|u| u != g && map.unit_view(u).is_none())
+                {
+                    give_back_gcd(map, g, casting.spell);
+                }
             } else {
                 launch_failed(map, g, casting.spell, code);
             }

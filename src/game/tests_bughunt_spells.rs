@@ -541,3 +541,46 @@ async fn an_instant_failed_at_launch_gives_its_global_cooldown_back() {
         .unwrap();
     assert_eq!(out, None, "no global cooldown for a shot not loosed");
 }
+
+/// A cast whose target is gone as it ends fails for those who watched it
+/// too (`SMSG_SPELL_FAILED_OTHER`), and gives its global cooldown back, as
+/// mangos's `cancel` at a lost target (review 3's R3-22).
+#[tokio::test]
+async fn a_cast_at_a_target_gone_fails_for_its_watchers() {
+    use super::tests_p3_spells_kit::{at, dummy, pass};
+    use crate::game::map::spells;
+    const BOLT: u32 = 991_010;
+    let realm = fast_realm(|d| {
+        let mut bolt = bare(BOLT, 2);
+        bolt.casting_time_index = CAST_2S;
+        bolt.start_recovery_category = spells::GCD_SPELLS;
+        bolt.start_recovery_time = 2_500;
+        effect(&mut bolt, 0, damage(10));
+        insert(d, [bolt]);
+    });
+    let (_c, g, map) = human(&realm, "BHBT", "Caster", Class::Mage).await;
+    let mut w = Client::connect(&realm, "BHBW");
+    let _watcher = w.enter("Watcher", Race::Human, Class::Mage).await;
+    w.sees(g).await;
+    let gcd = map
+        .query(move |m| {
+            ready(m, g, 60, &[BOLT]);
+            let k = dummy(m, g, 60, 4.0);
+            spells::cast(m, g, BOLT, at(k), None);
+            m.remove_creature(k);
+            pass(m, 2_100);
+            m.caster(g).unwrap().gcd_until
+        })
+        .await
+        .unwrap();
+    assert_eq!(gcd, None, "the global cooldown given back");
+    w.wait_for("the cast failed", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELL_FAILED_OTHER(f)
+            if f.caster == g && f.id == BOLT =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+}
