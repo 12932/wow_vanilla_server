@@ -209,6 +209,36 @@ pub fn beast_for(data: &GameData, level: u8) -> Option<u32> {
         .or_else(|| pick(&cat_or_wolf))
 }
 
+/// A tameable beast of `level` at random for `.pet random`: a family at
+/// random among those with one of that level (so a crowd's pets are cats,
+/// wolves, boars, bears, raptors, crabs, owls, bats, spiders and the rest
+/// about evenly), then one of that family; of any level if none is of it.
+pub fn random_beast_for(data: &GameData, level: u8, rng: &mut impl rand::Rng) -> Option<u32> {
+    use rand::seq::IndexedRandom;
+    let beasts = |of_level: bool| -> Vec<&crate::game::data::CreatureTemplate> {
+        data.creature_templates
+            .values()
+            .filter(|t| t.type_flags & TYPE_FLAG_TAMEABLE != 0 && t.family != 0 && t.rank == 0)
+            .filter(|t| !of_level || (t.level_min <= level && level <= t.level_max))
+            .collect()
+    };
+    let mut pool = beasts(true);
+    if pool.is_empty() {
+        pool = beasts(false);
+    }
+    let mut families: Vec<u32> = pool.iter().map(|t| t.family).collect();
+    families.sort_unstable();
+    families.dedup();
+    let family = *families.choose(rng)?;
+    let mut of_family: Vec<u32> = pool
+        .iter()
+        .filter(|t| t.family == family)
+        .map(|t| t.entry)
+        .collect();
+    of_family.sort_unstable();
+    of_family.choose(rng).copied()
+}
+
 /// `.pet`: `hunter` given a tamed beast of `entry` at `level`, out at their
 /// side, as Tame Beast's (mangos's `.npc tame` casts its effect on a
 /// selected beast; here the beast needs no finding): the pet they had, out

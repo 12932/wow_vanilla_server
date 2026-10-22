@@ -337,3 +337,27 @@ async fn gear_puts_on_one_of_each_unique_item_and_enchant_puts_crusader_on() {
     .await;
     assert_eq!(on_it, 1900);
 }
+
+/// `.pet random`: a level 30 hunter's pets drawn from many beast families,
+/// not a cat or a wolf each time, every one tameable and of their level.
+#[test]
+#[ignore = "extended"]
+fn pet_random_draws_many_families_of_the_hunters_level() {
+    if !have_data() {
+        return;
+    }
+    let data = harness::load_real(DB.as_path());
+    let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(7);
+    let mut families = std::collections::BTreeSet::new();
+    for _ in 0..200 {
+        let entry = crate::game::map::pets::random_beast_for(&data, 30, &mut rng).expect("a beast");
+        let t = data.creature_template(entry).unwrap();
+        assert!(
+            t.level_min <= 30 && 30 <= t.level_max,
+            "{} of level 30",
+            t.name
+        );
+        families.insert(t.family);
+    }
+    assert!(families.len() >= 8, "families: {families:?}");
+}

@@ -276,9 +276,10 @@ fn character(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     Some(format!("Level {level}."))
 }
 
-/// `.pet [creature]`: the selected player, or the GM, a hunter, given a
-/// tamed beast of that creature template (by default a cat or a wolf of
-/// their level) at their level, out at their side, the pet before let go;
+/// `.pet [creature|random]`: the selected player, or the GM, a hunter,
+/// given a tamed beast of that creature template (by default a cat or a
+/// wolf of their level; `random`, a beast of their level of a family at
+/// random) at their level, out at their side, the pet before let go;
 /// with the tamer's spells (Tame Beast, Call Pet, Dismiss Pet, Revive Pet,
 /// Feed Pet) they lack, which 1.12 teaches by quest.
 fn pet(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
@@ -286,11 +287,14 @@ fn pet(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     let level = map.players.get(&to)?.level();
     let entry = match args.first() {
         None => crate::game::map::pets::beast_for(&map.realm.data, level),
+        Some(&"random") => {
+            crate::game::map::pets::random_beast_for(&map.realm.data, level, &mut rand::rng())
+        }
         Some(_) if args.len() == 1 => num::<u32>(args.first()),
         Some(_) => None,
     };
     let Some(entry) = entry else {
-        return Some("Usage: .pet [creature entry]".into());
+        return Some("Usage: .pet [creature entry|random]".into());
     };
     Some(
         match crate::game::map::pets::give_pet(map, to, entry, level) {
