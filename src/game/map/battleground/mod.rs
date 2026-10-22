@@ -1256,6 +1256,43 @@ pub fn finish(map: &mut Map, winner: usize) {
         .values()
         .map(|p| (p.guid, side(p.team)))
         .collect();
+    // The fighting stops, as mangos's `EndBattleGround` has it: every
+    // creature not a player's is made immune to both sides and stunned
+    // (else Alterac Valley's would go on killing), and stops; the dead
+    // rise where they are (their corpses bones), the living stop fighting.
+    let creatures: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive())
+        .map(|(_, c)| c.guid)
+        .filter(|g| {
+            !map.players
+                .contains_key(&crate::game::map::pets::master(map, *g))
+        })
+        .collect();
+    for c in creatures {
+        if let Some(f) = map.unit_fields_mut(c) {
+            for flag in [
+                crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_PLAYER,
+                crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_NPC,
+                crate::game::map::player::UNIT_FLAG_STUNNED,
+            ] {
+                f.set_flag(UNIT_FIELD_FLAGS, flag, true);
+            }
+        }
+        if let Some(cr) = map.creature_mut(c) {
+            cr.threat.clear();
+        }
+        crate::game::map::combat::leave_combat(map, c);
+    }
+    for (g, _) in &everyone {
+        crate::game::map::ai::forget(map, *g);
+        if map.players.get(g).is_some_and(|p| p.death != Death::Alive) {
+            crate::game::map::death::resurrect(map, *g, 1.0);
+        } else {
+            crate::game::map::combat::leave_combat(map, *g);
+        }
+    }
     for (g, s) in &everyone {
         if let Some(t) = &template {
             let spell = if *s == winner {

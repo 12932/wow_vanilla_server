@@ -2068,3 +2068,63 @@ async fn a_locked_banner_is_claimed_by_its_opening_not_by_a_hand() {
         "by its Opening"
     );
 }
+
+/// A match's end stops its fighting (mangos's `EndBattleGround`): the
+/// dead rise where they are, the living are out of combat, and a creature
+/// of the match is immune to both sides and stunned, its fight over.
+#[tokio::test]
+async fn a_matchs_end_raises_its_dead_and_stops_its_fighting() {
+    let mut d = basin();
+    d.creature_templates.insert(
+        7000,
+        CreatureTemplate {
+            entry: 7000,
+            name: "Guard".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            display_scales: [1.0, 0.0, 0.0, 0.0],
+            level_min: 60,
+            level_max: 60,
+            faction: 14,
+            unit_class: 1,
+            health_max: 1_000,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = super::tests_pvp::both_into(&realm, &mut a, &mut b, Map::ArathiBasin).await;
+    let (alice, grom) = (a.guid, b.guid);
+    let seen = map
+        .query(move |m| {
+            let guard = super::tests_p3_combat::spawn(m, alice, 7000, 60, 5.0);
+            crate::game::map::ai::attacked(m, guard, alice);
+            crate::game::map::death::kill(m, grom);
+            let before = (
+                m.players[&grom].death == crate::game::map::death::Death::Alive,
+                m.creature(guard).is_some_and(|c| c.combat.attacking),
+            );
+            bg::finish(m, 0);
+            let flags = m
+                .unit_fields(guard)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_FLAGS));
+            (
+                before,
+                m.players[&grom].death == crate::game::map::death::Death::Alive,
+                m.players[&alice].fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                ),
+                m.creature(guard)
+                    .is_some_and(|c| c.combat.attacking || !c.threat.is_empty()),
+                flags & 0x4_0300,
+            )
+        })
+        .await;
+    assert_eq!(
+        seen,
+        Some(((false, true), true, false, false, 0x4_0300)),
+        "Grom risen, Alice and the creature out of the fight, it immune and stunned"
+    );
+}
