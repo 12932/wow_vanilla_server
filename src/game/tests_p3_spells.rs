@@ -1030,10 +1030,20 @@ async fn an_area_takes_its_count_its_kinds_and_its_reach() {
             for g in &chain {
                 m.remove_creature(*g);
             }
-            // Frost Nova's ten yards, a fifth more with Arctic Reach.
+            // Frost Nova's ten yards, a fifth more with Arctic Reach, and
+            // the dummy's size past them (a player's area at a creature).
+            let size = {
+                let g = dummy(m, me, 60, 5.0);
+                let r = m
+                    .unit_fields(g)
+                    .unwrap()
+                    .get_f32(crate::game::fields::UNIT_FIELD_COMBATREACH);
+                m.remove_creature(g);
+                r
+            };
             let ring: Vec<_> = [9.0, 11.0, 13.0]
                 .into_iter()
-                .map(|d| dummy(m, me, 60, d))
+                .map(|d| dummy(m, me, 60, d + size))
                 .collect();
             let nova = hit(m, FROST_NOVA, spells::Targets::default());
             apply(m, me, me, ARCTIC_REACH);

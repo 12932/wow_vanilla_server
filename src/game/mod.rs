@@ -41,6 +41,8 @@ mod tests_ai5_spells;
 #[cfg(test)]
 mod tests_answers2;
 #[cfg(test)]
+mod tests_aoe_leeway;
+#[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
 mod tests_bg5;
@@ -1425,6 +1427,7 @@ pub struct RealmConfig {
     pub players: crate::config::PlayersConfig,
     pub environment: crate::config::EnvironmentConfig,
     pub quests: crate::config::QuestsConfig,
+    pub spells: crate::config::SpellsConfig,
     pub instances: crate::config::InstancesConfig,
     pub outdoor_pvp: crate::config::OutdoorPvpConfig,
     pub events: crate::config::EventsConfig,
@@ -1487,6 +1490,7 @@ impl RealmConfig {
             players: c.players.clone(),
             environment: c.environment.clone(),
             quests: c.quests.clone(),
+            spells: c.spells.clone(),
             instances: c.instances.clone(),
             outdoor_pvp: c.outdoor_pvp.clone(),
             events: c.events.clone(),

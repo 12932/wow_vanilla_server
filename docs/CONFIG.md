@@ -315,6 +315,20 @@ Quests: which givers show what.
 |---|---|---|---|---|---|
 | `high_level_hide_diff` | Levels a player may be short of a quest's least level and still see its giver's grey "!"; further below, the giver shows nothing for it. -1 shows it at any gap. | `7` | -1 to 60, clamped | live | `Quests.HighLevelHideDiff` |
 
+### `[spells]`
+
+Spells: how far past its radius an area about its caster or at a place (Arcane Explosion, Frost Nova, Blizzard) reaches a unit when one of the two is moving. A player's area reaches a creature's size (its combat reach) past the radius besides, as mangos-classic's does.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `area_leeway_moving_yards` | Yards an area reaches past its radius when its caster or the unit runs (forward or back, not walking): mangos-classic's `AOE_LEEWAY`, which it gives for the caster's running alone. | `2.0` | 0 to 10, clamped | live |  |
+| `area_leeway_strafing_yards` | Yards it reaches when either strafes (no less than `area_leeway_moving_yards`): mangos-classic's `MELEE_LEEWAY`, its reach for two units running. | `2.6666667` | 0 to 10, clamped | live |  |
+
+The leeway goes beyond mangos-classic, which gives its 2 yards for the caster's running alone: here the unit's
+running counts as well, and a strafe (either side's) gets the larger leeway. Both at 0 is mangos-classic's area
+without its leeway; the creature's size is always counted, as mangos-classic counts it (a player's area, a creature
+in it), and never for a player in a player's area or for a creature's area.
+
 ### `[instances]`
 
 Dungeon and raid copies.
@@ -445,6 +459,8 @@ These tunables were constants and are now keys, at the same defaults:
   the group reward range (XP, loot, quest credit, reputation, honor), resurrection sickness's first level, the
   primary professions, gear's wear from blows.
 - **Environment (`[environment]`):** the breath, fatigue and lava timers, and lava's damage.
+- **Spells (`[spells]`):** how far past its radius an area reaches a running or strafing unit, or a running or
+  strafing caster's.
 - **Instances (`[instances]`):** an empty copy's unload time, the raids' reset hour, the copies an account enters an
   hour.
 - **Battlegrounds (`[battleground]`):** the start delay, the minimum players, the auto-leave and invitation times, the
