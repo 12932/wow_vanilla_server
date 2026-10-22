@@ -185,6 +185,15 @@ pub(crate) enum Gait {
     Strafing,
 }
 
+/// How a creature moves: on its path at a run, or not.
+fn creature_gait(c: &crate::game::map::creature::Creature) -> Gait {
+    if matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if w.run) {
+        Gait::Running
+    } else {
+        Gait::Still
+    }
+}
+
 /// How `g` moves: a player as their last movement says, a creature on its
 /// path at a run.
 pub(crate) fn gait(map: &Map, g: Guid) -> Gait {
@@ -197,29 +206,41 @@ pub(crate) fn gait(map: &Map, g: Guid) -> Gait {
         } else {
             Gait::Running
         }
-    } else if map.creature(g).is_some_and(
-        |c| matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if w.run),
-    ) {
-        Gait::Running
     } else {
-        Gait::Still
+        map.creature(g).map_or(Gait::Still, creature_gait)
     }
 }
 
-/// The yards an area reaches past its radius for these two gaits.
-pub(crate) fn leeway(map: &Map, a: Gait, b: Gait) -> f32 {
-    let moving = map.cfg.spells.area_leeway_moving_yards.max(0.0);
-    match a.max(b) {
-        Gait::Still => 0.0,
-        Gait::Running => moving,
-        Gait::Strafing => map.cfg.spells.area_leeway_strafing_yards.max(moving),
+/// `[spells]`'s leeways: an area's reach past its radius for each gait,
+/// the larger of two units'.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Leeways {
+    moving: f32,
+    strafing: f32,
+}
+
+impl Leeways {
+    pub(crate) fn of(map: &Map) -> Self {
+        let moving = map.cfg.spells.area_leeway_moving_yards.max(0.0);
+        Self {
+            moving,
+            strafing: map.cfg.spells.area_leeway_strafing_yards.max(moving),
+        }
+    }
+
+    pub(crate) fn of_gaits(self, a: Gait, b: Gait) -> f32 {
+        match a.max(b) {
+            Gait::Still => 0.0,
+            Gait::Running => self.moving,
+            Gait::Strafing => self.strafing,
+        }
     }
 }
 
 /// Units around `at` that an area of `radius` about `about` reaches, that
 /// `pick` keeps: within the radius, a creature's combat reach past it for
 /// a player's area (mangos-classic's `SpellNotifierCreatureAndPlayer`, for
-/// the player-controlled at the not), and [`leeway`] past that when
+/// the player-controlled at the not), and the [`Leeways`] past that when
 /// `about` or the unit moves.
 fn area_units(
     map: &Map,
@@ -230,7 +251,8 @@ fn area_units(
 ) -> Vec<Guid> {
     let players = super::checks::player_side(map, about);
     let mine = gait(map, about);
-    let most = radius + leeway(map, Gait::Strafing, Gait::Strafing) + LARGEST_REACH;
+    let leeways = Leeways::of(map);
+    let most = radius + leeways.strafing + LARGEST_REACH;
     let mut v: Vec<(Guid, f32)> = map
         .grid
         .within(at.x, at.y, most)
@@ -240,16 +262,23 @@ fn area_units(
             if d <= radius {
                 return Some((g, d));
             }
-            let size = if players && !super::checks::player_side(map, g) {
-                map.unit_fields(g)
-                    .map_or(0.0, |f| {
-                        f.get_f32(crate::game::fields::UNIT_FIELD_COMBATREACH)
-                    })
-                    .clamp(0.0, LARGEST_REACH)
-            } else {
-                0.0
+            if d > most {
+                return None;
+            }
+            let (size, theirs) = match map.creature(g) {
+                Some(c) => {
+                    let size = if players && !super::checks::player_side(map, g) {
+                        c.fields
+                            .get_f32(crate::game::fields::UNIT_FIELD_COMBATREACH)
+                            .clamp(0.0, LARGEST_REACH)
+                    } else {
+                        0.0
+                    };
+                    (size, creature_gait(c))
+                }
+                None => (0.0, gait(map, g)),
             };
-            (d <= radius + size + leeway(map, mine, gait(map, g))).then_some((g, d))
+            (d <= radius + size + leeways.of_gaits(mine, theirs)).then_some((g, d))
         })
         .filter(|(g, _)| pick(*g))
         .collect();

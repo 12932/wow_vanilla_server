@@ -1252,3 +1252,32 @@ introductions at 2,000, 3.4 ms at the end of the login's event, and 1.1 ms more 
 map's time per newcomer, the visibility refresh's per-pair cost that stage A's quick path cuts. The drill at 200
 bots (the server and peon on 4 cores each, a 1 s ramp, ramp-bound at 165 placed a second) is unchanged: update p99 5.2 ms at
 random, every broadcast delivered within 3 ms p99; its arrival events took 172 µs on average, from 338.
+
+## Area spells' reach (2026-10-22)
+
+An area about its caster or at a place (Arcane Explosion, Frost Nova, Blizzard; friends' areas too) took the units
+whose centres were within its radius, nothing more. Now (`spells::targets::area_units`) it reaches:
+
+- **A creature's size past the radius, for a player's area** (its combat reach, 1.5 for most): mangos-classic's
+  `SpellNotifierCreatureAndPlayer`, which adds it for the player-controlled at the not. A player in a player's area,
+  and anyone in a creature's, gets none, as there.
+- **A leeway past that when either side moves**: `[spells] area_leeway_moving_yards` (2, mangos-classic's
+  `AOE_LEEWAY`) when the caster or the unit runs, forward or back; `area_leeway_strafing_yards` (8/3,
+  mangos-classic's `MELEE_LEEWAY`) when either strafes. Walking gives none. mangos-classic gives its 2 yards for the
+  caster's running alone; the unit's running and the strafe's larger leeway go beyond it (the user's call).
+
+Cones, script areas, party and raid areas are as they were.
+
+The grid is asked for the radius, the strafe's leeway and 30 yards (the world's largest model reaches 26.25) as a
+disc (`Grid::within`), so a 10-yard area still looks in at most nine cells. A unit past the radius costs a lookup of
+its creature for its size and gait. Measured with 400 creatures in a 60-yard square about the caster, on 4 cores of
+a 32-core box (release, one area's targets, 2,000 times):
+
+| Radius | Before | After | Units taken, before / after |
+|---|---|---|---|
+| 8 | 4.2 µs | 8.2 µs | 22 / 38 |
+| 10 | 4.5 µs | 8.4 µs | 38 / 46 |
+| 20 | 6.2 µs | 10.4 µs | 138 / 162 |
+| 30 | 9.6 µs | 13.5 µs | 316 / 336 |
+
+Four microseconds more an area cast, in a crowd: nothing beside an update's 50 ms.
