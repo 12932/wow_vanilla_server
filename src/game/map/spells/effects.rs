@@ -2101,17 +2101,26 @@ pub fn tick_areas(map: &mut Map) {
         .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
     // The tick due as an area ends is had before it goes (mangos's
     // `Aura::Update` keeps the last tick): Blizzard's eighth wave.
-    let due: Vec<usize> = (0..map.spells.areas.len())
-        .filter(|i| {
-            let a = &map.spells.areas[*i];
-            a.next_tick <= now && (a.next_tick <= a.ends || a.ends > now)
-        })
+    // Each found again by its object and effect as its turn comes: a tick
+    // may end another area (its channeller killed), which moves the rest.
+    let due: Vec<(Guid, usize)> = map
+        .spells
+        .areas
+        .iter()
+        .filter(|a| a.next_tick <= now && (a.next_tick <= a.ends || a.ends > now))
+        .map(|a| (a.object, a.index))
         .collect();
     let data = map.realm.data.clone();
-    for i in due {
-        let Some(area) = map.spells.areas.get(i).cloned() else {
+    for (object, index) in due {
+        let Some(i) = map
+            .spells
+            .areas
+            .iter()
+            .position(|a| a.object == object && a.index == index)
+        else {
             continue;
         };
+        let area = map.spells.areas[i].clone();
         // On its own cadence, so a late update doesn't lose its last.
         map.spells.areas[i].next_tick = area.next_tick + area.period;
         let Some(s) = data.spells.get(area.spell) else {
@@ -2121,6 +2130,7 @@ pub fn tick_areas(map: &mut Map) {
             continue;
         }
         let helpful = auras::positive(s);
+        let sees_through = super::targets::ignores_sight(s);
         let inside: Vec<Guid> = map
             .grid
             .around(area.at.x, area.at.y, area.radius)
@@ -2130,6 +2140,15 @@ pub fn tick_areas(map: &mut Map) {
                     .is_some_and(|p| dist(p, area.at) <= area.radius)
             })
             .filter(|g| map.unit_view(*g).is_some_and(|u| u.alive))
+            // Only those the area sees (mangos's `DynamicObjectUpdater`
+            // tests sight from the dynamic object): a Blizzard doesn't
+            // reach through a wall.
+            .filter(|g| {
+                sees_through
+                    || map
+                        .position_of(*g)
+                        .is_some_and(|p| super::checks::sight(map, area.at, p))
+            })
             .filter(|g| {
                 if helpful {
                     !combat::can_attack(map, area.caster, *g)
@@ -2166,7 +2185,10 @@ pub fn tick_areas(map: &mut Map) {
                     // going on (mangos's `PeriodicTick` for a persistent
                     // area, Thistle Tea's ground ticks); an aura's DoT
                     // doesn't.
-                    let hit = outcome::roll_hit(map, area.caster, g, s, &Mods::default());
+                    // With the caster's modifiers (Arcane Focus,
+                    // Suppression), as its spell's other hits.
+                    let m = super::mods::for_spell(map, area.caster, s);
+                    let hit = outcome::roll_hit(map, area.caster, g, s, &m);
                     if !hit.lands() {
                         outcome::send_miss(map, area.caster, g, area.spell, hit);
                         continue;
@@ -2388,6 +2410,7 @@ fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
         applied: None,
         source: None,
         dr: None,
+        unsaved: false,
     }
 }
 
@@ -2414,46 +2437,35 @@ pub fn refresh_area_auras(map: &mut Map) {
         .map(|(_, c)| c.guid)
         .filter(|g| crate::game::map::pets::owner_of(map, *g).is_some())
         .collect();
-    let holders_of = |g: Guid| -> Vec<auras::Holder> {
-        auras::auras(map, g)
-            .map(|a| a.holders.clone())
-            .unwrap_or_default()
-    };
-    let units: Vec<(Guid, Vec<auras::Holder>)> = map
-        .players
-        .keys()
-        .copied()
-        .chain(owned)
-        .map(|g| (g, holders_of(g)))
-        .collect();
-    let sources: Vec<Source> = units
-        .iter()
-        .flat_map(|(g, holders)| {
-            let g = *g;
-            holders
+    // Read in place: only the party auras' own holders are taken.
+    let party_aura = |spell: u32| {
+        data.spells.get(spell).is_some_and(|s| {
+            s.effects
                 .iter()
-                .filter(move |h| h.caster == g)
-                .filter(|h| {
-                    data.spells.get(h.spell).is_some_and(|s| {
-                        s.effects
-                            .iter()
-                            .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
-                    })
-                })
-                .map(move |h| {
-                    (
-                        g,
-                        h.spell,
-                        h.effects
-                            .iter()
-                            .map(|x| (x.effect as usize, x.amount))
-                            .collect(),
-                        h.expires,
-                    )
-                })
-                .collect::<Vec<_>>()
+                .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
         })
-        .collect();
+    };
+    let mut sources: Vec<Source> = Vec::new();
+    for g in map.players.keys().copied().chain(owned) {
+        let Some(a) = auras::auras(map, g) else {
+            continue;
+        };
+        for h in a
+            .holders
+            .iter()
+            .filter(|h| h.caster == g && party_aura(h.spell))
+        {
+            sources.push((
+                g,
+                h.spell,
+                h.effects
+                    .iter()
+                    .map(|x| (x.effect as usize, x.amount))
+                    .collect(),
+                h.expires,
+            ));
+        }
+    }
     for (caster, spell, effects, expires) in sources {
         let Some(s) = data.spells.get(spell) else {
             continue;

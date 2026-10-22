@@ -180,6 +180,7 @@ Each with what a fix would take. Ordered by severity.
   helpful (or 16 harmful) auras.
 - **Fix:** find the new holder again by (spell, caster, item) after the replaced ones are ended, with `get`; call
   `recalc` on every return after something was replaced.
+- **State:** fixed in aa91a76e (test `an_aura_gone_with_what_it_replaced_leaves_the_rest_alone`).
 
 ### R3-17. Out-of-combat timers fire at once after a fight that ends without an evade (low-medium, easy)
 - **Where:** `src/game/map/event_ai.rs:290-300` (`reset_for_combat` leaves the OOC slots `None`) and `:860-864`.
@@ -196,6 +197,7 @@ Each with what a fix would take. Ordered by severity.
   again, a weapon buff renewed) makes the proc ready at once. mangos keeps proc cooldowns on the owner, by spell.
 - **Fix:** keep `old.proc_ready_at` on refresh, as `slot` and the heartbeat are kept. I couldn't confirm where Thistle
   Tea keeps the cooldown, so I left it.
+- **State:** fixed in 10f92373 (test `a_refreshed_aura_keeps_its_procs_cooldown`).
 
 ### R3-19. Saved auras' durations stand still while their player is offline (low, easy with a logout time)
 - **Where:** `src/game/map/spells/cooldowns.rs:243-271` (`saved_auras`) and `:341-366` (`restore`).
@@ -213,6 +215,7 @@ Each with what a fix would take. Ordered by severity.
   caster's own creature type (a player's falls back to humanoid).
 - **Fix:** keep the cast's `Mods` in `Area` and roll with them; leave the type bonus out of the stored amount and add
   it per victim, or drop it.
+- **State:** its hit fixed in 20a17484 (test `ground_ticks_roll_with_their_casters_hit`), with the caster's modifiers as they are at the tick; the type bonus scored on the caster is left.
 
 ### R3-21. Drain Life's heal skips its caster's healing modifiers (low, easy)
 - **Where:** `src/game/map/spells/effects.rs` `EFFECT_HEALTH_LEECH`: `heal(map, caster, caster, s.id, taken * mult)`;
@@ -227,29 +230,34 @@ Each with what a fix would take. Ordered by severity.
   `SMSG_SPELL_FAILED_OTHER`, so their cast bar runs out. The global cooldown isn't given back either (`interrupt`
   does both).
 - **Fix:** send `SMSG_SPELL_FAILED_OTHER` to observers there, and clear the GCD as `interrupt` does.
+- **State:** fixed in 1287d8a6 (test `a_cast_at_a_target_gone_fails_for_its_watchers`): the global cooldown is given back for a target gone, as mangos's `cancel`, not for one unseen (its `StopCast`).
 
 ### R3-23. An instant cast that fails at launch keeps its global cooldown and its `SMSG_SPELL_START` (low, easy)
 - **Where:** `src/game/map/spells/mod.rs` `cast`: the GCD is set and the start broadcast before `execute`, whose
   `at_launch` and ammunition checks can fail (`launch_failed`).
 - **How it shows:** Arcane Shot with no ammunition: the hunter is locked out for 1.5 s for a shot that didn't go.
 - **Fix:** give the GCD back in `launch_failed`, or check the ammunition in `checks::check`.
+- **State:** fixed in 5240666d (test `an_instant_failed_at_launch_gives_its_global_cooldown_back`), for an instant only.
 
 ### R3-24. A mounted player is dismounted by a cast that then fails its checks (low, easy)
 - **Where:** `src/game/map/spells/mod.rs` `cast`: `remove_where(.. AURA_MOUNTED)` runs before `checks::check`.
 - **How it shows:** casting a spell on cooldown, or out of range, while mounted dismounts.
 - **Fix:** dismount after the checks pass.
+- **State:** fixed in 1b43c338 (test `a_failed_cast_doesnt_dismount`).
 
 ### R3-25. A created item for another player is lost when their bags are full (low, easy)
 - **Where:** `src/game/map/spells/effects.rs` `EFFECT_CREATE_ITEM`: `fitting(..).ok()...unwrap_or(amount)`; room is
   checked only for the caster (`checks::room_for_made`).
 - **What:** the reagents are spent and `add_item` fails as a whole for a recipient who isn't the caster.
 - **Fix:** check room for the recipient in `room_for_made`, or make a count of 0 skip the effect.
+- **State:** not a bug: mangos's `DoCreateItem` makes no more than fits in the recipient's bags, and `CheckItems` checks only the caster's, so the reagents are spent and a full recipient gets nothing there too.
 
 ### R3-26. Procs run from a snapshot of the holders taken before any of them fires (low, easy)
 - **Where:** `src/game/map/procs.rs:263-275`.
 - **What:** a proc that removes or replaces another candidate (a dispel, an absorb used up, its owner's death) still
   lets the later one fire from its clone. mangos skips a deleted holder (`IsDeleted`).
 - **Fix:** before firing, look the holder up again by (spell, caster, item) and skip it if gone.
+- **State:** fixed in cd746873 (test `an_aura_taken_off_by_a_proc_doesnt_proc_after`).
 
 ### R3-27. An evade whose walk home makes no frame skips the reach-home work (low, easy)
 - **Where:** `src/game/map/ai.rs:1611-1614` and `:1647-1650`.

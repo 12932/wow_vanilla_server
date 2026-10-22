@@ -341,8 +341,20 @@ pub struct SavedAura {
     pub triggered: bool,
 }
 
+/// The Echoes of Lordaeron world buffs: lasting, and never saved.
+const ECHOES_OF_LORDAERON: [u32; 8] = [11413, 11414, 11415, 1386, 30880, 30683, 30682, 29520];
+
+/// A lasting aura of `s` isn't saved (mangos's `IsSaveToDbHolder`): a
+/// single-target one, or a world buff of Echoes of Lordaeron.
+pub fn unsaved(s: &SpellTemplate) -> bool {
+    super::single_target::limited(s) || ECHOES_OF_LORDAERON.contains(&s.id)
+}
+
 /// The auras a player keeps across a logout: not passive ones, not gear's,
-/// not another's lasting party auras, not a channel's.
+/// not another's lasting party auras, not a channel's; and, as mangos's
+/// `IsSaveToDbHolder`, not one that ends as its unit leaves the world
+/// (a polymorph, a battleground's flag, Silithyst), nor a single-target one
+/// or a world buff (`unsaved`).
 pub fn saved_auras(p: &Player, now: Instant) -> Vec<SavedAura> {
     let channel = p
         .caster
@@ -353,7 +365,8 @@ pub fn saved_auras(p: &Player, now: Instant) -> Vec<SavedAura> {
     p.auras
         .holders
         .iter()
-        .filter(|h| !h.passive && !h.equipped)
+        .filter(|h| !h.passive && !h.equipped && !h.unsaved)
+        .filter(|h| h.interrupt_flags & auras::INTERRUPT_CHANGE_MAP == 0)
         .filter(|h| !(h.caster != p.guid && h.expires.is_none()))
         .filter(|h| Some(h.spell) != channel)
         .filter(|h| h.expires.is_none_or(|t| t > now))
@@ -575,6 +588,13 @@ pub fn restore(map: &mut Map, player: Guid) {
     load(p, &data, now);
     let away = away_ms(p);
     let saved = std::mem::take(&mut p.row.state.auras);
+    // The spells `load` set waiting for their aura's end.
+    let waiting: Vec<u32> = saved
+        .iter()
+        .filter(|a| a.caster == 0 || a.caster == player.guid())
+        .map(|a| a.spell)
+        .filter(|id| p.caster.pending_cooldowns.contains(id))
+        .collect();
     for a in saved {
         let Some(s) = data.spells.get(a.spell) else {
             continue;
@@ -619,6 +639,20 @@ pub fn restore(map: &mut Map, player: Guid) {
         );
         // Its stacks, on its bar and in the stats.
         auras::set_stacks(map, player, a.spell, caster, item, a.stacks.max(1));
+    }
+    // One whose aura didn't come back (run out while away, or refused)
+    // waits for nothing: no cooldown, as mangos's `_LoadAuras` adds the
+    // waiting cooldown only for an aura it put back. Else it was locked
+    // until the next login.
+    for spell in waiting {
+        let back = auras::auras(map, player).is_some_and(|a| {
+            a.holders
+                .iter()
+                .any(|h| h.spell == spell && h.caster == player)
+        });
+        if !back {
+            release(map, player, spell, false);
+        }
     }
 }
 

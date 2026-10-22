@@ -150,6 +150,10 @@ pub fn form_error(s: &SpellTemplate, form: u8) -> Option<u8> {
     }
 }
 
+/// Ritual of Summoning's effect, which reaches a player on a flight
+/// (mangos's exception in `CheckCast`).
+const RITUAL_OF_SUMMONING_EFFECT: u32 = 7720;
+
 /// Whether `from` sees `to`: the navmesh's line of sight, and a test's
 /// walls.
 pub fn line_of_sight(map: &mut Map, from: Vector3d, to: Vector3d) -> bool {
@@ -380,6 +384,7 @@ pub fn check(
         }
         if !triggered
             && p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0
+            && map.spells.dismounting != Some(caster)
             && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
             && !s.has_aura(AURA_MOUNTED)
         {
@@ -861,6 +866,18 @@ pub fn at_finish(
     if base > 0.0 && !s.on_next_swing() && d > reach {
         return Some(fail::OUT_OF_RANGE);
     }
+    // Not a player on a flight meanwhile, and still in sight: mangos's
+    // `CheckCast(false)` at `Spell::cast` tests both whatever `strict` is,
+    // so a cast whose target steps behind a pillar fails.
+    if map.players.get(&target).is_some_and(|p| p.flight.is_some())
+        && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
+        && s.id != RITUAL_OF_SUMMONING_EFFECT
+    {
+        return Some(fail::BAD_TARGETS);
+    }
+    if !targets::ignores_sight(s) && !line_of_sight(map, me.position, u.position) {
+        return Some(fail::LINE_OF_SIGHT);
+    }
     if !map.players.contains_key(&caster) {
         return None;
     }
@@ -893,6 +910,15 @@ fn caster_at_finish(map: &mut Map, caster: Guid, s: &SpellTemplate) -> Option<u8
     }
     if p.flight.is_some() {
         return Some(fail::NOT_ON_TAXI);
+    }
+    // A silence or a pacify that came on meanwhile without interrupting
+    // (a pacify doesn't), as mangos's `CheckCasterAuras` at `Spell::cast`.
+    if !s.attr(3, sd::ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS) && prevented(map, caster, s) {
+        return Some(if s.prevention_type == PREVENTION_PACIFY {
+            fail::PACIFIED
+        } else {
+            fail::SILENCED
+        });
     }
     let now = map.now;
     let locked = p

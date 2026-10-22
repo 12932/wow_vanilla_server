@@ -564,33 +564,42 @@ pub fn edible_corpse(map: &Map, caster: Guid, s: &SpellTemplate) -> bool {
         map.unit_fields(g)
             .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAG_TAXI_FLIGHT != 0)
     };
-    map.creatures.iter().any(|(_, c)| {
-        !c.alive()
-            && near(c.position, size(c.guid))
-            && map
-                .realm
-                .data
-                .creature_template(c.entry)
-                .is_some_and(|t| matches!(t.creature_type, 6 | 7))
-            && !flying(c.guid)
-            && foe(c.guid)
-    }) || map.players.values().any(|p| {
-        matches!(p.death, crate::game::map::death::Death::Dead { .. })
-            && p.flight.is_none()
-            && !flying(p.guid)
-            && near(p.position(), size(p.guid))
-            && foe(p.guid)
-    }) || map.corpses.values().any(|c| {
-        // Not bones (mangos's "ignore bones"), and its owner here to say
-        // whose side it is.
-        !c.is_bones()
-            && near(c.position, OBJECT_SIZE)
-            && map
-                .players
-                .get(&c.owner)
-                .is_some_and(|p| p.death != crate::game::map::death::Death::Alive && foe(p.guid))
-    })
+    // The creatures near, from the grid, not the whole map's.
+    map.grid
+        .around(at.x, at.y, range + CORPSE_MARGIN)
+        .filter_map(|g| map.creature(g))
+        .any(|c| {
+            !c.alive()
+                && near(c.position, size(c.guid))
+                && map
+                    .realm
+                    .data
+                    .creature_template(c.entry)
+                    .is_some_and(|t| matches!(t.creature_type, 6 | 7))
+                && !flying(c.guid)
+                && foe(c.guid)
+        })
+        || map.players.values().any(|p| {
+            matches!(p.death, crate::game::map::death::Death::Dead { .. })
+                && p.flight.is_none()
+                && !flying(p.guid)
+                && near(p.position(), size(p.guid))
+                && foe(p.guid)
+        })
+        || map.corpses.values().any(|c| {
+            // Not bones (mangos's "ignore bones"), and its owner here to say
+            // whose side it is.
+            !c.is_bones()
+                && near(c.position, OBJECT_SIZE)
+                && map.players.get(&c.owner).is_some_and(|p| {
+                    p.death != crate::game::map::death::Death::Alive && foe(p.guid)
+                })
+        })
 }
+
+/// How much farther than Cannibalize's range the grid is asked for a
+/// corpse: past any creature's size.
+const CORPSE_MARGIN: f32 = 20.0;
 
 /// The item a create-item effect makes: its own, or a script's choice.
 pub fn created_item(map: &Map, caster: Guid, s: &SpellTemplate, item: u32) -> u32 {

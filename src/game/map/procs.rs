@@ -503,6 +503,16 @@ fn run(
     let trigger_spell = e.spell.and_then(|id| data.spells.get(id));
     let mut rng = rand::rng();
     for h in candidates {
+        // Still on, as it is now: an earlier proc may have taken it off
+        // or spent it (mangos skips a holder `IsDeleted`).
+        let Some(h) = auras::auras(map, owner).and_then(|a| {
+            a.holders
+                .iter()
+                .find(|x| x.spell == h.spell && x.caster == h.caster && x.item == h.item)
+                .cloned()
+        }) else {
+            continue;
+        };
         let Some(s) = data.spells.get(h.spell) else {
             continue;
         };
@@ -927,16 +937,31 @@ pub fn damage_shields(map: &mut Map, attacker: Guid, victim: Guid) {
     if attacker == victim || !map.unit_view(attacker).is_some_and(|u| u.alive) {
         return;
     }
-    let shields: Vec<(u32, u32)> = auras::auras(map, victim)
+    let shields: Vec<(u32, u32, u32)> = auras::auras(map, victim)
         .map(|a| {
             a.effects()
                 .filter(|(_, x)| x.kind == auras::AURA_DAMAGE_SHIELD)
-                .map(|(h, x)| ((x.amount * h.stacks.max(1) as i32).max(0) as u32, h.school))
+                .map(|(h, x)| {
+                    (
+                        h.spell,
+                        (x.amount * h.stacks.max(1) as i32).max(0) as u32,
+                        h.school,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
-    for (damage, school) in shields {
+    for (spell, damage, school) in shields {
         if damage == 0 {
+            continue;
+        }
+        // It meets immunity, as mangos's `DealMeleeDamage` tests the
+        // striker's (`SpellHitResult`'s `IsImmuneToSpell`, then
+        // `IsImmuneToDamage`): fire shields don't burn Molten Core's
+        // fire-immune. It never misses: its spell is a buff, which
+        // `SpellHitResult` lets through.
+        if combat::school_immune(map, attacker, school) {
+            crate::game::map::spells::log::immune(map, victim, attacker, spell);
             continue;
         }
         if let Some(frame) = crate::game::conn::encode(&SMSG_SPELLDAMAGESHIELD {

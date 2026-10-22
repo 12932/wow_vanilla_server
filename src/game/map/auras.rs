@@ -510,6 +510,10 @@ pub struct Holder {
     /// takes its place (mangos-classic's `getDiminishGroup` in
     /// `RemoveNoStackAurasDueToAuraHolder`).
     pub dr: Option<u8>,
+    /// Not kept across a logout though it lasts (mangos's
+    /// `IsSaveToDbHolder`): a single-target aura, or an Echoes of
+    /// Lordaeron world buff.
+    pub unsaved: bool,
 }
 
 impl Holder {
@@ -1072,6 +1076,7 @@ pub fn apply_spell(
             .flatten()
             .map(|s| (s.spell, s.caster)),
         dr: ctx.dr,
+        unsaved: crate::game::map::spells::cooldowns::unsaved(spell),
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);
@@ -1121,9 +1126,13 @@ pub fn apply_spell(
                 .map(|x| (x.effect, x.next_tick, x.ticks))
                 .collect();
             let slot = old.slot;
+            // Its proc's cooldown runs on (mangos keeps it on the unit, by
+            // spell): a seal or a weapon's buff renewed doesn't proc at once.
+            let proc_ready_at = old.proc_ready_at;
             *old = Holder {
                 stacks,
                 slot,
+                proc_ready_at,
                 ..holder.clone()
             };
             old.heartbeat = beat.flatten();
@@ -1171,9 +1180,17 @@ pub fn apply_spell(
         }
         removed(map, target, &h);
     }
-    // A slot for the new holder.
-    let mut index =
-        refreshed.unwrap_or_else(|| auras(map, target).map_or(0, |a| a.holders.len() - 1));
+    // A slot for the new holder, found again: what the replaced ones' ends
+    // did (a form's passives given back, a source's lasting auras taken
+    // off, this one among them) moves the others.
+    let Some(mut index) = auras(map, target).and_then(|a| {
+        a.holders
+            .iter()
+            .rposition(|h| h.spell == spell.id && h.caster == caster && h.item == ctx.item)
+    }) else {
+        recalc(map, target);
+        return Ok(());
+    };
     if visible {
         let mut slot = {
             let fields_taken: Vec<bool> = map
@@ -1204,6 +1221,8 @@ pub fn apply_spell(
                 if let Some(a) = auras_mut(map, target) {
                     a.holders.remove(index);
                 }
+                // What it replaced is gone from the stats too.
+                recalc(map, target);
                 return Ok(());
             }
             let Some(old) = auras(map, target).map(|a| a.holders[i].clone()) else {
@@ -1505,8 +1524,10 @@ fn replaces(
         return false;
     }
     if old.spell == new.spell && old.caster == new.caster {
-        // Refreshed in place, unless from another item.
-        return old.item != new.item && old.item.is_some() && new.item.is_some() && false;
+        // Never replaced: from the same item it is refreshed in place
+        // (below); from another item, the two stand together, as mangos's
+        // holders of one spell and caster from two items do.
+        return false;
     }
     // Crowd control of a diminishing returns group takes the place of
     // another of its group, whoever cast it (mangos-classic's
@@ -3680,23 +3701,34 @@ pub fn held(map: &Map, g: Guid, casting: bool) -> bool {
 /// and its `stealth_holder?`, the user's #41; mangos's takes the spell
 /// named alone).
 pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
+    const ATTR_EX_NO_AURA_ICON: u32 = 0x1000_0000;
     let data = map.realm.data.clone();
-    let Some(stealth) = map.players.get(&player).and_then(|p| {
-        p.auras
-            .holders
-            .iter()
-            .find(|h| h.spell == spell && h.positive && !h.passive)
-            .map(stealth_holder)
-    }) else {
-        return;
-    };
-    if data
-        .spells
-        .get(spell)
-        .is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL))
-    {
+    let s = data.spells.get(spell);
+    // Not one the client shows no icon for (but tracking), not while
+    // charmed, nor another's party aura (mangos's `HandleCancelAuraOpcode`).
+    let hidden = s.is_some_and(|s| {
+        s.attr(1, ATTR_EX_NO_AURA_ICON) && !s.effects.iter().any(|e| e.aura == AURA_TRACK_RESOURCES)
+    });
+    if s.is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL)) || hidden {
         return;
     }
+    let party =
+        s.is_some_and(|s| s.has_effect(crate::game::map::spells::EFFECT_APPLY_AREA_AURA_PARTY));
+    let Some(stealth) = map
+        .players
+        .get(&player)
+        .filter(|p| p.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero())
+        .and_then(|p| {
+            p.auras
+                .holders
+                .iter()
+                .find(|h| h.spell == spell && h.positive && !h.passive)
+                .filter(|h| !(party && h.caster != player))
+                .map(stealth_holder)
+        })
+    else {
+        return;
+    };
     remove_where(map, player, |h| {
         !h.passive && (h.spell == spell || (stealth && stealth_holder(h)))
     });

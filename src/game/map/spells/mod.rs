@@ -285,6 +285,16 @@ pub struct MapSpells {
     /// Casters whose gathering, lockpicking or skinning took its roll as
     /// the cast ended, before its go: its effect doesn't roll again.
     pub openings_rolled: ahash::AHashSet<Guid>,
+    /// The charged cast-time modifiers (spell, caster) the cast now ending
+    /// began with, for its `execute`: only those are spent.
+    pub ending_began_with: Option<Vec<(u32, Guid)>>,
+    /// A rider whose cast is checked as if off their mount, which it takes
+    /// them off if it may be cast.
+    pub dismounting: Option<Guid>,
+    /// By caster, the charged cast-time modifiers (spell, caster) its cast
+    /// under way had its time worked out with (Shadow Trance's), if any:
+    /// only those are spent as it ends.
+    pub began_with: AHashMap<Guid, Vec<(u32, Guid)>>,
     /// Override for spells' travel time; `None` takes the realm's setting.
     pub travel: Option<bool>,
     /// Missiles and bolts on their way.
@@ -998,16 +1008,24 @@ pub fn cast(
     if crate::game::map::mounts::dismissed(map, caster, s) {
         return true;
     }
-    if map.players.contains_key(&caster)
+    // A rider is taken off their mount by a cast that may be cast once off
+    // it, and only then: one that fails its checks (on cooldown, out of
+    // range) leaves them mounted. The checks take them as off it.
+    let dismount = map.players.contains_key(&caster)
         && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
         && !s.has_aura(auras::AURA_MOUNTED)
-        && auras::auras(map, caster).is_some_and(|a| a.has(auras::AURA_MOUNTED))
-    {
-        auras::remove_where(map, caster, |h| h.has(auras::AURA_MOUNTED));
+        && auras::auras(map, caster).is_some_and(|a| a.has(auras::AURA_MOUNTED));
+    if dismount {
+        map.spells.dismounting = Some(caster);
     }
-    if let Some(r) = checks::check(map, caster, s, &targets, item, false, &m) {
+    let refused = checks::check(map, caster, s, &targets, item, false, &m);
+    map.spells.dismounting = None;
+    if let Some(r) = refused {
         send_cast_result(map, caster, spell, Some(r));
         return false;
+    }
+    if dismount {
+        auras::remove_where(map, caster, |h| h.has(auras::AURA_MOUNTED));
     }
     // At oneself, unless aimed at a body to raise.
     if targets.unit.is_none()
@@ -1121,6 +1139,17 @@ pub fn cast(
             duration: time,
             at,
         });
+    }
+    let began: Vec<(u32, Guid)> = m
+        .charged
+        .iter()
+        .filter(|c| c.2 == mods::OP_CASTING_TIME)
+        .map(|c| (c.0, c.1))
+        .collect();
+    if began.is_empty() {
+        map.spells.began_with.remove(&caster);
+    } else {
+        map.spells.began_with.insert(caster, began);
     }
     true
 }
@@ -1418,6 +1447,9 @@ fn execute(
     item: Option<Guid>,
     triggered: bool,
 ) {
+    // A cast ending: the charged cast-time modifiers it began with.
+    let began_with = map.spells.ending_began_with.take();
+    let instant = began_with.is_none();
     // An aura's cast, or a proc's; what it casts in turn is its own.
     let by_aura = BY_AURA.replace(false) || crate::game::map::procs::in_proc();
     // What a triggered cast is checked for still (mangos-classic's
@@ -1434,7 +1466,15 @@ fn execute(
         return;
     };
     let now = map.now;
-    let m = mods::for_spell(map, caster, s);
+    let mut m = mods::for_spell(map, caster, s);
+    // A charged cast-time modifier that came on during the cast changed
+    // nothing of it, and is kept for the next (mangos's `m_appliedMods`,
+    // taken at `prepare`): a Shadow Trance from a Corruption tick mid-cast
+    // isn't spent by the Shadow Bolt under way.
+    if let Some(began) = began_with {
+        m.charged
+            .retain(|c| c.2 != mods::OP_CASTING_TIME || began.contains(&(c.0, c.1)));
+    }
     // The item cast from, by its entry, before it is spent.
     let cast_entry = item.and_then(|g| {
         let p = map.players.get(&caster)?;
@@ -1451,7 +1491,13 @@ fn execute(
             spell_cost(map, caster, s, &m)
         };
         paid = cost;
+        // An instant that fails here never went off: its global cooldown
+        // is given back, as mangos's checks refuse it before one starts
+        // (Arcane Shot with no ammunition).
         if let Some(r) = checks::at_launch(map, caster, s, cost) {
+            if instant {
+                give_back_gcd(map, caster, s.id);
+            }
             return launch_failed(map, caster, s.id, r);
         }
         // A ranged ability (Arcane Shot, Multi-Shot, Aimed Shot) spends a
@@ -1461,6 +1507,9 @@ fn execute(
             if let Err(r) = ammunition
                 && map.players.contains_key(&caster)
             {
+                if instant {
+                    give_back_gcd(map, caster, s.id);
+                }
                 return launch_failed(map, caster, s.id, r);
             }
         }
@@ -1965,10 +2014,14 @@ fn land_arrivals(map: &mut Map) {
     map.spells.in_flight = waiting;
     for mut f in due {
         // A target that died while it flew is missed, unless the spell is
-        // for the dead: Thistle Tea keeps only what works on a corpse.
+        // for the dead: Thistle Tea keeps only what works on a corpse. One
+        // whose caster left the map (logged out, teleported) is lost, as
+        // mangos ends a unit's spell events as it leaves the world (a
+        // caster's death doesn't stop it), and as a shot is.
         if map
             .unit_view(f.target)
             .is_none_or(|u| !u.alive && !checks::for_the_dead(&f.spell))
+            || map.unit_view(f.caster).is_none()
         {
             continue;
         }
@@ -2507,15 +2560,19 @@ pub fn periodic_damage_of(
     leech: bool,
 ) {
     let data = map.realm.data.clone();
-    let s = data
-        .spells
-        .get(h.spell)
-        .cloned()
-        .unwrap_or_else(|| SpellTemplate {
-            id: h.spell,
-            school: h.school.trailing_zeros(),
-            ..Default::default()
-        });
+    // Borrowed from the data, not cloned each tick.
+    let made_up;
+    let s = match data.spells.get(h.spell) {
+        Some(s) => s,
+        None => {
+            made_up = SpellTemplate {
+                id: h.spell,
+                school: h.school.trailing_zeros(),
+                ..Default::default()
+            };
+            &made_up
+        }
+    };
     let index = s
         .effects
         .iter()
@@ -2535,7 +2592,7 @@ pub fn periodic_damage_of(
         map,
         h.caster,
         target,
-        &s,
+        s,
         index,
         outcome::Kind::Dot,
         h.stacks,
@@ -2547,7 +2604,7 @@ pub fn periodic_damage_of(
         0.5
     };
     let amount = crate::game::map::reputation::dither(amount, roll).max(0) as u32;
-    let resisted = outcome::partial_resist(map, h.caster, target, &s, amount, true);
+    let resisted = outcome::partial_resist(map, h.caster, target, s, amount, true);
     let (left, absorbed) =
         auras::absorb_and_share(map, h.caster, target, amount - resisted, h.school);
     if let Some(frame) = crate::game::conn::encode(&SMSG_PERIODICAURALOG {
@@ -2580,7 +2637,7 @@ pub fn periodic_damage_of(
         // DOT (`GetSpellThreatMultiplier`, then `CalcThreat`).
         let multiplier = data.spells.threat.get(&s.id).map_or(1.0, |t| t.1.max(0.0));
         let by_mods =
-            mods::for_spell(map, h.caster, &s).apply(mods::OP_THREAT, 100.0) / 100.0 * multiplier;
+            mods::for_spell(map, h.caster, s).apply(mods::OP_THREAT, 100.0) / 100.0 * multiplier;
         let threat = left as f32 * combat::threat_multiplier(map, h.caster, h.school);
         combat::deal_periodic_damage(
             map,
@@ -2641,7 +2698,7 @@ pub fn periodic_damage_of(
             map,
             h.caster,
             left.min(had) as f32 * mult,
-            &s,
+            s,
             index,
             outcome::Kind::Dot,
             h.stacks,
@@ -2770,19 +2827,7 @@ pub fn interrupt(map: &mut Map, g: Guid) {
         return;
     };
     if casting.channel_until.is_none() {
-        let category = map
-            .realm
-            .data
-            .spells
-            .get(casting.spell)
-            .map_or(0, |s| s.start_recovery_category);
-        if let Some(c) = map.caster_mut(g) {
-            if category == GCD_SPELLS {
-                c.gcd_until = None;
-            } else {
-                c.other_gcds.retain(|(cat, _)| *cat != category);
-            }
-        }
+        give_back_gcd(map, g, casting.spell);
     }
     if let Some(p) = map.players.get(&g) {
         p.outbound.send(&SMSG_SPELL_FAILURE {
@@ -3037,10 +3082,59 @@ pub fn combat_began(map: &mut Map, g: Guid) {
     }
 }
 
-/// `CMSG_CANCEL_CAST` and `CMSG_CANCEL_CHANNELLING`.
+/// Whatever the unit casts or channels stops, and a next-swing strike
+/// waiting is taken back.
 pub fn cancel(map: &mut Map, g: Guid) {
     interrupt(map, g);
     crate::game::map::combat::cancel_queued(map, g);
+}
+
+/// The global cooldown `spell` started is given back (mangos's
+/// `ResetGCD`): a cast that never went off.
+fn give_back_gcd(map: &mut Map, g: Guid, spell: u32) {
+    let category = map
+        .realm
+        .data
+        .spells
+        .get(spell)
+        .map_or(0, |s| s.start_recovery_category);
+    if let Some(c) = map.caster_mut(g) {
+        if category == GCD_SPELLS {
+            c.gcd_until = None;
+        } else {
+            c.other_gcds.retain(|(cat, _)| *cat != category);
+        }
+    }
+}
+
+/// `CMSG_CANCEL_CAST`: the cast or channel of `spell` stops, if that is
+/// what is under way, and a next-swing strike of it waiting is taken back
+/// (mangos's `InterruptNonMeleeSpells(false, spellId)`; 0 names any). A
+/// cancel that comes after its cast is done stops nothing of the next.
+pub fn cancel_cast(map: &mut Map, g: Guid, spell: u32) {
+    let named = |id: u32| spell == 0 || id == spell;
+    if map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .is_some_and(|c| named(c.spell))
+    {
+        interrupt(map, g);
+    }
+    if map.combat(g).and_then(|c| c.queued).is_some_and(named) {
+        crate::game::map::combat::cancel_queued(map, g);
+    }
+}
+
+/// `CMSG_CANCEL_CHANNELLING`: the channel alone, whatever it names
+/// (mangos's `InterruptSpell(CURRENT_CHANNELED_SPELL)`).
+pub fn cancel_channel(map: &mut Map, g: Guid) {
+    if map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .is_some_and(|c| c.channel_until.is_some())
+    {
+        interrupt(map, g);
+    }
 }
 
 /// How far from where a cast began a caster may be before it has moved:
@@ -3257,6 +3351,22 @@ pub fn update(map: &mut Map) {
                         result: SpellCastResult::BadTargets,
                     });
                 }
+                // Those who saw it begin see it fail (mangos's
+                // `SendInterrupted`); a target gone gives the global
+                // cooldown back, as mangos's `cancel` at a lost target.
+                if let Some(frame) = crate::game::conn::encode(&SMSG_SPELL_FAILED_OTHER {
+                    caster: g,
+                    id: casting.spell,
+                }) {
+                    map.send_to_observers(g, &frame, false);
+                }
+                if casting
+                    .targets
+                    .unit
+                    .is_some_and(|u| u != g && map.unit_view(u).is_none())
+                {
+                    give_back_gcd(map, g, casting.spell);
+                }
             } else {
                 launch_failed(map, g, casting.spell, code);
             }
@@ -3285,6 +3395,7 @@ pub fn update(map: &mut Map) {
             launch_failed(map, g, casting.spell, code);
             continue;
         }
+        map.spells.ending_began_with = Some(map.spells.began_with.remove(&g).unwrap_or_default());
         execute(map, g, s, casting.targets, casting.item, false);
         map.spells.openings_rolled.remove(&g);
     }

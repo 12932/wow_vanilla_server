@@ -655,8 +655,9 @@ pub(crate) fn ignores_sight(s: &SpellTemplate) -> bool {
 /// ignores sight (`IsIgnoreLosSpellEffect`: the chain heal's, a party's
 /// within the caster's range, the party of a friend, the raid of a class,
 /// the world-wide radius 28), nor the caster at its own place. A
-/// persistent area (Blizzard's, Consecration's) isn't tested as it ticks,
-/// as mangos's `DynamicObjectUpdater` doesn't.
+/// persistent area (Blizzard's, Consecration's) is tested as it ticks,
+/// from where it is (`effects::tick_areas`), as mangos's
+/// `DynamicObjectUpdater` is.
 fn area_sight(
     map: &Map,
     caster: Guid,
