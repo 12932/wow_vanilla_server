@@ -41,6 +41,8 @@ mod tests_ai5_spells;
 #[cfg(test)]
 mod tests_answers2;
 #[cfg(test)]
+mod tests_aoe_leeway;
+#[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
 mod tests_bg5;
