@@ -380,3 +380,26 @@ async fn a_failed_quest_gets_no_kill_credit() {
     let kills = on_map(&realm, move |m| m.players[&g].journal.log[0].kills[0]).await;
     assert_eq!(kills, 0);
 }
+
+/// A creature's pockets go with it: picked, or left half-emptied by a
+/// rogue, they aren't kept once it leaves the map without dying.
+#[tokio::test]
+async fn a_creatures_pockets_go_as_it_leaves() {
+    let realm = realm();
+    let a = alice(&realm).await;
+    let g = a.guid;
+    let left = on_map(&realm, move |m| {
+        let at = m.players[&g].position();
+        let boar = crate::game::map::scripts::summon(m, Guid::zero(), BOAR, at, 0.0, None)
+            .expect("a boar");
+        m.loot_state.picked.insert(boar);
+        m.loot_state.pockets.insert((boar, g), Loot::default());
+        crate::game::map::scripts::remove_for_good(m, boar);
+        (
+            m.loot_state.picked.contains(&boar),
+            m.loot_state.pockets.contains_key(&(boar, g)),
+        )
+    })
+    .await;
+    assert_eq!(left, (false, false));
+}

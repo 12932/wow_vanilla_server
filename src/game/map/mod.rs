@@ -2744,6 +2744,7 @@ impl Map {
             self.by_spawn.remove(&s);
         }
         creature_groups::gone(self, guid);
+        loot::forget_pockets(self, guid);
         self.grid.remove(guid, c.cell);
         for o in c.observers.drain() {
             if let Some(p) = self.players.get_mut(&o) {
