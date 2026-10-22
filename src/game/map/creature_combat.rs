@@ -682,18 +682,14 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
 /// the highest `level:seconds` at or below its level).
 fn leash_timeout(map: &Map, c: &crate::game::map::creature::Creature) -> Duration {
     let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    // Parsed once a config (`RealmConfig::leash_brackets`), lowest first.
     let secs = map
         .cfg
-        .creatures
-        .leash_timeout_by_level
+        .leash_brackets()
         .iter()
-        .filter_map(|t| {
-            let (l, s) = t.split_once(':')?;
-            Some((l.trim().parse::<u32>().ok()?, s.trim().parse::<u64>().ok()?))
-        })
-        .filter(|(from, _)| *from <= level.max(1))
-        .max_by_key(|(from, _)| *from)
-        .map_or(LEASH_TIMEOUT.as_secs(), |(_, s)| s);
+        .rev()
+        .find(|(from, _)| *from <= level.max(1))
+        .map_or(LEASH_TIMEOUT.as_secs(), |(_, s)| *s);
     Duration::from_secs(secs)
 }
 

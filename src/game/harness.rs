@@ -215,6 +215,7 @@ pub fn test_config() -> RealmConfig {
         anticheat: Default::default(),
         gm: Default::default(),
         broadcast_batch: crate::game::map::batch::BatchConfig::fixed(Duration::ZERO),
+        leash_brackets: Default::default(),
     }
 }
 

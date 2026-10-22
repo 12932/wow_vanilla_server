@@ -626,3 +626,19 @@ async fn a_creature_just_spawned_lets_those_about_it_be_for_six_seconds() {
     assert!(r.1, "attacked in its grace, it fights");
     assert!(r.2, "a summon has no grace");
 }
+
+/// Bug hunt (creatures): the leash's timeouts were parsed from their
+/// strings at every look, a creature's fight step up to three times. They
+/// are parsed once a config, lowest level first, and a copy changed after
+/// parses its own.
+#[test]
+fn the_leash_brackets_are_parsed_once_a_config_and_a_changed_copy_its_own() {
+    let mut cfg = crate::game::RealmConfig::default();
+    cfg.creatures.leash_timeout_by_level =
+        ["40:13", "1:11", "bad", "30:12"].map(String::from).to_vec();
+    assert_eq!(cfg.leash_brackets(), &[(1, 11), (30, 12), (40, 13)]);
+    let mut copy = cfg.clone();
+    copy.creatures.leash_timeout_by_level = vec!["1:20".to_owned()];
+    assert_eq!(copy.leash_brackets(), &[(1, 20)]);
+    assert_eq!(cfg.leash_brackets(), &[(1, 11), (30, 12), (40, 13)]);
+}
