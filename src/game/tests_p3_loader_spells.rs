@@ -135,6 +135,10 @@ fn the_real_spells_load_as_thistle_tea_reads_them() {
         (spells::EFFECT_TRIGGER_SPELL, 23_885, 1)
     );
     assert!(spell(d, 635).has_effect(spells::EFFECT_HEAL));
+    // But not its row turning Nefarian's Wild Magic on himself: it is at the
+    // enemies about him, as mangos-classic casts it at the mages.
+    let wild_magic = spell(d, 23_410).effects[0];
+    assert_eq!((wild_magic.target_a, wild_magic.target_b), (22, 15));
     // A spell's level, and the points it gains a level past it.
     let fireball = spell(d, 133);
     assert_eq!(fireball.spell_level, 1);
