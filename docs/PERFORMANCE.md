@@ -1681,3 +1681,34 @@ the same with a level 60 Human priest's Mind Control (rank 3) on the real Kartra
 Only the held creature's `UNIT_FIELD_FLAGS` values change in what is sent, not any packet's layout. The fast suite
 passes, and so do the extended tests for pets, charm, possession, Mind Control and the client check
 (`tests_client_emu`).
+## An arrow's damage before the arrow (2026-10-22)
+
+The report: a level 1 night elf hunter shoots a tiger, and the damage shows before the arrow gets there. The
+cause: Auto Shot and a wand's Shoot are auto-repeat spells, fired by `map/ranged.rs` on the ranged weapon's timer
+outside the spell path, and a shot was resolved whole as it was loosed: its `SMSG_SPELL_GO`, then at once its
+`SMSG_SPELLNONMELEEDAMAGELOG`, the health change, the fight and the procs. The 1.12 client starts drawing the
+arrow on the go, from the spell's speed in its Spell.dbc (Auto Shot's is 40 yards a second, Shoot's 20), so the
+number came up while the arrow was still in the air. Shots cast as spells (Arcane Shot, Multi-Shot, Aimed Shot,
+Shoot Bow, Throw) already travelled: the spell path holds anything with a speed in `in_flight` until it lands
+(`[spells]` travel, round 11b).
+
+The fix, as in mangos-classic (`Spell::AddUnitTarget` works out `timeDelay` = distance / speed, at least five
+yards' worth, and `m_delayMoment`; `DoAllEffectOnTarget` applies the effects when it comes): a shot's hit or
+miss, crit and raw weapon damage (the weapon it was loosed from, so the last of a stack of knives still hits as a
+knife) are rolled as it goes, and its go goes then. The rest waits in `map.spells.shots` (`ranged::Shot`) until
+the shot lands: armour, partial resistance, absorbs, the damage log, the fight with its threat, pushback, the
+damage and the ranged procs. A shot lands at the first map update past its time, so up to one tick (50 ms) late.
+It is lost if its target is dead or gone, or its shooter has left the map. While it flies, the shooter is held in
+their fight, as a missile's caster is (`launch_hold`). The next shot's timer doesn't change: it is set as the shot
+is loosed. With travel off (the tests' default) a shot lands at once, as before. What is sent doesn't change, only
+when the damage log comes.
+
+Tested by `tests_arrow_travel`. In the fast suite: Auto Shot at a creature 5, 20 and 35 yards off, where the damage
+log comes no sooner than distance/speed after the go (within a tick), the health is untouched while the shot is in
+the air and drops by the logged damage once it lands; a wand's Shoot at 20 yards (a second's flight); an Arcane
+Shot-shaped spell at 30; the second auto shot two seconds (the bow's speed) after the first, whatever the
+flights; a shot whose target dies in flight lands nothing and leaves nothing in the air. In the extended suite: a
+level 1 night elf hunter, as she starts (Worn Shortbow, Rough Arrows), auto-shoots a Young Nightsaber 20 yards
+off in the real world, and what she was sent passes the client check. With travel off the timing tests fail. The
+fast suite passes, and the extended tests on combat, ammunition, ranged AI, real data and the client check pass.
+Nothing on the hot path changes: one more `Vec` checked each update, empty unless someone is shooting.

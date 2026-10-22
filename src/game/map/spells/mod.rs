@@ -289,6 +289,8 @@ pub struct MapSpells {
     pub travel: Option<bool>,
     /// Missiles and bolts on their way.
     pub in_flight: Vec<InFlight>,
+    /// Auto-repeat shots on their way (Auto Shot's arrows, a wand's bolt).
+    pub shots: Vec<crate::game::map::ranged::Shot>,
     /// What units' auras last gave their health (Last Stand, bear form).
     pub health_seen: AHashMap<Guid, health_sync::State>,
     /// When each caster's ground spell (its effect) last ticked each unit.
@@ -1918,7 +1920,7 @@ fn miss_info(hit: Hit) -> SpellMiss_SpellMissInfo {
 
 /// Whether spells take time to get where they go (tests land them at
 /// once).
-fn travels(map: &Map) -> bool {
+pub(crate) fn travels(map: &Map) -> bool {
     map.spells.travel.unwrap_or(map.cfg.spell_travel)
 }
 
@@ -2326,7 +2328,13 @@ fn contact(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, l: &Lau
 /// `TriggerCombatTimer(timeDelay + 500)`; Thistle Tea's `LaunchCombat`).
 /// Not one of no threat, threat only on a miss, or none as it lands, nor
 /// a creature's.
-fn launch_hold(map: &mut Map, caster: Guid, s: &SpellTemplate, target: Guid, delay_ms: u32) {
+pub(crate) fn launch_hold(
+    map: &mut Map,
+    caster: Guid,
+    s: &SpellTemplate,
+    target: Guid,
+    delay_ms: u32,
+) {
     let master = crate::game::map::pets::master(map, caster);
     if target == caster
         || !guid::is_player(master)

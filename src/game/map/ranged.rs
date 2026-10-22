@@ -2,7 +2,9 @@
 //! weapon's speed until cancelled, half a second after they start, as
 //! Thistle Tea's `AutoRepeat` runs them. A shot can only miss or crit; it
 //! spends a round of ammunition when its weapon takes ammo. Moving holds
-//! Auto Shot back and cancels a wand.
+//! Auto Shot back and cancels a wand. Its go goes as it is loosed, its
+//! damage when it lands: the distance over the spell's speed later, as
+//! mangos-classic's delayed spells.
 
 use std::time::Duration;
 
@@ -317,8 +319,9 @@ pub fn moved(map: &mut Map, g: Guid) {
     }
 }
 
-/// Fire the shots that are due.
+/// Land the shots that have got there, then fire those that are due.
 pub fn update(map: &mut Map) {
+    land_shots(map);
     let now = map.now;
     let due: Vec<Guid> = map
         .players
@@ -419,7 +422,26 @@ fn shoot(map: &mut Map, g: Guid) {
     spend(map, g, payment);
 }
 
-/// A shot's roll, damage and logs.
+/// A shot on its way: what was rolled as it was loosed, applied when it
+/// lands (mangos-classic's `Spell::AddUnitTarget` rolls a ranged spell's
+/// hit and `DoAllEffectOnTarget` applies it after `timeDelay`, the
+/// distance over Spell.dbc's speed).
+#[derive(Debug, Clone)]
+pub struct Shot {
+    pub lands: std::time::Instant,
+    pub shooter: Guid,
+    pub target: Guid,
+    pub spell: u32,
+    outcome: Outcome,
+    /// Its damage before the target's armor, resistance and absorbs.
+    raw: u32,
+    school: u32,
+    wand: bool,
+    immune: bool,
+}
+
+/// A shot's roll and go, as it is loosed; its damage when it lands
+/// ([`impact`]): at once, or after its flight when spells travel.
 fn resolve(
     map: &mut Map,
     g: Guid,
@@ -467,36 +489,8 @@ fn resolve(
             .sum();
         ((d as i32 + points).max(1) as u32, school)
     };
-    let mitigated = if school & 1 != 0 {
-        combat::armor_mitigate(map, g, target, raw)
-    } else {
-        raw
-    };
     // A wand's school the target is immune to: nothing, and it says so.
     let immune = wand && outcome != Outcome::Miss && combat::school_immune(map, target, school);
-    let damage = match outcome {
-        _ if immune => 0,
-        Outcome::Miss => 0,
-        Outcome::Crit if wand => mitigated * 3 / 2,
-        Outcome::Crit => (mitigated as f32 * combat::crit_multiplier(map, g, target)) as u32,
-        _ => mitigated,
-    };
-    // A wand's magic is partly resisted as a spell of its school is.
-    let resisted = if wand && school & 1 == 0 && damage > 0 {
-        let as_spell = crate::game::data::spells::SpellTemplate {
-            school: school.trailing_zeros(),
-            ..s.clone()
-        };
-        spells::outcome::partial_resist(map, g, target, &as_spell, damage, false)
-    } else {
-        0
-    };
-    let damage = damage - resisted;
-    let (left, absorbed) = if damage > 0 {
-        crate::game::map::auras::absorb_and_share(map, g, target, damage, school)
-    } else {
-        (0, 0)
-    };
     let mut flags = SMSG_SPELL_GO_CastFlags::empty();
     if let Some((display, inventory_type)) = ammo_display.filter(|_| !wand) {
         flags = flags.set_ammo(SMSG_SPELL_GO_CastFlags_Ammo {
@@ -530,6 +524,100 @@ fn resolve(
     }) {
         map.send_to_observers(g, &frame, true);
     }
+    // The client draws the arrow from the go; its damage waits for it to
+    // get there (mangos-classic's `m_delayMoment`, at least five yards'
+    // worth), the shooter held in their fight meanwhile.
+    let delay = if spells::travels(map) && s.speed > 0.0 {
+        spells::flight_ms(map, g, target, s.speed)
+    } else {
+        0
+    };
+    let shot = Shot {
+        lands: map.now + Duration::from_millis(u64::from(delay)),
+        shooter: g,
+        target,
+        spell: s.id,
+        outcome,
+        raw,
+        school,
+        wand,
+        immune,
+    };
+    if delay == 0 {
+        impact(map, &shot, s);
+        return;
+    }
+    spells::launch_hold(map, g, s, target, delay);
+    map.spells.shots.push(shot);
+}
+
+/// The shots that have got there land; one at a target dead or gone, or
+/// from a shooter gone from the map, is lost.
+fn land_shots(map: &mut Map) {
+    let now = map.now;
+    if !map.spells.shots.iter().any(|s| s.lands <= now) {
+        return;
+    }
+    let (due, waiting): (Vec<Shot>, Vec<Shot>) = std::mem::take(&mut map.spells.shots)
+        .into_iter()
+        .partition(|s| s.lands <= now);
+    map.spells.shots = waiting;
+    let data = map.realm.data.clone();
+    for shot in due {
+        if !map.unit_view(shot.target).is_some_and(|u| u.alive)
+            || map.unit_view(shot.shooter).is_none()
+        {
+            continue;
+        }
+        let Some(s) = data.spells.get(shot.spell) else {
+            continue;
+        };
+        impact(map, &shot, s);
+    }
+}
+
+/// A shot lands: its mitigation, its log, the fight, the damage and the
+/// procs.
+fn impact(map: &mut Map, shot: &Shot, s: &crate::game::data::spells::SpellTemplate) {
+    let Shot {
+        shooter: g,
+        target,
+        outcome,
+        raw,
+        school,
+        wand,
+        immune,
+        ..
+    } = *shot;
+    let mitigated = if school & 1 != 0 {
+        combat::armor_mitigate(map, g, target, raw)
+    } else {
+        raw
+    };
+    let damage = match outcome {
+        _ if immune => 0,
+        Outcome::Miss => 0,
+        Outcome::Crit if wand => mitigated * 3 / 2,
+        Outcome::Crit => (mitigated as f32 * combat::crit_multiplier(map, g, target)) as u32,
+        _ => mitigated,
+    };
+    // A wand's magic is partly resisted as a spell of its school is.
+    let resisted = if wand && school & 1 == 0 && damage > 0 {
+        let as_spell = crate::game::data::spells::SpellTemplate {
+            school: school.trailing_zeros(),
+            ..s.clone()
+        };
+        spells::outcome::partial_resist(map, g, target, &as_spell, damage, false)
+    } else {
+        0
+    };
+    let damage = damage - resisted;
+    let (left, absorbed) = if damage > 0 {
+        crate::game::map::auras::absorb_and_share(map, g, target, damage, school)
+    } else {
+        (0, 0)
+    };
+    let missed = outcome == Outcome::Miss || immune;
     if !missed
         && let Some(frame) = crate::game::conn::encode(&SMSG_SPELLNONMELEEDAMAGELOG {
             target,
