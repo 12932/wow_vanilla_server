@@ -67,6 +67,22 @@ max_queued_packets = 64
 # Default 0.8. Range 0 to 1, clamped. Changes at a reload.
 memory_guard_fraction = 0.8
 
+# Seconds the memory guard holds the clients back at most: if the
+# memory hasn't come down by then (a steady state over the line,
+# not queues), it lets go, says so at `error`, and rests.
+# Default 30. Range 1 to 3600, clamped. Changes at a reload.
+memory_guard_most_held_secs = 30
+
+# Seconds the memory guard rests the first time it gives up, before
+# it may engage again; each time again, twice as long.
+# Default 60. Range 1 to 86400, clamped. Changes at a reload.
+memory_guard_rest_secs = 60
+
+# Seconds the memory guard's rest doubles up to (at least
+# `memory_guard_rest_secs`).
+# Default 600. Range 1 to 86400, clamped. Changes at a reload.
+memory_guard_rest_max_secs = 600
+
 # Pings a client may send in a row each less than 27 seconds after
 # the last (the client pings every 30) before it is disconnected;
 # 0 never disconnects.

@@ -170,6 +170,7 @@ pub fn test_config() -> RealmConfig {
         max_queries_per_sec: 2000,
         max_queued_packets: 64,
         memory_guard_fraction: 0.8,
+        memory_guard_timings: crate::game::memory_guard::Timings::default(),
         // A test asks `/who` as often as it likes.
         packet_cooldown: Duration::ZERO,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,

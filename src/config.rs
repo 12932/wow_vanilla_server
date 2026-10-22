@@ -195,6 +195,16 @@ settings! {
         /// `max_queued_packets` is on each, never a crash. Logged as it
         /// engages and lets go. 0 never stops.
         memory_guard_fraction: f64 = 0.8, Clamp(0.0, 1.0), Live, "";
+        /// Seconds the memory guard holds the clients back at most: if the
+        /// memory hasn't come down by then (a steady state over the line,
+        /// not queues), it lets go, says so at `error`, and rests.
+        memory_guard_most_held_secs: u64 = crate::game::memory_guard::MOST_HELD.as_secs(), Clamp(1.0, 3600.0), Live, "";
+        /// Seconds the memory guard rests the first time it gives up, before
+        /// it may engage again; each time again, twice as long.
+        memory_guard_rest_secs: u64 = crate::game::memory_guard::REST_MIN.as_secs(), Clamp(1.0, 86_400.0), Live, "";
+        /// Seconds the memory guard's rest doubles up to (at least
+        /// `memory_guard_rest_secs`).
+        memory_guard_rest_max_secs: u64 = crate::game::memory_guard::REST_MAX.as_secs(), Clamp(1.0, 86_400.0), Live, "";
         /// Pings a client may send in a row each less than 27 seconds after
         /// the last (the client pings every 30) before it is disconnected;
         /// 0 never disconnects.
