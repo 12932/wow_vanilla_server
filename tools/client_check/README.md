@@ -23,6 +23,7 @@ uv run ... python -I check.py --raw packet.bin        # opcode-first body
 | `monster_move.py` | `SMSG_MONSTER_MOVE` / `..._TRANSPORT`: the spline reader |
 | `spell_log_miss.py` | `SMSG_SPELLLOGMISS`: the handler, read exactly (a target is a GUID and a byte) |
 | `attacker_state.py` | `SMSG_ATTACKERSTATEUPDATE`: the melee handler's parse, read exactly (five damage lines at most) |
+| `initial_spells.py` | `SMSG_INITIAL_SPELLS` and `SMSG_ACTION_BUTTONS`: the handlers, read exactly, and the spell list and bars the client keeps to build its spellbook from at each create of its own player |
 | `check.py` | the command line: route each frame of a capture to its check |
 | `selftest.py` | the proof against the spline crash and the frozen flier, with no outside files |
 
