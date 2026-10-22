@@ -885,6 +885,14 @@ pub fn may_equip_new(
     if p.item_at(BAG_PLAYER, slot).is_some() {
         return Err(Fail::NoSlot);
     }
+    // A new item is one more carried: a unique one (1.12's `max_count`, its
+    // only uniqueness: no 1.12 item has mangos's unique-equipped flag) isn't
+    // made beside the one there is, worn or not, as every other way in
+    // refuses it (`plan`; mangos's `CanEquipNewItem`, through
+    // `CanTakeMoreSimilarItems`).
+    if t.max_count > 0 && p.count_of(t.entry) + count > t.max_count {
+        return Err(Fail::CantCarryMore);
+    }
     can_equip(p, &Proficiency::of(p, data), t, slot)?;
     if t.required_reputation_faction != 0
         && !crate::game::map::reputation::meets(

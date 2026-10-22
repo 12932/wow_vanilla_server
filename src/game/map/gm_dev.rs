@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear [raid [1|2]], .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset, .tgm [on|off], .god [on|off], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -44,9 +44,12 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "learn" => learn(map, g, args, true),
         "unlearn" => learn(map, g, args, false),
         "character" => character(map, g, args),
-        "gear" => match gear_args(args) {
-            Ok(pick) => gear(map, g, pick),
-            Err(usage) => Some(usage.into()),
+        "gear" => match args {
+            ["enchant", rest @ ..] => gear_enchant(map, g, rest),
+            _ => match gear_args(args) {
+                Ok(pick) => gear(map, g, pick),
+                Err(usage) => Some(usage.into()),
+            },
         },
         "pet" => pet(map, g, args),
         "damage" => damage(map, g, args),
@@ -427,7 +430,7 @@ enum Pick {
     Raid { tier: Option<u8> },
 }
 
-const GEAR_USAGE: &str = "Usage: .gear [raid [1|2]]";
+const GEAR_USAGE: &str = "Usage: .gear [raid [1|2]] | .gear enchant <slot> <enchantment>";
 
 /// `.gear`'s arguments: none, `raid`, or `raid 1` or `raid 2`.
 fn gear_args(args: &[&str]) -> Result<Pick, &'static str> {
@@ -746,11 +749,16 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
     let mut names = Vec::new();
     for (slot, picks) in plan {
         // A few tries: one may be unique and worn already, as the first
-        // ring.
+        // ring (the store refuses a second of it, `may_equip_new`), or a
+        // unique one of the same name worn (the battlegrounds' rings are
+        // one name at several levels, alike to see): one of them.
         for entry in picks.into_iter().take(20) {
             let Some(t) = data.item(entry) else {
                 continue;
             };
+            if t.max_count > 0 && wears_named(map, to, &data, &t.name) {
+                continue;
+            }
             if let Some(spell) = proficiency_spell(t) {
                 teach(map, to, spell);
             }
@@ -800,6 +808,87 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
             ""
         }
     ))
+}
+
+const ENCHANT_USAGE: &str = "Usage: .gear enchant <slot> <enchantment>: a slot 0 to 18 or head, \
+neck, shoulders, chest, waist, legs, feet, wrists, hands, finger1, finger2, trinket1, trinket2, back, \
+mainhand, offhand, ranged";
+
+/// An equipment slot by its number (0 to 18) or name.
+fn equipment_slot(s: &str) -> Option<u8> {
+    if let Ok(n) = s.parse::<u8>() {
+        return (n < crate::game::map::inventory::EQUIPMENT_END).then_some(n);
+    }
+    Some(match s.to_ascii_lowercase().as_str() {
+        "head" => 0,
+        "neck" => 1,
+        "shoulders" | "shoulder" => 2,
+        "shirt" => 3,
+        "chest" => 4,
+        "waist" => 5,
+        "legs" => 6,
+        "feet" => 7,
+        "wrists" | "wrist" => 8,
+        "hands" => 9,
+        "finger1" => 10,
+        "finger2" => 11,
+        "trinket1" => 12,
+        "trinket2" => 13,
+        "back" => 14,
+        "mainhand" => 15,
+        "offhand" => 16,
+        "ranged" => 17,
+        "tabard" => 18,
+        _ => return None,
+    })
+}
+
+/// `.gear enchant <slot> <enchantment>`: a GM's, not 1.12's: the selected
+/// player's, or the GM's, item worn in `slot` given the lasting
+/// enchantment (`SpellItemEnchantment`'s id) an enchanter would put on, in
+/// its permanent slot, what was there replaced; its stats, procs and glow
+/// as an enchanter's (`enchant::enchant_item`).
+fn gear_enchant(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    use crate::game::store::BAG_PLAYER;
+    let (Some(slot), Some(id)) = (
+        args.first().and_then(|s| equipment_slot(s)),
+        num::<u32>(args.get(1)),
+    ) else {
+        return Some(ENCHANT_USAGE.into());
+    };
+    if args.len() != 2 {
+        return Some(ENCHANT_USAGE.into());
+    }
+    let data = map.realm.data.clone();
+    let Some(enchantment) = data.spells.enchantments.get(&id) else {
+        return Some(format!("No enchantment {id}."));
+    };
+    let to = player_target(map, g);
+    let p = map.players.get(&to)?;
+    let Some(i) = p.item_at(BAG_PLAYER, slot) else {
+        return Some(format!("Nothing worn in slot {slot}."));
+    };
+    let (item, entry) = (p.items[i].guid, p.items[i].entry);
+    let name = data
+        .item(entry)
+        .map_or_else(|| format!("item {entry}"), |t| t.name.clone());
+    if !crate::game::map::enchant::enchant_item(map, to, item, id, None) {
+        return Some(format!("Nothing worn in slot {slot}."));
+    }
+    Some(format!("Enchanted {name} with {}.", enchantment.name))
+}
+
+/// Whether `g` wears an item named `name`.
+fn wears_named(map: &Map, g: Guid, data: &crate::game::data::GameData, name: &str) -> bool {
+    use crate::game::map::inventory::EQUIPMENT_END;
+    use crate::game::store::BAG_PLAYER;
+    map.players.get(&g).is_some_and(|p| {
+        p.items.iter().any(|i| {
+            i.bag == BAG_PLAYER
+                && i.slot < EQUIPMENT_END
+                && data.item(i.entry).is_some_and(|t| t.name == name)
+        })
+    })
 }
 
 /// Four stacks of the best ammunition of `ammo_type` (arrows, bullets) of
