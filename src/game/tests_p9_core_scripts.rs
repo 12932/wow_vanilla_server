@@ -579,9 +579,9 @@ async fn ramstein_called_but_not_beaten_is_back_when_the_copy_loads_again() {
             instance_script::creature_event(m, g, Event::Death);
         }
         let called = living(m, RAMSTEIN);
-        let timed = called.iter().any(|r| {
-            event_ai::scripted(m, *r).is_some_and(|s| s.despawn_after.is_some())
-        });
+        let timed = called
+            .iter()
+            .any(|r| event_ai::scripted(m, *r).is_some_and(|s| s.despawn_after.is_some()));
         for r in &called {
             scripts::despawn(m, *r);
         }
@@ -594,7 +594,14 @@ async fn ramstein_called_but_not_beaten_is_back_when_the_copy_loads_again() {
             .first()
             .and_then(|r| m.creature(*r))
             .is_some_and(|c| near(c.position, (4_033.009, -3_404.329_3, 115.355_4)));
-        (called.len(), timed, gone, back.len(), post, state(m, ZIGGURAT_FOUR))
+        (
+            called.len(),
+            timed,
+            gone,
+            back.len(),
+            post,
+            state(m, ZIGGURAT_FOUR),
+        )
     })
     .await;
     assert_eq!(seen, (1, false, 0, 1, true, 1), "Ramstein back at his post");

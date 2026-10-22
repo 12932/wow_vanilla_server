@@ -2062,5 +2062,9 @@ async fn a_locked_banner_is_claimed_by_its_opening_not_by_a_hand() {
     map.query(move |m| crate::game::map::battleground::opened(m, alice, banner))
         .await;
     said(&mut a, "claims the Stables").await;
-    assert_eq!(map.query(|m| node_state(m, 0)).await, Some(1), "by its Opening");
+    assert_eq!(
+        map.query(|m| node_state(m, 0)).await,
+        Some(1),
+        "by its Opening"
+    );
 }
