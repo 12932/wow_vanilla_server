@@ -1653,7 +1653,8 @@ list, and is no player's pet and no one's charm, the player comes off the list. 
 turns to the next it may fight, or goes home evading if no one is left. That happens in the same update the client
 forgets it. The victim then leaves combat at the next look at their fight (every 1.2 s) if nothing else holds them.
 A creature that is hidden from the victim (its stealth, a script's concealment) is forgotten by their client too, but
-it isn't out of their sight, so it fights on. A creature told of again in the same step (a despawn and respawn)
+it isn't out of their sight, so it fights on. So does one whose victim is themselves still within their sight
+(`visibility_yards`) of it. A creature told of again in the same step (a despawn and respawn)
 fights on as well. The setting is `[creatures] evade_out_of_sight`, on by default; off, the leash alone decides, as
 before.
 
@@ -1669,7 +1670,10 @@ query that first finds the creature unknown to the client, it is evading with no
 out of combat within the next look. The same for a teleport of 150 yards: before this change, the brute chased her
 for its leash's time. With Bob on the list too, still beside it, the brute drops Alice alone and fights Bob on.
 With the setting off, the brute fights Alice on once forgotten, and she stays in combat. A creature a script
-conceals is forgotten but fights on. The fast suite and the client check pass, and so does the extended suite,
-apart from `the_real_scripted_bosses_fight_without_trouble`. That test fails about one run in three (Onyxia not yet
-in phase 1 after 1.5 s), with or without this change: in its runs, no creature ever had the forgotten player on its
-list, so nothing gave up.
+conceals is forgotten but fights on. A creature also fights on when the victim's camera, not the victim, has gone
+away (an intro cinematic, Far Sight). The client forgets by its view point, so the rule also needs the player
+themselves past their sight of the creature. That came from `the_real_scripted_bosses_fight_without_trouble`, which
+failed about one run in three on the first version. A fresh character's intro camera was still being followed after
+the test's teleport into Onyxia's lair. Her client forgot Onyxia five yards away, and Onyxia went home instead of
+taking off. With the check, it passes 10 runs out of 10. The fast suite, the extended suite and the client check
+pass.

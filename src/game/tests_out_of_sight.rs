@@ -253,3 +253,25 @@ async fn a_creature_hidden_from_its_victim_fights_on() {
     let s = at_forget(&map, ga, brute).await;
     assert!(!s.evading && s.threat == vec![ga], "{s:?}");
 }
+
+/// A victim whose camera is away (an intro cinematic's, Far Sight's), not
+/// themselves: their client forgets the brute, which fights them on.
+/// (A fresh character's intro, its camera still followed after a teleport
+/// to Onyxia's lair, had her give up on a player beside her.)
+#[tokio::test]
+async fn a_creature_whose_victims_camera_is_away_fights_on() {
+    let (_realm, mut a, ga, map) =
+        setup_with(crate::game::tests_p7_combat::data(), Class::Warrior).await;
+    let brute = fight(&map, &mut a, ga, true).await;
+    map.query(move |m| {
+        m.players.get_mut(&ga).unwrap().misc.view = Some(off(500.0, 0.0, 0.0));
+        m.visibility_dirty.insert(ga);
+    })
+    .await
+    .unwrap();
+    let s = at_forget(&map, ga, brute).await;
+    assert!(
+        !s.evading && s.threat == vec![ga] && s.victim == ga,
+        "{s:?}"
+    );
+}

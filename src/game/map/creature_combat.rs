@@ -740,7 +740,8 @@ pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
 /// each comes off its list, and one that has no one left in sight goes
 /// home, without waiting for its leash. A player's pet or a charmed
 /// creature fights on; and a creature hidden from the victim (its stealth,
-/// a script's concealment), not out of their sight, does too.
+/// a script's concealment), not out of their sight, does too, as does one
+/// whose victim's camera, not the victim, went (a cinematic, Far Sight).
 pub fn out_of_sight(map: &mut Map) {
     if map.lost_sight.is_empty() {
         return;
@@ -773,6 +774,19 @@ fn gives_up_on(map: &Map, g: Guid, victim: Guid) -> bool {
         && c.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero()
         && !p.known.contains(&g)
         && crate::game::map::death::can_see(map, victim, g)
+        && beyond_sight(map, p, c.position)
+}
+
+/// Whether the player themselves, not their camera, is past their sight of
+/// `at` (on the ground, as visibility measures): a client forgets what is
+/// far from its view point, which a cinematic, a Far Sight or a possessed
+/// unit's eyes take away from the player; a creature they are near fights
+/// on. Past the plain sight, not its margin as the forgetting is, so an
+/// anchor a little behind doesn't keep a creature on a player it has lost.
+fn beyond_sight(map: &Map, p: &crate::game::map::player::Player, at: Vector3d) -> bool {
+    let r = crate::game::map::visibility::sight(map, p);
+    let me = p.position();
+    (me.x - at.x).powi(2) + (me.y - at.y).powi(2) > r * r
 }
 
 /// `static_flags1`: no defence against spells (the water guardians').
