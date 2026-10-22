@@ -458,6 +458,7 @@ fn run(map: &mut Map, chunk: &[(Guid, Kind)]) {
             });
         }
     }
+    crate::game::map::creature_combat::out_of_sight(map);
 }
 
 /// What a refresh does before its decisions: the tiles ahead, the zone,
@@ -941,6 +942,11 @@ pub fn part(map: &mut Map, observer: Guid, object: Guid) {
         && p.known.remove(&object)
     {
         map.forget.entry(observer).or_default().push(object);
+        // A creature fighting them may give up on them: once the step is
+        // done ([`run`]).
+        if guid::is_unit(object) && map.cfg.creatures.evade_out_of_sight {
+            map.lost_sight.push((object, observer));
+        }
     }
     map.remove_observer(object, observer);
 }

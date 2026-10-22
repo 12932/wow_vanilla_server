@@ -671,6 +671,10 @@ pub struct Map {
     /// What came into the map (or was placed in it) since the update's
     /// visibility, near players ([`Map::hold_near`]).
     pub fresh: Vec<Guid>,
+    /// Creatures whose victim's client forgot them in this visibility
+    /// step, with that victim: their fights are seen to once it is done
+    /// ([`creature_combat::out_of_sight`]).
+    pub lost_sight: Vec<(Guid, Guid)>,
     /// Scripted area triggers resting from their cooldown, until when.
     pub trigger_cooldowns: AHashMap<u32, Instant>,
     /// The leash clocks creatures in one fight share.
@@ -1407,6 +1411,7 @@ impl Map {
             objects: Default::default(),
             holding: Vec::new(),
             fresh: Vec::new(),
+            lost_sight: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
             leashes: Default::default(),
             guards: Default::default(),

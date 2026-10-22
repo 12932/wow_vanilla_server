@@ -477,6 +477,14 @@ spawn_grace_ms = 6000
 # Default 24. Range 1 to 600, clamped. Changes at a reload.
 unreachable_timeout_secs = 24
 
+# Whether a creature gives up on a victim the moment it drops out
+# of their sight (their client is told to forget it): it drops
+# them from its fight, and goes home if no one it fights is left
+# in sight, without waiting for its leash. Off, the leash alone
+# decides.
+# Default true. Changes at a reload.
+evade_out_of_sight = true
+
 # Yards a creature drawn into a fight calls its kind from.
 # Default 5.0. Range 0 to 100, clamped. Changes at a reload. mangos: CreatureFamilyAssistanceRadius.
 assistance_radius = 5.0

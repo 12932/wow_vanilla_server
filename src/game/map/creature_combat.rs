@@ -733,6 +733,48 @@ pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
     far && leash_lapsed(map, c, timeout)
 }
 
+/// The creatures whose victim's client forgot them in the visibility step
+/// just done ([`Map::lost_sight`]) give up on them at once, if `[creatures]
+/// evade_out_of_sight` (mangos-classic's `Player::BeforeVisibilityDestroy`,
+/// which drops the player's reference outside dungeons; here inside too):
+/// each comes off its list, and one that has no one left in sight goes
+/// home, without waiting for its leash. A player's pet or a charmed
+/// creature fights on; and a creature hidden from the victim (its stealth,
+/// a script's concealment), not out of their sight, does too.
+pub fn out_of_sight(map: &mut Map) {
+    if map.lost_sight.is_empty() {
+        return;
+    }
+    let lost = std::mem::take(&mut map.lost_sight);
+    if !map.cfg.creatures.evade_out_of_sight {
+        return;
+    }
+    for (g, victim) in lost {
+        if gives_up_on(map, g, victim) {
+            crate::game::map::ai::lost_sight_of(map, g, victim);
+        }
+    }
+}
+
+/// Whether `g`, forgotten by `victim`'s client, gives up on them: it has
+/// them on its list, it is no player's and no one's charm, and they still
+/// don't see it (told of it again in the same step, they do), as they
+/// would if near.
+fn gives_up_on(map: &Map, g: Guid, victim: Guid) -> bool {
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
+    let Some(p) = map.players.get(&victim) else {
+        return false;
+    };
+    c.alive()
+        && c.threat.iter().any(|(t, _)| *t == victim)
+        && crate::game::map::ai::keeps_threat(c)
+        && c.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero()
+        && !p.known.contains(&g)
+        && crate::game::map::death::can_see(map, victim, g)
+}
+
 /// `static_flags1`: no defence against spells (the water guardians').
 const STATIC_NO_SPELL_DEFENSE: u32 = 0x8000;
 
