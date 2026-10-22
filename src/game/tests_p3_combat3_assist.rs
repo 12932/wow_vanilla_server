@@ -323,3 +323,32 @@ async fn only_a_free_creature_helps_and_a_fleeing_one_seeks_the_nearest_within_t
     assert!(got.1, "the next when it is busy");
     assert_eq!(got.2, None, "none past thirty yards");
 }
+
+/// Bug hunt (creatures): a creature turning to the next on its list (its
+/// victim feigning death, vanishing, dying) called for help again, each
+/// time. It calls once, as its fight begins (mangos-classic's
+/// `m_AlreadyCallAssistance`).
+#[tokio::test]
+async fn a_creature_turning_to_its_next_foe_calls_no_one_again() {
+    let realm = crate::game::harness::realm_with(world());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let got = map
+        .query(move |m| {
+            let caller = put(m, of(DEFIAS), 0.0, 0.0);
+            crate::game::map::ai::attacked(m, caller, ga);
+            crate::game::map::ai::add_threat(m, caller, gb, 1.0);
+            // One of its kind comes by after the pull; Alice feigns death.
+            let kin = put(m, of(DEFIAS), 5.0, 0.0);
+            crate::game::map::ai::forget(m, ga);
+            (fighting(m, caller, gb), called(m, caller).contains(&kin))
+        })
+        .await
+        .unwrap();
+    assert_eq!(got, (true, false), "on Bob, calling no one");
+}

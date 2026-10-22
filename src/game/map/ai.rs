@@ -332,7 +332,10 @@ fn turn_to_next(map: &mut Map, c: Guid) {
             if let Some(cr) = map.creature_mut(c) {
                 cr.combat.attacking = false;
             }
-            attacked(map, c, t);
+            // It called for help as its fight began, and calls no one
+            // again for a new victim in it (mangos-classic's
+            // `m_AlreadyCallAssistance`, reset only at `CombatStop`).
+            assist(map, c, t);
             map.note_fighting(c);
             if let Some(cr) = map.creature_mut(c) {
                 cr.combat.victim = t;
