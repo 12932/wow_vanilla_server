@@ -211,6 +211,7 @@ async fn write(realm: Arc<Realm>, mut out: std::io::BufWriter<std::fs::File>) {
 }
 
 /// The process's user and system time, from `/proc/self/stat`.
+#[cfg(unix)]
 fn cpu_secs() -> Option<f64> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     let rest = &stat[stat.rfind(')')? + 2..];
@@ -220,6 +221,12 @@ fn cpu_secs() -> Option<f64> {
     // SAFETY: sysconf reads a constant.
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     Some((utime + stime) / if ticks > 0 { ticks as f64 } else { 100.0 })
+}
+
+/// No `/proc` (or `libc`) off Unix: the stats file's `cpu_secs` is null.
+#[cfg(not(unix))]
+fn cpu_secs() -> Option<f64> {
+    None
 }
 
 /// The process's resident set, from `/proc/self/status`.
