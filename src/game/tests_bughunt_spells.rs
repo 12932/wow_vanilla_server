@@ -466,3 +466,48 @@ async fn a_refreshed_aura_keeps_its_procs_cooldown() {
         .unwrap();
     assert_eq!(kept, set);
 }
+
+/// A rider's cast that fails its checks (on cooldown) leaves them mounted;
+/// one that may be cast takes them off their mount and goes (review 3's
+/// R3-24).
+#[tokio::test]
+async fn a_failed_cast_doesnt_dismount() {
+    use crate::game::map::spells;
+    const MOUNT: u32 = 990_990;
+    const FLASH: u32 = 990_991;
+    let realm = fast_realm(|d| {
+        let mut mount = bare(MOUNT, 0);
+        mount.duration_index = LASTS_LONG;
+        effect(&mut mount, 0, aura(auras::AURA_MOUNTED, 6_000, 0, 1));
+        let mut flash = bare(FLASH, 0);
+        flash.recovery_time = 30_000;
+        flash.duration_index = LASTS_5S;
+        effect(&mut flash, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, [mount, flash]);
+    });
+    let (_c, g, map) = human(&realm, "BHMT", "Rider", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[FLASH]);
+            let s = m.realm.data.spells.get(MOUNT).unwrap().clone();
+            apply_template(m, g, g, &s);
+            let mounted = has(m, g, MOUNT);
+            let later = m.now + std::time::Duration::from_secs(30);
+            m.caster_mut(g).unwrap().cooldowns.insert(FLASH, later);
+            let refused = !spells::cast(m, g, FLASH, Default::default(), None);
+            let still = has(m, g, MOUNT);
+            m.caster_mut(g).unwrap().cooldowns.clear();
+            let went = spells::cast(m, g, FLASH, Default::default(), None);
+            (
+                mounted,
+                refused,
+                still,
+                went,
+                has(m, g, MOUNT),
+                has(m, g, FLASH),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, true, true, false, true));
+}

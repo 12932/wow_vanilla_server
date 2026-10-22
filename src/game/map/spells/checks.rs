@@ -384,6 +384,7 @@ pub fn check(
         }
         if !triggered
             && p.fields.get_u32(UNIT_FIELD_MOUNTDISPLAYID) != 0
+            && map.spells.dismounting != Some(caster)
             && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
             && !s.has_aura(AURA_MOUNTED)
         {

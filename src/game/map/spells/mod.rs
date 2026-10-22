@@ -288,6 +288,9 @@ pub struct MapSpells {
     /// The charged cast-time modifiers (spell, caster) the cast now ending
     /// began with, for its `execute`: only those are spent.
     pub ending_began_with: Option<Vec<(u32, Guid)>>,
+    /// A rider whose cast is checked as if off their mount, which it takes
+    /// them off if it may be cast.
+    pub dismounting: Option<Guid>,
     /// By caster, the charged cast-time modifiers (spell, caster) its cast
     /// under way had its time worked out with (Shadow Trance's), if any:
     /// only those are spent as it ends.
@@ -1005,16 +1008,24 @@ pub fn cast(
     if crate::game::map::mounts::dismissed(map, caster, s) {
         return true;
     }
-    if map.players.contains_key(&caster)
+    // A rider is taken off their mount by a cast that may be cast once off
+    // it, and only then: one that fails its checks (on cooldown, out of
+    // range) leaves them mounted. The checks take them as off it.
+    let dismount = map.players.contains_key(&caster)
         && !s.attr(0, sd::ATTR_ALLOW_WHILE_MOUNTED)
         && !s.has_aura(auras::AURA_MOUNTED)
-        && auras::auras(map, caster).is_some_and(|a| a.has(auras::AURA_MOUNTED))
-    {
-        auras::remove_where(map, caster, |h| h.has(auras::AURA_MOUNTED));
+        && auras::auras(map, caster).is_some_and(|a| a.has(auras::AURA_MOUNTED));
+    if dismount {
+        map.spells.dismounting = Some(caster);
     }
-    if let Some(r) = checks::check(map, caster, s, &targets, item, false, &m) {
+    let refused = checks::check(map, caster, s, &targets, item, false, &m);
+    map.spells.dismounting = None;
+    if let Some(r) = refused {
         send_cast_result(map, caster, spell, Some(r));
         return false;
+    }
+    if dismount {
+        auras::remove_where(map, caster, |h| h.has(auras::AURA_MOUNTED));
     }
     // At oneself, unless aimed at a body to raise.
     if targets.unit.is_none()
