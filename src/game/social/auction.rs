@@ -464,7 +464,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     };
     let price = m.price.as_int();
     let me = guid::counter(g);
-    let fail = |map: &Map, r: R| {
+    let answer = |map: &Map, r: R| {
         command_result(
             map,
             g,
@@ -479,7 +479,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
         .filter(|a| a.market == market_of(house))
     else {
         drop(auctions);
-        fail(map, R::ErrItemNotFound);
+        answer(map, R::ErrItemNotFound);
         return;
     };
     // Not one's own, nor another of one's account's characters'
@@ -492,7 +492,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     };
     if a.owner == me || account(a.owner).is_some_and(|o| Some(o) == account(me)) {
         drop(auctions);
-        fail(map, R::ErrBidOwn);
+        answer(map, R::ErrBidOwn);
         return;
     }
     // No more than the bid there is, as mangos tells it.
@@ -503,7 +503,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
             new_bid: a.bid,
         };
         drop(auctions);
-        fail(map, higher);
+        answer(map, higher);
         return;
     }
     let least = if a.bid > 0 {
@@ -514,7 +514,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let buyout = a.buyout > 0 && price >= a.buyout;
     if price < least && !buyout {
         drop(auctions);
-        fail(map, R::ErrBidIncrement);
+        answer(map, R::ErrBidIncrement);
         return;
     }
     let price = if buyout { a.buyout } else { price };
@@ -522,7 +522,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let cost = if a.bidder == me { price - a.bid } else { price };
     if map.players.get(&g).is_none_or(|p| p.money() < cost) {
         drop(auctions);
-        fail(map, R::ErrNotEnoughMoney);
+        answer(map, R::ErrNotEnoughMoney);
         return;
     }
     let mut records = Records::new();
@@ -554,7 +554,6 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     }
     a.bid = price;
     a.bidder = me;
-    let id = a.id;
     let outbid = a.outbid();
     let done = buyout.then(|| a.clone());
     if let Some(a) = &done {
@@ -585,13 +584,12 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     map.save_together(&[g], records);
     drop(mails);
     drop(auctions);
-    fail(
+    answer(
         map,
         R::Ok {
             auction_outbid1: outbid,
         },
     );
-    let _ = id;
 }
 
 /// `CMSG_AUCTION_REMOVE_ITEM`: the seller takes it back. With a bid on it,
