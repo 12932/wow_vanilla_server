@@ -48,6 +48,11 @@ pub struct Lists {
     /// ([`Lists::ignorers`]), not once a recipient. Changed only with
     /// `ignores`, by the methods below.
     ignored_by: AHashMap<Guid, AHashSet<Guid>>,
+    /// `friends` the other way round: those online with a player as a
+    /// friend, so that their login and logout ask once
+    /// ([`Lists::watchers`]), not once a player online. Changed only with
+    /// `friends`, by the methods below.
+    friended_by: AHashMap<Guid, AHashSet<Guid>>,
 }
 
 impl Lists {
@@ -101,26 +106,68 @@ impl Lists {
         }
     }
 
+    /// `owner` has `other` as a friend.
+    fn befriend(&mut self, owner: Guid, other: Guid) {
+        self.friends.entry(owner).or_default().insert(other);
+        self.friended_by.entry(other).or_default().insert(owner);
+    }
+
+    /// `owner` no longer has `other` as a friend.
+    fn unfriend(&mut self, owner: Guid, other: Guid) {
+        if let Some(s) = self.friends.get_mut(&owner) {
+            s.remove(&other);
+        }
+        self.stop_watching(owner, other);
+    }
+
+    /// `owner` off the list of those with `other` as a friend.
+    fn stop_watching(&mut self, owner: Guid, other: Guid) {
+        if let Some(by) = self.friended_by.get_mut(&other) {
+            by.remove(&owner);
+            if by.is_empty() {
+                self.friended_by.remove(&other);
+            }
+        }
+    }
+
+    /// `owner`'s friend list, all of it, in place of what it was.
+    fn set_friends(&mut self, owner: Guid, friends: AHashSet<Guid>) {
+        self.drop_friends(owner);
+        for f in &friends {
+            self.friended_by.entry(*f).or_default().insert(owner);
+        }
+        self.friends.insert(owner, friends);
+    }
+
+    /// `owner`'s friend list gone (offline, or deleted).
+    fn drop_friends(&mut self, owner: Guid) {
+        for f in self.friends.remove(&owner).unwrap_or_default() {
+            self.stop_watching(owner, f);
+        }
+    }
+
     /// A character deleted: off everyone's lists, and its own gone.
     fn forget(&mut self, g: Guid) {
-        for f in self.friends.values_mut() {
-            f.remove(&g);
+        for owner in self.friended_by.remove(&g).unwrap_or_default() {
+            if let Some(f) = self.friends.get_mut(&owner) {
+                f.remove(&g);
+            }
         }
-        for i in self.ignores.values_mut() {
-            i.remove(&g);
+        for owner in self.ignored_by.remove(&g).unwrap_or_default() {
+            if let Some(i) = self.ignores.get_mut(&owner) {
+                i.remove(&g);
+            }
         }
-        self.ignored_by.remove(&g);
-        self.friends.remove(&g);
+        self.drop_friends(g);
         self.drop_ignores(g);
     }
 
     /// Those online with `g` as a friend.
     fn watchers(&self, g: Guid) -> Vec<Guid> {
-        self.friends
-            .iter()
-            .filter(|(_, f)| f.contains(&g))
-            .map(|(owner, _)| *owner)
-            .collect()
+        self.friended_by
+            .get(&g)
+            .map(|by| by.iter().copied().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -209,7 +256,7 @@ fn send_lists(map: &mut Map, g: Guid) -> Option<(AHashSet<Guid>, AHashSet<Guid>)
 pub fn list(map: &mut Map, g: Guid) {
     if let Some((friends, ignores)) = send_lists(map, g) {
         let mut lists = map.realm.social.lists.lock();
-        lists.friends.insert(g, friends);
+        lists.set_friends(g, friends);
         lists.set_ignores(g, ignores);
     }
 }
@@ -248,7 +295,7 @@ pub fn logged_in(map: &mut Map, g: Guid) {
     };
     let watchers = {
         let mut lists = realm.social.lists.lock();
-        lists.friends.insert(g, friends);
+        lists.set_friends(g, friends);
         lists.set_ignores(g, ignores);
         lists.watchers(g)
     };
@@ -278,7 +325,7 @@ pub fn told_offline(realm: &Realm, g: Guid) {
 pub fn logged_out(realm: &Realm, g: Guid) {
     let watchers = {
         let mut lists = realm.social.lists.lock();
-        lists.friends.remove(&g);
+        lists.drop_friends(g);
         lists.drop_ignores(g);
         lists.watchers(g)
     };
@@ -316,14 +363,7 @@ pub fn add_friend(map: &mut Map, g: Guid, name: &str) {
         LIST_FULL
     } else {
         p.row.state.friends.push(counter);
-        realm
-            .social
-            .lists
-            .lock()
-            .friends
-            .entry(g)
-            .or_default()
-            .insert(f);
+        realm.social.lists.lock().befriend(g, f);
         let online = realm
             .registry
             .online(f)
@@ -343,9 +383,7 @@ pub fn del_friend(map: &mut Map, g: Guid, f: Guid) {
     // `HandleDelFriendOpcode`, Thistle Tea's idempotent `remove/3`).
     let counter = guid::counter(f);
     p.row.state.friends.retain(|c| *c != counter);
-    if let Some(s) = realm.social.lists.lock().friends.get_mut(&g) {
-        s.remove(&f);
-    }
+    realm.social.lists.lock().unfriend(g, f);
     status(&realm, g, REMOVED, f);
 }
 
@@ -426,5 +464,58 @@ mod tests {
         l.forget(c);
         agree(&l);
         assert!(l.ignored_by.is_empty());
+    }
+
+    /// `friended_by` is `friends` the other way round, whatever changes it.
+    #[test]
+    fn those_with_a_player_as_a_friend_follow_the_lists() {
+        let (a, b, c) = (guid::player(1), guid::player(2), guid::player(3));
+        let mut l = Lists::default();
+        let agree = |l: &Lists| {
+            for g in [a, b, c] {
+                let by: AHashSet<Guid> = [a, b, c]
+                    .into_iter()
+                    .filter(|o| l.friends.get(o).is_some_and(|f| f.contains(&g)))
+                    .collect();
+                let watchers: AHashSet<Guid> = l.watchers(g).into_iter().collect();
+                assert_eq!(watchers, by, "those with {g:?} as a friend");
+            }
+        };
+        l.befriend(a, c);
+        l.befriend(b, c);
+        agree(&l);
+        assert_eq!(l.watchers(c).len(), 2);
+        l.unfriend(a, c);
+        agree(&l);
+        l.set_friends(b, [a].into_iter().collect());
+        agree(&l);
+        assert!(l.watchers(c).is_empty());
+        l.set_friends(c, [a, b].into_iter().collect());
+        l.drop_friends(b);
+        agree(&l);
+        assert_eq!(l.watchers(a), vec![c]);
+        l.forget(a);
+        agree(&l);
+        l.forget(c);
+        agree(&l);
+        assert!(l.friended_by.is_empty());
+    }
+
+    /// A login storm asked each login of every online player's friend
+    /// list, under the lock every whisper and channel line takes: 3,000
+    /// logins of players with 50 friends each were 9 million lookups.
+    #[test]
+    fn a_login_storm_asks_each_login_once() {
+        let mut l = Lists::default();
+        let n = 3000u32;
+        for i in 0..n {
+            let friends = (1..=50).map(|k| guid::player((i + k) % n)).collect();
+            l.set_friends(guid::player(i), friends);
+        }
+        let started = std::time::Instant::now();
+        let told: usize = (0..n).map(|i| l.watchers(guid::player(i)).len()).sum();
+        let took = started.elapsed();
+        assert_eq!(told, 50 * n as usize);
+        assert!(took < std::time::Duration::from_millis(100), "{took:?}");
     }
 }

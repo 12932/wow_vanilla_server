@@ -464,7 +464,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     };
     let price = m.price.as_int();
     let me = guid::counter(g);
-    let fail = |map: &Map, r: R| {
+    let answer = |map: &Map, r: R| {
         command_result(
             map,
             g,
@@ -476,10 +476,11 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let Some(a) = auctions
         .auctions
         .get_mut(&m.auction_id)
-        .filter(|a| a.market == market_of(house))
+        // Run out, though not yet swept: it is over (`list` hides it).
+        .filter(|a| a.market == market_of(house) && a.expires_at > mail::now())
     else {
         drop(auctions);
-        fail(map, R::ErrItemNotFound);
+        answer(map, R::ErrItemNotFound);
         return;
     };
     // Not one's own, nor another of one's account's characters'
@@ -492,7 +493,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     };
     if a.owner == me || account(a.owner).is_some_and(|o| Some(o) == account(me)) {
         drop(auctions);
-        fail(map, R::ErrBidOwn);
+        answer(map, R::ErrBidOwn);
         return;
     }
     // No more than the bid there is, as mangos tells it.
@@ -503,7 +504,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
             new_bid: a.bid,
         };
         drop(auctions);
-        fail(map, higher);
+        answer(map, higher);
         return;
     }
     let least = if a.bid > 0 {
@@ -514,7 +515,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let buyout = a.buyout > 0 && price >= a.buyout;
     if price < least && !buyout {
         drop(auctions);
-        fail(map, R::ErrBidIncrement);
+        answer(map, R::ErrBidIncrement);
         return;
     }
     let price = if buyout { a.buyout } else { price };
@@ -522,7 +523,7 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     let cost = if a.bidder == me { price - a.bid } else { price };
     if map.players.get(&g).is_none_or(|p| p.money() < cost) {
         drop(auctions);
-        fail(map, R::ErrNotEnoughMoney);
+        answer(map, R::ErrNotEnoughMoney);
         return;
     }
     let mut records = Records::new();
@@ -554,7 +555,6 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     }
     a.bid = price;
     a.bidder = me;
-    let id = a.id;
     let outbid = a.outbid();
     let done = buyout.then(|| a.clone());
     if let Some(a) = &done {
@@ -585,13 +585,12 @@ pub fn bid(map: &mut Map, g: Guid, m: &CMSG_AUCTION_PLACE_BID) {
     map.save_together(&[g], records);
     drop(mails);
     drop(auctions);
-    fail(
+    answer(
         map,
         R::Ok {
             auction_outbid1: outbid,
         },
     );
-    let _ = id;
 }
 
 /// `CMSG_AUCTION_REMOVE_ITEM`: the seller takes it back. With a bid on it,
@@ -607,7 +606,9 @@ pub fn cancel(map: &mut Map, g: Guid, m: &CMSG_AUCTION_REMOVE_ITEM) {
     let Some(a) = auctions
         .auctions
         .get(&m.auction_id)
-        .filter(|a| a.owner == guid::counter(g))
+        // Run out with a bid, though not yet swept, it is the bidder's: no
+        // taking it back. Unbid, it comes back to the seller either way.
+        .filter(|a| a.owner == guid::counter(g) && (a.bidder == 0 || a.expires_at > mail::now()))
         .cloned()
     else {
         return;
@@ -792,10 +793,16 @@ fn usable_by(
         && !learned
 }
 
+/// An auction's bytes in a list (wow_messages' `AuctionListItem`).
+const LISTED_BYTES: usize = 64;
+
 /// `CMSG_AUCTION_LIST_OWNER_ITEMS` and `CMSG_AUCTION_LIST_BIDDER_ITEMS`:
 /// the player's auctions, or those they hold the bid on and those they ask
-/// after, outbid (mangos's `HandleAuctionListBidderItems`).
-pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32]) {
+/// after, outbid (mangos's `HandleAuctionListBidderItems`), from the
+/// `from`th on, as many as the client's cap holds (`mail::LIST_BYTES`);
+/// the total counts them all. Unbounded, a seller with a thousand auctions
+/// had a frame too big to send, and was sent nothing.
+pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32], from: u32) {
     let realm = &map.realm;
     let Some(house) = house_at(map, g, auctioneer) else {
         return;
@@ -803,23 +810,31 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32
     let me = guid::counter(g);
     let market = market_of(house);
     let auctions = realm.social.auctions.lock();
+    // Sorted and searched: a client may ask after thousands, and this
+    // runs under the realm's auctions lock.
     let mut asked: Vec<u32> = outbid.to_vec();
     asked.sort_unstable();
     asked.dedup();
-    let mine: Vec<AuctionListItem> = auctions
+    let all: Vec<&Auction> = auctions
         .auctions
         .values()
         .filter(|a| {
             a.market == market
                 && if bids {
-                    a.bidder == me || asked.contains(&a.id)
+                    a.bidder == me || asked.binary_search(&a.id).is_ok()
                 } else {
                     a.owner == me
                 }
         })
+        .collect();
+    let total = all.len() as u32;
+    let room = (mail::LIST_BYTES - 8) / LISTED_BYTES;
+    let mine: Vec<AuctionListItem> = all
+        .into_iter()
+        .skip(from as usize)
+        .take(room)
         .map(|a| a.list_item(&realm.data))
         .collect();
-    let total = mine.len() as u32;
     let Some(p) = map.players.get(&g) else {
         return;
     };

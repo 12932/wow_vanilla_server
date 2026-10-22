@@ -810,21 +810,41 @@ pub fn make_letter(map: &mut Map, g: Guid, id: u32) {
     );
 }
 
-/// `CMSG_ITEM_TEXT_QUERY`: a mail's text, or a letter's.
+/// `CMSG_ITEM_TEXT_QUERY`: a mail's text, or a letter's, to one who may
+/// read it: the mail's receiver (who, for one returned, is its sender), or
+/// one holding a letter of the text. Anyone else is told an empty text:
+/// ids are realm-wide and sequential, so a client walking them would read
+/// every letter and auction invoice in the realm (mangos's
+/// `HandleItemTextQuery` has a "TODO: some check needed" there).
 pub fn text_query(map: &Map, g: Guid, text_id: u32) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let holds = || {
+        text_id != 0
+            && p.items
+                .iter()
+                .any(|i| i.fields.get_u32(ITEM_FIELD_ITEM_TEXT_ID) == text_id)
+    };
     let mails = map.realm.social.mail.lock();
     let text = mails
         .texts
         .get(&text_id)
-        .or_else(|| mails.mails.get(&text_id).map(|m| &m.body))
+        .filter(|_| holds())
+        .or_else(|| {
+            mails
+                .mails
+                .get(&text_id)
+                .filter(|m| m.receiver == guid::counter(g))
+                .map(|m| &m.body)
+        })
         .map(|t| body(t).to_owned())
         .unwrap_or_default();
-    if let Some(p) = map.players.get(&g) {
-        p.outbound.send(&SMSG_ITEM_TEXT_QUERY_RESPONSE {
-            item_text_id: text_id,
-            text,
-        });
-    }
+    drop(mails);
+    p.outbound.send(&SMSG_ITEM_TEXT_QUERY_RESPONSE {
+        item_text_id: text_id,
+        text,
+    });
 }
 
 /// `MSG_QUERY_NEXT_MAIL_TIME`: 0 with unread mail, a day back without.
@@ -878,16 +898,28 @@ pub fn sweep(realm: &Realm) {
     }
     for id in expired {
         let mut mails = realm.social.mail.lock();
-        let Some(m) = mails.mails.get(&id) else {
-            continue;
-        };
-        let keeps = m.item.is_some() || m.money > 0;
-        if m.kind == NORMAL && m.flags & RETURNED == 0 && keeps {
-            send_back(realm, &mut mails, id);
-        } else {
-            mails.remove(id);
-            realm.store.delete_record(KIND_MAIL, u64::from(id));
-        }
+        expire(realm, &mut mails, id, now);
+    }
+}
+
+/// Mail `id`, if it has expired by `now`, back to a player who sent it, or
+/// away. Its expiry is read again under the lock it is acted on under: let
+/// go since the sweep found it, its receiver may have sent it back, with
+/// 30 days more, and it is not to be deleted, item and all.
+pub(crate) fn expire(realm: &Realm, mails: &mut Mails, id: u32, now: i64) {
+    let Some(m) = mails.mails.get(&id).filter(|m| m.expires_at <= now) else {
+        return;
+    };
+    let keeps = m.item.is_some() || m.money > 0;
+    // Not a mail already sent back, nor a cash-on-delivery payment:
+    // back, it would pay the buyer, who kept the item, again (mangos's
+    // `ReturnOrDeleteOldMails`, `MAIL_CHECK_MASK_COD_PAYMENT |
+    // MAIL_CHECK_MASK_RETURNED`).
+    if m.kind == NORMAL && m.flags & (RETURNED | COD_PAYMENT) == 0 && keeps {
+        send_back(realm, mails, id);
+    } else {
+        mails.remove(id);
+        realm.store.delete_record(KIND_MAIL, u64::from(id));
     }
 }
 

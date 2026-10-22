@@ -58,6 +58,8 @@ mod tests_bosses;
 #[cfg(test)]
 mod tests_bughunt_items;
 #[cfg(test)]
+mod tests_bughunt_social;
+#[cfg(test)]
 mod tests_bugs1;
 #[cfg(test)]
 mod tests_bugs2;

@@ -317,18 +317,28 @@ impl Group {
     /// `SMSG_GROUP_LIST` to each member online: everyone else, the leader
     /// and the loot rules.
     fn send_update(&self, realm: &Realm) {
+        self.send_update_without(realm, None);
+    }
+
+    /// [`Self::send_update`], `gone` taken as offline though still in the
+    /// registry: a member logging out, who leaves it after their group has
+    /// heard (mangos sends the update once the player is gone).
+    fn send_update_without(&self, realm: &Realm, gone: Option<Guid>) {
         for me in &self.members {
-            if self.away.contains(&me.guid) || realm.registry.online(me.guid).is_none() {
+            if Some(me.guid) == gone
+                || self.away.contains(&me.guid)
+                || realm.registry.online(me.guid).is_none()
+            {
                 continue;
             }
             set_leader_flag(realm, me.guid, me.guid == self.leader);
-            if let Some(frame) = list_frame(&self.list_for(realm, me)) {
+            if let Some(frame) = list_frame(&self.list_for(realm, me, gone)) {
                 send_frame(realm, me.guid, &frame);
             }
         }
     }
 
-    fn list_for(&self, realm: &Realm, me: &Slot) -> SMSG_GROUP_LIST {
+    fn list_for(&self, realm: &Realm, me: &Slot, gone: Option<Guid>) -> SMSG_GROUP_LIST {
         let flags = |s: &Slot| s.subgroup | if s.assistant { 0x80 } else { 0 };
         let members: Vec<GroupListMember> = self
             .members
@@ -337,7 +347,7 @@ impl Group {
             .map(|m| GroupListMember {
                 name: m.name.to_string(),
                 guid: m.guid,
-                is_online: realm.registry.online(m.guid).is_some(),
+                is_online: Some(m.guid) != gone && realm.registry.online(m.guid).is_some(),
                 flags: flags(m),
             })
             .collect();
@@ -711,9 +721,18 @@ impl Groups {
         }
     }
 
+    /// `g`'s own group is `id`. In a battleground's raid, they are away
+    /// from it, as `bg_joined` leaves one: its rosters aren't sent them,
+    /// over the raid's (mangos's `SendUpdate` skips a member whose
+    /// `GetGroup` is another).
     fn set_home(&mut self, g: Guid, id: u32) {
         if self.in_bg_raid(g) {
             self.original.insert(g, id);
+            if let Some(gr) = self.groups.get_mut(&id)
+                && !gr.away.contains(&g)
+            {
+                gr.away.push(g);
+            }
         } else {
             self.of.insert(g, id);
         }
@@ -1038,6 +1057,7 @@ pub fn accept(realm: &Realm, me: &Online) {
         return;
     };
     groups.invites.remove(&me.guid);
+    let away = groups.in_bg_raid(me.guid);
     let Some(gr) = groups.groups.get_mut(&id) else {
         return;
     };
@@ -1061,6 +1081,11 @@ pub fn accept(realm: &Realm, me: &Online) {
         subgroup,
         assistant: false,
     });
+    // In a battleground's raid, away from it from the first roster on
+    // (`set_home`).
+    if away && !gr.away.contains(&me.guid) {
+        gr.away.push(me.guid);
+    }
     if gr.looter.is_zero() {
         gr.looter = gr.leader;
     }
@@ -1670,7 +1695,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
         if gr.leader == g {
             gr.leader_away_since = Some(now());
         }
-        gr.send_update(realm);
+        gr.send_update_without(realm, Some(g));
         let offline = MemberStats::default();
         gr.broadcast(realm, &offline.packet(g, STAT_STATUS, false), Some(g));
     }
@@ -1678,7 +1703,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
     if groups.in_bg_raid(g)
         && let Some(gr) = groups.original_of(g)
     {
-        gr.send_update(realm);
+        gr.send_update_without(realm, Some(g));
     }
 }
 
@@ -1712,6 +1737,16 @@ pub fn bg_joined(realm: &Realm, g: Guid, name: Arc<str>, instance: u32, side: u8
             drop(groups);
             bg_left(realm, g);
             groups = realm.social.groups.lock();
+        }
+        // The raid there, with room, before they leave their own group for
+        // it: else they'd be away from it, in no raid, and hear nothing of
+        // it until they next joined one.
+        if groups
+            .groups
+            .get(&id)
+            .is_none_or(|gr| !gr.is_member(g) && gr.full())
+        {
+            return;
         }
         if let Some(own) = groups.of.get(&g).copied() {
             groups.original.insert(g, own);
@@ -1825,11 +1860,17 @@ pub fn bg_closed(realm: &Realm, instance: u32) {
     }
 }
 
-/// `CMSG_REQUEST_PARTY_MEMBER_STATS`: all of a member's stats.
+/// `CMSG_REQUEST_PARTY_MEMBER_STATS`: all of a member's stats, to one in
+/// a group with them (their battleground's raid, or their own group);
+/// anyone else is told they are offline. Unchecked (as mangos has it), a
+/// client could follow any grouped player's zone and position.
 pub fn request_stats(realm: &Realm, me: &Online, of: Guid) {
     let groups = realm.social.groups.lock();
+    let mates = |gr: Option<&Group>| gr.is_some_and(|gr| gr.is_member(of));
+    let mine =
+        of == me.guid || mates(groups.group_of(me.guid)) || mates(groups.original_of(me.guid));
     let frame = match groups.stats.get(&of) {
-        Some(s) if realm.registry.online(of).is_some() => s.packet(of, s.all(), true),
+        Some(s) if mine && realm.registry.online(of).is_some() => s.packet(of, s.all(), true),
         _ => MemberStats::default().packet(of, STAT_STATUS, true),
     };
     me.outbound.send_frame(frame);
