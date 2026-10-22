@@ -2248,3 +2248,36 @@ async fn a_flag_whose_carrier_is_gone_goes_home() {
     })
     .await;
 }
+
+/// Before the gates open, one who has gone farther than 75 yards from
+/// their side's start (mangos-classic's `StartMaxDist` for Warsong Gulch)
+/// is put back there; one within it stays where they are.
+#[tokio::test]
+async fn before_the_gates_open_one_strayed_from_the_start_is_put_back() {
+    let realm = delayed(gulch(), Duration::from_secs(120));
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    queue(&a, Map::WarsongGulch).await;
+    queue(&b, Map::WarsongGulch).await;
+    let map = into(&realm, &mut a, Map::WarsongGulch).await;
+    into(&realm, &mut b, Map::WarsongGulch).await;
+    let (alice, grom) = (a.guid, b.guid);
+    // Alice's start is at the origin, Grom's at (100, 100).
+    put(&map, &mut a, 200.0, 0.0, 0.0).await;
+    put(&map, &mut b, 100.0, 150.0, 0.0).await;
+    until(&map, "Alice back", move |m| {
+        m.players
+            .get(&alice)
+            .is_some_and(|p| p.position().x.abs() < 1.0 && p.position().y.abs() < 1.0)
+    })
+    .await;
+    let grom_at = map
+        .query(move |m| {
+            m.players
+                .get(&grom)
+                .map(|p| (p.position().x, p.position().y))
+        })
+        .await
+        .flatten();
+    assert_eq!(grom_at, Some((100.0, 150.0)), "Grom, 50 yards out, stays");
+}

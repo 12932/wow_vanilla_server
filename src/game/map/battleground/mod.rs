@@ -154,6 +154,9 @@ pub struct Match {
     /// left of that at the last update (mangos's premature finish).
     pub premature: Option<Instant>,
     pub premature_left: Duration,
+    /// Before the gates open: when those strayed from their side's start
+    /// are next brought back.
+    pub start_check_at: Instant,
 }
 
 impl Match {
@@ -177,6 +180,7 @@ impl Match {
             buffs: Vec::new(),
             premature: None,
             premature_left: Duration::ZERO,
+            start_check_at: now,
         }
     }
 
@@ -608,6 +612,12 @@ pub fn update(map: &mut Map) {
     let Some(m) = map.battleground.as_ref() else {
         return;
     };
+    if matches!(m.phase, Phase::Waiting | Phase::Starting { .. }) {
+        keep_to_the_start(map);
+    }
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
     match m.phase {
         Phase::Starting { at } => {
             let left = at.saturating_duration_since(now);
@@ -635,6 +645,51 @@ pub fn update(map: &mut Map) {
     }
     premature(map);
     resurrect_wave(map);
+}
+
+/// How far from their side's start a player may go before the gates open
+/// (mangos-classic's `battleground_template.StartMaxDist`).
+fn start_max_dist(bg: u32) -> f32 {
+    match bg {
+        BG_AV => 100.0,
+        _ => 75.0,
+    }
+}
+
+/// Before the gates open, each second: one farther from their side's
+/// start than [`start_max_dist`] (out over a wall of Warsong Gulch's
+/// tunnels or Alterac Valley's caves) is put back there (mangos's
+/// `BattleGround::Update` in `STATUS_WAIT_JOIN`).
+fn keep_to_the_start(map: &mut Map) {
+    let now = map.now;
+    let Some(m) = map.battleground.as_mut() else {
+        return;
+    };
+    if m.start_check_at > now {
+        return;
+    }
+    m.start_check_at = now + Duration::from_secs(1);
+    let bg = m.bg;
+    let max = start_max_dist(bg);
+    let Some(t) = map.realm.data.battlegrounds.get(&bg) else {
+        return;
+    };
+    let starts = t.starts;
+    let strayed: Vec<(Guid, Vector3d)> = map
+        .players
+        .values()
+        .filter_map(|p| {
+            let s = m.team_of(p.guid)?;
+            let &(_, x, y, z) = map.realm.data.safe_locs.get(&starts[s])?;
+            let start = Vector3d { x, y, z };
+            (crate::game::map::combat::dist(p.position(), start) > max).then_some((p.guid, start))
+        })
+        .collect();
+    for (g, start) in strayed {
+        tracing::debug!("{g} strayed from the start of battleground {bg}: put back");
+        let o = map.players.get(&g).map_or(0.0, |p| p.movement.orientation);
+        map.teleport(g, map.key, start, o);
+    }
 }
 
 /// A side short of players while the battle is on (mangos's
