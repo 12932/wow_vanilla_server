@@ -1158,10 +1158,9 @@ fn passive_fight(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let left = c
-        .threat
-        .iter()
-        .any(|(t, _)| map.unit_view(*t).is_some_and(|u| u.alive) && combat::can_attack(map, g, *t));
+    // Left to fight as [`fight_step`] has it: one it doesn't see (gone
+    // invisible) or believes dead holds it in no fight.
+    let left = c.threat.iter().any(|(t, _)| valid_victim(map, g, *t));
     // With none left, it doesn't go home while a creature it may fight is
     // attacking it, as in [`fight_step`]: that one is put on its list.
     // (Keeper Remulos, his phantasm dead and his attack stopped, waited
