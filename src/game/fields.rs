@@ -723,6 +723,22 @@ mod tests {
         assert!(Mask { words: mask }.get(PLAYER_FIELD_COINAGE));
     }
 
+    /// A creature's emote state (a dance, a kneel's work) and aura state
+    /// are public, as mangos-classic flags them: everyone near sees it
+    /// dance, at its create and when it starts.
+    #[test]
+    fn others_see_a_creatures_emote_state() {
+        let mut f = Fields::new(TypeId::Unit, Guid::new(0xF130_0000_0000_0001), 7787);
+        f.set_u32(UNIT_NPC_EMOTESTATE, 10);
+        f.set_u32(UNIT_FIELD_AURASTATE, 2);
+        for dirty_only in [false, true] {
+            let (mask, values) = f.select(Visibility::Public, dirty_only);
+            let mask = Mask { words: mask };
+            assert!(mask.get(UNIT_NPC_EMOTESTATE) && mask.get(UNIT_FIELD_AURASTATE));
+            assert!(values.contains(&10));
+        }
+    }
+
     #[test]
     fn a_mask_iterates_its_bits_in_order() {
         let mut m = Mask::new(100);

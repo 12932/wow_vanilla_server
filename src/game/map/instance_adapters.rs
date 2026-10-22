@@ -1282,9 +1282,23 @@ fn zf_wave_entries() -> impl Iterator<Item = u32> {
         .map(|(e, _, _)| *e)
 }
 
+/// The altar atop the pyramid, where the Sandfury Executioner stands over
+/// the cages: what a wave gathered below faces.
+const ZF_ALTAR: (f32, f32) = (1886.8, 1289.89);
+
+/// Which way a troll at `(x, y)` on the floor faces the altar.
+fn zf_facing_altar(x: f32, y: f32) -> f32 {
+    (ZF_ALTAR.1 - y)
+        .atan2(ZF_ALTAR.0 - x)
+        .rem_euclid(std::f32::consts::TAU)
+}
+
 fn zf_summon_wave(map: &mut Map, n: u32) {
     for (entry, x, y) in zf_wave(n) {
-        if let Some(g) = summon(map, *entry, [*x, *y, 8.87, 0.0], None)
+        // vmangos and Thistle Tea summon each at 0, due north, across the
+        // pyramid's foot; they face the stairs they are sent up.
+        let facing = zf_facing_altar(*x, *y);
+        if let Some(g) = summon(map, *entry, [*x, *y, 8.87, facing], None)
             && let Some(s) = crate::game::map::event_ai::scripted_mut(map, g)
         {
             s.despawn_type = 8;
