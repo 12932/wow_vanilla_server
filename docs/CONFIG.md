@@ -152,6 +152,7 @@ The world: saves, the message of the day, the character store and the data's pat
 | `nav_dir` | A rustigator bake, the directory with `Azeroth.map`; `data/nav` if unset and there. Without it creatures walk straight lines and zones come from the client. | `unset` |  | restart |  |
 | `terrain_dir` | Thistle Tea's terrain tiles (`nix run .#terrain-data`); `data/terrain` if unset and there. Without them liquids have no kind outside WMOs: no deep-sea fatigue, no lava in the open. | `unset` |  | restart |  |
 | `tile_unload_secs` | Seconds a navmesh or terrain tile is kept with no player or awake creature near it and nothing asking about it; then it is let go, and read again if it is needed. 0 keeps every tile read. | `300` | 0 to 86400, clamped | live | `GridCleanUpDelay` |
+| `worldport_ack_timeout_secs` | Seconds a client sent to another map (`SMSG_NEW_WORLD`) has to say it has loaded it (`MSG_MOVE_WORLDPORT_ACK`) before it is disconnected, its player saved and taken out of the world, as at a kick. A client loading a big map takes 10 to 30. 0 never disconnects (mangos has no such kick). | `60` | 0 to 3600, clamped | live |  |
 | `motd` | Shown to every player at login. The server's version and commit (`0.1.35 (c31f3df)`) follow it; empty, neither is sent. | `"Welcome to wow_vanilla_server."` |  | live | `Motd` |
 | `reserved_names` | Names no character may take. | `[]` |  | restart |  |
 | `petition_signatures` | Signatures a guild charter needs. | `9` | 0 to 9, clamped | live | `MinPetitionSigns` |

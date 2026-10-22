@@ -291,6 +291,12 @@ settings! {
         /// awake creature near it and nothing asking about it; then it is
         /// let go, and read again if it is needed. 0 keeps every tile read.
         tile_unload_secs: u64 = 300, Clamp(0.0, 86_400.0), Live, "GridCleanUpDelay";
+        /// Seconds a client sent to another map (`SMSG_NEW_WORLD`) has to
+        /// say it has loaded it (`MSG_MOVE_WORLDPORT_ACK`) before it is
+        /// disconnected, its player saved and taken out of the world, as
+        /// at a kick. A client loading a big map takes 10 to 30. 0 never
+        /// disconnects (mangos has no such kick).
+        worldport_ack_timeout_secs: u64 = 60, Clamp(0.0, 3600.0), Live, "";
         /// Shown to every player at login.
         motd: String = "Welcome to wow_vanilla_server.".to_owned(), Any, Live, "Motd";
         /// Names no character may take.

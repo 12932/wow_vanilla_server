@@ -116,6 +116,95 @@ async fn a_client_still_loading_a_map_acts_on_nothing_there() {
     assert_eq!(Some(!after), before);
 }
 
+/// Call 13: a client sent to another map that never says it has loaded it
+/// is disconnected after `[world] worldport_ack_timeout_secs` (60), its
+/// player saved where it was sent and taken out of the world; at 59 s it
+/// is still loading. One that has acknowledged is never kicked. (It was
+/// left in the world for ever, able only to ask and log out.)
+#[tokio::test]
+async fn a_client_that_never_loads_its_new_map_is_kicked_after_a_minute() {
+    use crate::game::map::login::kick_unloaded;
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let to = Vector3d {
+        x: 1_629.0,
+        y: -4_373.0,
+        z: 31.0,
+    };
+    map.call(move |m| m.teleport(g, MapKey::world(1), to, 0.0));
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    let kalimdor = realm.maps.get(&realm, MapKey::world(1));
+    until(&kalimdor, "Alice on Kalimdor", move |m| {
+        m.players.contains_key(&g).then_some(())
+    })
+    .await;
+    // The map's clock skipped: 59 s on, still loading.
+    let skip = move |secs: u64| {
+        move |m: &mut crate::game::map::Map| {
+            m.now += Duration::from_secs(secs);
+            kick_unloaded(m);
+        }
+    };
+    kalimdor.query(skip(59)).await.unwrap();
+    harness::an_update(&kalimdor).await;
+    assert!(realm.registry.online(g).is_some(), "still loading at 59 s");
+    assert!(on(&kalimdor, move |m| m.players.contains_key(&g)).await);
+    // 61 s on: kicked, and gone.
+    kalimdor.query(skip(61)).await.unwrap();
+    harness::offline(&realm, g).await;
+    assert!(!on(&kalimdor, move |m| m.players.contains_key(&g)).await);
+    // Saved where it was sent.
+    let mut b = Client::connect(&realm, "A");
+    b.login(g).await;
+    let back = realm.registry.online(g).expect("online").map();
+    assert_eq!(on(&back, move |m| m.key).await, MapKey::world(1));
+    // Sent back and loaded in time, it is never kicked.
+    let home = START_AT;
+    back.call(move |m| m.teleport(g, MapKey::world(0), home, 0.0));
+    b.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    until(&map, "Alice home", move |m| {
+        m.players
+            .get(&g)
+            .filter(|p| p.worldport_sent.is_some())
+            .map(|_| ())
+    })
+    .await;
+    b.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    until(&map, "Alice loaded", move |m| {
+        m.players
+            .get(&g)
+            .filter(|p| !p.awaiting_worldport)
+            .map(|_| ())
+    })
+    .await;
+    map.query(skip(600)).await.unwrap();
+    harness::an_update(&map).await;
+    assert!(realm.registry.online(g).is_some(), "loaded, never kicked");
+}
+
+/// Northshire, where the tests' players start.
+const START_AT: Vector3d = Vector3d {
+    x: -8_949.95,
+    y: -132.493,
+    z: 83.5312,
+};
+
+/// A query on `map`.
+async fn on<T: Send + 'static>(
+    map: &MapHandle,
+    f: impl FnOnce(&mut crate::game::map::Map) -> T + Send + 'static,
+) -> T {
+    map.query(f).await.unwrap()
+}
+
 /// mangos-classic's `UF_FLAG_PUBLIC` has a unit's aura state, the spell
 /// that made it, its NPC flags and its emote state: another player sees a
 /// dancer dance (Thistle Tea's "retains dancing for observers"), and a

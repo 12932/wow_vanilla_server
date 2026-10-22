@@ -1407,6 +1407,9 @@ pub struct RealmConfig {
     /// How long a player whose client has gone stays in the world, for it
     /// to come back (`login::DISCONNECT_LINGER`; tests shorten it).
     pub disconnect_linger: Duration,
+    /// How long a client sent to another map has to acknowledge it before
+    /// it is disconnected (`[world] worldport_ack_timeout_secs`, 0 never).
+    pub worldport_ack_timeout: Duration,
     /// Players a side needs for a match, over the template's.
     pub bg_min_players: Option<u32>,
     pub bg_start_delay: Duration,
@@ -1534,6 +1537,7 @@ impl RealmConfig {
             instance_unload: Duration::from_secs(c.instances.unload_delay_secs),
             logout_delay: crate::game::map::login::LOGOUT_DELAY,
             disconnect_linger: crate::game::map::login::DISCONNECT_LINGER,
+            worldport_ack_timeout: Duration::from_secs(c.world.worldport_ack_timeout_secs),
             bg_min_players: (b.min_players > 0).then_some(b.min_players),
             bg_start_delay: Duration::from_secs(b.start_delay_secs),
             bg_auto_leave: Duration::from_secs(b.auto_leave_secs),

@@ -190,6 +190,14 @@ characters_db = "characters.sqlite"
 # Default 300. Range 0 to 86400, clamped. Changes at a reload. mangos: GridCleanUpDelay.
 tile_unload_secs = 300
 
+# Seconds a client sent to another map (`SMSG_NEW_WORLD`) has to
+# say it has loaded it (`MSG_MOVE_WORLDPORT_ACK`) before it is
+# disconnected, its player saved and taken out of the world, as
+# at a kick. A client loading a big map takes 10 to 30. 0 never
+# disconnects (mangos has no such kick).
+# Default 60. Range 0 to 3600, clamped. Changes at a reload.
+worldport_ack_timeout_secs = 60
+
 # Shown to every player at login.
 # Default "Welcome to wow_vanilla_server.". Changes at a reload. mangos: Motd.
 motd = "Welcome to wow_vanilla_server."

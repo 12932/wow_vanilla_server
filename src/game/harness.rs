@@ -161,6 +161,7 @@ pub fn test_config() -> RealmConfig {
         // A client gone leaves the world at once (a test of the linger
         // sets it).
         disconnect_linger: Duration::ZERO,
+        worldport_ack_timeout: Duration::from_secs(60),
         bg_min_players: Some(1),
         bg_start_delay: Duration::ZERO,
         bg_auto_leave: crate::game::battlegrounds::AUTO_LEAVE,

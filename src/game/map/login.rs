@@ -253,6 +253,7 @@ pub fn take_over(
         p.outbound = new.outbound.clone();
         p.teleport = None;
         p.awaiting_worldport = false;
+        p.worldport_sent = None;
         p.quest_objects.clear();
         // Back before their client's linger ran out (mangos's
         // `HandlePlayerReconnect` stops the logout timer).
@@ -297,6 +298,40 @@ pub fn take_over(
         new.name, map.key
     );
     Some(map.handle.clone())
+}
+
+/// A client sent to this map that hasn't said it loaded it within
+/// `[world] worldport_ack_timeout_secs` is disconnected, as at a kick: its
+/// player is saved and leaves the world at once (`Control::Kick`). Until
+/// then it may only acknowledge, ask and log out (`handlers`); a client
+/// whose connection has gone lingers as ever, and isn't kicked.
+pub fn kick_unloaded(map: &mut Map) {
+    let limit = map.cfg.worldport_ack_timeout;
+    if limit.is_zero() {
+        return;
+    }
+    let now = map.now;
+    for p in map.players.values_mut() {
+        let Some(sent) = p.worldport_sent else {
+            continue;
+        };
+        if !p.awaiting_worldport {
+            p.worldport_sent = None;
+            continue;
+        }
+        if p.linger_until.is_some() || now.saturating_duration_since(sent) < limit {
+            continue;
+        }
+        debug!(
+            "{} never said it loaded map {} in {} s; disconnected",
+            p.name,
+            map.key.map,
+            limit.as_secs()
+        );
+        p.worldport_sent = None;
+        crate::game::conn::uncork();
+        let _ = p.online.session.send(Control::Kick);
+    }
 }
 
 /// The in-game clock: the host's local time.

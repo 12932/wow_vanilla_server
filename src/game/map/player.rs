@@ -242,6 +242,9 @@ pub struct Player {
     /// Arrived from another map and waiting for the client's worldport
     /// acknowledgement before anything is sent about the world.
     pub awaiting_worldport: bool,
+    /// When their client was sent to this map (`SMSG_NEW_WORLD`), while it
+    /// hasn't acknowledged it (`login::kick_unloaded`).
+    pub worldport_sent: Option<Instant>,
     /// When the played-time counters were last brought up to date.
     pub played_at: Instant,
     pub save_at: Instant,
@@ -374,6 +377,7 @@ impl Player {
             linger_until: None,
             teleport: None,
             awaiting_worldport: false,
+            worldport_sent: None,
             played_at: now,
             save_at: now,
             death: crate::game::map::death::Death::Alive,
