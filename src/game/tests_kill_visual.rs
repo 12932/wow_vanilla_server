@@ -45,18 +45,26 @@ struct Told {
     gone: Option<usize>,
 }
 
-/// What `c` was told of `caster`'s `spell` at `victim`.
-fn told(c: &mut Client, caster: Guid, spell: u32, victim: Guid) -> Told {
+/// Whether a go names `victim`, among its hits or its misses.
+fn names(g: &SMSG_SPELL_GO, victim: Guid) -> bool {
+    g.hits.contains(&victim) || g.misses.iter().any(|m| m.target == victim)
+}
+
+/// What `c` was told of `caster`'s `spell` at `victim`, in the frames it
+/// captured from the `from`th on (the capture keeps every frame, those of
+/// an earlier cast among them).
+fn told(c: &mut Client, from: usize, caster: Guid, spell: u32, victim: Guid) -> Told {
     let mut t = Told::default();
     let sent: Vec<ServerOpcodeMessage> = c
         .captured()
         .iter()
+        .skip(from)
         .filter_map(|f| ServerOpcodeMessage::read_unencrypted(&f[..]).ok())
         .collect();
     for (i, m) in sent.iter().enumerate() {
         match m {
             ServerOpcodeMessage::SMSG_SPELL_GO(g)
-                if g.caster == caster && g.spell == spell && t.go.is_none() =>
+                if g.caster == caster && g.spell == spell && names(g, victim) && t.go.is_none() =>
             {
                 t.go = Some((i, g.hits.contains(&victim)));
             }
@@ -191,12 +199,13 @@ async fn bolt_kills(entry: u32) {
         .unwrap();
     a.sees(victim).await;
     a.clear();
+    let from = a.captured().len();
     cast(&a, BOLT, Some(victim)).await;
     dead(&map, victim).await;
     // Its corpse lies a while: some updates on, it is still known.
     updates(&map, 10).await;
     assert!(corpse_known(&map, ga, victim).await, "its corpse is kept");
-    assert_told_in_order(&told(&mut a, ga, BOLT, victim), "the bolt");
+    assert_told_in_order(&told(&mut a, from, ga, BOLT, victim), "the bolt");
 }
 
 #[tokio::test]
@@ -221,6 +230,12 @@ const YOUNG_WOLF: u32 = 299;
 /// `entry`, in the real world, its packets run through the client check
 /// (`tools/client_check`) too. A Smite resisted (one in a hundred at
 /// least) is cast again at another.
+///
+/// Northshire's own creatures are cleared from about her first: a young
+/// wolf is of a predator's faction template, the enemy of a rabbit's
+/// (`FactionTemplate` 32 and 31), and one placed by a rabbit went for it
+/// and evaded when its fight was over, the Smite in flight told as an
+/// evade.
 async fn smite_kills(entry: u32, account: &str) {
     let realm = harness::realm_with(harness::load_real(DB.as_path()));
     let (mut a, ga, map) =
@@ -235,27 +250,40 @@ async fn smite_kills(entry: u32, account: &str) {
     .await
     .unwrap();
     learn(&map, ga, &[SMITE]);
+    map.query(move |m: &mut Map| {
+        let at = m.players[&ga].position();
+        crate::game::tests_p3_scripts::clear_around(m, at, 100.0, &[]);
+    })
+    .await
+    .unwrap();
     for attempt in 0..5 {
         let victim =
             crate::game::tests_pets::place(&map, ga, entry, 0x70_0901 + attempt, 10.0).await;
         a.sees_on(&map, victim).await;
         a.clear();
+        let from = a.captured().len();
         cast(&a, SMITE, Some(victim)).await;
         let landed = a
             .wait_for("Smite's go", |m| match m {
-                ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.caster == ga && g.spell == SMITE => {
+                ServerOpcodeMessage::SMSG_SPELL_GO(g)
+                    if g.caster == ga && g.spell == SMITE && names(g, victim) =>
+                {
                     Some(g.hits.contains(&victim))
                 }
                 _ => None,
             })
             .await;
         if !landed {
+            // Out of the way of the next.
+            map.query(move |m: &mut Map| m.remove_creature(victim))
+                .await
+                .unwrap();
             continue;
         }
         dead(&map, victim).await;
         updates(&map, 20).await;
         assert!(corpse_known(&map, ga, victim).await, "its corpse is kept");
-        assert_told_in_order(&told(&mut a, ga, SMITE, victim), "Smite");
+        assert_told_in_order(&told(&mut a, from, ga, SMITE, victim), "Smite");
         // And what the kill sent passes the client's own parsers.
         let (check_py, wow_exe) = crate::game::tests_client_emu::checker()
             .expect("the client-emulation check: see docs/TESTING.md");

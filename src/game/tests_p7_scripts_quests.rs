@@ -991,12 +991,48 @@ async fn the_trial_lights_the_sanctuary_and_its_waves_flee_the_village() {
     let _ = me;
 }
 
+/// [`until`] on a busy machine: whether `what` comes to hold within
+/// [`crate::game::harness::WAIT`], or longer while `map` hasn't run
+/// [`crate::game::harness::UPDATES`] updates since, however long they take.
+async fn until_on(
+    map: &MapHandle,
+    what: impl Fn(&mut Map) -> bool + Send + Clone + 'static,
+) -> bool {
+    use crate::game::harness::{UPDATES, WAIT};
+    let updates = || map.query(|m| m.stats.updates);
+    let from = updates().await.unwrap_or(0);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let w = what.clone();
+        if map.query(move |m| w(m)).await.unwrap_or(false) {
+            return true;
+        }
+        let ran = updates().await.unwrap_or(u64::MAX).saturating_sub(from);
+        if ran >= UPDATES && tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        sleep_ms(25).await;
+    }
+}
+
+/// Wait until `map` has run `n` updates from now.
+async fn updates(map: &MapHandle, n: u64) {
+    for _ in 0..n {
+        crate::game::harness::an_update(map).await;
+    }
+}
+
 /// A peasant of the trial stays passive and joins its event; a plagued
 /// one carries the Seething Plague (an injured one doesn't). Each walks to
 /// the road and on to the light, where it is saved and goes. The archers
 /// loose at random peasants; an arrow hits a peasant fifty-seven harder
-/// than its spell, and now and then opens Death's Door. Each fallen
-/// peasant is hung on the next of the light's death posts.
+/// than its spell, and now and then (one in eleven) opens Death's Door.
+/// Each fallen peasant is hung on the next of the light's death posts.
+///
+/// The arrow at the injured peasant is measured alone: the first, at a
+/// random peasant, has landed; the archer looses no more of its own; and
+/// a Death's Door an earlier arrow opened is closed, its ticks out of the
+/// count.
 #[tokio::test]
 #[ignore = "extended"]
 async fn peasants_flee_for_the_light_under_the_archers() {
@@ -1020,7 +1056,7 @@ async fn peasants_flee_for_the_light_under_the_archers() {
         .unwrap();
     // Their spawned events, at the update after.
     assert!(
-        until(&map, 2_000, move |m| has(m, plagued, SEETHING_PLAGUE)).await,
+        until_on(&map, move |m| has(m, plagued, SEETHING_PLAGUE)).await,
         "the plagued carry the plague"
     );
     let state = map
@@ -1047,16 +1083,34 @@ async fn peasants_flee_for_the_light_under_the_archers() {
     let all = map.query(|m| peasants(m)).await.unwrap();
     c.clear();
     map.query(move |m| due(m, archer, 1448902)).await;
-    let at = cast_any_of(&mut c, archer, ARROW, Duration::from_secs(3)).await;
+    let at = cast_any_of(&mut c, archer, ARROW, crate::game::harness::WAIT).await;
     assert!(
         at.is_some_and(|g| all.contains(&g)),
         "an arrow at a peasant: {at:?}"
     );
-    // The archers stood down, an arrow at the injured peasant.
+    let at = at.unwrap();
+    // It lands (at the injured peasant, it might, after the health below
+    // was read).
+    c.wait_for("the first arrow's damage", |m| match m {
+        wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(
+            d,
+        ) if d.spell == ARROW && d.target == at => Some(()),
+        _ => None,
+    })
+    .await;
+    // The archers stood down, the one left loosing none of its own (its
+    // timers off), an arrow at the injured peasant.
     map.query(move |m| {
         for g in living(m, ARCHER).into_iter().filter(|g| *g != archer) {
             scripts::despawn(m, g);
         }
+        let own = [1448902, 1448903].map(|id| index(m, archer, id));
+        if let Some(s) = event_ai::scripted_mut(m, archer) {
+            for i in own {
+                s.disabled[i] = true;
+            }
+        }
+        crate::game::map::auras::remove_spell(m, injured, DEATHS_DOOR, None);
         tough(m, injured);
     })
     .await;
@@ -1070,7 +1124,7 @@ async fn peasants_flee_for_the_light_under_the_archers() {
         .await
         .unwrap();
     let dealt = c
-        .gets(Duration::from_secs(3), move |m| match m {
+        .wait_for("the arrow's damage", move |m| match m {
             wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_SPELLNONMELEEDAMAGELOG(d)
                 if d.spell == ARROW && d.target == injured =>
             {
@@ -1078,20 +1132,20 @@ async fn peasants_flee_for_the_light_under_the_archers() {
             }
             _ => None,
         })
-        .await
-        .expect("the arrow hits");
+        .await;
     assert!(
-        until(&map, 2_000, move |m| before - health(m, injured).0
-            == dealt + 57)
-        .await,
+        until_on(&map, move |m| before - health(m, injured).0 == dealt + 57).await,
         "fifty-seven more than the arrow's {dealt}: {:?}",
         map.query(move |m| before - health(m, injured).0).await
     );
-    // Death's Door, now and then.
+    // Death's Door, now and then: about 90 of a thousand, give or take 9
+    // (its event's chance of 9); under 30 or over 200 is more than six
+    // times that from it. (Of the sixty this took, none came 49 runs in
+    // 10,000, under load or not.)
     let doors = map
         .query(move |m| {
             let mut n = 0;
-            for _ in 0..60 {
+            for _ in 0..1000 {
                 crate::game::map::auras::remove_spell(m, injured, DEATHS_DOOR, None);
                 event_ai::spell_hit(m, injured, archer, ARROW, 1);
                 if has(m, injured, DEATHS_DOOR) {
@@ -1103,8 +1157,8 @@ async fn peasants_flee_for_the_light_under_the_archers() {
         .await
         .unwrap();
     assert!(
-        (1..=20).contains(&doors),
-        "Death's Door, now and then: {doors} of 60"
+        (30..=200).contains(&doors),
+        "Death's Door, now and then: {doors} of 1000"
     );
     // To the road and the light.
     map.query(move |m| scripts::despawn(m, archer)).await;
@@ -1128,7 +1182,7 @@ async fn peasants_flee_for_the_light_under_the_archers() {
             }
         })
         .await;
-        sleep_ms(200).await;
+        updates(&map, 4).await;
         // A move toward it again, from beside it.
         map.query(move |m| {
             let step = crate::game::data::scripts::ScriptStep {
@@ -1145,7 +1199,7 @@ async fn peasants_flee_for_the_light_under_the_archers() {
         .await;
         if what == "the road" {
             assert!(
-                until(&map, 3_000, move |m| event_ai::scripted(m, plagued)
+                until_on(&map, move |m| event_ai::scripted(m, plagued)
                     .and_then(|s| s.scripted_move)
                     .is_some_and(|mv| mv.point == Some(2)))
                 .await,
@@ -1154,7 +1208,7 @@ async fn peasants_flee_for_the_light_under_the_archers() {
         }
     }
     assert!(
-        until(&map, 3_000, move |m| gone(m, plagued)
+        until_on(&map, move |m| gone(m, plagued)
             && map_events::data(m, BALANCE, 0) == Some(1))
         .await,
         "saved at the light"
