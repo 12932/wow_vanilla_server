@@ -149,3 +149,31 @@ async fn another_player_sees_a_players_emote_and_aura_states() {
         .await;
     assert_eq!(seen, (DANCE as i32, HEALTHLESS_20 as i32));
 }
+
+/// A creature despawned in the same run as something marked it for a
+/// visibility refresh (a script's `update_entry`, a summon gone in the
+/// step it came) was taken out of the grid but left marked: the refresh
+/// found it, took it whole, and introduced it again to everyone near.
+#[tokio::test]
+async fn a_creature_despawned_while_marked_is_not_introduced_again() {
+    use crate::game::tests_p3_combat::{BRUTE, START, data, spawn};
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let c = map
+        .query(move |m| spawn(m, g, BRUTE, 5, 5.0))
+        .await
+        .unwrap();
+    a.sees(c).await;
+    map.call(move |m| {
+        m.visibility_dirty.insert(c);
+        crate::game::map::ai::quiet_death_for(m, c, Duration::from_secs(300));
+    });
+    a.forgets(c).await;
+    assert!(
+        !a.sees_within(c, Duration::from_secs(1)).await,
+        "introduced again"
+    );
+}
