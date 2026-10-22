@@ -646,7 +646,7 @@ async fn an_auction_run_out_takes_no_bid_nor_cancel() {
     .await;
     let result = a
         .wait_for("SMSG_AUCTION_COMMAND_RESULT", |m| match m {
-            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => Some(r.action.clone()),
+            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(r) => Some(r.action),
             _ => None,
         })
         .await;
