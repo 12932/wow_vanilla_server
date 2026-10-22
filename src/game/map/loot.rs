@@ -1515,15 +1515,23 @@ pub fn take_money(map: &mut Map, player: Guid) {
     if gold == 0 {
         return;
     }
-    // A group's kill's money is shared among those it fell to, in even
-    // shares, the remainder lost; any other's (a lone kill, a chest, a
-    // pocket, a container) is the looter's (mangos's `SendGold`, by
-    // `m_ownerSet`).
+    // A group's kill's money is shared among those it fell to (mangos's
+    // `SendGold`, by `m_ownerSet`: near the kill, on its map, alive or a
+    // corpse near, as it fell), in even shares, the remainder lost as
+    // mangos loses it; any other's (a lone kill, a chest, a pocket, a
+    // container) is the looter's. Only those still on the map share it:
+    // mangos pays one gone to another map, wvs can't reach them from here,
+    // so their share is the others' rather than lost.
     let (sharers, share) = if allowed.is_empty() {
         (vec![player], gold)
     } else {
-        let share = gold / allowed.len() as u32;
-        (allowed, share)
+        let present: Vec<Guid> = allowed
+            .into_iter()
+            .filter(|g| map.players.contains_key(g))
+            .collect();
+        // The looter is one of them (`may_loot`), so there is at least one.
+        let share = gold / present.len().max(1) as u32;
+        (present, share)
     };
     for g in &sharers {
         if let Some(p) = map.players.get_mut(g) {
