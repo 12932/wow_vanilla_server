@@ -148,7 +148,10 @@ impl Map {
                 crate::game::map::world::use_object(self, guid, m.guid)
             }
             ClientOpcodeMessage::CMSG_ATTACKSWING(m) => {
-                crate::game::map::combat::start_attack(self, guid, m.guid)
+                // A unit possessed swings for its possessor's client.
+                let attacker =
+                    crate::game::map::pets::possessed_by_hand(self, guid).unwrap_or(guid);
+                crate::game::map::combat::start_attack(self, attacker, m.guid)
             }
             ClientOpcodeMessage::CMSG_ATTACKSTOP => {
                 crate::game::map::combat::stop_attack(self, guid)

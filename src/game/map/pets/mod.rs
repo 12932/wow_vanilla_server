@@ -187,6 +187,10 @@ pub struct PetState {
     /// A charmed unit's own faction, to go back to.
     pub was_faction: u32,
     pub was_hostile: bool,
+    /// A charmed unit's own immunities to players' side and to creatures',
+    /// and its PvP flag ([`CHARM_FLAGS`]), to go back to: while charmed it
+    /// has its charmer's.
+    pub was_flags: u32,
     /// Under Eyes of the Beast: the react and command it had before.
     pub eyes: Option<(u8, u8)>,
     /// Called back by Follow: on its way to its master, it takes no
@@ -245,6 +249,7 @@ impl PetState {
             inherit_at: now,
             was_faction: 0,
             was_hostile: false,
+            was_flags: 0,
             eyes: None,
             returning: false,
             charm_cooldowns: Vec::new(),
@@ -1085,11 +1090,12 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     // Its own way ends where it is (Thistle Tea's `ControlSync` stops the
     // path; mangos's charm puts it to follow its charmer).
     crate::game::map::ai::halt(map, unit);
-    let faction = map
-        .players
-        .get(&master)
-        .map(|p| p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE))
-        .unwrap_or(0);
+    let (faction, flags) = map.players.get(&master).map_or((0, 0), |p| {
+        (
+            p.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE),
+            p.fields.get_u32(UNIT_FIELD_FLAGS) & CHARM_FLAGS,
+        )
+    });
     let data = map.realm.data.clone();
     map.rare.pet = true;
     let Some(c) = map.creature_mut(unit) else {
@@ -1103,6 +1109,7 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     let mut s = PetState::new(kind, master, now);
     s.was_faction = c.fields.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
     s.was_hostile = c.hostile_to_players;
+    s.was_flags = c.fields.get_u32(UNIT_FIELD_FLAGS) & CHARM_FLAGS;
     s.name = data
         .creature_template(c.entry)
         .map(|t| t.name.clone())
@@ -1127,6 +1134,13 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
     c.evading = false;
     c.hostile_to_players = false;
     c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
+    // Its charmer's side, immunities and PvP flag: a creature immune to
+    // creatures (a city's battlemaster) fights them for its charmer, and
+    // they it, as its charmer would (mangos-classic's `TakeCharmOf` puts
+    // the charmer's immunity flags on it for the charm, and
+    // `ResetCharmState` puts its own back, its PvP flag too; its
+    // `CanAttack` asks the attacker's own immunity to the other's side).
+    set_charm_flags(&mut c.fields, flags);
     c.fields.set_guid(UNIT_FIELD_CHARMEDBY, master);
     c.fields
         .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED, true);
@@ -1149,6 +1163,36 @@ pub fn charmed(map: &mut Map, master: Guid, unit: Guid, possess: bool) {
         }
     }
     send_spells(map, master);
+}
+
+/// The unit `player` possesses and moves by hand, a creature or a player
+/// (Mind Control): their client's swing is its (mangos's
+/// `HandleAttackSwingOpcode` swings the player's `GetMover()`, the unit
+/// possessed from its possession on).
+pub fn possessed_by_hand(map: &Map, player: Guid) -> Option<Guid> {
+    let unit = map.players.get(&player)?.owned.charm?;
+    let held = state(map, unit).is_some_and(|s| s.kind == Kind::Possessed && s.owner == player)
+        || map
+            .players
+            .get(&unit)
+            .and_then(|v| v.owned.possessed_by)
+            .is_some_and(|pos| pos.manual && pos.master == player);
+    held.then_some(unit)
+}
+
+/// The unit flags a charmed unit takes of its charmer's: the immunities
+/// to players' side and to creatures', and the PvP flag.
+pub const CHARM_FLAGS: u32 = crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_PLAYER
+    | crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_NPC
+    | crate::game::map::player::UNIT_FLAG_PVP;
+
+/// `fields`' [`CHARM_FLAGS`] made `flags`'.
+fn set_charm_flags(fields: &mut crate::game::fields::Fields, flags: u32) {
+    let had = fields.get_u32(UNIT_FIELD_FLAGS);
+    let now = (had & !CHARM_FLAGS) | (flags & CHARM_FLAGS);
+    if now != had {
+        fields.set_u32(UNIT_FIELD_FLAGS, now);
+    }
 }
 
 /// The charm or possession of `unit` ended.
@@ -1196,6 +1240,7 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
         c.owner = None;
         c.fields.set_u32(UNIT_FIELD_FACTIONTEMPLATE, s.was_faction);
         c.hostile_to_players = s.was_hostile;
+        set_charm_flags(&mut c.fields, s.was_flags);
         c.fields.set_guid(UNIT_FIELD_CHARMEDBY, Guid::zero());
         c.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_PLAYER_CONTROLLED, false);
