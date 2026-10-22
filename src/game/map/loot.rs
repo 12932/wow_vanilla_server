@@ -180,6 +180,18 @@ impl Loot {
                 && self.rolls.is_empty())
     }
 
+    /// Looted for all, so its corpse may be skinned (mangos's
+    /// `IsLootedForAll`): a corpse's that fell to someone once
+    /// [`Loot::done`], with every quest and free-for-all drop of theirs
+    /// taken; any other once [`Loot::is_empty`].
+    pub fn looted_for_all(&self) -> bool {
+        if self.kind == LootKind::Corpse && (self.owner.is_some() || !self.allowed.is_empty()) {
+            self.done
+        } else {
+            self.is_empty()
+        }
+    }
+
     /// Whether `g` has a right to it: its owner, one of the group it fell
     /// to (mangos's `m_ownerSet`), or one who opened its lock. What in it
     /// is theirs to take is [`Loot::slot_type`]'s.

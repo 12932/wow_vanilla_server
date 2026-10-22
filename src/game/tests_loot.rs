@@ -951,3 +951,64 @@ async fn a_skinner_skins_a_looted_corpse() {
         .await;
     assert_eq!(again, Some(false));
 }
+
+/// A corpse with a free-for-all drop still untaken isn't looted for all,
+/// so it can't be skinned (mangos's `IsLootedForAll` at the cast): its
+/// skins would take the place of the drop.
+#[tokio::test]
+async fn a_corpse_with_an_untaken_free_for_all_drop_cant_be_skinned() {
+    use crate::game::map::loot::{self, Loot, LootKind, LootSlot};
+    let (_realm, mut a, map) = alone("Alice", Class::Warrior).await;
+    let g = a.guid;
+    let boar = guid::unit(3002, 24);
+    a.sees(boar).await;
+    map.query(move |m| {
+        learn(m, g, SKINNING, 393);
+        let _ = crate::game::map::inventory::add_item(m, g, 7005, 1, false);
+        crate::game::map::combat::kill(m, g, boar);
+        m.creature_mut(boar).unwrap().loot = Some(Loot {
+            items: vec![LootSlot {
+                item: LEATHER,
+                count: 1,
+                ffa: true,
+                ..Default::default()
+            }],
+            owner: Some(g),
+            kind: LootKind::Corpse,
+            ..Default::default()
+        });
+        loot::refresh_lootable(m, boar);
+    })
+    .await
+    .unwrap();
+    for _ in 0..20 {
+        map.query(move |m| {
+            if let Some(c) = m.caster_mut(g) {
+                c.gcd_until = None;
+                c.cooldowns.clear();
+            }
+            crate::game::map::spells::cast(
+                m,
+                g,
+                SKINNING,
+                Targets {
+                    unit: Some(boar),
+                    ..Default::default()
+                },
+                None,
+            );
+        })
+        .await
+        .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let kept = map
+        .query(move |m| {
+            m.creature(boar)
+                .and_then(|c| c.loot.as_ref())
+                .map(|l| (l.kind, l.items.len(), l.items[0].ffa))
+        })
+        .await
+        .unwrap();
+    assert_eq!(kept, Some((LootKind::Corpse, 1, true)), "the drop stays");
+}
