@@ -510,6 +510,10 @@ pub struct Holder {
     /// takes its place (mangos-classic's `getDiminishGroup` in
     /// `RemoveNoStackAurasDueToAuraHolder`).
     pub dr: Option<u8>,
+    /// Not kept across a logout though it lasts (mangos's
+    /// `IsSaveToDbHolder`): a single-target aura, or an Echoes of
+    /// Lordaeron world buff.
+    pub unsaved: bool,
 }
 
 impl Holder {
@@ -1072,6 +1076,7 @@ pub fn apply_spell(
             .flatten()
             .map(|s| (s.spell, s.caster)),
         dr: ctx.dr,
+        unsaved: crate::game::map::spells::cooldowns::unsaved(spell),
     };
     let mut holder = holder;
     crate::game::map::trinkets::prepare(existing, &mut holder, spell);

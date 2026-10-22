@@ -2384,6 +2384,7 @@ fn area_holder(area: &Area, s: &SpellTemplate) -> auras::Holder {
         applied: None,
         source: None,
         dr: None,
+        unsaved: false,
     }
 }
 

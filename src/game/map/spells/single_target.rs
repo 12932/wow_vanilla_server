@@ -11,7 +11,7 @@ use crate::game::data::spells::{self as sd, SpellTemplate};
 use crate::game::map::Map;
 use crate::game::map::auras::{self, Exclusive, Holder};
 
-fn limited(s: &SpellTemplate) -> bool {
+pub fn limited(s: &SpellTemplate) -> bool {
     s.custom(sd::CUSTOM_SINGLE_TARGET_AURA)
 }
 
