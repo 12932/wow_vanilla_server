@@ -201,11 +201,12 @@ async fn a_disenchants_leftovers_go_into_the_bags_at_release() {
                 ..Default::default()
             },
         );
-        loot::take_item(m, g, 0);
     })
     .await;
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
     a.send(CMSG_LOOT_RELEASE { guid: item }).await;
     harness::an_update(&map).await;
+    // A second release finds nothing left to store.
     a.send(CMSG_LOOT_RELEASE { guid: item }).await;
     harness::an_update(&map).await;
     let had = on(&map, move |m| {

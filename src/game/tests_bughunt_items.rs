@@ -183,3 +183,55 @@ async fn a_player_cant_trade_with_themselves() {
     let trading = on_map(&realm, move |m| m.players[&g].trade.is_some()).await;
     assert!(!trading);
 }
+
+/// A disenchant's window is an item's, but its loot is the map's: the
+/// client's take and one release reach it, the shard taken and the dust
+/// left stored, the loot let go.
+#[tokio::test]
+async fn a_disenchants_window_takes_and_releases_through_the_protocol() {
+    let realm = realm();
+    let mut a = alice(&realm).await;
+    let g = a.guid;
+    let item = crate::game::guid::item(990_101);
+    on_map(&realm, move |m| {
+        let slot = |entry, count| LootSlot {
+            item: entry,
+            count,
+            ..Default::default()
+        };
+        loot::show_item_loot(
+            m,
+            g,
+            item,
+            Loot {
+                items: vec![slot(SHARD, 1), slot(DUST, 3)],
+                kind: LootKind::Disenchant,
+                owner: Some(g),
+                ..Default::default()
+            },
+        );
+    })
+    .await;
+    a.send(CMSG_AUTOSTORE_LOOT_ITEM { item_slot: 0 }).await;
+    a.wait_for("the shard taken", |m| match m {
+        ServerOpcodeMessage::SMSG_LOOT_REMOVED(r) => (r.slot == 0).then_some(()),
+        _ => None,
+    })
+    .await;
+    a.send(CMSG_LOOT_RELEASE { guid: item }).await;
+    a.wait_for("released", |m| match m {
+        ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(r) => (r.guid == item).then_some(()),
+        _ => None,
+    })
+    .await;
+    let had = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (
+            p.count_of(SHARD),
+            p.count_of(DUST),
+            m.loot_state.item_loot.contains_key(&item),
+        )
+    })
+    .await;
+    assert_eq!(had, (1, 3, false));
+}

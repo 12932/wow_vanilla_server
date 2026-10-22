@@ -145,12 +145,17 @@ fn with_gift(data: &str, gift: Option<Wrapped>) -> String {
 
 pub fn handle(map: &mut Map, g: Guid, msg: ClientOpcodeMessage) -> Option<ClientOpcodeMessage> {
     use ClientOpcodeMessage as C;
-    // The loot packets, while an item's loot window is open.
+    // The loot packets, while an opened item's loot window is open. A
+    // disenchant's window is an item's too, but its loot is the map's
+    // (`loot_state.item_loot`), and `loot` answers for it.
     let item_window = map
         .players
         .get(&g)
         .and_then(|p| p.looting)
-        .is_some_and(|t| guid::high(t) == Some(guid::HighGuid::Item));
+        .is_some_and(|t| {
+            guid::high(t) == Some(guid::HighGuid::Item)
+                && !map.loot_state.item_loot.contains_key(&t)
+        });
     match msg {
         C::CMSG_AUTOSTORE_LOOT_ITEM(m) if item_window => take(map, g, m.item_slot),
         C::CMSG_LOOT_MONEY if item_window => take_money(map, g),
