@@ -1304,6 +1304,8 @@ mod tests_scripts;
 #[cfg(test)]
 mod tests_scripts2;
 #[cfg(test)]
+mod tests_spellbook_lost;
+#[cfg(test)]
 mod tests_spells;
 #[cfg(test)]
 mod tests_spells2;
