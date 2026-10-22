@@ -204,11 +204,13 @@ pub fn death_prevented(map: &mut Map, g: Guid) {
 /// The fields whose fight went with the copy (its summons, its timers), as
 /// it loads: back to the start, as mangos's `Load` puts what was under way.
 /// A fight's middle stage (`SPECIAL`) is under way too here, its summons
-/// gone with it.
+/// gone with it. Vaelastrasz's lost fight starts over too: his intro (the
+/// way to his fight) is only for one not started, and a copy loaded again
+/// lays him down on the floor with no menu.
 pub fn demote(data: &mut Data) {
     for f in RAZORGORE..=NEFA_RTUNNEL {
         if let Some(x) = data.get_mut(&f)
-            && matches!(*x, IN_PROGRESS | SPECIAL)
+            && (matches!(*x, IN_PROGRESS | SPECIAL) || (f == VAELASTRASZ && *x == FAILED))
             && f != QUEST_SCEPTER
         {
             *x = NOT_STARTED;
@@ -558,4 +560,27 @@ pub fn install(data: &mut GameData) {
     chromaggus::install(&mut b);
     nefarian::install(&mut b);
     b.home_fails(NPC_RAZORGORE, 90, RAZORGORE);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A copy loaded again: what was under way starts over, and so does a
+    /// lost Vaelastrasz (his intro wants him not started); another lost
+    /// fight, and a won one, stay as they were.
+    #[test]
+    fn a_lost_vaelastrasz_starts_over_as_the_copy_loads() {
+        let mut d: Data = [
+            (RAZORGORE, FAILED),
+            (VAELASTRASZ, FAILED),
+            (LASHLAYER, IN_PROGRESS),
+            (FIREMAW, DONE),
+        ]
+        .into();
+        demote(&mut d);
+        assert_eq!(d[&VAELASTRASZ], NOT_STARTED);
+        assert_eq!(d[&LASHLAYER], NOT_STARTED);
+        assert_eq!((d[&RAZORGORE], d[&FIREMAW]), (FAILED, DONE));
+    }
 }

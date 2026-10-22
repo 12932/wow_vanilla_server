@@ -274,6 +274,126 @@ async fn one_who_logs_out_in_a_match_comes_back_into_it() {
     assert!(member);
 }
 
+/// The way back is kept with the character: one who joined from a place,
+/// logged out in the match and came back into it, goes back to that place
+/// as they leave, not to their hearthstone (mangos's
+/// `character_battleground_data`).
+#[tokio::test]
+async fn the_way_back_from_a_match_outlasts_a_relog() {
+    let realm = harness::realm_with(gulch());
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut g = Client::connect(&realm, "G");
+    g.enter("Grom", Race::Orc, Class::Warrior).await;
+    // Away from her hearthstone's place.
+    let at = Vector3d {
+        x: 300.0,
+        y: 200.0,
+        z: 0.0,
+    };
+    map_of(&realm, alice)
+        .query(move |m| {
+            if let Some(p) = m.players.get_mut(&alice) {
+                p.movement.position = at;
+            }
+        })
+        .await;
+    queue(&a, Map::WarsongGulch).await;
+    queue(&g, Map::WarsongGulch).await;
+    into(&realm, &mut a, Map::WarsongGulch).await;
+    a.disconnect();
+    for _ in 0..200 {
+        if realm.registry.online(alice).is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    realm.store.flush().await;
+    let mut a2 = Client::connect(&realm, "A");
+    a2.login(alice).await;
+    a2.sees(alice).await;
+    map_of(&realm, alice)
+        .query(move |m| crate::game::battlegrounds::leave(m, alice))
+        .await;
+    a2.wait_for("SMSG_NEW_WORLD", |m| match m {
+        ServerOpcodeMessage::SMSG_NEW_WORLD(w) => (w.map == Map::EasternKingdoms).then_some(()),
+        _ => None,
+    })
+    .await;
+    a2.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    let mut back = None;
+    for _ in 0..200 {
+        back = map_of(&realm, alice)
+            .query(move |m| {
+                m.players
+                    .get(&alice)
+                    .filter(|p| !p.awaiting_worldport)
+                    .map(|p| (m.key, p.position()))
+            })
+            .await
+            .flatten();
+        if back.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (key, pos) = back.expect("back in the world");
+    assert_eq!(key, MapKey::world(0));
+    assert!(
+        (pos.x - at.x).abs() < 0.5 && (pos.y - at.y).abs() < 0.5,
+        "where she joined from: {pos:?}"
+    );
+}
+
+/// And one who logs in where a match no longer is (it ended while they
+/// were away, or the server restarted) comes back where they joined it
+/// from, not to their hearthstone.
+#[tokio::test]
+async fn one_who_logs_in_where_a_match_is_gone_comes_back_where_they_joined_it() {
+    let realm = harness::realm_with(gulch());
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut g = Client::connect(&realm, "G");
+    g.enter("Grom", Race::Orc, Class::Warrior).await;
+    let at = Vector3d {
+        x: 300.0,
+        y: 200.0,
+        z: 0.0,
+    };
+    map_of(&realm, alice)
+        .query(move |m| {
+            if let Some(p) = m.players.get_mut(&alice) {
+                p.movement.position = at;
+            }
+        })
+        .await;
+    queue(&a, Map::WarsongGulch).await;
+    queue(&g, Map::WarsongGulch).await;
+    into(&realm, &mut a, Map::WarsongGulch).await;
+    a.disconnect();
+    for _ in 0..200 {
+        if realm.registry.online(alice).is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    realm.store.flush().await;
+    realm.social.battlegrounds.lock().matches.clear();
+    let mut a2 = Client::connect(&realm, "A");
+    a2.login(alice).await;
+    a2.sees(alice).await;
+    let (key, pos) = map_of(&realm, alice)
+        .query(move |m| m.players.get(&alice).map(|p| (m.key, p.position())))
+        .await
+        .flatten()
+        .expect("in the world");
+    assert_eq!(key, MapKey::world(0));
+    assert!(
+        (pos.x - at.x).abs() < 0.5 && (pos.y - at.y).abs() < 0.5,
+        "where she joined from: {pos:?}"
+    );
+}
+
 /// A dungeon, Deadmines' copy, for players who aren't game masters.
 fn dungeon() -> std::sync::Arc<crate::game::Realm> {
     let mut d = GameData::empty();

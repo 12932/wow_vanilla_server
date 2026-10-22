@@ -2034,3 +2034,250 @@ async fn a_battleground_is_seen_further_than_the_world() {
     }
     assert_eq!(seen, Some((true, 400.0)), "300 yards off in the gulch");
 }
+
+/// A banner under its lock (Arathi Basin's, lock 1479, a 10-second
+/// Opening) is taken by that cast alone: `CMSG_GAMEOBJ_USE` for it does
+/// nothing (mangos's `HandleGameObjectUseOpcode` refuses a spell-locked
+/// object), the Opening's end claims it.
+#[tokio::test]
+async fn a_locked_banner_is_claimed_by_its_opening_not_by_a_hand() {
+    let mut d = basin();
+    for e in [180087, 180088, 180089, 180090, 180091] {
+        if let Some(t) = d.gameobject_templates.get_mut(&e) {
+            t.data[0] = 1479;
+        }
+    }
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = super::tests_pvp::both_into(&realm, &mut a, &mut b, Map::ArathiBasin).await;
+    let alice = a.guid;
+    let banner = use_banner(&map, &mut a, 0, 90000).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        map.query(|m| node_state(m, 0)).await,
+        Some(0),
+        "not by a hand"
+    );
+    map.query(move |m| crate::game::map::battleground::opened(m, alice, banner))
+        .await;
+    said(&mut a, "claims the Stables").await;
+    assert_eq!(
+        map.query(|m| node_state(m, 0)).await,
+        Some(1),
+        "by its Opening"
+    );
+}
+
+/// A match's end stops its fighting (mangos's `EndBattleGround`): the
+/// dead rise where they are, the living are out of combat, and a creature
+/// of the match is immune to both sides and stunned, its fight over.
+#[tokio::test]
+async fn a_matchs_end_raises_its_dead_and_stops_its_fighting() {
+    let mut d = basin();
+    d.creature_templates.insert(
+        7000,
+        CreatureTemplate {
+            entry: 7000,
+            name: "Guard".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            display_scales: [1.0, 0.0, 0.0, 0.0],
+            level_min: 60,
+            level_max: 60,
+            faction: 14,
+            unit_class: 1,
+            health_max: 1_000,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = super::tests_pvp::both_into(&realm, &mut a, &mut b, Map::ArathiBasin).await;
+    let (alice, grom) = (a.guid, b.guid);
+    let seen = map
+        .query(move |m| {
+            let guard = super::tests_p3_combat::spawn(m, alice, 7000, 60, 5.0);
+            crate::game::map::ai::attacked(m, guard, alice);
+            crate::game::map::death::kill(m, grom);
+            let before = (
+                m.players[&grom].death == crate::game::map::death::Death::Alive,
+                m.creature(guard).is_some_and(|c| c.combat.attacking),
+            );
+            bg::finish(m, 0);
+            let flags = m
+                .unit_fields(guard)
+                .map_or(0, |f| f.get_u32(UNIT_FIELD_FLAGS));
+            (
+                before,
+                m.players[&grom].death == crate::game::map::death::Death::Alive,
+                m.players[&alice].fields.has_flag(
+                    UNIT_FIELD_FLAGS,
+                    crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                ),
+                m.creature(guard)
+                    .is_some_and(|c| c.combat.attacking || !c.threat.is_empty()),
+                flags & 0x4_0300,
+            )
+        })
+        .await;
+    assert_eq!(
+        seen,
+        Some(((false, true), true, false, false, 0x4_0300)),
+        "Grom risen, Alice and the creature out of the fight, it immune and stunned"
+    );
+}
+
+/// An invitation to a match not yet taken goes with the match's end: the
+/// invited hear their slot is free, and taking it up then brings them
+/// nowhere, rather than out of the world into a finished match.
+#[tokio::test]
+async fn a_matchs_end_takes_back_its_invitations() {
+    let (realm, _a, _b, map) = in_the_basin().await;
+    let mut c = player(&realm, "C", "Carol", Race::Human).await;
+    queue(&c, Map::ArathiBasin).await;
+    c.wait_frame(
+        "the invitation",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() >= 17 && f[13] == 2,
+    )
+    .await;
+    map.query(|m| bg::finish(m, 0)).await;
+    c.wait_frame(
+        "the slot free",
+        crate::game::battlegrounds::SMSG_BATTLEFIELD_STATUS,
+        |f| f.len() < 17,
+    )
+    .await;
+    c.send(CMSG_BATTLEFIELD_PORT {
+        map: Map::ArathiBasin,
+        action: BattlefieldPortAction::EnterBattle,
+    })
+    .await;
+    let went = c
+        .gets(Duration::from_millis(400), |m| match m {
+            ServerOpcodeMessage::SMSG_NEW_WORLD(_) => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(went.is_none(), "not into a finished match");
+    let carol = c.guid;
+    let member = realm
+        .social
+        .battlegrounds
+        .lock()
+        .matches
+        .values()
+        .any(|m| m.members.contains_key(&carol) || m.invited.contains_key(&carol));
+    assert!(!member);
+}
+
+/// One brought into a match's map who isn't of its match (a GM's
+/// teleport, a summon) is on no side's scoreboard: no score, no side, so
+/// no flag, banner, honor or credit of it.
+#[tokio::test]
+async fn one_not_of_the_match_who_comes_in_plays_no_part() {
+    let (realm, _a, _b, map) = in_the_basin().await;
+    let mut c = player(&realm, "C", "Carol", Race::Human).await;
+    let carol = c.guid;
+    let key = map.key;
+    let from = realm.registry.online(carol).unwrap().map();
+    from.call(move |m| {
+        m.teleport(
+            carol,
+            key,
+            Vector3d {
+                x: 0.0,
+                y: 50.0,
+                z: 0.0,
+            },
+            0.0,
+        )
+    });
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    // Arrived: her worldport taken in by the copy.
+    let mut arrived = false;
+    for _ in 0..200 {
+        arrived = map
+            .query(move |m| m.players.get(&carol).is_some_and(|p| !p.awaiting_worldport))
+            .await
+            .unwrap_or(false);
+        if arrived {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(arrived, "in the copy");
+    let seen = map
+        .query(move |m| {
+            let b = m.battleground.as_ref().unwrap();
+            (
+                m.players.contains_key(&carol),
+                b.team_of(carol),
+                b.scores.contains_key(&carol),
+            )
+        })
+        .await;
+    assert_eq!(seen, Some((true, None, false)), "here, but of no side");
+}
+
+/// A flag whose carrier is no longer in the map, gone by any way that
+/// didn't drop it, goes home at the next update rather than being carried
+/// for good.
+#[tokio::test]
+async fn a_flag_whose_carrier_is_gone_goes_home() {
+    let realm = harness::realm_with(gulch());
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = all_in(&realm, &mut [&mut a, &mut b]).await;
+    stand(&map, 1).await;
+    map.query(|m| {
+        if let Some(b) = m.battleground.as_mut() {
+            b.flags[1] = Some(Flag::Carried(Guid::new(0xdead)));
+        }
+        wsg::update(m);
+    })
+    .await;
+    until(&map, "the flag home", |m| {
+        matches!(flags(m)[1], Some(Flag::AtBase(_)))
+    })
+    .await;
+}
+
+/// Before the gates open, one who has gone farther than 75 yards from
+/// their side's start (mangos-classic's `StartMaxDist` for Warsong Gulch)
+/// is put back there; one within it stays where they are.
+#[tokio::test]
+async fn before_the_gates_open_one_strayed_from_the_start_is_put_back() {
+    let realm = delayed(gulch(), Duration::from_secs(120));
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    queue(&a, Map::WarsongGulch).await;
+    queue(&b, Map::WarsongGulch).await;
+    let map = into(&realm, &mut a, Map::WarsongGulch).await;
+    into(&realm, &mut b, Map::WarsongGulch).await;
+    let (alice, grom) = (a.guid, b.guid);
+    // Alice's start is at the origin, Grom's at (100, 100).
+    put(&map, &mut a, 200.0, 0.0, 0.0).await;
+    put(&map, &mut b, 100.0, 150.0, 0.0).await;
+    until(&map, "Alice back", move |m| {
+        m.players
+            .get(&alice)
+            .is_some_and(|p| p.position().x.abs() < 1.0 && p.position().y.abs() < 1.0)
+    })
+    .await;
+    let grom_at = map
+        .query(move |m| {
+            m.players
+                .get(&grom)
+                .map(|p| (p.position().x, p.position().y))
+        })
+        .await
+        .flatten();
+    assert_eq!(grom_at, Some((100.0, 150.0)), "Grom, 50 yards out, stays");
+}

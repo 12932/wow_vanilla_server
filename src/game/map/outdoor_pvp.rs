@@ -245,6 +245,7 @@ const SPELL_TEAM_CARRYING: [u32; 2] = [29894, 29895];
 const SPELL_FAVOR: u32 = 30754;
 const SILITHYST_MOUND: u32 = 181597;
 const SILITHYST_GEYSER: u32 = 181598;
+pub const SILITHYST: [u32; 2] = [SILITHYST_MOUND, SILITHYST_GEYSER];
 const TURN_IN: [u32; 2] = [4162, 4168];
 const TURN_IN_REWARDS: [u32; 3] = [29534, 31420, 31247];
 const TURN_IN_CREDIT: [u32; 2] = [17090, 18199];
@@ -1024,11 +1025,11 @@ fn capture_credit(map: &mut Map, tower: usize, s: usize) {
     }
 }
 
-/// Silithyst, at a geyser or where a carrier lost it, picked up (by
-/// `CMSG_GAMEOBJ_USE`, or the client's Opening of it): carried, and the
-/// carrier's side's aura with it; the carrier is contested. It's used up:
-/// a mound goes, a geyser until it comes back. One carrying can't take
-/// more. Returns whether it was silithyst.
+/// Silithyst, at a geyser or where a carrier lost it, picked up (by the
+/// client's Opening of it; by `CMSG_GAMEOBJ_USE` only without a lock):
+/// carried, and the carrier's side's aura with it; the carrier is
+/// contested. It's used up: a mound goes, a geyser until it comes back.
+/// One carrying can't take more. Returns whether it was silithyst.
 pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     if map.outdoor.as_ref().is_none_or(|o| o.silithus.is_none()) {
         return false;

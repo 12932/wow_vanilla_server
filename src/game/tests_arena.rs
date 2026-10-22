@@ -452,6 +452,50 @@ async fn fighters_of_one_side_are_free_for_all_for_the_fight() {
     assert_eq!(after, [false, false], "friends again once it's over");
 }
 
+/// A pet from the stands strikes no fighter, nor is struck by one, as its
+/// master can't: a battle isn't to be decided from outside it.
+#[tokio::test]
+async fn an_outsiders_pet_may_not_strike_a_fighter() {
+    let mut data = data();
+    data.creature_templates.insert(
+        7000,
+        crate::game::data::CreatureTemplate {
+            entry: 7000,
+            name: "Wolf".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            display_scales: [1.0, 0.0, 0.0, 0.0],
+            level_min: 60,
+            level_max: 60,
+            faction: 14,
+            unit_class: 1,
+            health_max: 1_000,
+            ..Default::default()
+        },
+    );
+    let realm = harness::realm_with(data);
+    let (mut a, alice) = fighter(&realm, "Alice", 0.0).await;
+    let (_d, _dora) = fighter(&realm, "Dora", 3.0).await;
+    let (_b, bob) = fighter(&realm, "Bob", 300.0).await;
+    a.say(".arena start 1").await;
+    hears(&mut a, "FIGHT").await;
+    let seen = arena_map(&realm)
+        .query(move |m| {
+            let pet = crate::game::tests_p3_combat::spawn(m, bob, 7000, 60, 2.0);
+            if let Some(c) = m.creature_mut(pet) {
+                c.owner = Some(bob);
+            }
+            (
+                arena::fighting(m, alice),
+                arena::can_attack(m, pet, alice),
+                arena::can_attack(m, alice, pet),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen, (true, Some(false), Some(false)));
+}
+
 /// [`data`] with the pit (an arena's area), its stands and Stranglethorn,
 /// as AreaTable has them.
 fn with_areas(mut d: GameData) -> GameData {

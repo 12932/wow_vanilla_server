@@ -178,6 +178,10 @@ pub struct CharacterState {
     /// Aboard a transport at logout: its entry, and the place on deck
     /// (x, y, z, facing).
     pub transport: Option<(u32, f32, f32, f32, f32)>,
+    /// Where a battleground's match sends its player back to: the map and
+    /// the place (x, y, z, facing) they joined it from (mangos's
+    /// `character_battleground_data`), kept across a relog or a restart.
+    pub bg_return: Option<(u32, f32, f32, f32, f32)>,
     /// Auras and cooldowns kept across a logout.
     pub auras: Vec<crate::game::map::spells::cooldowns::SavedAura>,
     pub cooldowns: Vec<(u32, u32)>,

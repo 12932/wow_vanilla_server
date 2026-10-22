@@ -716,3 +716,43 @@ async fn razorgore_brought_down_too_soon_fails_and_comes_back() {
         "Razorgore, his eggs and Grethok back"
     );
 }
+
+/// Grethok pulled and the raid dead before Razorgore is ever fought: at
+/// the next wave the try fails (mangos's leash for him: no living player
+/// not a GM in the map), so the defenders go and the hall's gate opens
+/// for the raid running back, rather than the waves going on and the gate
+/// shut while anyone stays inside.
+#[tokio::test]
+#[ignore = "extended"]
+async fn razorgore_fails_when_the_raid_dies_before_he_is_fought() {
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, me, map) = hero_in(&realm, "Wiped", BWL, ORB, 0.0, &[]).await;
+    not_gm(&map, me).await;
+    let raz = boss(&map, bwl::NPC_RAZORGORE).await;
+    let grethok = boss(&map, rz::NPC_GRETHOK).await;
+    c.sees(raz).await;
+    map.query(move |m| {
+        tough(m, grethok);
+        ai::attacked(m, grethok, me);
+    })
+    .await;
+    map.query(|m| hurry_copy(m, Duration::from_secs(41))).await;
+    assert!(until(&map, 2000, |m| defenders(m).len() == 4).await);
+    map.query(move |m| crate::game::map::death::kill(m, me))
+        .await;
+    map.query(|m| hurry_copy(m, Duration::from_secs(16))).await;
+    assert!(
+        until(&map, 3000, |m| field(m, bwl::RAZORGORE)
+            == instance_script::FAILED)
+        .await,
+        "failed"
+    );
+    assert!(
+        until(&map, 2000, |m| defenders(m).is_empty()
+            && door_state(m, bwl::DOOR_RAZORGORE_ENTER) == Some(0))
+        .await,
+        "the defenders gone, the way in open"
+    );
+}

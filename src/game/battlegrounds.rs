@@ -769,7 +769,9 @@ pub fn port(map: &mut Map, g: Guid, map_id: u32, enter: bool) {
     if map.battleground.is_none()
         && let Some(p) = map.players.get_mut(&g)
     {
-        p.bg_return = Some((map.key, p.position(), p.movement.orientation));
+        let (at, o) = (p.position(), p.movement.orientation);
+        p.bg_return = Some((map.key, at, o));
+        p.row.state.bg_return = Some((map.key.map, at.x, at.y, at.z, o));
     }
     if let Some(inside) = bg.2 {
         send_frame(&realm, g, &inside);
@@ -833,8 +835,8 @@ fn out_of_match(realm: &Realm, g: Guid, not_on: Option<MapKey>) -> Option<(bool,
 }
 
 /// A member leaves the match (and the map): back where they came from
-/// (or, logged in again inside, home). Before the end, they are a
-/// deserter.
+/// (kept with the character across a relog; home if nothing was kept).
+/// Before the end, they are a deserter.
 pub fn leave(map: &mut Map, g: Guid) {
     let realm = map.realm.clone();
     let Some((ended, slot)) = out_of_match(&realm, g, None) else {
@@ -864,7 +866,17 @@ pub fn leave(map: &mut Map, g: Guid) {
     {
         crate::game::map::death::resurrect(map, g, 1.0);
     }
-    let back = map.players.get_mut(&g).and_then(|p| p.bg_return.take());
+    // Back where they joined from: kept in memory, or (after a relog or a
+    // restart) with the character.
+    let back = map.players.get_mut(&g).and_then(|p| {
+        let saved = p
+            .row
+            .state
+            .bg_return
+            .take()
+            .map(|(m, x, y, z, o)| (MapKey::world(m), Vector3d { x, y, z }, o));
+        p.bg_return.take().or(saved)
+    });
     if let Some((key, pos, o)) = back {
         map.teleport(g, key, pos, o);
     } else if let Some(b) = map.players.get(&g).and_then(|p| p.row.state.bind) {
@@ -889,6 +901,11 @@ pub fn strayed(map: &mut Map, g: Guid) {
     let Some((ended, slot)) = out_of_match(&realm, g, Some(map.key)) else {
         return;
     };
+    // Gone their own way: the way back is no longer wanted.
+    if let Some(p) = map.players.get_mut(&g) {
+        p.bg_return = None;
+        p.row.state.bg_return = None;
+    }
     send_frame(&realm, g, &none_frame(slot));
     // `[battleground] cast_deserter`, mangos's `Battleground.CastDeserter`.
     if !ended && map.cfg.bg_cast_deserter {
@@ -902,16 +919,27 @@ pub fn strayed(map: &mut Map, g: Guid) {
 }
 
 /// The match on `key` is over.
+///
+/// Its invitations not yet taken go with it, each one's slot told it is
+/// free, so that no one is taken out of the world (or of a queue) into a
+/// match that is over.
 pub fn ended(realm: &Realm, key: MapKey) {
-    if let Some(m) = realm
-        .social
-        .battlegrounds
-        .lock()
-        .matches
-        .get_mut(&key.instance)
+    let mut lapsed: Vec<(Guid, u32)> = Vec::new();
     {
+        let mut bgs = realm.social.battlegrounds.lock();
+        let Some(m) = bgs.matches.get_mut(&key.instance) else {
+            return;
+        };
         m.ended = true;
         m.ended_at = Some(Instant::now());
+        let bg = m.bg;
+        let invited: Vec<Guid> = m.invited.drain().map(|(g, _)| g).collect();
+        for g in invited {
+            lapsed.push((g, bgs.free_slot(g, bg).unwrap_or(0)));
+        }
+    }
+    for (g, slot) in lapsed {
+        send_frame(realm, g, &none_frame(slot));
     }
 }
 

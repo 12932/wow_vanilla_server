@@ -218,11 +218,23 @@ pub fn changed(map: &mut Map, new: u32) {
     schedule(map, T_RESET, Duration::from_secs(30));
 }
 
+/// Whether a player not a GM is alive in the copy.
+fn anyone_alive(map: &Map) -> bool {
+    map.players
+        .values()
+        .any(|p| !p.gm && p.death == crate::game::map::death::Death::Alive)
+}
+
 /// The copy's timers for Razorgore's fight; whether the key was one.
 pub fn timer(map: &mut Map, key: u32) -> bool {
     match key {
         T_DEFENSE => {
-            if get_data(map, RAZORGORE) == IN_PROGRESS {
+            // No one left alive to fight (a wipe before Razorgore is ever
+            // fought, with no evade of his to fail it): failed, as mangos's
+            // leash for him has it (no living player not a GM in the map).
+            if get_data(map, RAZORGORE) == IN_PROGRESS && !anyone_alive(map) {
+                set_data(map, RAZORGORE, FAILED);
+            } else if get_data(map, RAZORGORE) == IN_PROGRESS {
                 send_defenders(map);
                 schedule(map, T_DEFENSE, Duration::from_secs(15));
             }

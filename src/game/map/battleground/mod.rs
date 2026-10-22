@@ -154,6 +154,9 @@ pub struct Match {
     /// left of that at the last update (mangos's premature finish).
     pub premature: Option<Instant>,
     pub premature_left: Duration,
+    /// Before the gates open: when those strayed from their side's start
+    /// are next brought back.
+    pub start_check_at: Instant,
 }
 
 impl Match {
@@ -177,6 +180,7 @@ impl Match {
             buffs: Vec::new(),
             premature: None,
             premature_left: Duration::ZERO,
+            start_check_at: now,
         }
     }
 
@@ -511,9 +515,23 @@ pub fn arrived(map: &mut Map, g: Guid) {
     let Some(team) = map.players.get(&g).map(|p| side(p.team)) else {
         return;
     };
+    // Only a member of the match plays in it: one brought here otherwise
+    // (a GM's teleport, a summon) is on no side's scoreboard, takes no
+    // flag or banner, earns nothing and starts nothing.
+    let member = realm
+        .social
+        .battlegrounds
+        .lock()
+        .matches
+        .get(&key.instance)
+        .is_some_and(|b| b.members.contains_key(&g));
     let Some(m) = map.battleground.as_mut() else {
         return;
     };
+    if !member {
+        tracing::debug!("{g} came into battleground {key:?}, not of its match");
+        return;
+    }
     m.scores.entry(g).or_insert(Score {
         team,
         ..Default::default()
@@ -544,16 +562,7 @@ pub fn arrived(map: &mut Map, g: Guid) {
             .fetch_and(!PLAYER_FLAGS_AFK, std::sync::atomic::Ordering::Relaxed);
     }
     let name = p.online.name.clone();
-    if realm
-        .social
-        .battlegrounds
-        .lock()
-        .matches
-        .get(&key.instance)
-        .is_some_and(|b| b.members.contains_key(&g))
-    {
-        crate::game::social::groups::bg_joined(&realm, g, name, key.instance, team as u8);
-    }
+    crate::game::social::groups::bg_joined(&realm, g, name, key.instance, team as u8);
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
@@ -603,6 +612,12 @@ pub fn update(map: &mut Map) {
     let Some(m) = map.battleground.as_ref() else {
         return;
     };
+    if matches!(m.phase, Phase::Waiting | Phase::Starting { .. }) {
+        keep_to_the_start(map);
+    }
+    let Some(m) = map.battleground.as_ref() else {
+        return;
+    };
     match m.phase {
         Phase::Starting { at } => {
             let left = at.saturating_duration_since(now);
@@ -630,6 +645,51 @@ pub fn update(map: &mut Map) {
     }
     premature(map);
     resurrect_wave(map);
+}
+
+/// How far from their side's start a player may go before the gates open
+/// (mangos-classic's `battleground_template.StartMaxDist`).
+fn start_max_dist(bg: u32) -> f32 {
+    match bg {
+        BG_AV => 100.0,
+        _ => 75.0,
+    }
+}
+
+/// Before the gates open, each second: one farther from their side's
+/// start than [`start_max_dist`] (out over a wall of Warsong Gulch's
+/// tunnels or Alterac Valley's caves) is put back there (mangos's
+/// `BattleGround::Update` in `STATUS_WAIT_JOIN`).
+fn keep_to_the_start(map: &mut Map) {
+    let now = map.now;
+    let Some(m) = map.battleground.as_mut() else {
+        return;
+    };
+    if m.start_check_at > now {
+        return;
+    }
+    m.start_check_at = now + Duration::from_secs(1);
+    let bg = m.bg;
+    let max = start_max_dist(bg);
+    let Some(t) = map.realm.data.battlegrounds.get(&bg) else {
+        return;
+    };
+    let starts = t.starts;
+    let strayed: Vec<(Guid, Vector3d)> = map
+        .players
+        .values()
+        .filter_map(|p| {
+            let s = m.team_of(p.guid)?;
+            let &(_, x, y, z) = map.realm.data.safe_locs.get(&starts[s])?;
+            let start = Vector3d { x, y, z };
+            (crate::game::map::combat::dist(p.position(), start) > max).then_some((p.guid, start))
+        })
+        .collect();
+    for (g, start) in strayed {
+        tracing::debug!("{g} strayed from the start of battleground {bg}: put back");
+        let o = map.players.get(&g).map_or(0.0, |p| p.movement.orientation);
+        map.teleport(g, map.key, start, o);
+    }
 }
 
 /// A side short of players while the battle is on (mangos's
@@ -1007,6 +1067,19 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     }
 }
 
+/// Whether `object` is a PvP objective under a lock (Arathi Basin's and
+/// Alterac Valley's banners, Silithus's silithyst), to be opened by its
+/// spell alone.
+pub fn locked_objective(map: &Map, object: Guid) -> bool {
+    let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
+        return false;
+    };
+    (ab::BANNERS.contains(&entry)
+        || av::BANNERS.contains(&entry)
+        || crate::game::map::outdoor_pvp::SILITHYST.contains(&entry))
+        && crate::game::map::professions::object_lock(&map.realm.data, entry) != 0
+}
+
 /// A lock opened by a spell (the client's Opening and Attacking casts):
 /// in the match, a banner assaulted, a beacon disarmed; out of one,
 /// silithyst picked up. Returns whether it was one.
@@ -1243,6 +1316,43 @@ pub fn finish(map: &mut Map, winner: usize) {
         .values()
         .map(|p| (p.guid, side(p.team)))
         .collect();
+    // The fighting stops, as mangos's `EndBattleGround` has it: every
+    // creature not a player's is made immune to both sides and stunned
+    // (else Alterac Valley's would go on killing), and stops; the dead
+    // rise where they are (their corpses bones), the living stop fighting.
+    let creatures: Vec<Guid> = map
+        .creatures
+        .iter()
+        .filter(|(_, c)| c.alive())
+        .map(|(_, c)| c.guid)
+        .filter(|g| {
+            !map.players
+                .contains_key(&crate::game::map::pets::master(map, *g))
+        })
+        .collect();
+    for c in creatures {
+        if let Some(f) = map.unit_fields_mut(c) {
+            for flag in [
+                crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_PLAYER,
+                crate::game::map::combat::UNIT_FLAG_IMMUNE_TO_NPC,
+                crate::game::map::player::UNIT_FLAG_STUNNED,
+            ] {
+                f.set_flag(UNIT_FIELD_FLAGS, flag, true);
+            }
+        }
+        if let Some(cr) = map.creature_mut(c) {
+            cr.threat.clear();
+        }
+        crate::game::map::combat::leave_combat(map, c);
+    }
+    for (g, _) in &everyone {
+        crate::game::map::ai::forget(map, *g);
+        if map.players.get(g).is_some_and(|p| p.death != Death::Alive) {
+            crate::game::map::death::resurrect(map, *g, 1.0);
+        } else {
+            crate::game::map::combat::leave_combat(map, *g);
+        }
+    }
     for (g, s) in &everyone {
         if let Some(t) = &template {
             let spell = if *s == winner {

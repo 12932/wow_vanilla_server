@@ -1207,22 +1207,24 @@ fn free_for_all(map: &mut Map, g: Guid) {
 /// fight, and none between a fighter and someone outside it.
 pub fn can_attack(map: &Map, a: Guid, b: Guid) -> Option<bool> {
     let battle = map.arena.battle.as_ref()?;
-    let fa = battle.fighter(a).is_some_and(|f| f.alive);
-    let fb = battle.fighter(b).is_some_and(|f| f.alive);
+    // A pet, totem or guardian fights for its master, in the fight or out
+    // of it: one from the stands strikes no fighter, as its master can't.
+    let (ma, mb) = (
+        crate::game::map::pets::master(map, a),
+        crate::game::map::pets::master(map, b),
+    );
+    let fa = battle.fighter(ma).is_some_and(|f| f.alive);
+    let fb = battle.fighter(mb).is_some_and(|f| f.alive);
     if !fa && !fb {
         return None;
     }
     if !battle.fighting() {
         return Some(false);
     }
-    // A pet fights for its master.
-    let owner = |g: Guid| map.creature(g).and_then(|c| c.owner).unwrap_or(g);
-    let fa = fa || battle.fighter(owner(a)).is_some_and(|f| f.alive);
-    let fb = fb || battle.fighter(owner(b)).is_some_and(|f| f.alive);
     if fa && fb {
         return Some(true);
     }
-    if guid::is_unit(a) || guid::is_unit(b) {
+    if guid::is_unit(ma) || guid::is_unit(mb) {
         // The pit's own creatures (none) and others keep their rules.
         return None;
     }

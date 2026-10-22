@@ -2517,6 +2517,10 @@ const STRAT_PORT_GAUNTLET: u32 = 175374;
 const STRAT_PORT_SLAUGHTER: u32 = 175373;
 const STRAT_SLAUGHTER_GATE: u32 = 175358;
 const STRAT_BARON_LOCKED: u32 = 0x0200_0002;
+/// Ramstein comes out of the fourth ziggurat's door to his post in the
+/// square; he stays until he dies (mangos-classic's TEMPSPAWN_DEAD_DESPAWN).
+const STRAT_RAMSTEIN_DOOR: [f32; 4] = [4032.35, -3380.567, 119.739571, 4.7614];
+const STRAT_RAMSTEIN_POST: [f32; 3] = [4033.009, -3404.3293, 115.3554];
 const STRAT_ACOLYTES: [(u32, [u32; 5]); 3] = [
     (53955, [53268, 53269, 53270, 53271, 53272]),
     (53963, [53257, 53258, 53259, 53260, 53261]),
@@ -2809,13 +2813,8 @@ fn strat_creature(map: &mut Map, g: Guid, entry: u32, spawn: Option<u32>, event:
                 store(map, STRAT_RAMSTEIN_EVENT, DONE);
                 talk(map, STRAT_BARON_ENTRY, 6398);
                 operate(map, STRAT_ZIGGURAT_FOUR, Act::Open);
-                if let Some(r) = summon(
-                    map,
-                    10439,
-                    [4032.35, -3380.567, 119.739571, 4.7614],
-                    Some((1_800_000, 1)),
-                ) {
-                    walk_to(map, r, [4033.009, -3404.3293, 115.3554], false);
+                if let Some(r) = summon(map, 10439, STRAT_RAMSTEIN_DOOR, None) {
+                    walk_to(map, r, STRAT_RAMSTEIN_POST, false);
                 }
                 schedule(map, T_STRAT_RAMSTEIN_ARRIVAL, ms(5000));
             } else {
@@ -2897,7 +2896,15 @@ fn strat_settle(map: &mut Map) {
         operate(map, STRAT_ZIGGURAT_FOUR, Act::Open);
         operate(map, STRAT_ZIGGURAT_FIVE, Act::Open);
     } else if get_data(map, STRAT_RAMSTEIN_EVENT) == DONE {
-        operate(map, STRAT_ZIGGURAT_FOUR, Act::Open);
+        // Called but not beaten: the copy went with him (summons aren't
+        // kept), so he is back at his post, his door shut behind him, or
+        // the Baron would stay locked for the copy's life.
+        if creatures(map, 10439).is_empty() {
+            let [x, y, z] = STRAT_RAMSTEIN_POST;
+            summon(map, 10439, [x, y, z, STRAT_RAMSTEIN_DOOR[3]], None);
+        }
+        set_scratch(map, S_RAMSTEIN_ARRIVED, 1);
+        operate(map, STRAT_ZIGGURAT_FOUR, Act::Close);
     }
 }
 

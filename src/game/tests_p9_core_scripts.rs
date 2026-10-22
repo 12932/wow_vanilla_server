@@ -565,6 +565,48 @@ async fn ramsteins_death_opens_the_square_calls_the_black_guard_and_lets_the_bar
     );
 }
 
+/// Ramstein called stays until he dies (mangos-classic's dead-despawn
+/// summon): no time of his own runs out on him. And a copy loaded again
+/// with him called but not beaten (his summon gone with the copy) has him
+/// back at his post, the fourth ziggurat shut behind him, rather than the
+/// Baron locked for the copy's life.
+#[tokio::test]
+async fn ramstein_called_but_not_beaten_is_back_when_the_copy_loads_again() {
+    let (realm, _a, key) = inside().await;
+    let seen = on(&realm, key, |m| {
+        for (s, _) in ABOMINATIONS {
+            let g = of_spawn(m, s);
+            instance_script::creature_event(m, g, Event::Death);
+        }
+        let called = living(m, RAMSTEIN);
+        let timed = called
+            .iter()
+            .any(|r| event_ai::scripted(m, *r).is_some_and(|s| s.despawn_after.is_some()));
+        for r in &called {
+            scripts::despawn(m, *r);
+        }
+        let saved = m.instance.data.clone();
+        instance_script::load(m, &saved);
+        let gone = living(m, RAMSTEIN).len();
+        instance_script::settle_spawns(m);
+        let back = living(m, RAMSTEIN);
+        let post = back
+            .first()
+            .and_then(|r| m.creature(*r))
+            .is_some_and(|c| near(c.position, (4_033.009, -3_404.329_3, 115.355_4)));
+        (
+            called.len(),
+            timed,
+            gone,
+            back.len(),
+            post,
+            state(m, ZIGGURAT_FOUR),
+        )
+    })
+    .await;
+    assert_eq!(seen, (1, false, 0, 1, true, 1), "Ramstein back at his post");
+}
+
 /// `step`, its final targets swapped to the creature of spawn `spawn`.
 fn to_spawn(spawn: u32, step: ScriptStep) -> ScriptStep {
     ScriptStep {
@@ -958,4 +1000,40 @@ async fn a_spawns_creature_is_found_in_its_own_copy_alone() {
         "each its own creature"
     );
     assert_eq!(none, None, "none in the world of map 0");
+}
+
+/// The Deadmines' cannon fired, and the copy gone before its alarm three
+/// seconds on (timers aren't kept): loaded again, the alarm is due again,
+/// rather than the pirates never charging and the cannon not to be fired
+/// again.
+#[tokio::test]
+async fn the_deadmines_alarm_comes_after_a_copy_loaded_again_in_its_window() {
+    let mut d = GameData::empty();
+    d.maps.insert(
+        36,
+        MapInfo {
+            id: 36,
+            internal_name: "DeadminesInstance".into(),
+            name: "Deadmines".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    let realm = harness::realm_with(d);
+    let copy = realm.maps.get(
+        &realm,
+        MapKey {
+            map: 36,
+            instance: 1,
+        },
+    );
+    let due = copy
+        .query(|m| {
+            m.instance.script = Some(Script::Deadmines);
+            instance_script::load(m, &[(1, 1)].into());
+            instance_script::settle_spawns(m);
+            waits(m)
+        })
+        .await;
+    assert_eq!(due, Some(vec![secs(3.0)]), "the alarm in three seconds");
 }
