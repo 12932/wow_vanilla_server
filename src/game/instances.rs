@@ -571,7 +571,7 @@ fn in_use(
 /// too, as Thistle Tea's `Lockouts.inherit` has it.
 fn entered(realm: &Realm, g: Guid, key: MapKey, kind: u32, group_bound: bool) {
     let me = guid::counter(g);
-    let (changed, raid) = {
+    let raid = {
         let mut inst = realm.social.instances.lock();
         let changed = inst.enter(me, key.map, key.instance);
         let raid = (kind == 2 && group_bound && inst.raid_bind(me, key.map).is_none())
@@ -588,13 +588,17 @@ fn entered(realm: &Realm, g: Guid, key: MapKey, kind: u32, group_bound: bool) {
         {
             changed.push(s.clone());
         }
-        (changed, raid)
+        // Sent under the lock, so the store has the copy's records in the
+        // order they changed (another map's thread changes them too).
+        for s in changed {
+            realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
+        }
+        if let Some(r) = &raid {
+            realm.store.put_record(KIND_RAID, u64::from(r.id), r);
+        }
+        raid
     };
-    for s in changed {
-        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
-    }
-    if let Some(r) = raid {
-        realm.store.put_record(KIND_RAID, u64::from(r.id), &r);
+    if raid.is_some() {
         lockout_changed(realm, g, true);
     }
 }
@@ -650,7 +654,7 @@ pub fn group_changed(realm: &Realm, before: Option<(u32, Guid)>, after: Option<(
 /// them no more.
 fn adopt(realm: &Realm, group: u32, leader: Guid) {
     let me = guid::counter(leader);
-    let changed: Vec<InstanceSave> = {
+    {
         let mut inst = realm.social.instances.lock();
         let ids: Vec<u32> = inst
             .saves
@@ -679,30 +683,24 @@ fn adopt(realm: &Realm, group: u32, leader: Guid) {
             }
             inst.owned.insert((Owner::Group(group), map), id);
         }
-        changed
-    };
-    for s in changed {
-        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
+        for s in changed {
+            realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
+        }
     }
 }
 
 /// A group gone leaves its copies without an owner, for its old leader's
 /// next group to take up.
 fn orphan(realm: &Realm, group: u32) {
-    let changed: Vec<InstanceSave> = {
-        let mut inst = realm.social.instances.lock();
-        inst.owned.retain(|(o, _), _| *o != Owner::Group(group));
-        inst.saves
-            .values_mut()
-            .filter(|s| s.owner == Some(Owner::Group(group)))
-            .map(|s| {
-                s.owner = None;
-                s.clone()
-            })
-            .collect()
-    };
-    for s in changed {
-        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s);
+    let mut inst = realm.social.instances.lock();
+    inst.owned.retain(|(o, _), _| *o != Owner::Group(group));
+    for s in inst
+        .saves
+        .values_mut()
+        .filter(|s| s.owner == Some(Owner::Group(group)))
+    {
+        s.owner = None;
+        realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &*s);
     }
 }
 
@@ -825,23 +823,23 @@ fn change_save(realm: &Realm, key: MapKey, f: impl FnOnce(&mut InstanceSave)) {
     if key.instance == 0 {
         return;
     }
-    let record = {
-        let mut inst = realm.social.instances.lock();
-        let save = inst
-            .saves
-            .entry(key.instance)
-            .or_insert_with(|| InstanceSave {
-                id: key.instance,
-                map: key.map,
-                ..Default::default()
-            });
-        f(save);
-        save.touched_at = now();
-        save.clone()
-    };
+    let mut inst = realm.social.instances.lock();
+    let save = inst
+        .saves
+        .entry(key.instance)
+        .or_insert_with(|| InstanceSave {
+            id: key.instance,
+            map: key.map,
+            ..Default::default()
+        });
+    f(save);
+    save.touched_at = now();
+    // Sent under the lock: a change on another thread (a player entering,
+    // on their map's) can't reach the store ahead of this one with what
+    // it had before, and be written over it.
     realm
         .store
-        .put_record(KIND_INSTANCE, u64::from(key.instance), &record);
+        .put_record(KIND_INSTANCE, u64::from(key.instance), &*save);
 }
 
 /// A spawn died; it comes back after `respawn` (`None`: never, a boss in
@@ -965,7 +963,7 @@ pub fn bind_raid(map: &Map) {
         .map(|g| (*g, guid::counter(*g)))
         .collect();
     let reset_hour = map.cfg.instances.reset_hour;
-    let (record, newly) = {
+    let newly = {
         let mut inst = realm.social.instances.lock();
         let save = inst.raids.entry(key.instance).or_insert_with(|| RaidSave {
             id: key.instance,
@@ -980,14 +978,13 @@ pub fn bind_raid(map: &Map) {
                 newly.push(*g);
             }
         }
-        (save.clone(), newly)
+        if !newly.is_empty() {
+            realm
+                .store
+                .put_record(KIND_RAID, u64::from(key.instance), &*save);
+        }
+        newly
     };
-    if newly.is_empty() {
-        return;
-    }
-    realm
-        .store
-        .put_record(KIND_RAID, u64::from(key.instance), &record);
     for g in newly {
         lockout_changed(realm, g, true);
     }
@@ -1050,6 +1047,7 @@ pub fn reset(map: &Map, g: Guid) {
             if refused.is_none() {
                 inst.owned.remove(&(owner, m));
                 inst.saves.remove(&id);
+                realm.store.delete_record(KIND_INSTANCE, u64::from(id));
             }
             refused
         };
@@ -1060,7 +1058,6 @@ pub fn reset(map: &Map, g: Guid) {
             });
             continue;
         }
-        realm.store.delete_record(KIND_INSTANCE, u64::from(id));
         realm.maps.stop(key);
         p.outbound.send(&SMSG_INSTANCE_RESET { map: map_enum });
     }
@@ -1069,19 +1066,10 @@ pub fn reset(map: &Map, g: Guid) {
 /// A character deleted: their raid binds go, as mangos's `DeleteFromDB`
 /// deletes their `character_instance` rows.
 pub fn character_deleted(realm: &Realm, me: u32) {
-    let changed: Vec<RaidSave> = {
-        let mut inst = realm.social.instances.lock();
-        inst.raids
-            .values_mut()
-            .filter(|r| r.players.contains(&me))
-            .map(|r| {
-                r.players.retain(|p| *p != me);
-                r.clone()
-            })
-            .collect()
-    };
-    for r in changed {
-        realm.store.put_record(KIND_RAID, u64::from(r.id), &r);
+    let mut inst = realm.social.instances.lock();
+    for r in inst.raids.values_mut().filter(|r| r.players.contains(&me)) {
+        r.players.retain(|p| *p != me);
+        realm.store.put_record(KIND_RAID, u64::from(r.id), &*r);
     }
 }
 
@@ -1132,7 +1120,7 @@ pub fn sweep(realm: &Realm) {
         (realm.config().instance_unload.as_secs() as i64).max(UNLOAD_EMPTY_AFTER.as_secs() as i64);
     // Asked and removed under one lock, those on their way in counting as
     // inside: none is let in between.
-    let stale: Vec<u32> = {
+    {
         let mut inst = realm.social.instances.lock();
         let online = realm.registry.all_online();
         let stale: Vec<u32> = inst
@@ -1155,11 +1143,8 @@ pub fn sweep(realm: &Realm) {
         for id in &stale {
             inst.saves.remove(id);
             inst.owned.retain(|_, i| i != id);
+            realm.store.delete_record(KIND_INSTANCE, u64::from(*id));
         }
-        stale
-    };
-    for id in stale {
-        realm.store.delete_record(KIND_INSTANCE, u64::from(id));
     }
 }
 
@@ -1189,10 +1174,14 @@ fn expire(realm: &Realm, ids: &[u32]) {
     let now = now();
     let mut told = Vec::new();
     for id in ids {
-        let Some(r) = realm.social.instances.lock().raids.remove(id) else {
-            continue;
+        let r = {
+            let mut inst = realm.social.instances.lock();
+            let Some(r) = inst.raids.remove(id) else {
+                continue;
+            };
+            realm.store.delete_record(KIND_RAID, u64::from(r.id));
+            r
         };
-        realm.store.delete_record(KIND_RAID, u64::from(r.id));
         told.extend(r.players.iter().copied());
         let key = MapKey {
             map: r.map,
@@ -1200,29 +1189,26 @@ fn expire(realm: &Realm, ids: &[u32]) {
         };
         // Asked and decided under one lock: one on their way in counts as
         // inside, so the copy waits for them to leave.
-        let (occupied, record) = {
+        let (occupied, kept) = {
             let mut inst = realm.social.instances.lock();
             let occupied = in_use(&inst, realm, key, now).is_some();
             inst.owned.retain(|_, i| *i != r.id);
-            let record = if occupied {
+            let kept = if occupied {
                 inst.saves.get_mut(&r.id).map(|s| {
                     s.expired = true;
-                    s.clone()
+                    realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &*s);
                 })
             } else {
                 inst.saves.remove(&r.id);
                 None
             };
-            (occupied, record)
-        };
-        match record {
-            Some(s) => realm.store.put_record(KIND_INSTANCE, u64::from(s.id), &s),
-            None => {
+            if kept.is_none() {
                 realm.store.delete_record(KIND_INSTANCE, u64::from(r.id));
-                if !occupied {
-                    realm.maps.stop(key);
-                }
             }
+            (occupied, kept)
+        };
+        if kept.is_none() && !occupied {
+            realm.maps.stop(key);
         }
     }
     told.sort_unstable();
