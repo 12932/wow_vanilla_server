@@ -67,24 +67,24 @@ impl Cell {
         self.unplain
     }
 
-    fn push(&mut self, e: Entry) {
-        self.players += u32::from(crate::game::guid::is_player(e.guid));
-        self.unplain += u32::from(!e.plain);
-        self.entries.push(e);
-    }
-
-    fn take(&mut self, guid: Guid) -> Option<Entry> {
-        let i = self.entries.iter().position(|e| e.guid == guid)?;
-        let e = self.entries.swap_remove(i);
-        self.players -= u32::from(crate::game::guid::is_player(e.guid));
-        self.unplain -= u32::from(!e.plain);
-        Some(e)
+    /// Where `guid` is among the entries: at `hint` (the grid's index of
+    /// it), else looked for.
+    fn find(&self, guid: Guid, hint: Option<u32>) -> Option<usize> {
+        match hint {
+            Some(i) if self.entries.get(i as usize).is_some_and(|e| e.guid == guid) => {
+                Some(i as usize)
+            }
+            _ => self.entries.iter().position(|e| e.guid == guid),
+        }
     }
 }
 
 #[derive(Debug, Default)]
 pub struct Grid {
     cells: AHashMap<CellKey, Cell>,
+    /// Each object's place among its cell's entries: a crowd's cell has
+    /// hundreds.
+    slots: AHashMap<Guid, u32>,
 }
 
 impl Grid {
@@ -94,22 +94,45 @@ impl Grid {
 
     /// `guid` comes into `cell`: not plain, until its refresh.
     pub fn insert(&mut self, guid: Guid, cell: CellKey) {
-        self.cells.entry(cell).or_default().push(Entry {
-            guid,
-            ax: f32::NAN,
-            ay: f32::NAN,
-            plain: false,
-            batch: 0,
-        });
+        self.push(
+            cell,
+            Entry {
+                guid,
+                ax: f32::NAN,
+                ay: f32::NAN,
+                plain: false,
+                batch: 0,
+            },
+        );
+    }
+
+    fn push(&mut self, cell: CellKey, e: Entry) {
+        let c = self.cells.entry(cell).or_default();
+        self.slots.insert(e.guid, c.entries.len() as u32);
+        c.players += u32::from(crate::game::guid::is_player(e.guid));
+        c.unplain += u32::from(!e.plain);
+        c.entries.push(e);
+    }
+
+    /// `guid`'s entry, out of `cell`.
+    fn take(&mut self, guid: Guid, cell: CellKey) -> Option<Entry> {
+        let c = self.cells.get_mut(&cell)?;
+        let i = c.find(guid, self.slots.get(&guid).copied())?;
+        let e = c.entries.swap_remove(i);
+        c.players -= u32::from(crate::game::guid::is_player(e.guid));
+        c.unplain -= u32::from(!e.plain);
+        if let Some(moved) = c.entries.get(i) {
+            self.slots.insert(moved.guid, i as u32);
+        }
+        self.slots.remove(&guid);
+        if c.entries.is_empty() {
+            self.cells.remove(&cell);
+        }
+        Some(e)
     }
 
     pub fn remove(&mut self, guid: Guid, cell: CellKey) {
-        if let Some(c) = self.cells.get_mut(&cell) {
-            c.take(guid);
-            if c.entries.is_empty() {
-                self.cells.remove(&cell);
-            }
-        }
+        self.take(guid, cell);
     }
 
     /// Move `guid` between cells, with what is known of it; a no-op within
@@ -118,21 +141,17 @@ impl Grid {
         if from == to {
             return;
         }
-        let taken = self.cells.get_mut(&from).and_then(|c| c.take(guid));
-        if self.cells.get(&from).is_some_and(|c| c.entries.is_empty()) {
-            self.cells.remove(&from);
-        }
-        match taken {
-            Some(e) => self.cells.entry(to).or_default().push(e),
+        match self.take(guid, from) {
+            Some(e) => self.push(to, e),
             None => self.insert(guid, to),
         }
     }
 
     /// `guid`'s entry in `cell`, if it is there.
     pub fn entry(&self, guid: Guid, cell: CellKey) -> Option<&Entry> {
-        self.cells
-            .get(&cell)
-            .and_then(|c| c.entries.iter().find(|e| e.guid == guid))
+        let c = self.cells.get(&cell)?;
+        c.find(guid, self.slots.get(&guid).copied())
+            .map(|i| &c.entries[i])
     }
 
     /// Change `guid`'s entry in `cell`, if it is there, its cell's count of
@@ -141,9 +160,10 @@ impl Grid {
         let Some(c) = self.cells.get_mut(&cell) else {
             return;
         };
-        let Some(e) = c.entries.iter_mut().find(|e| e.guid == guid) else {
+        let Some(i) = c.find(guid, self.slots.get(&guid).copied()) else {
             return;
         };
+        let e = &mut c.entries[i];
         let was = e.plain;
         f(e);
         match (was, e.plain) {
@@ -173,8 +193,7 @@ impl Grid {
         let (cx, cy) = cell_of(x, y);
         let r = (radius / CELL_YARDS).ceil() as i32;
         (cx - r..=cx + r).flat_map(move |ix| {
-            (cy - r..=cy + r)
-                .filter_map(move |iy| self.cells.get(&(ix, iy)).map(|c| ((ix, iy), c)))
+            (cy - r..=cy + r).filter_map(move |iy| self.cells.get(&(ix, iy)).map(|c| ((ix, iy), c)))
         })
     }
 
@@ -297,6 +316,39 @@ mod tests {
             (x - cx).abs() > 400.0 && (y - cy).abs() > 400.0
         });
         assert!(corner.is_some_and(|o| !disc.contains(&o)));
+    }
+
+    /// An entry keeps its anchor and flag as it moves between cells, and
+    /// each is found again however the others came and went.
+    #[test]
+    fn entries_keep_what_is_known_of_them_and_are_found() {
+        let mut g = Grid::new();
+        let a = (0, 0);
+        for i in 1..=40 {
+            g.insert(Guid::new(i), a);
+        }
+        g.update(Guid::new(5), a, |e| {
+            e.plain = true;
+            e.ax = 3.0;
+        });
+        assert_eq!(g.cells[&a].unplain(), 39);
+        for i in (1..=40).step_by(3) {
+            g.relocate(Guid::new(i), a, (1, 0));
+        }
+        g.remove(Guid::new(2), a);
+        g.relocate(Guid::new(5), a, (2, 2));
+        let e = g.entry(Guid::new(5), (2, 2)).unwrap();
+        assert!(e.plain && e.ax == 3.0, "moved with what is known of it");
+        assert_eq!(g.cells[&(2, 2)].unplain(), 0);
+        for i in 1..=40 {
+            let found = [a, (1, 0), (2, 2)]
+                .iter()
+                .filter(|c| g.entry(Guid::new(i), **c).is_some())
+                .count();
+            assert_eq!(found, usize::from(i != 2), "{i} once, 2 gone");
+        }
+        let all: usize = g.cells.values().map(|c| c.entries().len()).sum();
+        assert_eq!(all, 39);
     }
 
     #[test]

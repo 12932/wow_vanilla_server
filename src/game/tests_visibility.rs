@@ -207,7 +207,12 @@ fn the_quick_path_decides_as_a_whole_refresh_does() {
             );
         });
         let v = &crowds[0].map.visibility_dirty;
-        assert!(v.skipped > 5_000, "the quick path skipped: {} {}", v.skipped, v.looked);
+        assert!(
+            v.skipped > 5_000,
+            "the quick path skipped: {} {}",
+            v.skipped,
+            v.looked
+        );
     }
 }
 
@@ -224,7 +229,12 @@ fn a_crowd_in_sight_of_itself_knows_itself() {
         }
     });
     let v = &crowds[0].map.visibility_dirty;
-    assert!(v.skipped > 20 * v.looked, "most skipped: {} {}", v.skipped, v.looked);
+    assert!(
+        v.skipped > 20 * v.looked,
+        "most skipped: {} {}",
+        v.skipped,
+        v.looked
+    );
 }
 
 /// The chunks' decisions worked out across threads are the ones worked
@@ -473,10 +483,16 @@ fn one_gone_past_its_drift_is_worked_out_whole() {
     };
     assert!(plain(&c));
     move_by(&mut c.map, g, 9.0, 0.0);
-    assert_eq!(c.map.visibility_dirty.kind(&g), Some(visibility::Kind::Moved));
+    assert_eq!(
+        c.map.visibility_dirty.kind(&g),
+        Some(visibility::Kind::Moved)
+    );
     move_by(&mut c.map, g, 9.0, 0.0);
     assert!(!plain(&c), "past its drift");
-    assert_eq!(c.map.visibility_dirty.kind(&g), Some(visibility::Kind::Full));
+    assert_eq!(
+        c.map.visibility_dirty.kind(&g),
+        Some(visibility::Kind::Full)
+    );
     c.refresh();
     assert!(plain(&c), "plain again from its refresh");
     let cell = c.map.players[&g].cell;

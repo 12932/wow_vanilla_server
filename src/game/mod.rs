@@ -125,8 +125,6 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_order;
 #[cfg(test)]
-mod tests_visibility;
-#[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_ai_autocast;
@@ -1304,6 +1302,8 @@ mod tests_spells5;
 mod tests_taming;
 #[cfg(test)]
 mod tests_terrain;
+#[cfg(test)]
+mod tests_visibility;
 #[cfg(test)]
 mod tests_world;
 #[cfg(test)]

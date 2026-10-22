@@ -99,7 +99,13 @@ impl Crowd {
             };
             let (outbound, f) = Outbound::detached();
             let (session, _) = tokio::sync::mpsc::unbounded_channel();
-            let online = Arc::new(Online::new(&entry, 0, outbound, session, map.handle.clone()));
+            let online = Arc::new(Online::new(
+                &entry,
+                0,
+                outbound,
+                session,
+                map.handle.clone(),
+            ));
             let row = CharacterRow {
                 guid: id,
                 account: format!("A{id}"),

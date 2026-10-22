@@ -823,7 +823,6 @@ fn apply(map: &mut Map, acts: &[Act]) {
     }
 }
 
-
 /// `observer`'s client learns of `object`: a player with quests in their
 /// log as their group's members see them, with the log's ids (mangos's
 /// `UF_FLAG_GROUP_ONLY`), else as anyone does.

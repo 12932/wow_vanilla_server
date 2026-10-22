@@ -16,8 +16,17 @@
 //!   about 23 updates): a sample is an update's visibility in the drill's
 //!   random phase.
 //! - `one`: one player moves among the crowd: a refresh's own cost.
+//!
+//! Each as the server does it (`quick`: the quick path, the decisions on
+//! the visibility threads, `WVS_BENCH_THREADS` of them, else the machine's
+//! cores up to 8), on the map's thread alone (`quick_one_thread`), and as
+//! it was before the quick path (`before`: each refresh alone and whole).
+//! No budget: every refresh due is done, so a sample is its whole cost.
+
+use std::time::Duration;
 
 use divan::Bencher;
+use wow_vanilla_server::game::RealmConfig;
 use wow_vanilla_server::game::map::vis_bench::Crowd;
 
 #[global_allocator]
@@ -31,30 +40,48 @@ fn main() {
     divan::main();
 }
 
-fn crowd(n: usize) -> (tokio::runtime::Runtime, Crowd) {
+#[derive(Clone, Copy)]
+enum Way {
+    Quick,
+    OneThread,
+    Before,
+}
+
+fn crowd(n: usize, way: Way) -> (tokio::runtime::Runtime, Crowd) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("a tokio runtime");
-    let c = {
-        let _in = rt.enter();
-        Crowd::new(n, RADIUS)
+    let threads = std::env::var("WVS_BENCH_THREADS")
+        .ok()
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0);
+    let cfg = RealmConfig {
+        visibility_budget: Duration::from_secs(3600),
+        visibility_threads: match way {
+            Way::Quick => threads,
+            Way::OneThread | Way::Before => 1,
+        },
+        ..RealmConfig::default()
     };
+    let mut c = {
+        let _in = rt.enter();
+        Crowd::with_config(cfg, n, RADIUS)
+    };
+    c.map.visibility_dirty.one_by_one = matches!(way, Way::Before);
     (rt, c)
 }
 
-#[divan::bench(args = SIZES, sample_count = 10, sample_size = 1)]
-fn in_step(b: Bencher, n: usize) {
-    let (_rt, mut c) = crowd(n);
+fn in_step(b: Bencher, n: usize, way: Way) {
+    let (_rt, mut c) = crowd(n, way);
     b.bench_local(|| {
         c.shift(1, 0, 9.0);
         c.refresh();
     });
 }
 
-#[divan::bench(args = SIZES, sample_count = 50, sample_size = 1)]
-fn random(b: Bencher, n: usize) {
-    let (_rt, mut c) = crowd(n);
+fn random(b: Bencher, n: usize, way: Way) {
+    let (_rt, mut c) = crowd(n, way);
     let mut from = 0;
     b.bench_local(|| {
         c.shift(23, from, 9.0);
@@ -63,13 +90,64 @@ fn random(b: Bencher, n: usize) {
     });
 }
 
-#[divan::bench(args = SIZES, sample_count = 200, sample_size = 1)]
-fn one(b: Bencher, n: usize) {
-    let (_rt, mut c) = crowd(n);
+fn one(b: Bencher, n: usize, way: Way) {
+    let (_rt, mut c) = crowd(n, way);
     let mut from = 0;
     b.bench_local(|| {
         c.shift(n, from, 9.0);
         from = (from + 1) % n;
         c.refresh();
     });
+}
+
+mod in_step {
+    use super::*;
+
+    #[divan::bench(args = SIZES, sample_count = 20, sample_size = 1)]
+    fn quick(b: Bencher, n: usize) {
+        in_step(b, n, Way::Quick);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 20, sample_size = 1)]
+    fn quick_one_thread(b: Bencher, n: usize) {
+        in_step(b, n, Way::OneThread);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 5, sample_size = 1)]
+    fn before(b: Bencher, n: usize) {
+        in_step(b, n, Way::Before);
+    }
+}
+
+mod random {
+    use super::*;
+
+    #[divan::bench(args = SIZES, sample_count = 50, sample_size = 1)]
+    fn quick(b: Bencher, n: usize) {
+        random(b, n, Way::Quick);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 50, sample_size = 1)]
+    fn quick_one_thread(b: Bencher, n: usize) {
+        random(b, n, Way::OneThread);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 20, sample_size = 1)]
+    fn before(b: Bencher, n: usize) {
+        random(b, n, Way::Before);
+    }
+}
+
+mod one {
+    use super::*;
+
+    #[divan::bench(args = SIZES, sample_count = 200, sample_size = 1)]
+    fn quick(b: Bencher, n: usize) {
+        one(b, n, Way::Quick);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 100, sample_size = 1)]
+    fn before(b: Bencher, n: usize) {
+        one(b, n, Way::Before);
+    }
 }
