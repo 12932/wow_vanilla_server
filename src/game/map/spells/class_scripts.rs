@@ -55,7 +55,13 @@ const PROTECTED_MECHANICS: [u32; 12] = [1, 2, 5, 8, 12, 13, 18, 20, 23, 24, 27, 
 /// Stealth, Vanish's and Prowl's icons: casting them keeps stealth.
 const STEALTH_ICONS: [u32; 3] = [250, 103, 252];
 const SAP_ICON: u32 = 249;
-const IMPROVED_SAP: [(u32, u32); 3] = [(14095, 90), (14094, 60), (14076, 30)];
+/// Improved Sap's ranks and their chances. Its auras are 1.12's proc
+/// triggers of Vanished (14093) on any ability, harmful spell or area
+/// spell, which `spell_proc_event` should narrow to Sap but vmangos's
+/// lacks a row for: its chance is rolled here, as Sap is cast
+/// ([`keeps_stealth`]), and the auras never proc of their own
+/// (`procs::proc_flags`).
+pub(crate) const IMPROVED_SAP: [(u32, u32); 3] = [(14095, 90), (14094, 60), (14076, 30)];
 const CANNIBALIZE_EMOTE: u32 = 398;
 pub const FORBEARANCE: u32 = 25771;
 pub const RECENTLY_BANDAGED: u32 = 11196;

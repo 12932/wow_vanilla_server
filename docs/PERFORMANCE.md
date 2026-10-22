@@ -1712,3 +1712,37 @@ level 1 night elf hunter, as she starts (Worn Shortbow, Rough Arrows), auto-shoo
 off in the real world, and what she was sent passes the client check. With travel off the timing tests fail. The
 fast suite passes, and the extended tests on combat, ammunition, ranged AI, real data and the client check pass.
 Nothing on the hot path changes: one more `Vec` checked each update, empty unless someone is shooting.
+## A Subtlety rogue's 3 to 8 damage a second (2026-10-22)
+
+The report: in peon's scenarios a rogue of the Hemorrhage build (0/21/30) did 3 to 8 damage a second, with or
+without the bots' melee rules, where Combat and Assassination rogues did far more. The cause was the server's:
+Improved Sap. Its auras (14076, 14094, 14095) are 1.12's proc triggers of Vanished (14093, a sanctuary: the fight
+dropped) on any ability, harmful spell or area spell (`procFlags` 0x11010) at 30, 60 or 90%. The rule that
+narrows it to Sap (`spell_proc_event`, the rogues' family flag 0x80) is not in vmangos's tables, so every
+Hemorrhage or Sinister Strike that hit vanished the rogue at 60% (two ranks): the creature left the fight and
+healed to full, the rogue stopped swinging, and peon's bot, which swings once a target, stood by. Auto-attack
+itself was never wrong: forced swings at a creature of their level, two Bonescrapers each, came to 78 a swing for
+the Subtlety rogue at 60 and 83 for the Combat one (65 and 67 at 40), with Deadliness's 10% attack power, Serrated
+Blades and the rest as they should be.
+
+The fix: Improved Sap's auras proc on nothing of their own (`procs::proc_flags`). Their chance is already rolled
+where it belongs, as Sap is cast (`class_scripts::keeps_stealth`, Thistle Tea's `Spell.Stealth`; mangos-classic
+gets there through the proc on Sap and the `spell_improved_sap` script on Vanished). Over eight seconds of
+auto-attack and a builder a second at a creature, before and after:
+
+| | Before | After |
+|---|---|---|
+| Subtlety rogue at 60 (Hemorrhage) | 0 to 3 swings, then out of the fight; 0 damage | 16 to 17 swings; 133 to 214 dps |
+| Combat rogue at 60 (Sinister Strike) | 168 to 246 dps | the same |
+| Subtlety rogue at 40 | 1 to 4 swings; 0 damage | 16 swings; 115 to 140 dps |
+| Combat rogue at 40 | 132 to 152 dps | the same |
+
+(The gear but the daggers is `.gear`'s random pick, so the numbers spread; the outcome tables, misses, dodges,
+parries and glancing blows, are alike between the two.) Tested by `tests_subtlety`. In the fast suite, Improved
+Sap's aura and another proc trigger of its flags at 100% on a rogue: twenty ability hits proc the other each time
+and Improved Sap never. In the extended suite, at 60 and at 40, a Subtlety and a Combat rogue made ready as peon
+makes them (`.character level`, `.gear`, `.talents learn` with peon's builds, `.character spells`) fight side by
+side through the protocol; the Subtlety rogue must still be swinging, out of stealth, its creature in the fight,
+and its damage at least 40% of the Combat rogue's. Without the fix the fast test fails, and so does the extended
+one at 40. What is sent doesn't change but for the Vanished that no longer comes. The fast suite passes, and so do
+the extended tests for procs, stealth, Sap, rogues and talents.
