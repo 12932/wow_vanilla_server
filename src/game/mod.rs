@@ -132,9 +132,9 @@ mod tests_mailbox;
 #[cfg(test)]
 mod tests_mangos_defaults;
 #[cfg(test)]
-mod tests_misc;
-#[cfg(test)]
 mod tests_map_core;
+#[cfg(test)]
+mod tests_misc;
 #[cfg(test)]
 mod tests_misc2;
 #[cfg(test)]

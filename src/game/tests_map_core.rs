@@ -139,12 +139,14 @@ async fn another_player_sees_a_players_emote_and_aura_states() {
     });
     let seen = b
         .wait_for("Alice's states", |m| {
-            harness::values(m).into_iter().find_map(|(of, mask)| match mask {
-                UpdateMask::Player(p) if of == ga => {
-                    Some((p.unit_npc_emotestate()?, p.unit_aurastate()?))
-                }
-                _ => None,
-            })
+            harness::values(m)
+                .into_iter()
+                .find_map(|(of, mask)| match mask {
+                    UpdateMask::Player(p) if of == ga => {
+                        Some((p.unit_npc_emotestate()?, p.unit_aurastate()?))
+                    }
+                    _ => None,
+                })
         })
         .await;
     assert_eq!(seen, (DANCE as i32, HEALTHLESS_20 as i32));

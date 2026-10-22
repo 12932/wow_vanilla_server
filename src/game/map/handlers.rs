@@ -76,7 +76,12 @@ impl Map {
         let Some(msg) = crate::game::map::acks::handle(self, guid, msg) else {
             return;
         };
-        if self.players.get(&guid).is_some_and(|p| p.awaiting_worldport) && !in_transfer(&msg) {
+        if self
+            .players
+            .get(&guid)
+            .is_some_and(|p| p.awaiting_worldport)
+            && !in_transfer(&msg)
+        {
             trace!("{guid} hasn't acknowledged its worldport: {msg} dropped");
             return;
         }
@@ -346,10 +351,7 @@ impl Map {
                     && zone != 0
                 {
                     if zone != m.area.as_int() {
-                        tracing::debug!(
-                            "{guid} sent zone {}, but is in {zone}",
-                            m.area.as_int()
-                        );
+                        tracing::debug!("{guid} sent zone {}, but is in {zone}", m.area.as_int());
                     }
                     crate::game::map::world::update_zone(self, guid);
                     if let Some(p) = self.players.get(&guid) {
