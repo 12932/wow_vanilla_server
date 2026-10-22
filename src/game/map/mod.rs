@@ -156,11 +156,23 @@ pub enum MapEvent {
     Arrive(Box<Arrival>),
     /// A player's client's packet, by the session it came from: one from
     /// a session whose player another login has taken over since is
-    /// dropped, as a [`MapEvent::Disconnect`] is.
+    /// dropped, as a [`MapEvent::Disconnect`] is. It holds its room in the
+    /// session's share of the mailbox until it is handled.
     Packet(
         Guid,
         ClientOpcodeMessage,
         tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+        Room,
+    ),
+    /// A client's `MSG_MOVE_HEARTBEAT`, the newest it has sent: one it
+    /// sends while this waits, with nothing sent after this, takes its
+    /// place in the slot ([`Heartbeat`]). As a [`MapEvent::Packet`]
+    /// otherwise.
+    Heartbeat(
+        Guid,
+        Arc<Heartbeat>,
+        tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+        Room,
     ),
     /// A player's client has gone, by the session it went from: one whose
     /// player another login has taken over since leaves them be.
@@ -174,6 +186,60 @@ pub enum MapEvent {
     Shutdown(oneshot::Sender<()>),
     /// Stop: an empty copy that goes.
     Stop,
+}
+
+/// Room in a session's share of its map's mailbox (`[network]
+/// max_queued_packets`): what a client's packet sends holds it until the
+/// map has handled it, and the session reads no more of the client while
+/// its share is full. `None` for what no session sent.
+pub type Room = Option<tokio::sync::OwnedSemaphorePermit>;
+
+/// A mover's heartbeat waiting for its map: the session puts its client's
+/// newest in the slot while the map hasn't taken it, so a map that has
+/// fallen behind takes the mover's last heartbeat, not each of them. Only
+/// while nothing else the client sent waits behind it, and only one that
+/// says the same of the mover's state (its flags): every other packet
+/// keeps its place, and a heartbeat never goes ahead of one
+/// (`Session::heartbeat`).
+#[derive(Debug, Default)]
+pub struct Heartbeat(parking_lot::Mutex<Option<wow_world_messages::vanilla::MovementInfo>>);
+
+impl Heartbeat {
+    pub fn new(info: wow_world_messages::vanilla::MovementInfo) -> Self {
+        Self(parking_lot::Mutex::new(Some(info)))
+    }
+
+    /// `info` in the place of the heartbeat waiting in the slot, if one is
+    /// and it says the same of the mover's state (its movement flags: a
+    /// run, a fall, a swim, a jump, a deck): one that differs, a fall's
+    /// last or a swim's first, is the map's to see, and stays. `None` if
+    /// the slot is empty (the map took the last); else whether it took
+    /// the place.
+    pub fn coalesce(&self, info: wow_world_messages::vanilla::MovementInfo) -> Option<bool> {
+        let mut slot = self.0.lock();
+        let waiting = slot.as_mut()?;
+        if waiting.flags != info.flags {
+            return Some(false);
+        }
+        *waiting = info;
+        Some(true)
+    }
+
+    /// `info` in the slot, which the map has emptied: the session's, the
+    /// only one that fills it.
+    pub fn fill(&self, info: wow_world_messages::vanilla::MovementInfo) {
+        *self.0.lock() = Some(info);
+    }
+
+    /// Whether a heartbeat is waiting in the slot.
+    pub fn waiting(&self) -> bool {
+        self.0.lock().is_some()
+    }
+
+    /// The map takes the waiting heartbeat.
+    pub fn take(&self) -> Option<wow_world_messages::vanilla::MovementInfo> {
+        self.0.lock().take()
+    }
 }
 
 /// A player coming into a map.
@@ -777,7 +843,7 @@ fn guarded<T>(map: &mut Map, what: &str, f: impl FnOnce(&mut Map) -> T) -> Optio
 /// packet that panics counts against them.
 fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
     let from = match &event {
-        MapEvent::Packet(g, ..) => Some(*g),
+        MapEvent::Packet(g, ..) | MapEvent::Heartbeat(g, ..) => Some(*g),
         _ => None,
     };
     #[cfg(all(feature = "world-bench", unix))]
@@ -787,12 +853,13 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Login(_) => "a login",
                 ArrivalKind::Transfer(_) => "a transfer",
             },
-            MapEvent::Packet(_, ClientOpcodeMessage::CMSG_MESSAGECHAT(c), _)
+            MapEvent::Packet(_, ClientOpcodeMessage::CMSG_MESSAGECHAT(c), ..)
                 if c.message.starts_with('.') =>
             {
                 bench_probe::intern(c.message.split(' ').next().unwrap_or("."))
             }
-            MapEvent::Packet(_, m, _) => packet_name(m),
+            MapEvent::Packet(_, m, ..) => packet_name(m),
+            MapEvent::Heartbeat(..) => "MSG_MOVE_HEARTBEAT",
             MapEvent::Disconnect(..) => "a disconnect",
             MapEvent::Call(_) => "a call",
             MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
@@ -1209,7 +1276,7 @@ impl Map {
                 let _z = crate::zone!("arrival");
                 self.arrive(*a)
             }
-            MapEvent::Packet(guid, msg, from) => {
+            MapEvent::Packet(guid, msg, from, _room) => {
                 let _z = crate::tracy::on()
                     .then(|| crate::tracy::Zone::named("packet", packet_name(&msg)));
                 #[cfg(test)]
@@ -1218,6 +1285,26 @@ impl Map {
                 }
                 if self.from_their_session(guid, &from) {
                     self.handle_packet(guid, msg)
+                }
+            }
+            MapEvent::Heartbeat(guid, beat, from, _room) => {
+                let _z = crate::tracy::on()
+                    .then(|| crate::tracy::Zone::named("packet", "MSG_MOVE_HEARTBEAT"));
+                #[cfg(test)]
+                if self.faults.any() {
+                    self.faults.check(&format!("packets of {guid}"));
+                }
+                // Taken whoever it is from: the slot is free for the next.
+                let info = beat.take();
+                if let Some(info) = info
+                    && self.from_their_session(guid, &from)
+                {
+                    self.handle_packet(
+                        guid,
+                        ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(
+                            wow_world_messages::vanilla::MSG_MOVE_HEARTBEAT_Client { info },
+                        ),
+                    )
                 }
             }
             MapEvent::Disconnect(guid, from) => {

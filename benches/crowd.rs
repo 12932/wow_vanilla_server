@@ -321,10 +321,7 @@ async fn crowd(realm: &Arc<Realm>, n: usize) -> Vec<Bot> {
 
 /// The crowd's queues, drained every 20 ms on a thread of their own; the
 /// movement broadcasts counted. The senders go back when it stops.
-fn drain(
-    queues: Vec<Frames>,
-    on: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<Vec<Frames>> {
+fn drain(queues: Vec<Frames>, on: Arc<AtomicBool>) -> std::thread::JoinHandle<Vec<Frames>> {
     std::thread::spawn(move || {
         let mut queues = queues;
         while on.load(Ordering::Relaxed) {
@@ -379,7 +376,7 @@ fn report_map(key: MapKey, secs: f64) {
     let mut steps: Vec<_> = steps.into_iter().collect();
     steps.sort_by(|a, b| b.1.total_cmp(&a.1));
     let mut kinds: Vec<_> = kinds.into_iter().filter(|((k, _), _)| *k == key).collect();
-    kinds.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+    kinds.sort_by_key(|a| std::cmp::Reverse(a.1.1));
     let events: u64 = kinds.iter().map(|(_, (n, _))| n).sum();
     let event_cpu: f64 = kinds.iter().map(|(_, (_, d))| d.as_secs_f64()).sum();
     let mut boxes: Vec<f64> = mailbox
@@ -592,7 +589,8 @@ async fn movement(
                     let dx = next.x - CENTER.0;
                     let dy = next.y - CENTER.1;
                     if dx * dx + dy * dy > RADIUS * RADIUS {
-                        *heading = (*heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+                        *heading =
+                            (*heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
                     } else {
                         *at = next;
                     }

@@ -113,6 +113,8 @@ mod tests_items3;
 #[cfg(test)]
 mod tests_loot;
 #[cfg(test)]
+mod tests_mailbox;
+#[cfg(test)]
 mod tests_mangos_defaults;
 #[cfg(test)]
 mod tests_misc;
@@ -1366,6 +1368,9 @@ pub struct RealmConfig {
     /// Read-only queries a client may send a second, sustained, apart
     /// from the packets (`session::is_query`).
     pub max_queries_per_sec: u32,
+    /// Packets of a client's that may wait for its map at once
+    /// (`[network] max_queued_packets`).
+    pub max_queued_packets: usize,
     /// How seldom a `/who`, whois or inspect may come (`session::Cooldowns`):
     /// mangos's 5 s; none in the tests.
     pub packet_cooldown: Duration,
@@ -1437,6 +1442,7 @@ impl RealmConfig {
             pvp_realm: c.players.pvp_realm,
             max_packets_per_sec: c.network.max_packets_per_sec,
             max_queries_per_sec: c.network.max_queries_per_sec,
+            max_queued_packets: c.network.max_queued_packets,
             packet_cooldown: session::COOLDOWN,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,

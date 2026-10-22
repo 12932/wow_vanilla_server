@@ -207,6 +207,7 @@ async fn the_old_clients_packets_after_a_takeover_dont_act() {
             g,
             ClientOpcodeMessage::CMSG_SET_SELECTION(CMSG_SET_SELECTION { target: keeper }),
             from,
+            None,
         )
     };
     let target = move |m: &mut Map| m.players[&g].fields.get_guid(UNIT_FIELD_TARGET);

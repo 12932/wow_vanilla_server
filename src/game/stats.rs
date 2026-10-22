@@ -8,7 +8,7 @@
 //! costs a relaxed load an update and an event while off.
 //!
 //! A line: `{"t":12.0,"unix":1792571234.5,"online":880,"packets_in":..,"packets_out":..,
-//! "bytes_out":..,"disconnects":{"budget":0,"flood":0,"stall":0},
+//! "bytes_out":..,"heartbeats_coalesced":..,"packets_held_back":..,"disconnects":{"budget":0,"flood":0,"stall":0},
 //! "cpu_secs":..,"rss_kb":..,"maps":[{"map":1,"instance":0,"players":880,
 //! "awake":312,"mailbox":0,"updates_us":[..],"events":4400,"events_us":..,
 //! "biggest_queue":..,"queued":..,"steps_us":{"visibility":..}}]}`, its counters since start-up (the
@@ -36,6 +36,11 @@ pub static BYTES_OUT: AtomicU64 = AtomicU64::new(0);
 pub static BUDGET: AtomicU64 = AtomicU64::new(0);
 pub static FLOOD: AtomicU64 = AtomicU64::new(0);
 pub static STALL: AtomicU64 = AtomicU64::new(0);
+/// Heartbeats that took the place of their mover's last, still waiting
+/// for its map; and packets a client's session waited to send, its share
+/// of the map's mailbox full (`[network] max_queued_packets`).
+pub static COALESCED: AtomicU64 = AtomicU64::new(0);
+pub static HELD_BACK: AtomicU64 = AtomicU64::new(0);
 
 /// The maps' seconds, waiting for the writer.
 static SAMPLES: Mutex<Vec<Sample>> = Mutex::new(Vec::new());
@@ -178,6 +183,8 @@ async fn write(realm: Arc<Realm>, mut out: std::io::BufWriter<std::fs::File>) {
             "packets_in": crate::game::conn::PACKETS_IN.load(Ordering::Relaxed),
             "packets_out": crate::game::conn::PACKETS_OUT.load(Ordering::Relaxed),
             "bytes_out": BYTES_OUT.load(Ordering::Relaxed),
+            "heartbeats_coalesced": COALESCED.load(Ordering::Relaxed),
+            "packets_held_back": HELD_BACK.load(Ordering::Relaxed),
             "disconnects": {
                 "budget": BUDGET.load(Ordering::Relaxed),
                 "flood": FLOOD.load(Ordering::Relaxed),

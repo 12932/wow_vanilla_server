@@ -94,6 +94,16 @@ pub struct Session {
     /// going: the player leaves the world at once, as mangos's
     /// `KickPlayer` logs them out, rather than lingering in it.
     kicked: bool,
+    /// The session's share of its map's mailbox (`[network]
+    /// max_queued_packets`): each packet sent there holds a permit until
+    /// the map has handled it.
+    room: Arc<tokio::sync::Semaphore>,
+    /// The slot of the last heartbeat sent to a map, and that map's
+    /// handle ([`crate::game::map::Heartbeat`]).
+    beat: Option<(Arc<crate::game::map::Heartbeat>, MapHandle)>,
+    /// Whether the last thing sent to the map was that heartbeat: only
+    /// then may the next take its place.
+    beat_last: bool,
 }
 
 /// However a session ends (the client goes, the task panics or is
@@ -259,6 +269,9 @@ pub fn run(
     if let Some(old) = &replaced {
         let _ = old.send(Control::Replaced);
     }
+    let room = Arc::new(tokio::sync::Semaphore::new(
+        realm.config().max_queued_packets.max(1),
+    ));
     let s = Session {
         realm,
         account,
@@ -269,6 +282,9 @@ pub fn run(
         last_character: None,
         screen_caches: ahash::AHashMap::new(),
         kicked: false,
+        room,
+        beat: None,
+        beat_last: false,
     };
     s.serve(inbound, replaced)
 }
@@ -360,7 +376,11 @@ impl Session {
                 if let State::InWorld { guid, .. } = &self.state {
                     let g = *guid;
                     let from = self.control.clone();
+                    let Some(room) = self.room().await else {
+                        return;
+                    };
                     let call = MapEvent::Call(Box::new(move |m: &mut crate::game::map::Map| {
+                        let _room = room;
                         if m.from_their_session(g, &from) {
                             m.handle_raw(g, opcode, &body)
                         }
@@ -375,7 +395,28 @@ impl Session {
             }
         };
         if let State::InWorld { guid, .. } = &self.state {
-            let packet = MapEvent::Packet(*guid, msg, self.control.clone());
+            let guid = *guid;
+            let msg = match msg {
+                ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(h) => match self.heartbeat(h.info) {
+                    Beat::Coalesced => return,
+                    Beat::Marker(slot) => {
+                        let Some(room) = self.room().await else {
+                            return;
+                        };
+                        let event = MapEvent::Heartbeat(guid, slot, self.control.clone(), room);
+                        if !self.send_to_map(event).await {
+                            self.outbound.close();
+                        }
+                        return;
+                    }
+                    Beat::Packet => ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(h),
+                },
+                msg => msg,
+            };
+            let Some(room) = self.room().await else {
+                return;
+            };
+            let packet = MapEvent::Packet(guid, msg, self.control.clone(), room);
             if !self.send_to_map(packet).await {
                 self.outbound.close();
             }
@@ -389,6 +430,62 @@ impl Session {
             ClientOpcodeMessage::CMSG_CHAR_RENAME(c) => self.rename(c).await,
             other => debug!("{} on the character screen: {other}", self.account),
         }
+    }
+
+    /// What to do with a heartbeat from the client, in the world: put it
+    /// in the place of the one still waiting for the map, if nothing has
+    /// been sent after that one and it has the same flags; else in the
+    /// slot, emptied, to send its marker; or, with one waiting behind
+    /// other packets (or with other flags), send it as an ordinary packet,
+    /// behind them. A heartbeat never goes ahead of what
+    /// was sent before it, and every other packet keeps its place.
+    fn heartbeat(&mut self, info: MovementInfo) -> Beat {
+        let State::InWorld { map, .. } = &self.state else {
+            return Beat::Packet;
+        };
+        match &self.beat {
+            Some((slot, to)) if to.same(map) => {
+                if self.beat_last {
+                    match slot.coalesce(info) {
+                        Some(true) => {
+                            crate::game::stats::COALESCED.fetch_add(1, Ordering::Relaxed);
+                            return Beat::Coalesced;
+                        }
+                        // Its state differs: behind it, in its own turn.
+                        Some(false) => return Beat::Packet,
+                        None => {}
+                    }
+                } else if slot.waiting() {
+                    return Beat::Packet;
+                }
+                // Empty, and only this session fills it.
+                slot.fill(info);
+                Beat::Marker(slot.clone())
+            }
+            _ => {
+                let slot = Arc::new(crate::game::map::Heartbeat::new(info));
+                self.beat = Some((slot.clone(), map.clone()));
+                Beat::Marker(slot)
+            }
+        }
+    }
+
+    /// Room in the session's share of the map's mailbox, waiting for it
+    /// while the share is full (and reading no more of the client
+    /// meanwhile). `None` once the connection is closed.
+    async fn room(&self) -> Option<crate::game::map::Room> {
+        let room = match self.room.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                crate::game::stats::HELD_BACK.fetch_add(1, Ordering::Relaxed);
+                let outbound = self.outbound.clone();
+                tokio::select! {
+                    p = self.room.clone().acquire_owned() => p.ok()?,
+                    () = outbound.closed() => return None,
+                }
+            }
+        };
+        Some(Some(room))
     }
 
     /// Send `event` to the player's map. A map whose actor has stopped
@@ -405,13 +502,22 @@ impl Session {
         let mut event = event;
         let deadline = tokio::time::Instant::now() + HANDED_ON_WAIT;
         let outbound = self.outbound.clone();
+        let beat = matches!(event, MapEvent::Heartbeat(..));
         loop {
             // Out of the world meanwhile: what the client sent was for it.
             let State::InWorld { map, .. } = &self.state else {
                 return true;
             };
+            let map = map.clone();
             match map.try_send(event) {
-                Ok(()) => return true,
+                Ok(()) => {
+                    // The heartbeat's slot is the map's that has its marker.
+                    self.beat_last = beat;
+                    if beat && let Some((_, to)) = &mut self.beat {
+                        *to = map;
+                    }
+                    return true;
+                }
                 Err(back) => event = back,
             }
             // What the map said before it stopped comes first: the player
@@ -494,6 +600,8 @@ impl Session {
                 true
             }
             Control::ToPlayer { guid, call } => {
+                // Sent after the heartbeat: the next doesn't go ahead of it.
+                self.beat_last = false;
                 if let State::InWorld { guid: g, map } = &self.state
                     && *g == guid
                 {
@@ -1113,6 +1221,16 @@ const GHOST_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// has the player now ([`Session::send_to_map`]): a fresh copy's start and the
 /// arrival ahead of it. None in that time: the map died with them.
 const HANDED_ON_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What [`Session::heartbeat`] makes of a heartbeat.
+enum Beat {
+    /// It took the place of the one waiting for the map.
+    Coalesced,
+    /// It waits in the slot: send its marker.
+    Marker(Arc<crate::game::map::Heartbeat>),
+    /// Send it as any packet.
+    Packet,
+}
 
 /// What [`Session::enter`] came to.
 enum Entered {

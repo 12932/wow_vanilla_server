@@ -4726,9 +4726,21 @@ mod security {
     async fn a_client_moving_too_fast_is_pulled_back() {
         let realm = players_realm();
         let mut a = Client::connect(&realm, "A");
-        a.enter("Alice", Race::Human, Class::Warrior).await;
-        // A step, then five hundred yards in no time.
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        // A step, then five hundred yards in no time. The step is waited
+        // for: two heartbeats that both wait for a busy map are one, the
+        // newest (`Session::heartbeat`), judged from where she was before.
         a.heartbeat(START.0 + 1.0, START.1, START.2).await;
+        let map = realm.registry.online(ga).expect("online").map();
+        let deadline = tokio::time::Instant::now() + harness::WAIT;
+        while map
+            .query(move |m| (m.players[&ga].position().x - (START.0 + 1.0)).abs() > 0.01)
+            .await
+            .unwrap_or(true)
+        {
+            assert!(tokio::time::Instant::now() < deadline, "the step is taken");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
         a.heartbeat(START.0 + 500.0, START.1, START.2).await;
         let back = a
             .wait_for("MSG_MOVE_TELEPORT_ACK", |m| match m {
