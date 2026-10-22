@@ -2715,6 +2715,8 @@ impl Map {
     /// event's conditions on it read it as it was (vmangos's
     /// `SummonedCreatureDespawn` before the summon leaves the world).
     pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {
+        // Charmed or possessed, its master has their own back.
+        pets::leaving(self, guid);
         let heard = self
             .creature(guid)
             .filter(|c| !c.despawned)

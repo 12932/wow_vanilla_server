@@ -1237,6 +1237,23 @@ fn release(map: &mut Map, master: Guid, unit: Guid) {
 
 /// Let a charmed or possessed unit go, turning on its master if `turn`.
 fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
+    free(map, master, unit, turn, true);
+}
+
+/// A charmed or possessed creature leaving the map without dying (a
+/// script's despawn, an event's end): its master has their own camera,
+/// movement and bar back, as at any release, and it turns on no one.
+pub fn leaving(map: &mut Map, unit: Guid) {
+    let Some((master, kind)) = state(map, unit).map(|s| (s.owner, s.kind)) else {
+        return;
+    };
+    if matches!(kind, Kind::Charmed | Kind::Possessed) && guid::is_player(master) {
+        free(map, master, unit, false, false);
+    }
+}
+
+/// [`let_go`]; a summoned eye is removed with it if `remove`.
+fn free(map: &mut Map, master: Guid, unit: Guid, turn: bool, remove: bool) {
     let Some(s) = map.creature_mut(unit).and_then(|c| c.pet.take()) else {
         return;
     };
@@ -1305,7 +1322,9 @@ fn let_go(map: &mut Map, master: Guid, unit: Guid, turn: bool) {
     }
     if summoned {
         // A summoned eye goes when its master lets it go.
-        summon::remove(map, unit);
+        if remove {
+            summon::remove(map, unit);
+        }
         return;
     }
     let alive = map.unit_view(unit).is_some_and(|u| u.alive);

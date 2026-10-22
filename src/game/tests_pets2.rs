@@ -699,6 +699,43 @@ async fn the_eye_of_kilrogg_goes_no_faster_than_it_can() {
     .await;
 }
 
+/// Bug hunt (combat and pets): a Mind Controlled creature taken out of
+/// the map without dying (an event's end, a script's despawn) left its
+/// master's camera and movement on it, and their charm named it, so they
+/// could move nothing and charm nothing until they logged out. Its master
+/// has their own back, as at any release.
+#[tokio::test]
+async fn a_possessed_creature_removed_gives_its_master_their_own_back() {
+    let realm = harness::realm_with(more());
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    let wolf = place(&map, ga, WOLF, 0x70_0102, 8.0).await;
+    a.sees(wolf).await;
+    cast(&a, MIND_CONTROL, Some(wolf)).await;
+    assert!(control_update(&mut a, wolf).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: wolf }).await;
+    crate::game::tests_p3_player2_ammo::handled(&mut a).await;
+    map.call(move |m| {
+        m.remove_creature(wolf);
+    });
+    assert!(control_update(&mut a, ga).await, "the priest has their own");
+    let (charm, mover, sight, charm_field) = map
+        .query(move |m| {
+            let p = &m.players[&ga];
+            (
+                p.owned.charm,
+                p.owned.mover,
+                p.fields.get_guid(PLAYER_FARSIGHT),
+                p.fields.get_guid(UNIT_FIELD_CHARM),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(charm, None);
+    assert_eq!(mover, None);
+    assert!(sight.is_zero() && charm_field.is_zero());
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());
