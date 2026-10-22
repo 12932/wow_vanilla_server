@@ -9,7 +9,7 @@
 //! share of its thread's time its updates and events take (as the stats
 //! file measures it), smoothed over about a second, above
 //! `broadcast_batch_busy_high` doubles the window, below
-//! `broadcast_batch_busy_low` halves it, and between holds it. A mailbox
+//! `broadcast_batch_busy_low` halves it (the CPU low too, below), and between holds it. A mailbox
 //! deeper than `broadcast_batch_mailbox` (smoothed the same way) counts as
 //! busy whatever the share. After a change the window holds for a smoothing
 //! time, so that what the change did shows before the next.
