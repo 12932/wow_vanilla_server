@@ -321,9 +321,10 @@ fn cast(map: &mut Map, player: Guid, pet: Guid, spell: u32, asked: Targets, from
     let data = map.realm.data.clone();
     let knows = match map.players.get(&pet) {
         Some(v) => v.spells.contains(&spell),
-        None => {
-            state(map, pet).is_some_and(|s| s.spells.contains(&spell) || s.kind == Kind::Possessed)
-        }
+        // A possessed creature casts what its bar has, as any pet: its
+        // charm spells (mangos-classic's `HandlePetCastSpellOpcode` refuses
+        // a spell the unit doesn't `HasSpell`).
+        None => state(map, pet).is_some_and(|s| s.spells.contains(&spell)),
     };
     if !knows {
         return;

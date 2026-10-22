@@ -510,6 +510,54 @@ async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
     assert_eq!(position(&map, eye).await.z, at.z, "never out of the world");
 }
 
+/// Bug hunt (combat and pets): a possessed unit cast any spell its
+/// controller's client named, known or not (Death Touch from a Mind
+/// Controlled mob). It casts only what its bar has, as mangos-classic's
+/// `HandlePetCastSpellOpcode` (`HasSpell`): the eye has nothing.
+#[tokio::test]
+async fn a_possessed_unit_casts_no_spell_it_doesnt_have() {
+    let realm = harness::realm_with(more());
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[EYE_OF_KILROGG]);
+    let wolf = place(&map, gw, WOLF, 0x70_0101, 6.0).await;
+    cast(&w, EYE_OF_KILROGG, None).await;
+    let eye = w
+        .wait_for("control of the eye", |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid != gw && u.allow_movement =>
+            {
+                Some(u.guid)
+            }
+            _ => None,
+        })
+        .await;
+    w.sees(wolf).await;
+    let health = move |m: &mut crate::game::map::Map| {
+        m.creature(wolf)
+            .map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH))
+    };
+    let before = map.query(health).await.flatten();
+    w.send(CMSG_PET_CAST_SPELL {
+        guid: eye,
+        id: FIRE,
+        targets: at(wolf),
+    })
+    .await;
+    let cast = w
+        .gets(Duration::from_millis(400), |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == FIRE => Some(()),
+            ServerOpcodeMessage::SMSG_SPELL_START(g) if g.spell == FIRE => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(cast.is_none(), "the eye has no Fire");
+    assert_eq!(
+        map.query(health).await.flatten(),
+        before,
+        "the wolf unharmed"
+    );
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());
