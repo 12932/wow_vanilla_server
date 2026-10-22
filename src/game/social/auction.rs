@@ -803,6 +803,8 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32
     let me = guid::counter(g);
     let market = market_of(house);
     let auctions = realm.social.auctions.lock();
+    // Sorted and searched: a client may ask after thousands, and this
+    // runs under the realm's auctions lock.
     let mut asked: Vec<u32> = outbid.to_vec();
     asked.sort_unstable();
     asked.dedup();
@@ -812,7 +814,7 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32
         .filter(|a| {
             a.market == market
                 && if bids {
-                    a.bidder == me || asked.contains(&a.id)
+                    a.bidder == me || asked.binary_search(&a.id).is_ok()
                 } else {
                     a.owner == me
                 }
