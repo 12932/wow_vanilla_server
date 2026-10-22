@@ -70,6 +70,7 @@ async fn a_kill_is_the_tapping_groups_after_its_tapper_leaves_for_another() {
     let brute = on(&map, move |m| {
         let brute = spawn(m, ga, BRUTE, 10, 3.0);
         crate::game::map::ai::attacked(m, brute, ga);
+        combat::deal_damage(m, ga, brute, 1);
         brute
     })
     .await;

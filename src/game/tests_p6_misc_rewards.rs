@@ -77,6 +77,7 @@ async fn a_kill_is_the_group_it_was_tapped_for() {
         let brute = spawn(m, ga, BRUTE, 20, 3.0);
         let other = spawn(m, ga, BRUTE, 20, 3.0);
         crate::game::map::ai::attacked(m, brute, ga);
+        combat::deal_damage(m, ga, brute, 1);
         let tapped = m.creature(brute).map(|c| (c.tapped_by, c.tap_group));
         (brute, other, tapped)
     })
@@ -161,6 +162,7 @@ async fn a_possessed_players_kill_is_their_controllers() {
         crate::game::map::pets::charmed(m, ga, gb, true);
         let brute = spawn(m, gb, BRUTE, 20, 3.0);
         combat::engage(m, gb, brute);
+        combat::deal_damage(m, gb, brute, 1);
         let tapper = m.creature(brute).and_then(|c| c.tapped_by);
         let o = combat::kill_options(m, brute);
         let alone = combat::group_shares(&[1], 20, &o).0[0];
@@ -216,5 +218,148 @@ async fn a_tap_outlasts_its_tapper_leaving_the_fight() {
         b.gets(Duration::from_millis(100), xp_for(brute)).await,
         None,
         "not Bob's"
+    );
+}
+
+/// The SITREP's call on the tap (mangos-classic's): only damage taps a
+/// creature (`Unit::DealDamage` → `SetLootRecipient`), not its aggro
+/// (Thistle Tea's `combat_entered` → `maybe_tap`). A watcher that notices
+/// Alice walking by and runs at her is no one's; Bob, who hits it first,
+/// has it: his kill, his XP and his loot, Alice none.
+#[tokio::test]
+async fn a_creature_that_aggroes_a_passer_by_is_whoever_hurts_it_first() {
+    use crate::game::tests_p7_combat::{WATCHER, creature_at, look, off};
+    let realm = harness::realm_with(crate::game::tests_p7_combat::data());
+    let mut a = player(&realm, "Alice").await;
+    let mut b = player(&realm, "Bob").await;
+    let (ga, gb) = (a.guid, b.guid);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (w, aggro, tapped, loot) = on(&map, move |m: &mut Map| {
+        for g in [ga, gb] {
+            // Short of the cap, to have XP.
+            crate::game::tests_p3_combat::level(m, g, 59);
+        }
+        crate::game::tests_p6_wspell::put(m, ga, off(0.0, 0.0, 0.0));
+        crate::game::tests_p6_wspell::put(m, gb, off(0.0, 25.0, 0.0));
+        let w = creature_at(m, ga, WATCHER, off(4.0, 0.0, 0.0));
+        look(m);
+        let c = m.creature(w).unwrap();
+        let aggro = (c.combat.attacking && c.combat.victim == ga, c.tapped_by);
+        combat::deal_damage(m, gb, w, 1);
+        let tapped = m.creature(w).unwrap().tapped_by;
+        combat::deal_damage(m, gb, w, 10_000_000);
+        let l = crate::game::map::loot::loot_ref(m, w);
+        let loot = l.map(|l| (l.may_loot(ga), l.may_loot(gb)));
+        (w, aggro, tapped, loot)
+    })
+    .await;
+    assert_eq!(aggro, (true, None), "it runs at Alice, no one's tap");
+    assert_eq!(tapped, Some(gb), "Bob's first hit taps it");
+    assert_eq!(loot, Some((false, true)), "Bob's loot, not Alice's");
+    b.wait_for("Bob's XP", xp_for(w)).await;
+    assert_eq!(
+        a.gets(Duration::from_millis(100), xp_for(w)).await,
+        None,
+        "none for Alice"
+    );
+}
+
+/// Threat without damage taps no one (mangos's tap is in `DealDamage`,
+/// past its no-damage return): a heal's threat (Bob healing Alice, whom
+/// the brute fights), a taunt (Cid's), a miss. Cid's hit, after, does.
+#[tokio::test]
+async fn a_taunt_a_heal_or_a_miss_taps_no_one() {
+    let realm = harness::realm_with(crate::game::tests_p3_combat::data());
+    let a = player(&realm, "Alice").await;
+    let b = player(&realm, "Bob").await;
+    let c = player(&realm, "Cid").await;
+    let (ga, gb, gc) = (a.guid, b.guid, c.guid);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let out = on(&map, move |m: &mut Map| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        crate::game::map::ai::attacked(m, brute, ga);
+        let f = m.unit_fields_mut(ga).unwrap();
+        let max = f.get_u32(UNIT_FIELD_MAXHEALTH);
+        f.set_u32(UNIT_FIELD_HEALTH, max - 500);
+        crate::game::map::spells::heal(m, gb, ga, 2050, 200, false);
+        let tap = |m: &Map| m.creature(brute).unwrap().tapped_by;
+        let on_list = |m: &Map, g: Guid| m.creature(brute).unwrap().threat.iter().any(|t| t.0 == g);
+        let healed = (on_list(m, gb), tap(m));
+        crate::game::map::ai::taunted(m, brute, gc);
+        let taunted = (m.creature(brute).unwrap().combat.victim == gc, tap(m));
+        crate::game::tests_p3_combat::forced_swing(m, gc, brute, combat::Outcome::Miss);
+        let missed = tap(m);
+        combat::deal_damage(m, gc, brute, 1);
+        (healed, taunted, missed, tap(m))
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        (true, None),
+        "the heal's threat: on its list, no tap"
+    );
+    assert_eq!(out.1, (true, None), "taunted: on Cid, no tap");
+    assert_eq!(out.2, None, "a miss: none");
+    assert_eq!(out.3, Some(gc), "Cid's hit taps it");
+}
+
+/// A pet's first hit taps a creature for its owner (mangos's
+/// `GetBeneficiaryPlayer`), whose kill, by the pet, it is.
+#[tokio::test]
+async fn a_pets_first_hit_taps_for_its_owner() {
+    use crate::game::tests_p7_combat::{creature_at, off};
+    let (_realm, mut h, gh, pet, map) = crate::game::tests_p8_pets_owner::hunter().await;
+    let (brute, untapped, tapped) = on(&map, move |m: &mut Map| {
+        // Short of the cap, to have XP.
+        crate::game::tests_p3_combat::level(m, gh, 59);
+        let brute = creature_at(m, gh, BRUTE, off(3.0, 0.0, 0.0));
+        crate::game::map::ai::attacked(m, brute, pet);
+        let untapped = m.creature(brute).unwrap().tapped_by;
+        combat::deal_damage(m, pet, brute, 1);
+        let tapped = m.creature(brute).unwrap().tapped_by;
+        combat::deal_damage(m, pet, brute, 10_000_000);
+        (brute, untapped, tapped)
+    })
+    .await;
+    assert_eq!(untapped, None, "the pet's pull alone: no one's");
+    assert_eq!(tapped, Some(gh), "its hit: its owner's");
+    h.wait_for("the owner's XP", xp_for(brute)).await;
+}
+
+/// A group member's first hit taps a creature for the group: aggroed on
+/// a stranger, Cid, then hit by Bob, it is Alice's and Bob's party's kill,
+/// shared by the two of them, and not grey to Alice.
+#[tokio::test]
+async fn a_members_hit_taps_for_the_group() {
+    let realm = harness::realm_with(crate::game::tests_p3_combat::data());
+    let mut a = player(&realm, "Alice").await;
+    let mut b = player(&realm, "Bob").await;
+    let mut c = player(&realm, "Cid").await;
+    let (ga, gb, gc) = (a.guid, b.guid, c.guid);
+    joins(&mut a, &mut b, "Bob").await;
+    let party = realm.social.groups.lock().group_of(ga).map(|g| g.id);
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (brute, tapped, holds, share) = on(&map, move |m: &mut Map| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        crate::game::map::ai::attacked(m, brute, gc);
+        combat::deal_damage(m, gb, brute, 1);
+        let k = m.creature(brute).unwrap();
+        let tapped = (k.tapped_by, k.tap_group);
+        let holds = [ga, gb, gc].map(|g| crate::game::map::tap::holds(m, k, g));
+        let o = combat::kill_options(m, brute);
+        let share = combat::group_shares(&[1, 1], 20, &o).0[0];
+        combat::deal_damage(m, ga, brute, 10_000_000);
+        (brute, tapped, holds, share)
+    })
+    .await;
+    assert!(party.is_some());
+    assert_eq!(tapped, (Some(gb), party), "Bob's, for the party");
+    assert_eq!(holds, [true, true, false], "the party's, not Cid's");
+    assert_eq!(a.wait_for("Alice's share", xp_for(brute)).await, share);
+    assert_eq!(b.wait_for("Bob's share", xp_for(brute)).await, share);
+    assert_eq!(
+        c.gets(Duration::from_millis(100), xp_for(brute)).await,
+        None,
+        "none for Cid"
     );
 }

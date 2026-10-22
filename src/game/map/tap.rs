@@ -41,6 +41,30 @@ pub fn take(realm: &Realm, c: &mut Creature, tapper: Guid) {
     c.tap_group = realm.social.groups.lock().group_of(tapper).map(|g| g.id);
 }
 
+/// `attacker`'s damage landed on `victim`: an untapped creature no one
+/// controls is tapped by the player whose side the blow is (a pet's or a
+/// guardian's master, a possessed player's controller: mangos's
+/// `GetBeneficiaryPlayer`), for their group. Only damage taps, melee, a
+/// spell or a tick alike (mangos's `Unit::DealDamage`, after the absorb:
+/// a blow absorbed whole taps no one); an aggro, a taunt, a heal's threat
+/// don't. An NPC's blow leaves it untapped.
+pub fn damaged(map: &mut Map, victim: Guid, attacker: Guid) {
+    if map
+        .creature(victim)
+        .is_none_or(|c| c.tapped_by.is_some() || c.owner.is_some())
+    {
+        return;
+    }
+    let by = crate::game::map::pets::master(map, attacker);
+    if !crate::game::guid::is_player(by) {
+        return;
+    }
+    let realm = map.realm.clone();
+    if let Some(c) = map.creature_mut(victim) {
+        take(&realm, c, by);
+    }
+}
+
 /// `c`'s tap let go.
 pub fn clear(c: &mut Creature) {
     c.tapped_by = None;

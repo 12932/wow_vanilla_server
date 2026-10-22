@@ -227,6 +227,8 @@ async fn an_entry_change_is_a_new_template_on_the_same_creature_till_it_respawns
         f.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
         f.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
         crate::game::map::ai::attacked(m, brute, ga);
+        // A hit taps it.
+        crate::game::map::combat::deal_damage(m, ga, brute, 1);
         let c = m.creature_mut(brute).unwrap();
         let max = c.fields.get_u32(UNIT_FIELD_MAXHEALTH);
         c.fields.set_u32(UNIT_FIELD_HEALTH, max / 4);

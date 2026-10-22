@@ -205,7 +205,17 @@ async fn revival_weapon_lock_and_heart_of_the_wild() {
             ready(m, w, 60, &[]);
             // Symbol of Life: the revived corpse has no loot and no owner.
             let corpse = spawn(m, w, 6172, 10, 5.0);
-            crate::game::map::combat::deal_damage(m, w, corpse, 2_000_000);
+            // Killed outright: Henze Faulk is unkillable by damage, which
+            // left him at 1 health, alive, the revive not reached (and,
+            // damage tapping him, tapped by the warrior).
+            if let Some(f) = m.unit_fields_mut(corpse) {
+                f.set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 0);
+            }
+            crate::game::map::combat::kill(m, w, corpse);
+            let killed = m
+                .creature(corpse)
+                .is_some_and(|c| !c.alive() && c.tapped_by == Some(w));
+            assert!(killed, "a corpse, the warrior's");
             spells::cast_triggered(m, w, 8593, Some(corpse));
             let revived = m
                 .creature(corpse)

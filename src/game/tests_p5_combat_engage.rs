@@ -46,6 +46,8 @@ async fn a_pull_stands_a_creature_up_an_evade_clears_the_fight_and_death_keeps_t
                 c.fields.get_byte(UNIT_FIELD_BYTES_1, 0),
                 c.fields.get_u32(UNIT_NPC_EMOTESTATE),
             );
+            // A hit taps it (a pull alone doesn't).
+            combat::deal_damage(m, ga, brute, 1);
             let engaged = fight(m, brute);
             ai::enter_evade(m, brute);
             let evaded = fight(m, brute);

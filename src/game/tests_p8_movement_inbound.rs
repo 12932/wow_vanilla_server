@@ -465,8 +465,10 @@ async fn every_creature_in_an_updates_batch_is_its_viewers_own() {
         c.clear();
     }
     map.query(move |m| {
-        crate::game::map::ai::attacked(m, r1, ga);
-        crate::game::map::ai::attacked(m, r2, ga);
+        for r in [r1, r2] {
+            crate::game::map::ai::attacked(m, r, ga);
+            crate::game::map::combat::deal_damage(m, ga, r, 1);
+        }
     })
     .await
     .unwrap();

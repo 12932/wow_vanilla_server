@@ -3266,6 +3266,9 @@ fn deal_damage_with(
     if damage == 0 || crate::game::map::event_ai::feigning(map, victim) {
         return;
     }
+    // The first damage that gets through taps a creature (one absorbed
+    // whole doesn't, as `damage` is what is left).
+    crate::game::map::tap::damaged(map, victim, attacker);
     // No rage from one's own harm, the world's (mangos's `dealer !=
     // victim`).
     if attacker != victim {
