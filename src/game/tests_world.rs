@@ -700,6 +700,64 @@ async fn an_escort_left_behind_fails() {
     assert_eq!(map.query(|m| m.escorts.len()).await, Some(0));
 }
 
+/// An escort with a group: the starter far off while one of their group
+/// stays beside the escortee goes on (mangos's `IsPlayerOrGroupInRange`);
+/// with all of them far off, it fails for the group, not the starter
+/// alone (`FailQuestForPlayerAndGroup`), so that no one is left with an
+/// escort they can't take again.
+#[tokio::test]
+async fn an_escort_goes_on_with_its_group_near_and_fails_for_the_group() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let h = b.enter("Bob", Race::Human, Class::Warrior).await;
+    super::tests_p12e_stacking::group(&mut a, &mut b, "Bob").await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let escortee = guid::unit(ESCORTEE, 31);
+    map.query(move |m| {
+        crate::game::map::quests::accept(m, g, escortee, ESCORT_QUEST);
+        if let Some(p) = m.players.get_mut(&h) {
+            p.journal.add(crate::game::store::Logged {
+                quest: ESCORT_QUEST,
+                ..Default::default()
+            });
+        }
+        if let Some(p) = m.players.get_mut(&g) {
+            p.movement.position.x += 500.0;
+        }
+    })
+    .await;
+    // Bob keeps by it: it goes on.
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let going = map
+            .query(move |m| {
+                if let Some(at) = m.creature(escortee).map(|c| c.position)
+                    && let Some(p) = m.players.get_mut(&h)
+                {
+                    p.movement.position = at;
+                }
+                m.escorts.len()
+            })
+            .await;
+        assert_eq!(going, Some(1), "one of the group near");
+    }
+    map.query(move |m| {
+        if let Some(p) = m.players.get_mut(&h) {
+            p.movement.position.x += 500.0;
+        }
+    })
+    .await;
+    let failed = |q: &ServerOpcodeMessage| match q {
+        ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILED(f) if f.quest_id == ESCORT_QUEST => Some(()),
+        _ => None,
+    };
+    a.wait_for("Alice's escort failed", failed).await;
+    b.wait_for("Bob's escort failed", failed).await;
+    assert_eq!(map.query(|m| m.escorts.len()).await, Some(0));
+}
+
 #[tokio::test]
 async fn the_scourge_invasion_counts_its_victories() {
     let realm = harness::realm_with(data());

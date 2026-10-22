@@ -989,15 +989,19 @@ fn summon(map: &mut Map, entry: u32, pos: Vector3d, o: f32) -> Option<Guid> {
     Some(map.add_creature(c))
 }
 
+/// The player and the others of their group.
+fn group_of(map: &Map, player: Guid) -> Vec<Guid> {
+    let mut who = vec![player];
+    let groups = map.realm.social.groups.lock();
+    if let Some(g) = groups.group_of(player) {
+        who.extend(g.members.iter().map(|m| m.guid).filter(|g| *g != player));
+    }
+    who
+}
+
 /// The quest is credited to the player and their group near.
 fn credit(map: &mut Map, player: Guid, quest: u32, reach: f32, near: Vector3d) {
-    let mut who = vec![player];
-    {
-        let groups = map.realm.social.groups.lock();
-        if let Some(g) = groups.group_of(player) {
-            who.extend(g.members.iter().map(|m| m.guid).filter(|g| *g != player));
-        }
-    }
+    let who = group_of(map, player);
     let data = map.realm.data.clone();
     for g in who {
         let Some(p) = map.players.get_mut(&g) else {
@@ -1015,8 +1019,13 @@ fn credit(map: &mut Map, player: Guid, quest: u32, reach: f32, near: Vector3d) {
     }
 }
 
+/// The escort failed: for the player and those of their group here who
+/// have it under way (mangos's `FailQuestForPlayerAndGroup`), so that none
+/// is left with an escort they can't take again.
 fn fail(map: &mut Map, player: Guid, quest: u32) {
-    crate::game::map::quests::fail(map, player, quest);
+    for g in group_of(map, player) {
+        crate::game::map::quests::fail(map, g, quest);
+    }
 }
 
 /// The escortee goes back where it stood, as it was, at once.
@@ -1168,10 +1177,20 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
     }) else {
         return false;
     };
-    // No limit to how far the player may be, for one with none.
+    // No limit to how far the player may be, for one with none. The
+    // starter or one of their group near keeps it going, and it isn't
+    // looked at while the escortee fights or is held (mangos's
+    // `npc_escortAI::UpdateAI`, `IsPlayerOrGroupInRange`).
     let max = max_distance(&map.escorts[i].kind);
-    let ppos = map.players.get(&player).map(|p| p.position());
-    let strayed = ppos.is_none_or(|p| max > 0.0 && dist(p, cpos) > max);
+    let near = |map: &Map, g: &Guid| {
+        map.players
+            .get(g)
+            .is_some_and(|p| max <= 0.0 || dist(p.position(), cpos) <= max)
+    };
+    let looked_at = !fighting && !map.escorts[i].held();
+    let strayed = looked_at
+        && (!map.players.contains_key(&player)
+            || (!near(map, &player) && !group_of(map, player).iter().any(|g| near(map, g))));
     let failable = !map.escorts[i].failed && !map.escorts[i].event_over;
     if !alive || (strayed && failable) {
         if failable {
@@ -1302,7 +1321,7 @@ fn step(map: &mut Map, i: usize, now: Instant) -> bool {
                 return true;
             }
             // Trailing the player, two yards to their side.
-            if let Some(p) = ppos
+            if let Some(p) = map.players.get(&player).map(|p| p.position())
                 && dist(p, cpos) > 3.0
             {
                 let o = map
