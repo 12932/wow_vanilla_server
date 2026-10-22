@@ -105,9 +105,11 @@ fn ban(map: &Map, args: &[&str]) -> String {
     let account = crate::auth::account_name(name);
     let registry = &map.realm.registry;
     if let Some(s) = registry.session_for_account(&account) {
+        crate::game::conn::uncork();
         let _ = s.send(crate::game::session::Control::Kick);
     }
     if let Some(o) = registry.online_for_account(&account) {
+        crate::game::conn::uncork();
         let _ = o.session.send(crate::game::session::Control::Kick);
     }
     format!("{account} is banned.")
@@ -450,6 +452,7 @@ fn kick(map: &Map, args: &[&str]) -> String {
     };
     match map.realm.registry.online_by_name(name) {
         Some(o) => {
+            crate::game::conn::uncork();
             let _ = o.session.send(crate::game::session::Control::Kick);
             format!("Kicked {}.", o.name)
         }

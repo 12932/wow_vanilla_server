@@ -118,6 +118,37 @@ pub fn movement_of(msg: ClientOpcodeMessage) -> Result<(MovementInfo, Relay), Cl
     }
 }
 
+/// Whether a client packet is one [`movement_of`] relays: what a map's
+/// burst of events corks (`map::run`), the fan-out that is most of its
+/// sending.
+pub fn is_movement(msg: &ClientOpcodeMessage) -> bool {
+    use ClientOpcodeMessage as C;
+    matches!(
+        msg,
+        C::MSG_MOVE_START_FORWARD(_)
+            | C::MSG_MOVE_START_BACKWARD(_)
+            | C::MSG_MOVE_STOP(_)
+            | C::MSG_MOVE_START_STRAFE_LEFT(_)
+            | C::MSG_MOVE_START_STRAFE_RIGHT(_)
+            | C::MSG_MOVE_STOP_STRAFE(_)
+            | C::MSG_MOVE_JUMP(_)
+            | C::MSG_MOVE_START_TURN_LEFT(_)
+            | C::MSG_MOVE_START_TURN_RIGHT(_)
+            | C::MSG_MOVE_STOP_TURN(_)
+            | C::MSG_MOVE_START_PITCH_UP(_)
+            | C::MSG_MOVE_START_PITCH_DOWN(_)
+            | C::MSG_MOVE_STOP_PITCH(_)
+            | C::MSG_MOVE_SET_RUN_MODE(_)
+            | C::MSG_MOVE_SET_WALK_MODE(_)
+            | C::MSG_MOVE_FALL_LAND(_)
+            | C::MSG_MOVE_START_SWIM(_)
+            | C::MSG_MOVE_STOP_SWIM(_)
+            | C::MSG_MOVE_SET_FACING(_)
+            | C::MSG_MOVE_SET_PITCH(_)
+            | C::MSG_MOVE_HEARTBEAT(_)
+    )
+}
+
 /// A place a client may say a unit is: in the world (no NaN, nothing past
 /// 20,000 yards), and on a deck if on one.
 pub(crate) fn finite(info: &MovementInfo) -> bool {

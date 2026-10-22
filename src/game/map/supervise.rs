@@ -202,6 +202,7 @@ pub fn send_to_screen(map: &mut Map, g: Guid) {
         map.key
     );
     if let Some(session) = gone_unsaved(map, g) {
+        crate::game::conn::uncork();
         let _ = session.send(crate::game::session::Control::LoggedOut);
     }
 }

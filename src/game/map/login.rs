@@ -240,6 +240,7 @@ pub fn take_over(
         // `HandlePlayerReconnect` stops the logout timer).
         p.linger_until = None;
     }
+    crate::game::conn::uncork();
     let _ = old.session.send(Control::TakenOver);
     old.outbound.close();
     cancel_logout(map, guid);
@@ -458,5 +459,6 @@ pub fn complete_logout(map: &mut Map, guid: Guid) {
     undo_logout(&mut p);
     let session = p.online.session.clone();
     map.save_and_go_offline(p);
+    crate::game::conn::uncork();
     let _ = session.send(Control::LoggedOut);
 }

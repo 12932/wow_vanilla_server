@@ -211,12 +211,15 @@ impl MapHandle {
     }
 
     pub fn send(&self, event: MapEvent) -> bool {
-        self.tx.send(event).is_ok()
+        self.try_send(event).is_ok()
     }
 
-    /// An event sent, or given back if the actor has gone.
+    /// An event sent, or given back if the actor has gone. What this thread
+    /// has corked goes first: the map it goes to may send to the same
+    /// clients.
     #[allow(clippy::result_large_err)] // Handing the event back unmoved.
     pub fn try_send(&self, event: MapEvent) -> Result<(), MapEvent> {
+        crate::game::conn::uncork();
         self.tx.send(event).map_err(|mpsc::error::SendError(e)| e)
     }
 
@@ -816,6 +819,14 @@ impl Drop for EventProbe {
     }
 }
 
+/// Whether an event runs corked ([`crate::game::conn::Cork`]): a movement
+/// packet, whose handling sends to the map's own clients and hands nothing
+/// to another task but through what uncorks first ([`Map::take_player`],
+/// [`MapHandle::send`], a session's control sent).
+fn corks(event: &MapEvent) -> bool {
+    matches!(event, MapEvent::Packet(_, m, _) if movement::is_movement(m))
+}
+
 /// Run a map's actor until it is told to stop.
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     guarded(&mut map, "populating", |m| {
@@ -833,6 +844,12 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
                 let sampled = crate::game::stats::on().then_some(map.now);
+                // A run of movement packets is corked: what it sends each
+                // client goes in one push at the run's end. Any other event
+                // goes uncorked, what was corked pushed first: a call's
+                // answer, a session told, a client handed on, mustn't
+                // overtake what was sent before it.
+                let mut cork = corks(&event).then(crate::game::conn::Cork::new);
                 if handle_guarded(&mut map, event) {
                     break;
                 }
@@ -847,6 +864,11 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
+                            if !corks(&event) {
+                                cork = None;
+                            } else if cork.is_none() {
+                                cork = Some(crate::game::conn::Cork::new());
+                            }
                             if handle_guarded(&mut map, event) {
                                 stop = true;
                                 break;
@@ -856,6 +878,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                         Err(_) => break,
                     }
                 }
+                drop(cork);
                 if let Some(at) = sampled {
                     sampler.events(handled, at.elapsed());
                 }
@@ -864,7 +887,12 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
             }
             _ = ticker.tick() => {
-                guarded(&mut map, "the update", Map::update);
+                // What the update sends each client goes in one push at its
+                // end.
+                {
+                    let _cork = crate::game::conn::Cork::new();
+                    guarded(&mut map, "the update", Map::update);
+                }
                 if map.stopping {
                     break;
                 }
@@ -990,6 +1018,7 @@ pub(crate) fn after_player(
         } else {
             // Taken out of here and not yet sent on: their session has
             // them on its queue, and passes this on after them.
+            crate::game::conn::uncork();
             let _ = o
                 .session
                 .send(crate::game::session::Control::ToPlayer { guid: g, call: f });
@@ -1024,6 +1053,7 @@ fn let_go(realm: &Realm, key: MapKey, event: MapEvent) {
                 // Never in it: no one heard they came.
                 ArrivalKind::Login(_) => realm.registry.go_offline(online.guid),
             }
+            crate::game::conn::uncork();
             let _ = online.session.send(crate::game::session::Control::Kick);
         }
         MapEvent::Shutdown(reply) => {
@@ -1320,6 +1350,7 @@ impl Map {
         let Some(p) = self.players.get(&guid) else {
             return;
         };
+        crate::game::conn::uncork();
         let told = p
             .online
             .session
@@ -1497,6 +1528,9 @@ impl Map {
         for known in p.known.drain() {
             self.remove_observer(known, guid);
         }
+        // What was corked goes before they go: to another map, which sends
+        // them its own, or out of the world, their session told.
+        crate::game::conn::uncork();
         Some(p)
     }
 
