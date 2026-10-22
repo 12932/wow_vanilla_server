@@ -912,7 +912,13 @@ const MSG_MOVE_HEARTBEAT: u16 = 0xEE;
 /// to another task but through what uncorks first ([`Map::take_player`],
 /// [`MapHandle::send`], a session's control sent).
 fn corks(event: &MapEvent) -> bool {
-    matches!(event, MapEvent::Packet(_, m, _, _) if movement::is_movement(m))
+    match event {
+        MapEvent::Packet(_, m, _, _) => movement::is_movement(m),
+        // A heartbeat from its session's slot is a movement packet too:
+        // uncorked, each went to every observer's queue on its own.
+        MapEvent::Heartbeat(..) => true,
+        _ => false,
+    }
 }
 
 /// [`Map::after_events`], under guard (and, for the world benchmark,
@@ -2731,8 +2737,17 @@ impl Map {
 
     /// `observer` no longer knows `object`.
     pub fn remove_observer(&mut self, object: Guid, observer: Guid) {
+        let (i, table) = (self.clients.get(observer), self.clients.id);
         if let Some(o) = self.observers_mut(object) {
-            o.remove(&observer);
+            o.take(&observer, i, table);
+        }
+    }
+
+    /// `observer` knows `object` now.
+    pub fn add_observer(&mut self, object: Guid, observer: Guid) {
+        let (i, table) = (self.clients.index_of(observer), self.clients.id);
+        if let Some(o) = self.observers_mut(object) {
+            o.add(observer, i, table);
         }
     }
 
@@ -2742,13 +2757,16 @@ impl Map {
         if to_self && let Some(p) = self.players.get(&object) {
             p.outbound.send_frame(frame.clone());
         }
+        let z = crate::zone!("observers: clients");
         let Some(observers) = self.observers(object) else {
             return;
         };
         if observers.is_empty() {
             return;
         }
-        self.broadcast(frame, &observers.clients(&self.clients));
+        let to = observers.clients(&self.clients);
+        drop(z);
+        self.broadcast(frame, &to);
     }
 
     /// `frame` to the clients `to` ([`crate::game::conn::broadcast`]).
@@ -2890,4 +2908,42 @@ pub fn packet_name(m: &ClientOpcodeMessage) -> &'static str {
     let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
     names.insert(leaked);
     leaked
+}
+
+#[cfg(test)]
+mod corking_tests {
+    use super::*;
+
+    /// A heartbeat that came through its session's slot runs corked, as
+    /// the movement packets do: uncorked, a crowd's heartbeats went to
+    /// every observer's queue one by one (the 2,000 drill's dearest cost).
+    #[test]
+    fn movement_and_heartbeats_run_corked_and_nothing_else() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let info = wow_world_messages::vanilla::MovementInfo::default();
+        let beat = MapEvent::Heartbeat(
+            Guid::new(1),
+            Arc::new(Heartbeat::new(info)),
+            tx.clone(),
+            None,
+        );
+        assert!(corks(&beat));
+        let moved = MapEvent::Packet(
+            Guid::new(1),
+            ClientOpcodeMessage::MSG_MOVE_SET_FACING(
+                wow_world_messages::vanilla::MSG_MOVE_SET_FACING_Client { info },
+            ),
+            tx.clone(),
+            None,
+        );
+        assert!(corks(&moved));
+        let other = MapEvent::Packet(
+            Guid::new(1),
+            ClientOpcodeMessage::CMSG_PLAYED_TIME,
+            tx,
+            None,
+        );
+        assert!(!corks(&other));
+        assert!(!corks(&MapEvent::Stop));
+    }
 }

@@ -275,6 +275,7 @@ pub fn uncork() {
 
 /// Push what `state` holds, each client's in one go.
 fn push(state: &mut CorkState) {
+    let _z = crate::zone!("cork: push");
     let slots = std::mem::take(&mut state.slots);
     let log = std::mem::take(&mut state.log);
     let mut bytes = Vec::new();
@@ -353,10 +354,13 @@ pub fn broadcast(
         // Another map's numbering: what was kept in the last goes first.
         uncork();
     }
+    let _z = crate::zone!("cork: broadcast");
     let held = CORK.with_borrow_mut(|c| {
         c.table = table;
         // Those it reaches for the first time since the push: their
         // queues, held or gone.
+        let reach = crate::zone!("cork: reach");
+        let mut reached = 0;
         for (w, &word) in to.0.iter().enumerate() {
             let known = c.reached.0.get(w).copied().unwrap_or(0);
             let mut new = word & !known;
@@ -375,8 +379,12 @@ pub fn broadcast(
                     }
                     None => c.gone.insert(i),
                 }
+                reached += 1;
             }
         }
+        reach.value(reached);
+        drop(reach);
+        let _log = crate::zone!("cork: log");
         let mut held = Vec::new();
         let to = if to.meets(&c.held) || to.meets(&c.gone) {
             for i in to.iter().filter(|i| c.held.contains(*i)) {
@@ -1127,19 +1135,23 @@ pub async fn run_writer<W>(
         scratch.clear();
         let mut written = 0u64;
         let mut drained = 0usize;
-        for item in staging.drain(..) {
-            match item {
-                Item::One(buf) => {
-                    drained += buf.len();
-                    written += put(&mut scratch, &mut encrypter, &buf);
+        {
+            let z = crate::zone!("writer: burst");
+            for item in staging.drain(..) {
+                match item {
+                    Item::One(buf) => {
+                        drained += buf.len();
+                        written += put(&mut scratch, &mut encrypter, &buf);
+                    }
+                    Item::Corked(c) => c.for_each(|buf| {
+                        drained += buf.len();
+                        written += put(&mut scratch, &mut encrypter, &buf);
+                    }),
                 }
-                Item::Corked(c) => c.for_each(|buf| {
-                    drained += buf.len();
-                    written += put(&mut scratch, &mut encrypter, &buf);
-                }),
             }
+            shared.queued.fetch_sub(drained, Ordering::Relaxed);
+            z.value(written);
         }
-        shared.queued.fetch_sub(drained, Ordering::Relaxed);
         if scratch.is_empty() {
             continue;
         }

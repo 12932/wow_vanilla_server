@@ -918,9 +918,7 @@ pub fn introduce(map: &mut Map, observer: Guid, object: Guid) {
     // What the map sends it from now on, about the object or not, follows
     // the create.
     map.hold(observer);
-    if let Some(o) = map.observers_mut(object) {
-        o.insert(observer);
-    }
+    map.add_observer(object, observer);
     if map.creature_by_guid.contains_key(&object) {
         map.awake.insert(object);
     }
@@ -960,10 +958,8 @@ pub fn send_self(map: &mut Map, guid: Guid) {
         .map(|t| t.transport.guid)
         .filter(|t| map.gameobject(*t).is_some());
     let transport = aboard.and_then(|t| Some((t, map.public_create(t)?)));
-    if let Some((t, _)) = transport
-        && let Some(o) = map.observers_mut(t)
-    {
-        o.insert(guid);
+    if let Some((t, _)) = transport {
+        map.add_observer(t, guid);
     }
     let Some(p) = map.players.get_mut(&guid) else {
         return;

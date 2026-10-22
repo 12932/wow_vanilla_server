@@ -199,6 +199,7 @@ pub enum Came {
 
 /// [`moved_self`], for what came in as `came`.
 pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay, came: Came) {
+    let checks = crate::zone!("move: checks");
     // Someone else's to move (a possessed player's own client).
     if map
         .players
@@ -269,6 +270,8 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
         teleport_within(map, guid, last, o);
         return;
     }
+    drop(checks);
+    let z = crate::zone!("move: taken");
     crate::game::map::move_guard::taken(p, &info);
     p.move_check = Some((info.position, now));
     let fall = landing(p, &info);
@@ -296,11 +299,19 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
     if crate::game::map::combat::dist(before, position) > 0.1 {
         crate::game::map::ranged::moved(map, guid);
     }
+    drop(z);
+    let z = crate::zone!("move: visibility");
     map.grid.relocate(guid, old_cell, new_cell);
     visibility::moved(map, guid, anchor, position);
-    if let Some(frame) = relay(guid, info) {
+    drop(z);
+    let z = crate::zone!("move: encode");
+    let frame = relay(guid, info);
+    drop(z);
+    if let Some(frame) = frame {
+        let _z = crate::zone!("move: broadcast");
         map.send_move(guid, &frame);
     }
+    let _z = crate::zone!("move: after");
     body_moved(map, guid, moved, turned, jumped);
     // Into the water or out of it: the auras that ends (Thistle Tea's
     // `interrupt_water_auras`). The terrain's liquid ends them too, for a
