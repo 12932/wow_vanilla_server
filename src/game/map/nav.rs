@@ -28,6 +28,19 @@ const AREA_FLOOR_TOLERANCE: f32 = 0.1;
 /// navmesh takes milliseconds to join the rest, and many may arrive at
 /// once (a player logging in, a populated map).
 const TAKE_BUDGET: Duration = Duration::from_millis(3);
+/// How far a path's line may leave the ground under it before a point on
+/// the ground is put in, and how often along it that is looked at: a path
+/// is its polygons' corners, joined straight, and a dune or a slope
+/// between them (or a goal taken at a victim's height down a slope) would
+/// have the creature walk through the ground. mangos's smooth path puts a
+/// point every 4 yards at its polygons' heights (`SMOOTH_PATH_STEP_SIZE`).
+const GROUND_TOLERANCE: f32 = 0.5;
+const GROUND_SAMPLE: f32 = 2.0;
+/// How far over or under a point its ground is looked for: as far as a
+/// path's ends are taken to the navmesh from.
+const GROUND_REACH: f32 = 5.0;
+/// The most points a path is given so.
+const GROUND_POINTS: usize = 64;
 
 pub struct Nav {
     map: PathfindMap,
@@ -377,7 +390,88 @@ impl Nav {
         self.map
             .find_path(v(from), v(to), false, &mut points)
             .ok()?;
+        (points.0.len() >= 2).then(|| self.grounded(&points.0))
+    }
+
+    /// [`Nav::path`] as the navmesh answers it, not put on the ground: for
+    /// the probe of what that costs.
+    #[cfg(test)]
+    pub fn path_as_found(&mut self, from: Vector3d, to: Vector3d) -> Option<Vec<Vector3d>> {
+        let mut points = Points(Vec::new());
+        self.map
+            .find_path(v(from), v(to), false, &mut points)
+            .ok()?;
         (points.0.len() >= 2).then_some(points.0)
+    }
+
+    /// The navmesh's ground under a point (its detail mesh's height),
+    /// within [`GROUND_REACH`] of it.
+    fn ground_near(&self, p: Vector3d) -> Option<f32> {
+        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+            return None;
+        }
+        let nav = self.map.navmesh();
+        let at = [-p.y, p.z, -p.x];
+        let filter = rustigator_pathfind::navmesh::QueryFilter::any();
+        let (poly, _) = nav.find_nearest_poly(at, [0.25, GROUND_REACH, 0.25], &filter);
+        if poly.is_null() {
+            return None;
+        }
+        nav.poly_height(poly, at)
+            .filter(|z| (z - p.z).abs() <= GROUND_REACH)
+    }
+
+    /// A path's points on the ground: each after the first (where the
+    /// walker is) at the ground under it if it is farther from it than
+    /// [`GROUND_TOLERANCE`] (one on the ground is left alone), and, where the line between two
+    /// leaves the ground by more than [`GROUND_TOLERANCE`], a point on the
+    /// ground put in where it leaves it most, until none does.
+    fn grounded(&self, path: &[Vector3d]) -> Vec<Vector3d> {
+        let mut out = Vec::with_capacity(path.len());
+        out.push(path[0]);
+        let mut budget = GROUND_POINTS;
+        for &p in &path[1..] {
+            let mut b = p;
+            if let Some(z) = self.ground_near(b)
+                && (z - b.z).abs() > GROUND_TOLERANCE
+            {
+                b.z = z;
+            }
+            let a = out[out.len() - 1];
+            self.fill(a, b, &mut out, &mut budget);
+            out.push(b);
+        }
+        out
+    }
+
+    /// The points on the ground between `a` and `b` their line needs.
+    fn fill(&self, a: Vector3d, b: Vector3d, out: &mut Vec<Vector3d>, budget: &mut usize) {
+        let planar = (b.x - a.x).hypot(b.y - a.y);
+        let steps = (planar / GROUND_SAMPLE).ceil() as usize;
+        if steps < 2 || *budget == 0 {
+            return;
+        }
+        let mut worst: Option<(f32, Vector3d)> = None;
+        for i in 1..steps {
+            let f = i as f32 / steps as f32;
+            let p = Vector3d {
+                x: a.x + (b.x - a.x) * f,
+                y: a.y + (b.y - a.y) * f,
+                z: a.z + (b.z - a.z) * f,
+            };
+            if let Some(z) = self.ground_near(p) {
+                let off = (z - p.z).abs();
+                if off > GROUND_TOLERANCE && worst.is_none_or(|(o, _)| off > o) {
+                    worst = Some((off, Vector3d { z, ..p }));
+                }
+            }
+        }
+        if let Some((_, m)) = worst {
+            *budget -= 1;
+            self.fill(a, m, out, budget);
+            out.push(m);
+            self.fill(m, b, out, budget);
+        }
     }
 
     /// A random walkable point within `radius` of `center`.

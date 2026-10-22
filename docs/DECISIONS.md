@@ -1161,4 +1161,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       timeout); forged speed acks go unpunished; the client check has no parser for `SMSG_SPELL_GO`, party member
       stats or the loot window; a lingering player's group sees no change until they go.
 
+74. **The leash, your calls** (2026-10-22; `fix/x2`, 0.1.99): the radius is **31 yards** (`[creatures] leash_radius`,
+    over decision 61's mangos default of 30); a creature standing still in reach and swinging renews its leash every
+    `[creatures] leash_standing_ms` (1250). mangos-classic's `AttackerStateUpdate` renews it on a swing only after 3 s
+    standing and with its victim standing too; wvs's rule leaves the victim's movement out.
+
 ## Left for later, and why

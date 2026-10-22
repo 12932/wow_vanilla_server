@@ -27,7 +27,7 @@ use crate::game::map::creature::Motion;
 
 /// The leash's reach around where the fight began, by default
 /// (`[creatures] leash_radius`).
-pub const THREAT_RADIUS: f32 = 30.0;
+pub const THREAT_RADIUS: f32 = 31.0;
 /// Without a hostile act this long, a creature beyond its threat radius
 /// goes home, by default (`[creatures] leash_timeout_secs`).
 pub const LEASH_TIMEOUT: Duration = Duration::from_secs(12);
@@ -109,6 +109,9 @@ pub struct Engagement {
     pub spread_at: Option<Instant>,
     pub spread_tries: u8,
     pub spreading: bool,
+    /// Since when it has stood still in reach of its victim, attacking,
+    /// as of its last renewal of its leash so ([`stood_attacking`]).
+    pub standing_since: Option<Instant>,
 }
 
 /// How often a creature under control has its leash extended (Thistle
@@ -373,6 +376,28 @@ pub fn hostile_act(map: &mut Map, g: Guid) {
     }
 }
 
+/// A creature standing still in reach of its victim and attacking it,
+/// since `since` (its last update's, or now): for each `[creatures]
+/// leash_standing_ms` it does so, its leash is renewed, as a hostile act
+/// on it renews it. One that stands and fights isn't leashed for its
+/// victim's having drawn it far from where the fight began. (mangos-classic
+/// has its like: a melee swing of a creature that hasn't moved for three
+/// seconds, at a victim that isn't moving, starts its leash's timer again
+/// from where it stands, `Unit::AttackerStateUpdate`'s `resetLeashFunc`.)
+pub fn stood_attacking(map: &mut Map, g: Guid, since: Instant) {
+    let now = map.now;
+    let every = Duration::from_millis(map.cfg.creatures.leash_standing_ms);
+    let since = if now.saturating_duration_since(since) >= every {
+        hostile_act(map, g);
+        now
+    } else {
+        since
+    };
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.standing_since = Some(since);
+    }
+}
+
 /// The fight is over.
 pub fn disengaged(map: &mut Map, g: Guid) {
     if let Some(c) = map.creature_mut(g) {
@@ -395,6 +420,7 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.spread_at = None;
         c.engagement.spread_tries = 0;
         c.engagement.spreading = false;
+        c.engagement.standing_since = None;
     }
 }
 

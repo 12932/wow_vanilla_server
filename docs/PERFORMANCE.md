@@ -1299,3 +1299,22 @@ random:
 The update's dearest steps are now the creatures' (despawns about 1 ms an update, auras 0.7 to 1.0, values 0.5, pets
 0.3, as the pets and the buffs' auras come in), not visibility; the before is the earlier drill on a quieter box (its
 cores to itself), so the update's p99 and the latency are the box's as much as the crowd's.
+## A path on the ground (2026-10-22)
+
+The drill's crocolisks and basilisks went through the sand chasing a bot a little below them. A path from the
+navmesh is its polygons' corners joined straight, each end kept at the height it was asked at where it lies over a
+polygon; a chase's goal is beside its victim at the victim's height. A few yards up a slope from the victim that goal
+is under the ground (3.6 yards on a dune south-west of Waterspring Field), and a straight leg over a dune goes through
+it (0.7 yards in the Field). `Nav::path` now puts each point after the first on the navmesh's ground (its detail
+mesh's height, `find_nearest_poly` and `poly_height`) where it is more than half a yard off it, and looks along each
+leg every 2 yards: where the line leaves the ground by more than half a yard, a point on the ground goes in where it
+leaves it most, and so on, at most 64 a path (mangos's smooth path puts one every 4 yards). A point on the ground is
+left alone, so a path over flat ground is what it was. The test is `tests_chase_ground` (extended).
+
+What it costs (`probe_path_on_the_ground`, release, one core): 2,000 chases of 5 to 40 yards about the Field, every
+one a straight hop, took 0.6 µs each as the navmesh found them and 3.7 µs on the ground, with 4,550 points for
+4,000.
+
+The leash also changed: its radius is 31 yards (mangos's 30 and a yard), and a creature standing still in reach of its
+victim, attacking, has its leash renewed every `[creatures] leash_standing_ms` (1.25 s): no cost to speak of, a
+timestamp a creature fighting in reach.

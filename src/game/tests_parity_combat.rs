@@ -979,8 +979,8 @@ async fn a_leashing_creature_is_healed_as_it_goes_if_it_regenerates() {
 /// creature keeps it, landed or not, and a channel's tick, but not a burn's;
 /// under control it is kept, so it doesn't go the moment it is free; those
 /// its kind called share its clock; and its reach is half again its aggro
-/// radius where that is more than `[creatures] leash_radius` (mangos's 30;
-/// Thistle Tea's 50).
+/// radius where that is more than `[creatures] leash_radius` (31; mangos's
+/// 30, Thistle Tea's 50).
 #[tokio::test]
 async fn the_leash_holds_as_thistle_tea_holds_it() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;

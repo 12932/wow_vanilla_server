@@ -1,10 +1,10 @@
 //! Round 7's leash (Thistle Tea's `combat_leash_test.exs` and
-//! `owned_combat_leash_test.exs`), at mangos's 30-yard radius where Thistle
-//! Tea's is 50: where a fight is anchored, who near its start holds it,
+//! `owned_combat_leash_test.exs`), at wvs's 31-yard radius (mangos's is 30,
+//! Thistle Tea's 50): where a fight is anchored, who near its start holds it,
 //! the hard leash, what extends it, control, and the clocks a creature and
 //! its summons share.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
@@ -68,14 +68,15 @@ async fn a_fight_holds_near_where_it_began_and_for_twelve_seconds_after_a_blow()
             m.now = start + Duration::from_secs(8);
             creature_combat::hostile_act(m, mate);
             let shared = (at(m, 20_000), at(m, 20_001));
-            // Late: the victim within 30 of where it began holds it, 31
-            // doesn't, nor one gone from the map.
-            far(m, brute, 40.0, ga, 25.0);
+            // Late: the victim within 31 of where it began holds it (at
+            // 30.5 too, past mangos's 30), 32 doesn't, nor one gone from
+            // the map.
+            far(m, brute, 40.0, ga, 30.5);
             let victim_near = at(m, 30_000);
-            far(m, brute, 40.0, ga, 31.0);
+            far(m, brute, 40.0, ga, 32.0);
             let victim_far = at(m, 30_000);
             let gone = should_evade(m, brute, Guid::new(0x99));
-            // The creature itself within 30: held.
+            // The creature itself within 31: held.
             far(m, brute, 25.0, ga, 60.0);
             let near = at(m, 30_000);
             // A hard leash of 30, a blow just now: 29 holds, 31 doesn't.
@@ -102,7 +103,7 @@ async fn a_fight_holds_near_where_it_began_and_for_twelve_seconds_after_a_blow()
     assert_eq!(
         r.3,
         (false, true, true, false),
-        "(victim within 30, victim at 31, victim gone, creature within 30)"
+        "(victim at 30.5, victim at 32, victim gone, creature within 31)"
     );
     assert_eq!(r.4, (false, true), "a hard leash, whatever the clock");
 }
@@ -328,4 +329,157 @@ async fn a_summon_and_its_summoner_share_a_clock_before_any_other() {
     assert_eq!(r.5, (true, true), "its owner's clock before a caller's");
     assert_eq!(r.6, vec![true, true], "a player's or no one's, its own");
     assert!(r.7, "it outlives its owner's going");
+}
+
+/// The creatures' turns of 50 ms, for `ms`: what `each` says of the map
+/// after each.
+fn turns<T>(m: &mut Map, ms: u64, mut each: impl FnMut(&mut Map) -> T) -> Vec<T> {
+    (0..ms / 50)
+        .map(|_| {
+            m.now += Duration::from_millis(50);
+            ai::update_creatures(m);
+            combat::update_creatures(m);
+            each(m)
+        })
+        .collect()
+}
+
+/// `g` hardy, so a long fight doesn't kill it.
+fn hardy(m: &mut Map, g: Guid) {
+    let f = m.unit_fields_mut(g).unwrap();
+    f.set_u32(UNIT_FIELD_MAXHEALTH, 10_000_000);
+    f.set_u32(UNIT_FIELD_HEALTH, 10_000_000);
+}
+
+/// The user's rule: a creature that has stood still in reach of its
+/// victim, attacking it, for `[creatures] leash_standing_ms` (1.25 s) has
+/// that count as a hostile act, renewing its leash each 1.25 s it stands
+/// and attacks (`creature_combat::stood_attacking`). Forty yards from
+/// where its fight began, its victim beside it as far, nothing done to it
+/// for twenty seconds: it fights on, its leash renewed every 1.25 s from
+/// its first 1.25 s standing, never more than that ago.
+#[tokio::test]
+async fn a_creature_standing_and_swinging_beyond_its_leash_fights_on() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = creature_at(m, ga, BRUTE, off(0.0, 0.0, 0.0));
+            put(m, ga, off(1.5, 0.0, 0.0));
+            hardy(m, ga);
+            ai::attacked(m, brute, ga);
+            let start = m.now;
+            put(m, brute, off(40.0, 0.0, 0.0));
+            put(m, ga, off(41.5, 0.0, 0.0));
+            let seen = turns(m, 20_000, |m| {
+                (
+                    m.now,
+                    p3_attacking(m, brute, ga),
+                    leash_extended_at(m, brute),
+                )
+            });
+            let fought = seen.iter().all(|(_, on, _)| *on);
+            let mut renewals: Vec<Instant> = seen.iter().filter_map(|(_, _, at)| *at).collect();
+            renewals.dedup();
+            let oldest = seen
+                .iter()
+                .map(|(now, _, at)| at.map_or(Duration::MAX, |at| now.duration_since(at)))
+                .max()
+                .unwrap();
+            let swung = m.unit_fields(ga).unwrap().get_u32(UNIT_FIELD_HEALTH) < 10_000_000;
+            (start, fought, renewals, oldest, swung)
+        })
+        .await
+        .unwrap();
+    let (start, fought, renewals, oldest, swung) = r;
+    assert!(fought, "it fights on throughout");
+    assert!(swung, "and swings at its victim");
+    let every = Duration::from_millis(1250);
+    assert_eq!(renewals[0], start, "its leash from the fight's start");
+    assert!(
+        renewals.len() >= 15,
+        "renewed as it stands: {}",
+        renewals.len()
+    );
+    for w in renewals[1..].windows(2) {
+        assert_eq!(w[1] - w[0], every, "each 1.25 s");
+    }
+    assert!(oldest <= every, "never older than 1.25 s: {oldest:?}");
+}
+
+/// And one chasing its victim, beyond its leash, nothing done to it,
+/// goes home once the leash's twelve seconds are up: chasing isn't
+/// standing. With `leash_standing_ms` longer than the fight, one that
+/// stands and swings goes home as well.
+#[tokio::test]
+async fn a_creature_chasing_with_no_hostile_act_goes_home_after_the_timeout() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let brute = creature_at(m, ga, BRUTE, off(0.0, 0.0, 0.0));
+            put(m, ga, off(1.5, 0.0, 0.0));
+            hardy(m, ga);
+            ai::attacked(m, brute, ga);
+            let start = m.now;
+            put(m, brute, off(40.0, 0.0, 0.0));
+            put(m, ga, off(60.0, 0.0, 0.0));
+            // Its victim keeps twenty yards ahead of it.
+            let seen = turns(m, 14_000, |m| {
+                let at = m.creature(brute).unwrap().position;
+                let stood = m.creature(brute).unwrap().engagement.standing_since;
+                if p3_attacking(m, brute, ga) {
+                    put(
+                        m,
+                        ga,
+                        Vector3d {
+                            x: at.x + 20.0,
+                            ..at
+                        },
+                    );
+                }
+                (m.now, p3_attacking(m, brute, ga), stood)
+            });
+            let went = seen
+                .iter()
+                .find(|(_, on, _)| !on)
+                .map(|(now, _, _)| now.duration_since(start));
+            let stood = seen.iter().any(|(_, _, s)| s.is_some());
+            (went, stood)
+        })
+        .await
+        .unwrap();
+    let (went, stood) = r;
+    assert!(!stood, "it never stood");
+    let went = went.expect("it went home");
+    assert!(
+        went > Duration::from_secs(12) && went <= Duration::from_millis(12_100),
+        "at the leash's twelve seconds: {went:?}"
+    );
+    // Standing, but the setting longer than the fight: home as well.
+    let went = map
+        .query(move |m| {
+            let mut cfg = (*m.cfg).clone();
+            cfg.creatures.leash_standing_ms = 600_000;
+            m.cfg = std::sync::Arc::new(cfg);
+            let brute = creature_at(m, ga, BRUTE, off(100.0, 0.0, 0.0));
+            put(m, ga, off(101.5, 0.0, 0.0));
+            ai::attacked(m, brute, ga);
+            let start = m.now;
+            put(m, brute, off(140.0, 0.0, 0.0));
+            put(m, ga, off(141.5, 0.0, 0.0));
+            turns(m, 14_000, |m| (m.now, p3_attacking(m, brute, ga)))
+                .into_iter()
+                .find(|(_, on)| !on)
+                .map(|(now, _)| now.duration_since(start))
+        })
+        .await
+        .unwrap();
+    let went = went.expect("it went home");
+    assert!(
+        went > Duration::from_secs(12) && went <= Duration::from_millis(12_100),
+        "standing, at the leash's twelve seconds: {went:?}"
+    );
+}
+
+fn p3_attacking(m: &Map, g: Guid, victim: Guid) -> bool {
+    crate::game::tests_p7_combat::attacking(m, g, victim)
 }

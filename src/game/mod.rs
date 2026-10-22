@@ -71,6 +71,8 @@ mod tests_calls12;
 #[cfg(test)]
 mod tests_charges;
 #[cfg(test)]
+mod tests_chase_ground;
+#[cfg(test)]
 mod tests_chat_fanout;
 #[cfg(test)]
 mod tests_cities;

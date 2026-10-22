@@ -455,11 +455,15 @@ settings! {
         /// Multiplies the distance at which creatures notice players.
         aggro_rate: f32 = 1.0, Clamp(0.0, 10.0), Live, "Rate.Creature.Aggro";
         /// Yards from where a fight began that a creature chases before it
-        /// may give up.
-        leash_radius: f32 = 30.0, Clamp(5.0, 500.0), Live, "LeashRadius";
+        /// may give up (mangos's default is 30).
+        leash_radius: f32 = 31.0, Clamp(5.0, 500.0), Live, "LeashRadius";
         /// Seconds beyond its leash without a hostile act before a creature
         /// goes home.
         leash_timeout_secs: u64 = 12, Clamp(1.0, 600.0), Live, "";
+        /// Milliseconds a creature stands still in reach of its victim,
+        /// attacking, before that renews its leash as a hostile act on it
+        /// would (and again each as long, while it stands and attacks).
+        leash_standing_ms: u64 = 1250, Clamp(50.0, 600_000.0), Live, "";
         /// Seconds a creature tries for a victim it can't reach before it
         /// goes home.
         unreachable_timeout_secs: u64 = 24, Clamp(1.0, 600.0), Live, "";

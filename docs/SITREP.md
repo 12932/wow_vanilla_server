@@ -892,6 +892,7 @@ Six agents at most from 2026-10-21 (your limit; seven overloaded the machine), r
   merged first, is kept; the others' copies go at their merges.
 
 ## Answered
+- **The leash** (2026-10-22, decision 74): 31 yards, and renewed every 1.25 s a creature stands and swings.
 - **Round 11's questions** (2026-10-21, decision 72): five alone make a meeting-stone party; misses in
   the go for every spell; a player's guardian goes at its time; `Map.dbc`'s zone first; the rest kept as they were.
 - **Round 11's triage** (2026-10-21, decision 71): a pet's bar spell as mangos-classic's opener; spell range on a
