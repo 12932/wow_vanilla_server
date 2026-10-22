@@ -163,6 +163,100 @@ fn alive(map: &Map, g: Guid) -> bool {
     map.unit_view(g).is_some_and(|u| u.alive)
 }
 
+/// How far past its radius an area reaches a unit when it or the caster
+/// runs (mangos-classic's `AOE_LEEWAY`, its caster's alone there), and
+/// when either strafes (mangos-classic's `MELEE_LEEWAY`): `[spells]`'s
+/// defaults.
+pub const AREA_LEEWAY_MOVING: f32 = 2.0;
+pub const AREA_LEEWAY_STRAFING: f32 = combat::MELEE_LEEWAY;
+
+/// The largest combat reach an area looks for past its radius: the
+/// world's largest model is 26.25 yards.
+const LARGEST_REACH: f32 = 30.0;
+
+/// How a unit moves, for an area's leeway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Gait {
+    /// Standing, or walking.
+    Still,
+    /// Running, forward or back, or in the air.
+    Running,
+    /// Running sideways.
+    Strafing,
+}
+
+/// How `g` moves: a player as their last movement says, a creature on its
+/// path at a run.
+pub(crate) fn gait(map: &Map, g: Guid) -> Gait {
+    if let Some(p) = map.players.get(&g) {
+        let f = &p.movement.flags;
+        if !super::checks::moving(f) || f.get_walk_mode() {
+            Gait::Still
+        } else if f.get_strafe_left() || f.get_strafe_right() {
+            Gait::Strafing
+        } else {
+            Gait::Running
+        }
+    } else if map.creature(g).is_some_and(
+        |c| matches!(&c.motion, crate::game::map::creature::Motion::Moving(w) if w.run),
+    ) {
+        Gait::Running
+    } else {
+        Gait::Still
+    }
+}
+
+/// The yards an area reaches past its radius for these two gaits.
+pub(crate) fn leeway(map: &Map, a: Gait, b: Gait) -> f32 {
+    let moving = map.cfg.spells.area_leeway_moving_yards.max(0.0);
+    match a.max(b) {
+        Gait::Still => 0.0,
+        Gait::Running => moving,
+        Gait::Strafing => map.cfg.spells.area_leeway_strafing_yards.max(moving),
+    }
+}
+
+/// Units around `at` that an area of `radius` about `about` reaches, that
+/// `pick` keeps: within the radius, a creature's combat reach past it for
+/// a player's area (mangos-classic's `SpellNotifierCreatureAndPlayer`, for
+/// the player-controlled at the not), and [`leeway`] past that when
+/// `about` or the unit moves.
+fn area_units(
+    map: &Map,
+    about: Guid,
+    at: Vector3d,
+    radius: f32,
+    mut pick: impl FnMut(Guid) -> bool,
+) -> Vec<Guid> {
+    let players = super::checks::player_side(map, about);
+    let mine = gait(map, about);
+    let most = radius + leeway(map, Gait::Strafing, Gait::Strafing) + LARGEST_REACH;
+    let mut v: Vec<(Guid, f32)> = map
+        .grid
+        .within(at.x, at.y, most)
+        .filter(|g| guid::is_player(*g) || guid::is_unit(*g))
+        .filter_map(|g| {
+            let d = dist(map.position_of(g)?, at);
+            if d <= radius {
+                return Some((g, d));
+            }
+            let size = if players && !super::checks::player_side(map, g) {
+                map.unit_fields(g)
+                    .map_or(0.0, |f| {
+                        f.get_f32(crate::game::fields::UNIT_FIELD_COMBATREACH)
+                    })
+                    .clamp(0.0, LARGEST_REACH)
+            } else {
+                0.0
+            };
+            (d <= radius + size + leeway(map, mine, gait(map, g))).then_some((g, d))
+        })
+        .filter(|(g, _)| pick(*g))
+        .collect();
+    v.sort_by(|a, b| a.1.total_cmp(&b.1));
+    v.into_iter().map(|(g, _)| g).collect()
+}
+
 /// Units around `at` within `radius`, that `pick` keeps.
 fn units_around(
     map: &Map,
@@ -279,7 +373,7 @@ pub fn effect_targets(
     let mut out = match (a, b) {
         // An area named by the second target.
         (_, AoeEnemyAtCaster) | (AoeEnemyAtCaster, _) => {
-            units_around(map, center(map, caster, t, false), r, |g| {
+            area_units(map, about, center(map, caster, t, false), r, |g| {
                 g != about && enemy(g)
             })
         }
@@ -290,11 +384,13 @@ pub fn effect_targets(
         (_, AoeEnemyAtDest)
         | (AoeEnemyAtDest, _)
         | (_, AoeEnemyAtChannel)
-        | (AoeEnemyAtChannel, _) => {
-            units_around(map, center(map, caster, t, e.target_a != 18), r, |g| {
-                g != about && enemy(g)
-            })
-        }
+        | (AoeEnemyAtChannel, _) => area_units(
+            map,
+            about,
+            center(map, caster, t, e.target_a != 18),
+            r,
+            |g| g != about && enemy(g),
+        ),
         (_, AoeEnemyInCone) | (AoeEnemyInCone, _) => {
             let degrees = map
                 .realm
@@ -309,11 +405,15 @@ pub fn effect_targets(
             })
         }
         (_, AoeAllyAtSource) | (AoeAllyAtSource, _) => {
-            units_around(map, center(map, caster, t, false), r, ally)
+            area_units(map, about, center(map, caster, t, false), r, ally)
         }
-        (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => {
-            units_around(map, center(map, caster, t, e.target_a != 18), r, ally)
-        }
+        (_, AoeAllyAtDest) | (AoeAllyAtDest, _) => area_units(
+            map,
+            about,
+            center(map, caster, t, e.target_a != 18),
+            r,
+            ally,
+        ),
         // The caster's party and its pets: a pet's, its master's.
         (PartyAroundCaster, _) | (_, PartyAroundCaster) => {
             let at = center(map, caster, t, e.target_a == 34);

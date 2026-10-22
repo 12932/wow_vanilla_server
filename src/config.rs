@@ -656,6 +656,24 @@ settings! {
 }
 
 settings! {
+    /// Spells: how far past its radius an area about its caster or at a
+    /// place (Arcane Explosion, Frost Nova, Blizzard) reaches a unit when
+    /// one of the two is moving. A player's area reaches a creature's size
+    /// (its combat reach) past the radius besides, as mangos-classic's
+    /// does.
+    pub struct SpellsConfig in "spells" {
+        /// Yards an area reaches past its radius when its caster or the
+        /// unit runs (forward or back, not walking): mangos-classic's
+        /// `AOE_LEEWAY`, which it gives for the caster's running alone.
+        area_leeway_moving_yards: f32 = crate::game::map::spells::targets::AREA_LEEWAY_MOVING, Clamp(0.0, 10.0), Live, "";
+        /// Yards it reaches when either strafes (no less than
+        /// `area_leeway_moving_yards`): mangos-classic's `MELEE_LEEWAY`,
+        /// its reach for two units running.
+        area_leeway_strafing_yards: f32 = crate::game::map::spells::targets::AREA_LEEWAY_STRAFING, Clamp(0.0, 10.0), Live, "";
+    }
+}
+
+settings! {
     /// Battlegrounds' queues and matches.
     pub struct BattlegroundConfig in "battleground" {
         /// Seconds from a match's first arrival to its start.
@@ -894,6 +912,7 @@ pub struct ServerConfig {
     pub players: PlayersConfig,
     pub environment: EnvironmentConfig,
     pub quests: QuestsConfig,
+    pub spells: SpellsConfig,
     pub instances: InstancesConfig,
     pub battleground: BattlegroundConfig,
     pub outdoor_pvp: OutdoorPvpConfig,
@@ -917,6 +936,7 @@ pub const SECTIONS: &[&Section] = &[
     &PlayersConfig::SECTION,
     &EnvironmentConfig::SECTION,
     &QuestsConfig::SECTION,
+    &SpellsConfig::SECTION,
     &InstancesConfig::SECTION,
     &BattlegroundConfig::SECTION,
     &OutdoorPvpConfig::SECTION,

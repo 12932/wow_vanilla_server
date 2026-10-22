@@ -196,6 +196,7 @@ pub fn test_config() -> RealmConfig {
         },
         environment: Default::default(),
         quests: Default::default(),
+        spells: Default::default(),
         instances: Default::default(),
         outdoor_pvp: Default::default(),
         events: Default::default(),
