@@ -205,7 +205,8 @@ The lows of the world, combat and realm-wide sections (`fix/lowsb`):
   loot and the summoner's and group's death events are skipped. A fix reorders the death's hooks, and needs the
   EventAI and boss tests to pass again.
 - **R3-16, aura indexes** (review 3): a new aura's index can go stale after the auras it replaces end, and one
-  early return skips the stats' recalculation.
+  early return skips the stats' recalculation. **Fixed** (2026-10-22, `fix/bughunt-spells`): the new holder is
+  found again after the replaced ones end, and the early return recalculates.
 - **R4-18, round-robin loot** (review 4): only the assigned looter can open the corpse, so the others' quest drops
   and the money wait. A fix needs mangos's released state.
 - **R4-19, groups** (review 4): they aren't saved, so a restart dissolves them.
