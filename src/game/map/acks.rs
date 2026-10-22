@@ -224,7 +224,7 @@ fn knock_back(map: &mut Map, g: Guid, unit: Guid, counter: u32, info: MovementIn
         // and a fall as it would).
         let now = map.now;
         if let Some(p) = map.players.get_mut(&g) {
-            crate::game::map::move_guard::launched(p, &j, info.position, now);
+            crate::game::map::move_guard::launched(p, j, info.position, now);
         }
         movement::moved_self(map, g, info, launched);
     } else if map
@@ -235,9 +235,9 @@ fn knock_back(map: &mut Map, g: Guid, unit: Guid, counter: u32, info: MovementIn
         // The possessed unit's flight, as a player's own.
         let now = map.now;
         if let Some(v) = map.players.get_mut(&unit) {
-            crate::game::map::move_guard::launched(v, &j, info.position, now);
+            crate::game::map::move_guard::launched(v, j, info.position, now);
         } else if let Some(s) = crate::game::map::pets::state_mut(map, unit) {
-            crate::game::map::move_guard::launched_with(&mut s.move_guard, &j, info.position, now);
+            crate::game::map::move_guard::launched_with(&mut s.move_guard, j, info.position, now);
         }
         crate::game::map::pets::move_possessed(map, g, &info, launched);
     }
