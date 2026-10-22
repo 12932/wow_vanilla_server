@@ -144,6 +144,7 @@ pub fn test_config() -> RealmConfig {
         visibility_threads: visibility.refresh_threads,
         distant_move_yards: visibility.distant_move_yards,
         distant_move_every: visibility.distant_move_every,
+        parallel_moves: crate::config::WorldConfig::default().parallel_moves,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,

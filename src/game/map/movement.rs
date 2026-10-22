@@ -345,23 +345,32 @@ const SAFE_SURFACE: f32 = 3.0;
 /// three yards from where it last stood: the place is remembered for
 /// Stuck, if the navmesh has ground there.
 fn remember_safe_position(map: &mut Map, g: Guid) {
+    let Some(movement) = map.players.get(&g).map(|p| p.movement) else {
+        return;
+    };
+    remember_safe_position_as(map, g, &movement);
+}
+
+/// [`remember_safe_position`], the player's movement being `movement` (a
+/// burst's packet's, `moves`, the player's own since gone on).
+pub(crate) fn remember_safe_position_as(map: &mut Map, g: Guid, movement: &MovementInfo) {
     let map_id = map.key.map;
     let Some(p) = map.players.get(&g) else {
         return;
     };
-    let f = &p.movement.flags;
+    let f = &movement.flags;
     let grounded = f.get_jumping().is_none()
         && !f.get_fallingfar()
         && f.get_swimming().is_none()
         && f.get_on_transport().is_none();
-    let at = p.movement.position;
+    let at = movement.position;
     let moved = p.safe_position.is_none_or(|(m, last, _)| {
         m != map_id || crate::game::map::combat::dist(last, at) >= SAFE_SAMPLE
     });
     if !grounded || !moved {
         return;
     }
-    let o = p.movement.orientation;
+    let o = movement.orientation;
     let on_ground = map.nav_at(&[at]).is_none_or(|n| {
         n.ground(at.x, at.y, at.z)
             .is_some_and(|z| (z - at.z).abs() <= SAFE_SURFACE)
@@ -442,7 +451,7 @@ pub fn unsteered(f: MovementInfo_MovementFlags) -> MovementInfo_MovementFlags {
         .clear_turn_right()
 }
 
-fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
+pub(crate) fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
@@ -463,7 +472,10 @@ fn height(info: &MovementInfo) -> (f32, Guid) {
 /// transport, of its deck), as Thistle Tea's `Falling` tracks it; a landing
 /// after a long fall (the falling-far flag seen, 1,229 ms in the air, on the
 /// same transport) returns how far it was. Swimming ends a fall.
-fn landing(p: &mut crate::game::map::player::Player, info: &MovementInfo) -> Option<f32> {
+pub(crate) fn landing(
+    p: &mut crate::game::map::player::Player,
+    info: &MovementInfo,
+) -> Option<f32> {
     let falling = info.flags.get_jumping().is_some() || info.flags.get_fallingfar();
     let (z, transport) = height(info);
     // Swimming ends a fall, and so does slowing it: what was fallen before

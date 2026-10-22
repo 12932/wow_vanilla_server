@@ -156,6 +156,16 @@ auction_deposit_min = 0
 # Default "Location Realm". Needs a restart.
 realm_name = "Location Realm"
 
+# A burst of players' movement packets is checked and taken across
+# the visibility's threads (`[visibility] refresh_threads`), each
+# mover's packets in their order, and what they tell the map done
+# on its thread in the order they came: the same as one by one.
+# Off, one by one on the map's thread: on four cores the threads'
+# hand-off cost more than the checks it took off the map's
+# (docs/PERFORMANCE.md).
+# Default false. Changes at a reload.
+parallel_moves = false
+
 # How far players see, in yards (further costs the server more and
 # the client more), and what working it out may take.
 [visibility]

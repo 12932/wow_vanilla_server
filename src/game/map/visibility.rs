@@ -511,7 +511,7 @@ fn prepare(map: &mut Map, g: Guid, full: bool) -> Option<(Vector3d, f32)> {
 /// The pool the decisions are worked out on: `[visibility]
 /// refresh_threads` of them (0: the machine's cores, up to 8), made at the
 /// first chunk big enough to share.
-fn pool(threads: usize) -> Option<&'static rayon::ThreadPool> {
+pub(crate) fn pool(threads: usize) -> Option<&'static rayon::ThreadPool> {
     static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
         let n = if threads == 0 {

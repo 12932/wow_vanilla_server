@@ -144,6 +144,7 @@ The world: saves, the message of the day, the character store and the data's pat
 | `weather_change_secs` | Seconds between a zone's rolls for a change of weather. | `600` | 10 to 86400, clamped | live | `ChangeWeatherInterval` |
 | `auction_deposit_min` | The least deposit an auction takes, in copper. | `0` | 0 to 2147483647, clamped | live | `Auction.Deposit.Min` |
 | `realm_name` | The realm's name in the realm list. | `"Location Realm"` |  | restart |  |
+| `parallel_moves` | A burst of players' movement packets is checked and taken across the visibility's threads (`[visibility] refresh_threads`), each mover's packets in their order, and what they tell the map done on its thread in the order they came: the same as one by one. Off, one by one on the map's thread: on four cores the threads' hand-off cost more than the checks it took off the map's (docs/PERFORMANCE.md). | `false` |  | live |  |
 
 ### `[visibility]`
 

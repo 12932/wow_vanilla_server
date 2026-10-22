@@ -121,6 +121,8 @@ mod tests_misc;
 #[cfg(test)]
 mod tests_misc2;
 #[cfg(test)]
+mod tests_moves;
+#[cfg(test)]
 mod tests_net5;
 #[cfg(test)]
 mod tests_objects;
@@ -1350,6 +1352,9 @@ pub struct RealmConfig {
     /// yards, an observer gets one in so many of a mover's heartbeats.
     pub distant_move_yards: f32,
     pub distant_move_every: u32,
+    /// A burst's movement checked and taken across the threads
+    /// (`[world] parallel_moves`, `map::moves`).
+    pub parallel_moves: bool,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -1443,6 +1448,7 @@ impl RealmConfig {
             visibility_threads: c.visibility.refresh_threads,
             distant_move_yards: c.visibility.distant_move_yards,
             distant_move_every: c.visibility.distant_move_every,
+            parallel_moves: c.world.parallel_moves,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,

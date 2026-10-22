@@ -63,6 +63,7 @@ pub mod misc;
 pub mod mounts;
 pub mod move_guard;
 pub mod movement;
+pub mod moves;
 pub mod nav;
 pub mod necrotic_camps;
 pub mod npc;
@@ -494,6 +495,10 @@ pub struct MapStats {
     pub quarantined: u32,
     /// Times the map was built again after its update kept panicking.
     pub restarts: u32,
+    /// A burst's movement packets taken across the threads, and handled
+    /// alone (`moves`).
+    pub moves_across: u64,
+    pub moves_alone: u64,
 }
 
 /// Holds being released: any left when it goes (a step that panicked) are
@@ -921,9 +926,52 @@ fn corks(event: &MapEvent) -> bool {
     }
 }
 
+/// One event of a burst: a movement packet kept with the burst's others
+/// (`moves`), anything else handled, the movement kept so far first. True
+/// to stop the actor.
+fn dispatch(
+    map: &mut Map,
+    event: MapEvent,
+    moves: &mut Vec<moves::Move>,
+    cork: &mut Option<crate::game::conn::Cork>,
+    parked: &mut Option<crate::game::conn::Parked>,
+) -> bool {
+    // Under the movement's cork still: what it sends goes with the rest.
+    if !corks(&event) {
+        flush_moves(map, moves);
+    }
+    let feed = map.clients.feed.clone();
+    corking(&event, cork, parked, &feed);
+    let event = match moves::keep(map, event) {
+        Ok(Some(m)) => {
+            moves.push(m);
+            return false;
+        }
+        Ok(None) => return false,
+        Err(event) => event,
+    };
+    if handle_guarded(map, event) {
+        return true;
+    }
+    // A client the event held goes as it ends, not at the burst's: what
+    // else it is sent waits no longer.
+    after_event(map);
+    false
+}
+
+/// The movement kept, worked out ([`moves::handle_all`]), under guard.
+fn flush_moves(map: &mut Map, moves: &mut Vec<moves::Move>) {
+    if moves.is_empty() {
+        return;
+    }
+    guarded(map, "a burst's movement", |m| moves::handle_all(m, moves));
+    moves.clear();
+    after_event(map);
+}
+
 /// [`Map::after_events`], under guard (and, for the world benchmark,
 /// counted as an event of its own).
-fn after_event(map: &mut Map) {
+pub(crate) fn after_event(map: &mut Map) {
     if map.holding.is_empty() {
         return;
     }
@@ -1015,13 +1063,12 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // answer, a session told, a client handed on, mustn't
                 // overtake what was sent before it.
                 let mut cork = None;
-                corking(&event, &mut cork, &mut parked, &map.clients.feed);
-                if handle_guarded(&mut map, event) {
+                // The burst's movement, kept to be worked out at once
+                // (`moves`): before any other event, and at the burst's end.
+                let mut moves: Vec<moves::Move> = Vec::new();
+                if dispatch(&mut map, event, &mut moves, &mut cork, &mut parked) {
                     break;
                 }
-                // A client the event held goes as it ends, not at the
-                // burst's: what else it is sent waits no longer.
-                after_event(&mut map);
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved: at most 512 events, and none begun
                 // past `EVENT_BURST` (a crowd's arrivals, a few ms each,
@@ -1035,16 +1082,15 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
-                            corking(&event, &mut cork, &mut parked, &map.clients.feed);
-                            if handle_guarded(&mut map, event) {
+                            if dispatch(&mut map, event, &mut moves, &mut cork, &mut parked) {
                                 stop = true;
                                 break;
                             }
-                            after_event(&mut map);
                         }
                         Err(_) => break,
                     }
                 }
+                flush_moves(&mut map, &mut moves);
                 // Kept for the next burst, while the batch's time lasts.
                 if let Some(c) = cork
                     && !stop

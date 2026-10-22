@@ -269,6 +269,14 @@ settings! {
         auction_deposit_min: u32 = 0, Clamp(0.0, 2_147_483_647.0), Live, "Auction.Deposit.Min";
         /// The realm's name in the realm list.
         realm_name: String = crate::auth::REALM_NAME.to_owned(), Any, Restart, "";
+        /// A burst of players' movement packets is checked and taken across
+        /// the visibility's threads (`[visibility] refresh_threads`), each
+        /// mover's packets in their order, and what they tell the map done
+        /// on its thread in the order they came: the same as one by one.
+        /// Off, one by one on the map's thread: on four cores the threads'
+        /// hand-off cost more than the checks it took off the map's
+        /// (docs/PERFORMANCE.md).
+        parallel_moves: bool = false, Any, Live, "";
     }
 }
 

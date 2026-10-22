@@ -140,6 +140,26 @@ async fn every_observer_gets_every_movement_packet_in_order_by_default() {
     stop_before_say(&mut b, ga).await;
 }
 
+/// With a burst's movement kept and worked out at once (`[world]
+/// parallel_moves`, `map::moves`), every observer still gets every packet,
+/// in order, and what follows uncorked after it.
+#[tokio::test]
+async fn kept_for_the_bursts_end_every_movement_packet_comes_in_order() {
+    let realm = realm(RealmConfig {
+        parallel_moves: true,
+        ..harness::test_config()
+    });
+    let ([mut a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let at = on(&map, move |m| m.players[&ga].position()).await;
+    run(&mut a, at).await;
+    assert_eq!(moves_until_stop(&mut b, ga).await, RUN);
+    assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
+    run(&mut a, at).await;
+    a.say("after the run").await;
+    stop_before_say(&mut b, ga).await;
+}
+
 /// On, an observer past the yards gets one in `every` heartbeats, and
 /// every start, jump and stop; one within them gets everything.
 #[tokio::test]
