@@ -89,7 +89,30 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
         }
     }
     let ms = recovery.max(category_recovery);
-    send(map, caster, &[(s.id, ms)]);
+    let mut told = vec![(s.id, ms)];
+    // The category's other spells the player knows (Frost Nova's other
+    // ranks) wait as long: the client is told of each, as mangos's
+    // `AddSpellAndCategoryCooldowns` puts the category's wait on each
+    // spell of it. A time in `SMSG_SPELL_COOLDOWN` is the spell's own to
+    // the client, which reads no category's wait from it.
+    if category != 0
+        && category_recovery > 0
+        && let Some(p) = map.players.get(&caster)
+    {
+        told.extend(
+            p.spells
+                .iter()
+                .copied()
+                .filter(|id| *id != s.id)
+                .filter(|id| {
+                    data.spells
+                        .get(*id)
+                        .is_some_and(|t| t.category == category && !t.passive())
+                })
+                .map(|id| (id, category_recovery)),
+        );
+    }
+    send(map, caster, &told);
     send_to_master(map, caster, &[(s.id, ms)]);
     if item.is_some()
         && let Some(p) = map.players.get(&caster)

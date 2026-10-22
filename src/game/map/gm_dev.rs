@@ -1314,6 +1314,21 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let to = player_target(map, g);
             let p = map.players.get_mut(&to)?;
             let spells: Vec<u32> = p.caster.cooldowns.keys().copied().collect();
+            // And each known spell of a category cooling, its client told
+            // of it at the cast (Frost Nova's ranks, a wait of the
+            // category's alone).
+            let categories = &p.caster.category_cooldowns;
+            let of_categories: Vec<u32> = p
+                .spells
+                .iter()
+                .copied()
+                .filter(|id| {
+                    !p.caster.cooldowns.contains_key(id)
+                        && data.spells.get(*id).is_some_and(|t| {
+                            t.category != 0 && categories.contains_key(&t.category)
+                        })
+                })
+                .collect();
             p.caster.cooldowns.clear();
             p.caster.category_cooldowns.clear();
             p.caster.gcd_until = None;
@@ -1321,7 +1336,7 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             // And an interrupt's school lockouts (Thistle Tea's `.debug
             // cooldowns`).
             p.caster.school_lockout.clear();
-            for id in &spells {
+            for id in spells.iter().chain(&of_categories) {
                 p.outbound.send(&SMSG_CLEAR_COOLDOWN {
                     id: *id,
                     target: to,

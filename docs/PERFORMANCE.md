@@ -1252,3 +1252,30 @@ introductions at 2,000, 3.4 ms at the end of the login's event, and 1.1 ms more 
 map's time per newcomer, the visibility refresh's per-pair cost that stage A's quick path cuts. The drill at 200
 bots (the server and peon on 4 cores each, a 1 s ramp, ramp-bound at 165 placed a second) is unchanged: update p99 5.2 ms at
 random, every broadcast delivered within 3 ms p99; its arrival events took 172 µs on average, from 338.
+
+## After the three merges: a test that raced the map, and Frost Nova's ranks (2026-10-22)
+
+**`tests_p12l_bwl::ebonroc_fights_as_mangos_classic`**, failing every run alone since the visibility merge (first
+at `086cdd1f`, its parent passing), was a test racing the map, not a regression in what a client sees. The test
+pulls Ebonroc and makes his Shadow of Ebonroc, Shadow Flame, Thrash and then Wing Buffet due, each in a query: all
+of it a few milliseconds, which can fall between two 20 Hz updates. Wing Buffet is a cone (target 24) at its
+caster's facing, and a drake turns to his victim only on a fight turn of his own (mangos's chase does the same; its
+`OnSpellCastStateChange` leaves a cone's caster as it faces). With no update between the pull and the buffet, he
+still faced his spawn's way and the cone missed. The visibility merge moved the client's sight of the boss by an
+update relative to the map's clock (it saw him a step sooner after its arrival), so the pull now always came just
+after an update rather than just before one; loaded, as in the whole suite, it passed by luck. Firemaw and Flamegor
+had the same race (Flamegor failed once alone). The fix is in the test (`buffet_halves_threat`): out of his last
+cast, it waits for the drake to face his victim before it makes the buffet due. `tests_p12l` passed 10 runs of 10
+on an 8-core share of a 32-core box.
+
+**Frost Nova's ranks** (a wait of category 35's alone, 25 s, none of the spell's own): after rank 1 the client
+showed the other ranks ready, though the server refused them. The 1.12 client (build 5875's `SMSG_SPELL_GO`
+handler) starts its own cast's cooldown from its Spell.dbc, the spell's and its category's, only when the go's
+first GUID, the cast item, is the caster's own; any other it takes for an item, and with no such item it starts
+none. mangos writes the caster there when no item cast the spell (`Spell::SendSpellGo`, `SendSpellStart`); wvs
+wrote an empty GUID, so the client started nothing, and the only cooldown it had was `SMSG_SPELL_COOLDOWN`'s, which
+its handler takes as the spell's own (a time given there sets no category wait). Now the start and the go name the
+caster when no item cast the spell, and a cast's `SMSG_SPELL_COOLDOWN` also names each other spell of the category
+the player knows, with the category's time (mangos's `AddSpellAndCategoryCooldowns` holds each of them; Cold Snap's
+reset already clears each). `.debug cooldowns` clears those too. The packets' layouts are unchanged; the fast and
+the extended suites, the client check among them, pass.

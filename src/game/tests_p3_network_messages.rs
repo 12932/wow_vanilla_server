@@ -765,9 +765,9 @@ async fn a_ranged_spell_shows_its_arrow_at_start_and_go() {
         })
         .await;
     assert_eq!(&go[go.len() - 8..], &arrow[..], "the go's arrow");
-    // The flags, after the item (none) and caster, packed, and the spell:
-    // ammo's 0x20.
-    let flags_at = packed(Guid::zero()).len() + packed(ga).len() + 4;
+    // The flags, after the item (the caster, as no item cast it) and the
+    // caster, packed, and the spell: ammo's 0x20.
+    let flags_at = 2 * packed(ga).len() + 4;
     assert_ne!(
         u16::from_le_bytes([start[flags_at], start[flags_at + 1]]) & 0x20,
         0
