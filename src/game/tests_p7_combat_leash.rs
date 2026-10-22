@@ -586,6 +586,8 @@ async fn a_creature_just_spawned_lets_those_about_it_be_for_six_seconds() {
                 crate::game::tests_p7_combat::WATCHER,
                 off(4.0, 0.0, 0.0),
             );
+            // From a spawn of the world's, as a respawn is.
+            m.creature_mut(calm).unwrap().spawn_guid = Some(1);
             let seen = turns(m, 8_000, |m| (m.now, p3_attacking(m, calm, ga)));
             let first = seen
                 .iter()
@@ -602,7 +604,17 @@ async fn a_creature_just_spawned_lets_those_about_it_be_for_six_seconds() {
             let fights = turns(m, 500, |m| p3_attacking(m, struck, ga))
                 .into_iter()
                 .any(|on| on);
-            (first, fights)
+            // A summon (no spawn of the world's) comes to fight at once.
+            let summoned = creature_at(
+                m,
+                ga,
+                crate::game::tests_p7_combat::WATCHER,
+                off(0.0, 4.0, 0.0),
+            );
+            let at_once = turns(m, 1_000, |m| p3_attacking(m, summoned, ga))
+                .into_iter()
+                .any(|on| on);
+            (first, fights, at_once)
         })
         .await
         .unwrap();
@@ -612,4 +624,5 @@ async fn a_creature_just_spawned_lets_those_about_it_be_for_six_seconds() {
         "not before six seconds: {first:?}"
     );
     assert!(r.1, "attacked in its grace, it fights");
+    assert!(r.2, "a summon has no grace");
 }

@@ -1023,12 +1023,15 @@ fn aggro_scan(map: &mut Map, g: Guid) {
         return;
     };
     c.aggro_check_at = next;
-    // Just come into the world, it lets those about it be for a while: a
-    // respawn mustn't catch a player by surprise (`[creatures]
-    // spawn_grace_ms`). Attacked meanwhile, it fights as ever.
+    // Just come into the world from its spawn (a respawn, or the world's
+    // first), it lets those about it be for a while: a respawn mustn't
+    // catch a player by surprise (`[creatures] spawn_grace_ms`). A summon
+    // (Jaina's elementals, a script's or a GM's) has none: it comes to
+    // fight. Attacked meanwhile, it fights as ever.
     let grace = Duration::from_millis(map.cfg.creatures.spawn_grace_ms);
     if map
         .creature(g)
+        .filter(|c| c.spawn_guid.is_some())
         .and_then(|c| c.spawned_at)
         .is_some_and(|at| now.saturating_duration_since(at) < grace)
     {
