@@ -125,6 +125,8 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_order;
 #[cfg(test)]
+mod tests_outbound;
+#[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_ai_autocast;
@@ -1334,6 +1336,10 @@ pub struct RealmConfig {
     pub battleground_visibility_yards: f32,
     /// On a flight master's mount.
     pub flight_visibility_yards: f32,
+    /// `[visibility] distant_move_yards` and `distant_move_every`: past the
+    /// yards, an observer gets one in so many of a mover's heartbeats.
+    pub distant_move_yards: f32,
+    pub distant_move_every: u32,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -1418,6 +1424,8 @@ impl RealmConfig {
             instance_visibility_yards: c.visibility.instances_yards,
             battleground_visibility_yards: c.visibility.battleground_yards,
             flight_visibility_yards: c.visibility.flight_yards,
+            distant_move_yards: c.visibility.distant_move_yards,
+            distant_move_every: c.visibility.distant_move_every,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,

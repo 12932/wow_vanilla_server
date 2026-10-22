@@ -124,13 +124,16 @@ thread_local! {
     static CORK: std::cell::RefCell<CorkState> = std::cell::RefCell::new(CorkState::default());
 }
 
+/// A client corked, and its frames.
+type Slot = (Arc<OutboundInner>, Vec<Arc<[u8]>>);
+
 #[derive(Default)]
 struct CorkState {
     depth: usize,
     /// Each client corked, in the order first sent to, and its frames.
-    slots: Vec<(Arc<OutboundInner>, Vec<Arc<[u8]>>)>,
+    slots: Vec<Slot>,
     /// A client's slot, by its queue's address.
-    index: std::collections::HashMap<usize, usize, std::hash::BuildHasherDefault<AddressHasher>>,
+    index: ahash::AHashMap<usize, usize>,
     spare: Vec<Vec<Arc<[u8]>>>,
 }
 
@@ -148,26 +151,6 @@ impl CorkState {
             }
         };
         self.slots[slot].1.push(frame);
-    }
-}
-
-/// An address's hash: a multiply, its low bits (alignment) shifted out.
-#[derive(Default)]
-struct AddressHasher(u64);
-
-impl std::hash::Hasher for AddressHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for b in bytes {
-            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3);
-        }
-    }
-
-    fn write_usize(&mut self, n: usize) {
-        self.0 = ((n as u64) >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
 }
 

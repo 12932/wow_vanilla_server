@@ -140,7 +140,12 @@ mod writer {
     fn sink_singly(bencher: Bencher) {
         let rt = current_thread();
         let (out, frames) = Outbound::with_budget(1 << 30);
-        let writer = rt.spawn(conn::run_writer(tokio::io::sink(), encrypter(), frames, LONG));
+        let writer = rt.spawn(conn::run_writer(
+            tokio::io::sink(),
+            encrypter(),
+            frames,
+            LONG,
+        ));
         let f = heartbeat();
         bencher.counter(ItemsCount::new(1000usize)).bench_local(|| {
             rt.block_on(async {
@@ -239,6 +244,98 @@ mod fanout {
     }
 }
 
+/// The map's own lookups around the push: each observer a GUID in the
+/// mover's set, looked up in the map's players (a player is about 5 KB, so
+/// each lookup is a cache line of its own) or in a table of their queues
+/// alone; corked, as the map sends.
+#[divan::bench_group(min_time = 2.0, max_time = 3.0)]
+mod lookups {
+    use super::*;
+    use ahash::{AHashMap, AHashSet};
+
+    /// A player's size, as the map holds them.
+    struct Player {
+        _before: [u64; 300],
+        outbound: Outbound,
+        _after: [u64; 370],
+    }
+
+    struct World {
+        players: AHashMap<u64, Player>,
+        outbounds: AHashMap<u64, Outbound>,
+        observers: AHashSet<u64>,
+        frames: Vec<Frames>,
+    }
+
+    fn world(n: usize) -> World {
+        let mut w = World {
+            players: AHashMap::new(),
+            outbounds: AHashMap::new(),
+            observers: AHashSet::new(),
+            frames: Vec::new(),
+        };
+        for i in 0..n as u64 {
+            let (out, f) = Outbound::with_budget(1 << 30);
+            w.players.insert(
+                i + 1,
+                Player {
+                    _before: [i; 300],
+                    outbound: out.clone(),
+                    _after: [i; 370],
+                },
+            );
+            w.outbounds.insert(i + 1, out);
+            w.observers.insert(i + 1);
+            w.frames.push(f);
+        }
+        w
+    }
+
+    fn empty(frames: &mut [Frames]) {
+        for f in frames {
+            while f.try_recv().is_some() {}
+        }
+    }
+
+    #[divan::bench(args = [880, 2000, 3000])]
+    fn through_players(bencher: Bencher, n: usize) {
+        let mut w = world(n);
+        let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
+        bencher
+            .counter(ItemsCount::new(MOVERS * n))
+            .with_inputs(|| empty(&mut w.frames))
+            .bench_local_values(|()| {
+                let _cork = conn::Cork::new();
+                for m in &movers {
+                    for o in &w.observers {
+                        if let Some(p) = w.players.get(o) {
+                            p.outbound.send_frame(m.clone());
+                        }
+                    }
+                }
+            });
+    }
+
+    #[divan::bench(args = [880, 2000, 3000])]
+    fn through_outbounds(bencher: Bencher, n: usize) {
+        let mut w = world(n);
+        let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
+        bencher
+            .counter(ItemsCount::new(MOVERS * n))
+            .with_inputs(|| empty(&mut w.frames))
+            .bench_local_values(|()| {
+                let _cork = conn::Cork::new();
+                for m in &movers {
+                    for o in &w.observers {
+                        if let Some(out) = w.outbounds.get(o) {
+                            out.send_frame(m.clone());
+                        }
+                    }
+                }
+            });
+    }
+}
+
 /// End to end, to loopback sockets.
 #[divan::bench_group(min_time = 3.0, max_time = 4.0, sample_count = 30)]
 mod delivered {
@@ -294,18 +391,20 @@ mod delivered {
         let mut clients = Clients::new(n);
         let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
         let per_round = (MOVERS * heartbeat().len()) as u64;
-        bencher.counter(ItemsCount::new(MOVERS * n)).bench_local(|| {
-            clients.rounds += 1;
-            {
-                let _cork = corked.then(conn::Cork::new);
-                for m in &movers {
-                    for o in &clients.outs {
-                        o.send_frame(m.clone());
+        bencher
+            .counter(ItemsCount::new(MOVERS * n))
+            .bench_local(|| {
+                clients.rounds += 1;
+                {
+                    let _cork = corked.then(conn::Cork::new);
+                    for m in &movers {
+                        for o in &clients.outs {
+                            o.send_frame(m.clone());
+                        }
                     }
                 }
-            }
-            clients.wait(clients.rounds * per_round);
-        });
+                clients.wait(clients.rounds * per_round);
+            });
     }
 
     #[divan::bench(args = [100, 880, 2000])]

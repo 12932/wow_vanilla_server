@@ -153,6 +153,8 @@ How far players see, in yards. Further costs the server more and the client more
 | `instances_yards` | In dungeons and raids. | `170.0` | 20 to 500, clamped | live | `Visibility.Distance.Instances` |
 | `battleground_yards` | In battlegrounds: further, so a battle's far side is in view. | `400.0` | 20 to 500, clamped | live | `Visibility.Distance.BGArenas` |
 | `flight_yards` | On a flight master's gryphon or wyvern: further, as the land goes by below. Back to the map's own on landing. | `400.0` | 20 to 500, clamped | live |  |
+| `distant_move_yards` | Past these yards from a player who moves, those who see them get only every `distant_move_every`th of their heartbeats (a start, a stop, a jump, a turn or a landing always): fewer packets for a crowd's far side. 0 sends every heartbeat to everyone, as 1.12's servers do. | `0.0` | 0 to 500, clamped | live |  |
+| `distant_move_every` | Of a mover's heartbeats, the share an observer past `distant_move_yards` gets: one in this many. 1 is every one. | `1` | 1 to 100, clamped | live |  |
 
 ### `[chat]`
 

@@ -291,6 +291,15 @@ settings! {
         /// On a flight master's gryphon or wyvern: further, as the land
         /// goes by below. Back to the map's own on landing.
         flight_yards: f32 = 400.0, Clamp(20.0, 500.0), Live, "";
+        /// Past these yards from a player who moves, those who see them
+        /// get only every `distant_move_every`th of their heartbeats (a
+        /// start, a stop, a jump, a turn or a landing always): fewer
+        /// packets for a crowd's far side. 0 sends every heartbeat to
+        /// everyone, as 1.12's servers do.
+        distant_move_yards: f32 = 0.0, Clamp(0.0, 500.0), Live, "";
+        /// Of a mover's heartbeats, the share an observer past
+        /// `distant_move_yards` gets: one in this many. 1 is every one.
+        distant_move_every: u32 = 1, Clamp(1.0, 100.0), Live, "";
     }
 }
 

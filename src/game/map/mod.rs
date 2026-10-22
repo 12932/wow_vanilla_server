@@ -819,6 +819,9 @@ impl Drop for EventProbe {
     }
 }
 
+/// `MSG_MOVE_HEARTBEAT`'s opcode.
+const MSG_MOVE_HEARTBEAT: u16 = 0xEE;
+
 /// Whether an event runs corked ([`crate::game::conn::Cork`]): a movement
 /// packet, whose handling sends to the map's own clients and hands nothing
 /// to another task but through what uncorks first ([`Map::take_player`],
@@ -2562,6 +2565,38 @@ impl Map {
         for o in observers {
             if let Some(p) = self.players.get(o) {
                 p.outbound.send_frame(frame.clone());
+            }
+        }
+    }
+
+    /// A player's movement packet to those who see them: as
+    /// [`Map::send_to_observers`], but with `[visibility]
+    /// distant_move_yards` set, a heartbeat goes to an observer past those
+    /// yards only once in `distant_move_every` (the mover's count of
+    /// heartbeats); every other movement packet to everyone.
+    pub fn send_move(&mut self, mover: Guid, frame: &Arc<[u8]>) {
+        let (yards, every) = (self.cfg.distant_move_yards, self.cfg.distant_move_every);
+        let heartbeat =
+            frame.len() >= 4 && u16::from_le_bytes([frame[2], frame[3]]) == MSG_MOVE_HEARTBEAT;
+        if !heartbeat || yards <= 0.0 || every <= 1 {
+            return self.send_to_observers(mover, frame, false);
+        }
+        let Some(p) = self.players.get_mut(&mover) else {
+            return;
+        };
+        p.misc.heartbeats = p.misc.heartbeats.wrapping_add(1);
+        if p.misc.heartbeats % every == 0 {
+            return self.send_to_observers(mover, frame, false);
+        }
+        let at = p.position();
+        let far = yards * yards;
+        let p = &self.players[&mover];
+        for o in &p.observers {
+            if let Some(o) = self.players.get(o) {
+                let d = o.position();
+                if (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= far {
+                    o.outbound.send_frame(frame.clone());
+                }
             }
         }
     }

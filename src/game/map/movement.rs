@@ -299,7 +299,7 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
     map.grid.relocate(guid, old_cell, new_cell);
     visibility::moved(map, guid, anchor, position);
     if let Some(frame) = relay(guid, info) {
-        map.send_to_observers(guid, &frame, false);
+        map.send_move(guid, &frame);
     }
     body_moved(map, guid, moved, turned, jumped);
     // Into the water or out of it: the auras that ends (Thistle Tea's
