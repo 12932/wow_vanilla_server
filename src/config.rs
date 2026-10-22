@@ -223,19 +223,24 @@ settings! {
         /// The share of its thread's time a map's updates and events take
         /// (smoothed over a second) past which its window doubles, at most
         /// once a second, up to `broadcast_batch_max_ms`.
-        broadcast_batch_busy_high: f64 = 0.7, Clamp(0.0, 1.0), Live, "";
-        /// The share under which a map's window halves, at most once a
-        /// second, down to `broadcast_batch_min_ms` (at most
-        /// `broadcast_batch_busy_high`). Between the two, it holds.
-        broadcast_batch_busy_low: f64 = 0.4, Clamp(0.0, 1.0), Live, "";
+        broadcast_batch_busy_high: f64 = 0.9, Clamp(0.0, 1.0), Live, "";
+        /// The share under which (the server's CPU under
+        /// `broadcast_batch_cpu_low` too) a map's window halves, at most
+        /// once a second, down to `broadcast_batch_min_ms` (at most
+        /// `broadcast_batch_busy_high`). Between, it holds.
+        broadcast_batch_busy_low: f64 = 0.6, Clamp(0.0, 1.0), Live, "";
         /// Events waiting in a map's mailbox (smoothed over a second) past
         /// which it counts as busy whatever its share. 0: never.
-        broadcast_batch_mailbox: usize = 1000, Clamp(0.0, 1_000_000.0), Live, "";
-        /// Whether the server's CPU (its time over the cores it may run
-        /// on, smoothed over a second) counts as busy too, with the same
-        /// thresholds: a short window costs the clients' writers, on the
-        /// other threads, more than the map's.
-        broadcast_batch_cpu: bool = true, Any, Live, "";
+        broadcast_batch_mailbox: usize = 2000, Clamp(0.0, 1_000_000.0), Live, "";
+        /// The server's CPU (its time over the cores it may run on,
+        /// smoothed over a second) past which each map's window doubles,
+        /// at most once a second: a short window costs the clients'
+        /// writers, on the other threads, more than the map's. 1: never.
+        broadcast_batch_cpu_high: f64 = 0.85, Clamp(0.0, 1.0), Live, "";
+        /// The server's CPU under which (the map's thread under
+        /// `broadcast_batch_busy_low` too) a map's window may halve (at
+        /// most `broadcast_batch_cpu_high`).
+        broadcast_batch_cpu_low: f64 = 0.5, Clamp(0.0, 1.0), Live, "";
     }
 }
 

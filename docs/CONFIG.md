@@ -131,10 +131,11 @@ Connections: queues, timeouts and limits.
 | `broadcast_batch_ms` | Milliseconds a map may keep players' movement before it sends it on, gathering what each client is sent into one write: a crowd's packets cost far less so, a little later. Each map's window starts here (within `broadcast_batch_min_ms` and `broadcast_batch_max_ms`) and follows its thread's load. 0 sends each burst of movement as it is handled. | `10` | 0 to 50, clamped | live | |
 | `broadcast_batch_min_ms` | The least a map's window goes to, quiet. With `broadcast_batch_max_ms` equal to it, the window is fixed there. | `2` | 0 to 50, clamped | live | |
 | `broadcast_batch_max_ms` | The most a map's window goes to, loaded (at least `broadcast_batch_min_ms`). | `40` | 0 to 50, clamped | live | |
-| `broadcast_batch_busy_high` | The share of its thread's time a map's updates and events take (smoothed over a second) past which its window doubles, at most once a second, up to `broadcast_batch_max_ms`. | `0.7` | 0 to 1, clamped | live | |
-| `broadcast_batch_busy_low` | The share under which a map's window halves, at most once a second, down to `broadcast_batch_min_ms` (at most `broadcast_batch_busy_high`). Between the two, it holds. | `0.4` | 0 to 1, clamped | live | |
-| `broadcast_batch_mailbox` | Events waiting in a map's mailbox (smoothed over a second) past which it counts as busy whatever its share. 0: never. | `1000` | 0 to 1000000, clamped | live | |
-| `broadcast_batch_cpu` | Whether the server's CPU (its time over the cores it may run on, smoothed over a second) counts as busy too, with the same thresholds: a short window costs the clients' writers, on the other threads, more than the map's. | `true` |  | live |  |
+| `broadcast_batch_busy_high` | The share of its thread's time a map's updates and events take (smoothed over a second) past which its window doubles, at most once a second, up to `broadcast_batch_max_ms`. | `0.9` | 0 to 1, clamped | live | |
+| `broadcast_batch_busy_low` | The share under which (the server's CPU under `broadcast_batch_cpu_low` too) a map's window halves, at most once a second, down to `broadcast_batch_min_ms` (at most `broadcast_batch_busy_high`). Between, it holds. | `0.6` | 0 to 1, clamped | live | |
+| `broadcast_batch_mailbox` | Events waiting in a map's mailbox (smoothed over a second) past which it counts as busy whatever its share. 0: never. | `2000` | 0 to 1000000, clamped | live | |
+| `broadcast_batch_cpu_high` | The server's CPU (its time over the cores it may run on, smoothed over a second) past which each map's window doubles, at most once a second: a short window costs the clients' writers, on the other threads, more than the map's. 1: never. | `0.85` | 0 to 1, clamped | live | |
+| `broadcast_batch_cpu_low` | The server's CPU under which (the map's thread under `broadcast_batch_busy_low` too) a map's window may halve (at most `broadcast_batch_cpu_high`). | `0.5` | 0 to 1, clamped | live | |
 
 ### `[world]`
 

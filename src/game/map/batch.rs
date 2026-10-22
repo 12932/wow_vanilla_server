@@ -17,10 +17,13 @@
 //! The map's thread isn't where a short window costs most: since the feed
 //! (`conn::Feed`), its clients' writers read its broadcasts themselves, on
 //! the runtime's other threads, and a window a fifth as long has them write
-//! about five times as often. So the server's CPU (its time over the cores
-//! it may run on, [`cpu_share`]) counts too, with the same thresholds
-//! (`broadcast_batch_cpu`): a box that has the cores spends them on
-//! latency, one that hasn't keeps them for the crowd.
+//! about five times as often, the map's thread hardly more busy. So the
+//! server's CPU (its time over the cores it may run on, [`cpu_share`],
+//! smoothed the same way) steers it too: past `broadcast_batch_cpu_high`
+//! the window doubles, and it halves only with the CPU under
+//! `broadcast_batch_cpu_low` and the map's thread under its own low. A box
+//! that has the cores spends them on latency, one that hasn't keeps them
+//! for the crowd.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -41,8 +44,10 @@ pub struct BatchConfig {
     pub busy_low: f64,
     /// Events waiting past which the map counts as busy (0: never).
     pub mailbox: usize,
-    /// Whether the server's CPU share counts as busy too.
-    pub cpu: bool,
+    /// The server's CPU shares past which the window doubles, and under
+    /// which (the map's thread under `busy_low` too) it may halve.
+    pub cpu_high: f64,
+    pub cpu_low: f64,
 }
 
 impl BatchConfig {
@@ -67,7 +72,8 @@ impl BatchConfig {
             busy_high: n.broadcast_batch_busy_high,
             busy_low: n.broadcast_batch_busy_low.min(n.broadcast_batch_busy_high),
             mailbox: n.broadcast_batch_mailbox,
-            cpu: n.broadcast_batch_cpu,
+            cpu_high: n.broadcast_batch_cpu_high,
+            cpu_low: n.broadcast_batch_cpu_low.min(n.broadcast_batch_cpu_high),
         }
     }
 }
@@ -218,7 +224,6 @@ impl BatchWindow {
         self.busy = Some(busy);
         self.mailbox += a * (mailbox as f64 - self.mailbox);
         self.cpu += a * (cpu - self.cpu);
-        let busy = if cfg.cpu { busy.max(self.cpu) } else { busy };
         // A reload's bounds hold at once.
         let mut window = self.window.clamp(cfg.min, cfg.max);
         let settled = self
@@ -226,9 +231,9 @@ impl BatchWindow {
             .is_none_or(|c| now.saturating_duration_since(c) >= SMOOTHING);
         if settled {
             let deep = cfg.mailbox > 0 && self.mailbox > cfg.mailbox as f64;
-            if busy > cfg.busy_high || deep {
+            if busy > cfg.busy_high || self.cpu > cfg.cpu_high || deep {
                 window = (window * 2).max(Duration::from_millis(1)).min(cfg.max);
-            } else if busy < cfg.busy_low {
+            } else if busy < cfg.busy_low && self.cpu < cfg.cpu_low {
                 // In whole milliseconds, as it is set.
                 let half = Duration::from_millis((window.as_millis() / 2) as u64);
                 window = half.max(cfg.min);
@@ -253,7 +258,8 @@ mod tests {
             busy_high: 0.7,
             busy_low: 0.4,
             mailbox: 1000,
-            cpu: true,
+            cpu_high: 0.85,
+            cpu_low: 0.5,
         }
     }
 
@@ -397,24 +403,34 @@ mod tests {
         assert!(w.window() > ms(0));
     }
 
-    #[test]
-    fn the_servers_cpu_counts_unless_it_is_told_not_to() {
-        for (counts, want) in [(true, ms(40)), (false, ms(2))] {
-            let c = BatchConfig {
-                cpu: counts,
-                ..cfg()
-            };
-            let mut now = Instant::now();
-            let mut w = BatchWindow::new(&c);
-            w.look(&c, now, 0, 0.0);
-            // The map's thread idle, the server's cores 90% busy.
-            for _ in 0..200 {
-                now += TICK;
-                w.took(TICK / 10);
-                w.look(&c, now, 0, 0.9);
-            }
-            assert_eq!(w.window(), want, "cpu counts: {counts}");
+    /// The map's thread at 10%, the server's cores at `cpu`, for `secs`.
+    fn run_cpu(w: &mut BatchWindow, c: &BatchConfig, now: &mut Instant, secs: usize, cpu: f64) {
+        for _ in 0..secs * 20 {
+            *now += TICK;
+            w.took(TICK / 10);
+            w.look(c, *now, 0, cpu);
         }
+    }
+
+    #[test]
+    fn the_servers_cpu_steers_it_too() {
+        let c = cfg();
+        let mut now = Instant::now();
+        let mut w = BatchWindow::new(&c);
+        w.look(&c, now, 0, 0.0);
+        // Its cores 95% busy, the map's thread idle: up.
+        run_cpu(&mut w, &c, &mut now, 10, 0.95);
+        assert_eq!(w.window(), ms(40));
+        // Between the CPU's thresholds: held, the map's thread idle as it is.
+        run_cpu(&mut w, &c, &mut now, 10, 0.7);
+        assert_eq!(w.window(), ms(40));
+        // Under both lows: down.
+        run_cpu(&mut w, &c, &mut now, 10, 0.3);
+        assert_eq!(w.window(), ms(2));
+        // A CPU high of 1 never counts.
+        let off = BatchConfig { cpu_high: 1.0, ..c };
+        run_cpu(&mut w, &off, &mut now, 10, 1.0);
+        assert_eq!(w.window(), ms(2));
     }
 
     #[cfg(unix)]
