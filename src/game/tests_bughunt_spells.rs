@@ -132,3 +132,70 @@ async fn a_cancel_stops_only_what_it_names() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
 }
+
+/// A cast whose target steps out of sight before it ends fails with
+/// LINE_OF_SIGHT, and one its caster is pacified for meanwhile fails
+/// PACIFIED, as mangos's `CheckCast(false)` at `Spell::cast` tests sight
+/// and the caster's auras again; neither does its damage.
+#[tokio::test]
+async fn a_cast_ends_only_in_sight_and_unrestrained() {
+    use super::tests_p3_spells_kit::{at, dummy, health, pass};
+    use crate::game::map::spells::{self, checks::fail};
+    use wow_world_messages::vanilla::Vector3d;
+    const BOLT: u32 = 990_920;
+    const STRIKE: u32 = 990_921;
+    const PACIFY: u32 = 990_922;
+    let realm = fast_realm(|d| {
+        let mut bolt = bare(BOLT, 2);
+        bolt.casting_time_index = CAST_2S;
+        effect(&mut bolt, 0, damage(100));
+        let mut strike = bare(STRIKE, 0);
+        strike.casting_time_index = CAST_2S;
+        strike.prevention_type = spells::checks::PREVENTION_PACIFY;
+        effect(&mut strike, 0, damage(100));
+        let mut pacify = bare(PACIFY, 0);
+        pacify.duration_index = LASTS_15S;
+        effect(&mut pacify, 0, aura(auras::AURA_MOD_PACIFY, 0, 0, 1));
+        insert(d, [bolt, strike, pacify]);
+    });
+    let (mut c, g, map) = human(&realm, "BHLS", "Sighted", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[BOLT, STRIKE]);
+            m.players.get_mut(&g).unwrap().gm = false;
+            let k = dummy(m, g, 60, 4.0);
+            let (a, b) = (m.players[&g].position(), m.unit_view(k).unwrap().position);
+            let mid = Vector3d {
+                x: (a.x + b.x) / 2.0,
+                y: (a.y + b.y) / 2.0,
+                z: a.z,
+            };
+            // Across the way between them, ten yards wide.
+            let (dx, dy) = ((b.x - a.x) / 4.0, (b.y - a.y) / 4.0);
+            let across = |f: f32| Vector3d {
+                x: mid.x - dy * f,
+                y: mid.y + dx * f,
+                z: mid.z,
+            };
+            let before = health(m, k);
+            let began = spells::cast(m, g, BOLT, at(k), None);
+            m.spells.walls.push((across(-5.0), across(5.0)));
+            pass(m, 2_100);
+            let walled = before - health(m, k);
+            m.spells.walls.clear();
+            let began2 = spells::cast(m, g, STRIKE, at(k), None);
+            let s = m.realm.data.spells.get(PACIFY).unwrap().clone();
+            super::tests_p3_spells_kit::apply_template(m, g, g, &s);
+            pass(m, 2_100);
+            (began, walled, began2, before - health(m, k))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, 0, true, 0), "neither lands");
+    for (spell, code) in [(BOLT, fail::LINE_OF_SIGHT), (STRIKE, fail::PACIFIED)] {
+        c.wait_frame("the cast failed", spells::SMSG_CAST_RESULT, |b| {
+            b[..4] == spell.to_le_bytes() && b[4] == 2 && b[5] == code
+        })
+        .await;
+    }
+}
