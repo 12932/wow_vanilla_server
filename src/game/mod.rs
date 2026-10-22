@@ -74,6 +74,8 @@ mod tests_calls12;
 #[cfg(test)]
 mod tests_charges;
 #[cfg(test)]
+mod tests_charm_faction;
+#[cfg(test)]
 mod tests_chase_evade;
 #[cfg(test)]
 mod tests_chase_ground;

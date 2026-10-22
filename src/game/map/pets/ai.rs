@@ -150,7 +150,13 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
                 if holding != 0 {
                     summon::remove(map, g);
                 }
+                return;
             }
+            // Its swing, while it is sent at one: no AI moves it, but it
+            // strikes on at its victim in reach, as a player's own swing
+            // does (mangos's `PossessedAI::UpdateAI`, `DoMeleeAttackIfReady`).
+            // Without, it struck once.
+            combat::try_swing(map, g);
         }
         Kind::Charmed => {
             let aura = crate::game::map::auras::auras(map, g).is_some_and(|a| {
