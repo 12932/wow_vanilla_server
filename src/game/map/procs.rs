@@ -405,8 +405,15 @@ pub fn ppm_chance(ppm: f32, speed_ms: u32) -> f32 {
 }
 
 /// The `procFlags` a holder procs on. A seal of righteousness strikes on
-/// abilities' blows too.
+/// abilities' blows too; Improved Sap on nothing, its chance Sap's own
+/// (`class_scripts::keeps_stealth`): of its own it would Vanish the rogue
+/// out of the fight at an ability's hit (60% at two ranks), a Subtlety
+/// rogue's damage gone with it.
 fn proc_flags(s: &SpellTemplate, pe: Option<&ProcEvent>) -> u32 {
+    use crate::game::map::spells::class_scripts::IMPROVED_SAP;
+    if IMPROVED_SAP.iter().any(|(id, _)| *id == s.id) {
+        return 0;
+    }
     let flags = match pe.filter(|p| p.flags != 0) {
         Some(p) => p.flags,
         None => s.proc_flags,
