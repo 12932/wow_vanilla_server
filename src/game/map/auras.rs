@@ -1180,9 +1180,17 @@ pub fn apply_spell(
         }
         removed(map, target, &h);
     }
-    // A slot for the new holder.
-    let mut index =
-        refreshed.unwrap_or_else(|| auras(map, target).map_or(0, |a| a.holders.len() - 1));
+    // A slot for the new holder, found again: what the replaced ones' ends
+    // did (a form's passives given back, a source's lasting auras taken
+    // off, this one among them) moves the others.
+    let Some(mut index) = auras(map, target).and_then(|a| {
+        a.holders
+            .iter()
+            .rposition(|h| h.spell == spell.id && h.caster == caster && h.item == ctx.item)
+    }) else {
+        recalc(map, target);
+        return Ok(());
+    };
     if visible {
         let mut slot = {
             let fields_taken: Vec<bool> = map
@@ -1213,6 +1221,8 @@ pub fn apply_spell(
                 if let Some(a) = auras_mut(map, target) {
                     a.holders.remove(index);
                 }
+                // What it replaced is gone from the stats too.
+                recalc(map, target);
                 return Ok(());
             }
             let Some(old) = auras(map, target).map(|a| a.holders[i].clone()) else {

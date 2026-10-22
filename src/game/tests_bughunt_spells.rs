@@ -737,3 +737,62 @@ async fn an_aura_taken_off_by_a_proc_doesnt_proc_after() {
         "the marker cleansed, and no mark from it"
     );
 }
+
+/// A new aura whose replacing of another takes it off too (its source, the
+/// aura whose pulse put it on, replaced and its lasting auras going with
+/// it) leaves the unit's other auras as they were: the new holder is found
+/// again, not taken to be the last, which was given the replaced one's
+/// slot (review 3's R3-16).
+#[tokio::test]
+async fn an_aura_gone_with_what_it_replaced_leaves_the_rest_alone() {
+    const PULSE: u32 = 991_040;
+    const FED: u32 = 991_041;
+    const HIDDEN: u32 = 991_042;
+    let realm = fast_realm(|d| {
+        let mut pulse = bare(PULSE, 0);
+        pulse.duration_index = LASTS_15S;
+        pulse.attributes[2] |= 0x8000_0000;
+        effect(
+            &mut pulse,
+            0,
+            crate::game::data::spells::SpellEffect {
+                trigger_spell: FED,
+                amplitude: 5_000,
+                ..aura(auras::AURA_PERIODIC_TRIGGER_SPELL, 0, 0, 1)
+            },
+        );
+        let mut fed = bare(FED, 0);
+        fed.attributes[2] |= 0x8000_0000;
+        effect(&mut fed, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        // On no bar.
+        let mut hidden = bare(HIDDEN, 0);
+        hidden.duration_index = LASTS_LONG;
+        hidden.attributes[0] = crate::game::data::spells::ATTR_HIDDEN;
+        effect(&mut hidden, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, [pulse, fed, hidden]);
+    });
+    let (_c, g, map) = human(&realm, "BHRI", "Replaced", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            for id in [HIDDEN, PULSE, FED] {
+                let s = m.realm.data.spells.get(id).unwrap().clone();
+                apply_template(m, g, g, &s);
+            }
+            let slotted: Vec<u32> = auras::auras(m, g)
+                .unwrap()
+                .holders
+                .iter()
+                .filter(|h| h.slot.is_some())
+                .map(|h| h.spell)
+                .collect();
+            (slotted, has(m, g, HIDDEN), has(m, g, PULSE), has(m, g, FED))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        out,
+        (vec![], true, false, false),
+        "the hidden one given no slot"
+    );
+}
