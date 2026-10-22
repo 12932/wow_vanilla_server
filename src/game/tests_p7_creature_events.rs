@@ -415,8 +415,9 @@ async fn the_lowest_event_on_dresses_a_spawn_and_the_next_when_it_ends() {
 #[tokio::test]
 #[ignore = "extended"]
 async fn an_events_and_a_scripts_changes_in_place_pass_the_client() {
-    let (check_py, wow_exe) = crate::game::tests_client_emu::checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = crate::game::tests_client_emu::checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let (realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
     for spawn in [CHANGED, ARMED, MODELLED] {
         a.sees(of(spawn)).await;

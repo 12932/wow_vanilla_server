@@ -109,8 +109,9 @@ fn flyers() -> GameData {
 #[tokio::test]
 #[ignore = "extended"]
 async fn the_packets_wvs_sends_pass_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
 
     let realm = harness::realm_with(flyers());
     let map = realm.maps.get(&realm, MapKey::world(0));
@@ -209,8 +210,9 @@ async fn the_packets_wvs_sends_pass_the_client() {
 #[tokio::test]
 #[ignore = "extended"]
 async fn the_elite_guards_packets_pass_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let dir = harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
@@ -323,8 +325,9 @@ async fn the_elite_guards_packets_pass_the_client() {
 #[tokio::test]
 #[ignore = "extended"]
 async fn the_capitals_elite_guards_and_rexxars_packets_pass_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let dir = harness::real_data("db");
     if !dir.join("vmangos.sqlite").exists() {
         return;
@@ -395,8 +398,9 @@ const HOLD: u32 = 995_101;
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_held_tapped_and_dead_creatures_packets_pass_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let mut d = GameData::empty();
     d.creature_templates
         .insert(PROWLER, template(PROWLER, "Prowler", 7));
@@ -469,8 +473,9 @@ async fn a_held_tapped_and_dead_creatures_packets_pass_the_client() {
 #[ignore = "extended"]
 async fn a_passengers_creates_pass_the_client() {
     use crate::game::tests::transports::{BOAT, aboard_in, data};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm_with(data());
     let boat = crate::game::guid::make(crate::game::guid::HighGuid::MoTransport, 0, BOAT);
     // Bob waits on Kalimdor, where the boat comes.
@@ -555,8 +560,9 @@ const CHARGE: u32 = 22911;
 #[ignore = "extended"]
 async fn a_corpse_and_its_bones_pass_the_client() {
     use crate::game::map::death::{self, Death};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm();
     let map = realm.maps.get(&realm, MapKey::world(0));
     let (mut a, ga) = enter(&realm, "A", "Alice").await;
@@ -652,8 +658,9 @@ async fn a_corpse_and_its_bones_pass_the_client() {
 async fn a_ghost_rising_before_a_stranger_passes_the_client() {
     use crate::game::fields::UNIT_FIELD_HEALTH;
     use crate::game::map::death;
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm();
     let map = realm.maps.get(&realm, MapKey::world(0));
     let (mut a, ga) = enter(&realm, "A", "Alice").await;
@@ -708,8 +715,9 @@ async fn a_ghost_rising_before_a_stranger_passes_the_client() {
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_player_turned_on_the_spot_passes_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm();
     let map = realm.maps.get(&realm, MapKey::world(0));
     let (mut a, ga) = enter(&realm, "A", "Alice").await;
@@ -778,8 +786,9 @@ fn flight() -> GameData {
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_flier_coming_into_view_passes_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm_with(flight());
     let map = realm.maps.get(&realm, MapKey::world(0));
     let (mut a, ga) = enter(&realm, "A", "Alice").await;

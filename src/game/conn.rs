@@ -3,12 +3,12 @@
 //! to the client through an [`Outbound`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Notify, mpsc};
 use tracing::{debug, warn};
 use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, HeaderCrypto};
 use wow_world_messages::Guid;
@@ -39,6 +39,436 @@ pub fn encode<M: ServerMessage>(m: &M) -> Option<Arc<[u8]>> {
     Some(Arc::from(buf))
 }
 
+/// What a queue carries: a frame, or what a cork kept for the client
+/// ([`Cork`]).
+enum Item {
+    One(Arc<[u8]>),
+    Corked(Corked),
+}
+
+/// A cork's frames for one client: the map's broadcasts it is among, and
+/// what was sent to it alone, each of those before the broadcast its `u32`
+/// numbers (all of them, if past the last).
+struct Corked {
+    log: Option<Arc<Vec<Broadcast>>>,
+    /// The client's index among the map's ([`Clients`]).
+    me: usize,
+    direct: Vec<(u32, Arc<[u8]>)>,
+}
+
+impl Corked {
+    /// Every frame, in the order sent.
+    fn for_each(self, mut f: impl FnMut(Arc<[u8]>)) {
+        let mut direct = self.direct.into_iter().peekable();
+        if let Some(log) = &self.log {
+            for (k, b) in log.iter().enumerate() {
+                while let Some((_, d)) = direct.next_if(|(seq, _)| *seq as usize <= k) {
+                    f(d);
+                }
+                if b.to.contains(self.me) {
+                    f(b.frame.clone());
+                }
+            }
+        }
+        for (_, d) in direct {
+            f(d);
+        }
+    }
+}
+
+/// A set of a map's clients, by their index on the map (the map's own
+/// numbering, `map::ClientTable`): a bit each.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Clients(Vec<u64>);
+
+impl Clients {
+    pub fn insert(&mut self, i: usize) {
+        let w = i / 64;
+        if self.0.len() <= w {
+            self.0.resize(w + 1, 0);
+        }
+        self.0[w] |= 1 << (i % 64);
+    }
+
+    pub fn remove(&mut self, i: usize) {
+        if let Some(w) = self.0.get_mut(i / 64) {
+            *w &= !(1 << (i % 64));
+        }
+    }
+
+    pub fn contains(&self, i: usize) -> bool {
+        self.0.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|w| *w == 0)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.iter().map(|w| w.count_ones() as usize).sum()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The indices, in order.
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().flat_map(|(w, &word)| {
+            let mut word = word;
+            std::iter::from_fn(move || {
+                if word == 0 {
+                    return None;
+                }
+                let bit = word.trailing_zeros() as usize;
+                word &= word - 1;
+                Some(w * 64 + bit)
+            })
+        })
+    }
+
+    /// Whether any of `other` is here too.
+    fn meets(&self, other: &Clients) -> bool {
+        self.0.iter().zip(&other.0).any(|(a, b)| a & b != 0)
+    }
+
+    /// These, but not `other`'s.
+    fn without(&self, other: &Clients) -> Clients {
+        let mut out = self.clone();
+        for (a, b) in out.0.iter_mut().zip(&other.0) {
+            *a &= !b;
+        }
+        out
+    }
+}
+
+/// A frame to a set of a map's clients.
+struct Broadcast {
+    frame: Arc<[u8]>,
+    to: Arc<Clients>,
+}
+
+/// While one is alive, what this thread queues for a client waits, in the
+/// order it was sent, and goes in one push a client when the last cork on
+/// the thread is dropped (or at [`uncork`]): a map's run of movement packets
+/// and its update hand each client one batch, not a push (and a wake of its
+/// writer) a packet. A map's broadcast ([`broadcast`]) is kept once, with
+/// the set of clients it goes to, and each of them takes its share of the
+/// cork's broadcasts in its writer: the map's cost is a packet's, not a
+/// packet's times its observers. Only the push waits: the budget is taken
+/// (a broadcast's at the push), a hold keeps what it keeps and a closed
+/// client takes nothing, as uncorked. What other threads send isn't
+/// corked, so a map uncorks before it hands a client, or word of one, to
+/// another task (see `map::run`).
+pub struct Cork {
+    /// When what it holds was first parked ([`Cork::park`]).
+    since: Option<std::time::Instant>,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl Cork {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        CORK.with_borrow_mut(|c| c.depth += 1);
+        CORKED.set(true);
+        Cork {
+            since: None,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// A cork again over what was parked: what it held stays, and what is
+    /// sent now goes after it. Under another cork, what was parked is
+    /// pushed first.
+    pub fn resume(parked: Parked) -> Self {
+        if CORKED.get() {
+            drop(parked);
+            return Cork::new();
+        }
+        let mut parked = parked;
+        let since = parked.since;
+        let state = std::mem::take(&mut *parked.state);
+        CORK.with_borrow_mut(|c| {
+            let depth = c.depth;
+            *c = state;
+            c.depth = depth;
+        });
+        let mut cork = Cork::new();
+        cork.since = Some(since);
+        cork
+    }
+
+    /// Stop corking without pushing: what the cork holds is kept for a
+    /// later cork on whichever thread ([`Cork::resume`]), or pushed when
+    /// the parked state is dropped. None if it holds nothing, or another
+    /// cork on the thread is alive (which keeps it).
+    pub fn park(self) -> Option<Parked> {
+        let me = std::mem::ManuallyDrop::new(self);
+        let since = me.since.unwrap_or_else(std::time::Instant::now);
+        let state = CORK.with_borrow_mut(|c| {
+            c.depth -= 1;
+            if c.depth > 0 {
+                return None;
+            }
+            let state = std::mem::take(c);
+            Some(state)
+        });
+        let state = state?;
+        CORKED.set(false);
+        if state.slots.is_empty() {
+            return None;
+        }
+        Some(Parked {
+            state: Box::new(state),
+            since,
+        })
+    }
+}
+
+impl Drop for Cork {
+    fn drop(&mut self) {
+        let last = CORK.with_borrow_mut(|c| {
+            c.depth -= 1;
+            c.depth == 0
+        });
+        if last {
+            uncork();
+            CORKED.set(false);
+        }
+    }
+}
+
+/// What a cork held, parked between a map's bursts ([`Cork::park`]): sent
+/// on with a later cork, or pushed when dropped.
+pub struct Parked {
+    state: Box<CorkState>,
+    since: std::time::Instant,
+}
+
+impl Parked {
+    /// When it was first parked.
+    pub fn since(&self) -> std::time::Instant {
+        self.since
+    }
+}
+
+impl Drop for Parked {
+    fn drop(&mut self) {
+        push(&mut self.state);
+    }
+}
+
+/// Push what this thread's cork holds now, the cork staying on.
+pub fn uncork() {
+    // Uncorked, nothing waits: the last cork's drop pushed it.
+    if !CORKED.get() {
+        return;
+    }
+    let mut state = CORK.with_borrow_mut(|c| {
+        let depth = c.depth;
+        let state = std::mem::take(c);
+        c.depth = depth;
+        state
+    });
+    push(&mut state);
+}
+
+/// Push what `state` holds, each client's in one go.
+fn push(state: &mut CorkState) {
+    let slots = std::mem::take(&mut state.slots);
+    let log = std::mem::take(&mut state.log);
+    let mut bytes = Vec::new();
+    if slots.is_empty() {
+        return;
+    }
+    // What each client is due of the broadcasts, for its budget.
+    bytes.resize(slots.len(), 0);
+    let log = if log.is_empty() {
+        None
+    } else {
+        let mut slot_of = vec![u32::MAX; 0];
+        for (s, slot) in slots.iter().enumerate() {
+            if let Some(i) = slot.index {
+                if slot_of.len() <= i {
+                    slot_of.resize(i + 1, u32::MAX);
+                }
+                slot_of[i] = s as u32;
+            }
+        }
+        for b in &log {
+            let n = b.frame.len();
+            for i in b.to.iter() {
+                if let Some(&s) = slot_of.get(i)
+                    && s != u32::MAX
+                {
+                    bytes[s as usize] += n;
+                }
+            }
+        }
+        Some(Arc::new(log))
+    };
+    for (s, slot) in slots.into_iter().enumerate() {
+        let out = Outbound { inner: slot.inner };
+        if out.inner.shared.closed.load(Ordering::Acquire) {
+            continue;
+        }
+        let due = bytes[s];
+        if due > 0 && !out.take_budget(due) {
+            out.overflow();
+            continue;
+        }
+        let item = match (due, slot.direct.len()) {
+            (0, 0) => continue,
+            (0, 1) => Item::One(slot.direct.into_iter().next().expect("one").1),
+            _ => Item::Corked(Corked {
+                log: if due > 0 { log.clone() } else { None },
+                me: slot.index.unwrap_or(usize::MAX),
+                direct: slot.direct,
+            }),
+        };
+        let _ = out.inner.tx.send(item);
+    }
+}
+
+/// Send `frame` to the map's clients `to`, `client` naming the queue of
+/// each by its index (none for one no longer there), and `table` the map
+/// whose numbering `to` is in. Corked, it is kept once, with the set, and
+/// each client takes it in its writer; a held client's goes into its hold
+/// at once. Uncorked, each is sent it now.
+pub fn broadcast(
+    table: usize,
+    frame: &Arc<[u8]>,
+    to: &Arc<Clients>,
+    client: impl Fn(usize) -> Option<Outbound>,
+) {
+    if !CORKED.get() {
+        for i in to.iter() {
+            if let Some(out) = client(i) {
+                out.send_frame(frame.clone());
+            }
+        }
+        return;
+    }
+    if CORK.with_borrow(|c| c.table != 0 && c.table != table) {
+        // Another map's numbering: what was kept in the last goes first.
+        uncork();
+    }
+    let held = CORK.with_borrow_mut(|c| {
+        c.table = table;
+        // Those it reaches for the first time since the push: their
+        // queues, held or gone.
+        for (w, &word) in to.0.iter().enumerate() {
+            let known = c.reached.0.get(w).copied().unwrap_or(0);
+            let mut new = word & !known;
+            while new != 0 {
+                let i = w * 64 + new.trailing_zeros() as usize;
+                new &= new - 1;
+                c.reached.insert(i);
+                match client(i) {
+                    Some(out) => {
+                        if out.inner.holding.load(Ordering::Acquire) {
+                            c.held.insert(i);
+                        }
+                        let s = c.slot(&out.inner);
+                        c.slots[s].index = Some(i);
+                        c.by_index.insert(i, s);
+                    }
+                    None => c.gone.insert(i),
+                }
+            }
+        }
+        let mut held = Vec::new();
+        let to = if to.meets(&c.held) || to.meets(&c.gone) {
+            for i in to.iter().filter(|i| c.held.contains(*i)) {
+                held.push(c.slots[c.by_index[&i]].inner.clone());
+            }
+            Arc::new(to.without(&c.held).without(&c.gone))
+        } else {
+            to.clone()
+        };
+        if !to.is_empty() {
+            c.log.push(Broadcast {
+                frame: frame.clone(),
+                to,
+            });
+        }
+        held
+    });
+    // Into their holds, behind what waits there.
+    for inner in held {
+        Outbound { inner }.send_frame(frame.clone());
+    }
+}
+
+thread_local! {
+    static CORKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CORK: std::cell::RefCell<CorkState> = std::cell::RefCell::new(CorkState::default());
+}
+
+/// A client corked: what was sent to it alone, and its index among the
+/// map's if a broadcast reached it.
+struct Slot {
+    inner: Arc<OutboundInner>,
+    index: Option<usize>,
+    direct: Vec<(u32, Arc<[u8]>)>,
+}
+
+#[derive(Default)]
+struct CorkState {
+    depth: usize,
+    /// Each client corked, in the order first sent to.
+    slots: Vec<Slot>,
+    /// A client's slot, by its queue's address.
+    by_address: ahash::AHashMap<usize, usize>,
+    /// A client's slot, by its index among the map's.
+    by_index: ahash::AHashMap<usize, usize>,
+    /// The broadcasts, in order.
+    log: Vec<Broadcast>,
+    /// The map whose numbering the broadcasts are in.
+    table: usize,
+    /// The indices a broadcast has reached; of those, the held and the
+    /// gone.
+    reached: Clients,
+    held: Clients,
+    gone: Clients,
+}
+
+impl CorkState {
+    fn slot(&mut self, inner: &Arc<OutboundInner>) -> usize {
+        let key = Arc::as_ptr(inner) as usize;
+        if let Some(&s) = self.by_address.get(&key) {
+            return s;
+        }
+        let s = self.slots.len();
+        self.slots.push(Slot {
+            inner: inner.clone(),
+            index: None,
+            direct: Vec::new(),
+        });
+        self.by_address.insert(key, s);
+        s
+    }
+
+    fn push(&mut self, inner: &Arc<OutboundInner>, frame: Arc<[u8]>) {
+        let s = self.slot(inner);
+        let seq = self.log.len() as u32;
+        self.slots[s].direct.push((seq, frame));
+    }
+
+    /// A client's hold began or ended: its broadcasts from now go into
+    /// the hold, or into the log again.
+    fn held(&mut self, inner: &Arc<OutboundInner>, on: bool) {
+        let key = Arc::as_ptr(inner) as usize;
+        if let Some(i) = self.by_address.get(&key).and_then(|&s| self.slots[s].index) {
+            if on {
+                self.held.insert(i);
+            } else {
+                self.held.remove(i);
+            }
+        }
+    }
+}
+
 /// Where packets for one client go: a queue the writer task drains, with
 /// a byte budget. A client too slow to keep its queue under the budget is
 /// disconnected: dropping some of its packets would leave it out of step
@@ -51,10 +481,8 @@ pub struct Outbound {
 struct OutboundInner {
     /// tokio's unbounded `mpsc`: its send is sync, from any thread, and
     /// the writer takes a batch at a time (`recv_many`).
-    tx: mpsc::UnboundedSender<Arc<[u8]>>,
+    tx: mpsc::UnboundedSender<Item>,
     shared: Arc<Shared>,
-    /// The budget's bytes, all of them.
-    capacity: usize,
     overflowed: AtomicBool,
     /// Frames wait in `held` (see [`Outbound::hold`]).
     holding: AtomicBool,
@@ -131,8 +559,12 @@ impl Order {
 
 /// What a queue's two ends share.
 struct Shared {
-    /// Bytes that may still be queued; the writer gives back what it takes.
-    budget: Semaphore,
+    /// Bytes queued and not yet taken by the writer, which takes back what
+    /// it takes: a plain counter (nothing waits on it), one atomic add a
+    /// frame.
+    queued: AtomicUsize,
+    /// The budget's bytes, all of them.
+    capacity: usize,
     /// [`Outbound::close`] was called. tokio's senders can't close their
     /// channel, so from then on the queue's far end takes nothing more, and
     /// what was queued is dropped unwritten.
@@ -170,7 +602,7 @@ impl Shared {
 impl std::fmt::Debug for Outbound {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Outbound")
-            .field("budget", &self.inner.shared.budget.available_permits())
+            .field("queued", &self.inner.shared.queued.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -179,7 +611,9 @@ impl std::fmt::Debug for Outbound {
 /// test reads ([`Outbound::detached`]). Once the queue is closed it hands
 /// out nothing more.
 pub struct Frames {
-    rx: mpsc::UnboundedReceiver<Arc<[u8]>>,
+    rx: mpsc::UnboundedReceiver<Item>,
+    /// The rest of a batch taken.
+    batch: std::collections::VecDeque<Arc<[u8]>>,
     shared: Arc<Shared>,
 }
 
@@ -194,11 +628,18 @@ impl Frames {
         if self.closed() {
             return None;
         }
-        let frame = tokio::select! {
-            frame = self.rx.recv() => frame?,
+        if let Some(frame) = self.batch.pop_front() {
+            return Some(frame);
+        }
+        let item = tokio::select! {
+            item = self.rx.recv() => item?,
             () = self.shared.wait_closed() => return None,
         };
-        (!self.closed()).then_some(frame)
+        self.unpack(item);
+        if self.closed() {
+            return None;
+        }
+        self.batch.pop_front()
     }
 
     /// The next frame, if one is queued.
@@ -206,16 +647,35 @@ impl Frames {
         if self.closed() {
             return None;
         }
-        let frame = self.rx.try_recv().ok()?;
-        (!self.closed()).then_some(frame)
+        if self.batch.is_empty() {
+            let item = self.rx.try_recv().ok()?;
+            self.unpack(item);
+        }
+        if self.closed() {
+            return None;
+        }
+        self.batch.pop_front()
+    }
+
+    fn unpack(&mut self, item: Item) {
+        match item {
+            Item::One(f) => self.batch.push_back(f),
+            Item::Corked(c) => c.for_each(|f| self.batch.push_back(f)),
+        }
     }
 
     /// Frames queued and not yet taken.
-    pub fn len(&self) -> usize {
-        if self.closed() { 0 } else { self.rx.len() }
+    pub fn len(&mut self) -> usize {
+        if self.closed() {
+            return 0;
+        }
+        while let Ok(item) = self.rx.try_recv() {
+            self.unpack(item);
+        }
+        self.batch.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub fn is_empty(&mut self) -> bool {
         self.len() == 0
     }
 }
@@ -224,14 +684,14 @@ impl Frames {
 fn queue(budget: usize) -> (Outbound, Frames) {
     let (tx, rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {
-        budget: Semaphore::new(budget),
+        queued: AtomicUsize::new(0),
+        capacity: budget,
         closed: AtomicBool::new(false),
         closing: Notify::new(),
     });
     let outbound = Outbound {
         inner: Arc::new(OutboundInner {
             tx,
-            capacity: shared.budget.available_permits(),
             shared: shared.clone(),
             overflowed: AtomicBool::new(false),
             holding: AtomicBool::new(false),
@@ -239,7 +699,14 @@ fn queue(budget: usize) -> (Outbound, Frames) {
             orders: parking_lot::Mutex::new(Orders::default()),
         }),
     };
-    (outbound, Frames { rx, shared })
+    (
+        outbound,
+        Frames {
+            rx,
+            batch: Default::default(),
+            shared,
+        },
+    )
 }
 
 impl Outbound {
@@ -302,39 +769,43 @@ impl Outbound {
     /// A queue nothing drains, with an unlimited budget, and the receiving
     /// end for tests to read.
     pub fn detached() -> (Self, Frames) {
-        queue(Semaphore::MAX_PERMITS)
+        queue(usize::MAX >> 1)
+    }
+
+    /// A queue with `budget` bytes, and its far end, for a writer
+    /// ([`run_writer`]) or a test or benchmark to drain.
+    pub fn with_budget(budget: usize) -> (Self, Frames) {
+        queue(budget)
     }
 
     /// Queue a frame the budget has been taken for: false if the client is
     /// gone.
     fn enqueue(&self, frame: Arc<[u8]>) -> bool {
-        !self.inner.shared.closed.load(Ordering::Acquire) && self.inner.tx.send(frame).is_ok()
+        if self.inner.shared.closed.load(Ordering::Acquire) {
+            return false;
+        }
+        if CORKED.get() {
+            CORK.with_borrow_mut(|c| c.push(&self.inner, frame));
+            return !self.inner.tx.is_closed();
+        }
+        self.inner.tx.send(Item::One(frame)).is_ok()
     }
 
     /// Queue a framed packet. False if the client is gone or over budget;
     /// over budget, its connection is closed.
     pub fn send_frame(&self, frame: Arc<[u8]>) -> bool {
         if self.inner.holding.load(Ordering::Acquire) {
-            let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
+            let n = frame.len();
             let mut held = self.inner.held.lock();
             // Not released since: it waits behind what is held.
             if self.inner.holding.load(Ordering::Acquire) {
-                return match self.inner.shared.budget.try_acquire_many(n) {
-                    Ok(permit) => {
-                        permit.forget();
-                        held.push(frame);
-                        !self.is_closed()
-                    }
-                    Err(_) => {
-                        drop(held);
-                        if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
-                            crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
-                            warn!("a client's outbound queue is over budget; disconnecting it");
-                        }
-                        self.close();
-                        false
-                    }
-                };
+                if !self.take_budget(n) {
+                    drop(held);
+                    self.overflow();
+                    return false;
+                }
+                held.push(frame);
+                return !self.is_closed();
             }
         }
         self.send_frame_unheld(frame)
@@ -343,21 +814,32 @@ impl Outbound {
     /// Queue a frame past any hold: for what names no object a create could
     /// be waiting for, and is waited on (a pong, a query's answer).
     pub fn send_frame_unheld(&self, frame: Arc<[u8]>) -> bool {
-        let n = u32::try_from(frame.len()).unwrap_or(u32::MAX);
-        match self.inner.shared.budget.try_acquire_many(n) {
-            Ok(permit) => {
-                permit.forget();
-                self.enqueue(frame)
-            }
-            Err(_) => {
-                if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
-                    crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
-                    warn!("a client's outbound queue is over budget; disconnecting it");
-                }
-                self.close();
-                false
-            }
+        if !self.take_budget(frame.len()) {
+            self.overflow();
+            return false;
         }
+        self.enqueue(frame)
+    }
+
+    /// `n` bytes of the budget for a frame: false, and nothing taken, if
+    /// they aren't left.
+    fn take_budget(&self, n: usize) -> bool {
+        let shared = &self.inner.shared;
+        let before = shared.queued.fetch_add(n, Ordering::Relaxed);
+        if before.saturating_add(n) <= shared.capacity {
+            return true;
+        }
+        shared.queued.fetch_sub(n, Ordering::Relaxed);
+        false
+    }
+
+    /// Over budget: the client is disconnected, and counted once.
+    fn overflow(&self) {
+        if !self.inner.overflowed.swap(true, Ordering::Relaxed) {
+            crate::game::stats::BUDGET.fetch_add(1, Ordering::Relaxed);
+            warn!("a client's outbound queue is over budget; disconnecting it");
+        }
+        self.close();
     }
 
     /// From now on, what is sent waits, in the order it was sent, for
@@ -365,7 +847,11 @@ impl Outbound {
     /// for, so that nothing it sends naming those objects arrives before
     /// them. True if the client wasn't held already.
     pub fn hold(&self) -> bool {
-        !self.inner.holding.swap(true, Ordering::AcqRel)
+        let fresh = !self.inner.holding.swap(true, Ordering::AcqRel);
+        if fresh && CORKED.get() {
+            CORK.with_borrow_mut(|c| c.held(&self.inner, true));
+        }
+        fresh
     }
 
     /// Whether frames are waiting on a hold.
@@ -384,6 +870,9 @@ impl Outbound {
             self.enqueue(frame);
         }
         self.inner.holding.store(false, Ordering::Release);
+        if CORKED.get() {
+            CORK.with_borrow_mut(|c| c.held(&self.inner, false));
+        }
     }
 
     pub fn send<M: ServerMessage>(&self, m: &M) -> bool {
@@ -421,9 +910,7 @@ impl Outbound {
 
     /// Bytes queued for the writer, not yet written.
     pub fn queued_bytes(&self) -> usize {
-        self.inner
-            .capacity
-            .saturating_sub(self.inner.shared.budget.available_permits())
+        self.inner.shared.queued.load(Ordering::Relaxed)
     }
 
     /// Closed, or the writer has gone.
@@ -614,7 +1101,7 @@ pub const MAX_AUTH_SESSION: usize = 8 * 1024;
 /// progress for `stall`: a client that doesn't read (its window shut, its
 /// acknowledgements still coming) holds its socket and its frames no
 /// longer than that, nor past the close.
-pub(crate) async fn run_writer<W>(
+pub async fn run_writer<W>(
     mut write: W,
     mut encrypter: EncrypterHalf,
     mut frames: Frames,
@@ -623,7 +1110,7 @@ pub(crate) async fn run_writer<W>(
     W: AsyncWrite + Unpin,
 {
     const BATCH_LIMIT: usize = 128;
-    let mut staging: Vec<Arc<[u8]>> = Vec::with_capacity(BATCH_LIMIT);
+    let mut staging: Vec<Item> = Vec::with_capacity(BATCH_LIMIT);
     let mut scratch: Vec<u8> = Vec::with_capacity(16 * 1024);
     let shared = frames.shared.clone();
     loop {
@@ -640,27 +1127,19 @@ pub(crate) async fn run_writer<W>(
         scratch.clear();
         let mut written = 0u64;
         let mut drained = 0usize;
-        for buf in &staging {
-            drained += buf.len();
-            if buf.len() < 4 {
-                continue;
+        for item in staging.drain(..) {
+            match item {
+                Item::One(buf) => {
+                    drained += buf.len();
+                    written += put(&mut scratch, &mut encrypter, &buf);
+                }
+                Item::Corked(c) => c.for_each(|buf| {
+                    drained += buf.len();
+                    written += put(&mut scratch, &mut encrypter, &buf);
+                }),
             }
-            let size = u16::from_be_bytes([buf[0], buf[1]]);
-            let opcode = u16::from_le_bytes([buf[2], buf[3]]);
-            // A size that isn't the frame's would put the client's stream out
-            // of step: what is built refuses one, and nothing gets past here.
-            if usize::from(size) != buf.len() - 2 {
-                warn!(
-                    "not writing opcode {opcode:#x}: its size field says {size}, its frame {}",
-                    buf.len()
-                );
-                continue;
-            }
-            scratch.extend_from_slice(&encrypter.encrypt_server_header(size, opcode));
-            scratch.extend_from_slice(&buf[4..]);
-            written += 1;
         }
-        shared.budget.add_permits(drained);
+        shared.queued.fetch_sub(drained, Ordering::Relaxed);
         if scratch.is_empty() {
             continue;
         }
@@ -674,6 +1153,10 @@ pub(crate) async fn run_writer<W>(
         }
         PACKETS_OUT.fetch_add(written, Ordering::Relaxed);
         crate::game::stats::BYTES_OUT.fetch_add(scratch.len() as u64, Ordering::Relaxed);
+        // A burst of creates doesn't keep its megabytes for good.
+        if scratch.capacity() > SCRATCH_KEPT {
+            scratch = Vec::with_capacity(16 * 1024);
+        }
     }
     // The senders, the reader and the session see the queue closed, and
     // what it held is let go.
@@ -685,6 +1168,34 @@ pub(crate) async fn run_writer<W>(
     // same, as the write was.
     let _ = tokio::time::timeout(stall, write.shutdown()).await;
 }
+
+/// A frame onto the burst: 1 if it went. Its first four bytes are the
+/// header as the client reads it, size and opcode: copied whole, and the
+/// header encrypted where it lands, in the order the frames are written
+/// (ARC4 is a stream cipher).
+fn put(scratch: &mut Vec<u8>, encrypter: &mut EncrypterHalf, buf: &[u8]) -> u64 {
+    if buf.len() < 4 {
+        return 0;
+    }
+    let size = u16::from_be_bytes([buf[0], buf[1]]);
+    // A size that isn't the frame's would put the client's stream out of
+    // step: what is built refuses one, and nothing gets past here.
+    if usize::from(size) != buf.len() - 2 {
+        let opcode = u16::from_le_bytes([buf[2], buf[3]]);
+        warn!(
+            "not writing opcode {opcode:#x}: its size field says {size}, its frame {}",
+            buf.len()
+        );
+        return 0;
+    }
+    let at = scratch.len();
+    scratch.extend_from_slice(buf);
+    encrypter.encrypt(&mut scratch[at..at + 4]);
+    1
+}
+
+/// The most of its buffer a writer keeps between bursts.
+const SCRATCH_KEPT: usize = 1 << 20;
 
 /// Write all of `buf`, or fail once a write has taken nothing for `stall`.
 async fn write_within<W>(write: &mut W, mut buf: &[u8], stall: Duration) -> std::io::Result<()>
@@ -1053,6 +1564,212 @@ mod tests {
         assert_eq!(opcodes, [1, 2, 3, 4, 5]);
     }
 
+    fn opcodes(rx: &mut Frames) -> Vec<u16> {
+        std::iter::from_fn(|| rx.try_recv())
+            .map(|f| u16::from_le_bytes([f[2], f[3]]))
+            .collect()
+    }
+
+    /// Corked, what is sent waits for the cork's end and goes in one push,
+    /// in order; the budget is taken at the send, as uncorked.
+    #[test]
+    fn a_cork_pushes_each_client_its_frames_at_its_end_in_order() {
+        let (a, mut ra) = Outbound::detached();
+        let (b, mut rb) = Outbound::detached();
+        {
+            let _cork = Cork::new();
+            for i in 1..=3 {
+                assert!(a.send_frame(frame(i, &[0; 4])));
+                assert!(b.send_frame(frame(10 + i, &[0; 4])));
+            }
+            assert_eq!(a.queued_bytes(), 3 * 8, "the budget taken at the send");
+            assert!(ra.rx.is_empty() && rb.rx.is_empty(), "nothing pushed yet");
+            {
+                let _inner = Cork::new();
+                assert!(a.send_frame(frame(4, &[0; 4])));
+            }
+            assert!(ra.rx.is_empty(), "an inner cork's end pushes nothing");
+        }
+        assert_eq!(ra.rx.len(), 1, "one push");
+        assert_eq!(opcodes(&mut ra), [1, 2, 3, 4]);
+        assert_eq!(opcodes(&mut rb), [11, 12, 13]);
+        // Uncorked again: each frame goes at once.
+        assert!(a.send_frame(frame(5, &[0; 4])));
+        assert_eq!(ra.rx.len(), 1);
+    }
+
+    /// `uncork` pushes what waits, the cork staying on.
+    #[test]
+    fn uncork_pushes_what_waits_and_the_cork_stays() {
+        let (a, mut ra) = Outbound::detached();
+        let _cork = Cork::new();
+        a.send_frame(frame(1, &[0; 4]));
+        uncork();
+        assert_eq!(opcodes(&mut ra), [1]);
+        a.send_frame(frame(2, &[0; 4]));
+        assert!(ra.rx.is_empty(), "corked still");
+        drop(_cork);
+        assert_eq!(opcodes(&mut ra), [2]);
+    }
+
+    /// A hold under a cork keeps the order it keeps uncorked: what went
+    /// before it, then the hold's blocks, then what waited, then the rest.
+    #[test]
+    fn a_hold_under_a_cork_keeps_its_order() {
+        let (out, mut rx) = Outbound::detached();
+        let cork = Cork::new();
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        assert!(out.hold());
+        assert!(out.send_frame(frame(3, &[0; 4])));
+        assert!(out.send_unheld(&SMSG_PONG { sequence_id: 0 }));
+        assert!(out.send_frame(frame(4, &[0; 4])));
+        assert!(out.has_held());
+        out.release(vec![frame(2, &[0; 4])]);
+        assert!(out.send_frame(frame(5, &[0; 4])));
+        drop(cork);
+        assert_eq!(opcodes(&mut rx), [1, 0x1DD, 2, 3, 4, 5]);
+    }
+
+    /// Over budget corked, a client is disconnected at the send; a closed
+    /// client's corked frames are dropped.
+    #[test]
+    fn a_corked_client_over_budget_or_closed_gets_nothing() {
+        let (out, mut rx) = queue(10);
+        let cork = Cork::new();
+        assert!(out.send_frame(frame(1, &[0; 4])));
+        assert!(!out.send_frame(frame(1, &[0; 4])));
+        assert!(out.is_closed());
+        drop(cork);
+        assert!(rx.try_recv().is_none());
+        assert!(rx.rx.is_empty(), "nothing pushed to a closed client");
+    }
+
+    /// Another thread's sends aren't corked by this one's cork.
+    #[test]
+    fn a_cork_is_the_threads_own() {
+        let (out, mut rx) = Outbound::detached();
+        let _cork = Cork::new();
+        let other = out.clone();
+        std::thread::spawn(move || assert!(other.send_frame(frame(7, &[0; 4]))))
+            .join()
+            .unwrap();
+        assert_eq!(opcodes(&mut rx), [7]);
+    }
+
+    fn clients(of: &[usize]) -> Arc<Clients> {
+        let mut c = Clients::default();
+        for i in of {
+            c.insert(*i);
+        }
+        Arc::new(c)
+    }
+
+    /// A broadcast is kept once; each client gets it in its place among
+    /// what was sent it alone, and the budget is taken for it at the push.
+    #[test]
+    fn a_broadcast_reaches_each_client_in_its_place() {
+        let queues: Vec<(Outbound, Frames)> = (0..3).map(|_| Outbound::detached()).collect();
+        let table = |i: usize| queues.get(i).map(|(o, _)| o.clone());
+        {
+            let _cork = Cork::new();
+            queues[0].0.send_frame(frame(1, &[0; 4]));
+            broadcast(7, &frame(2, &[0; 4]), &clients(&[0, 2]), table);
+            queues[0].0.send_frame(frame(3, &[0; 4]));
+            queues[1].0.send_frame(frame(3, &[0; 4]));
+            broadcast(7, &frame(4, &[0; 4]), &clients(&[0, 1, 2, 9]), table);
+            assert_eq!(
+                queues[2].0.queued_bytes(),
+                0,
+                "a broadcast's budget at the push"
+            );
+        }
+        let mut q = queues;
+        assert_eq!(q[2].0.queued_bytes(), 16);
+        assert_eq!(opcodes(&mut q[0].1), [1, 2, 3, 4]);
+        assert_eq!(opcodes(&mut q[1].1), [3, 4]);
+        assert_eq!(opcodes(&mut q[2].1), [2, 4]);
+        // Uncorked, each is sent it at once.
+        let table = |i: usize| q.get(i).map(|(o, _)| o.clone());
+        broadcast(7, &frame(5, &[0; 4]), &clients(&[1]), table);
+        assert_eq!(opcodes(&mut q[1].1), [5]);
+    }
+
+    /// A broadcast to a held client goes into its hold, before the hold or
+    /// after it into the log, as uncorked.
+    #[test]
+    fn a_broadcast_keeps_a_holds_order() {
+        let (a, mut ra) = Outbound::detached();
+        let table = |i: usize| (i == 0).then(|| a.clone());
+        let cork = Cork::new();
+        broadcast(1, &frame(1, &[0; 4]), &clients(&[0]), table);
+        assert!(a.hold());
+        broadcast(1, &frame(3, &[0; 4]), &clients(&[0]), table);
+        a.send_frame(frame(4, &[0; 4]));
+        assert!(a.has_held());
+        a.release(vec![frame(2, &[0; 4])]);
+        broadcast(1, &frame(5, &[0; 4]), &clients(&[0]), table);
+        drop(cork);
+        assert_eq!(opcodes(&mut ra), [1, 2, 3, 4, 5]);
+        // Held before the cork's first broadcast reaches it.
+        let (b, mut rb) = Outbound::detached();
+        let table = |i: usize| (i == 0).then(|| b.clone());
+        assert!(b.hold());
+        {
+            let _cork = Cork::new();
+            broadcast(1, &frame(7, &[0; 4]), &clients(&[0]), table);
+            assert!(rb.rx.is_empty() && b.has_held());
+        }
+        b.release(vec![frame(6, &[0; 4])]);
+        assert_eq!(opcodes(&mut rb), [6, 7]);
+    }
+
+    /// Over budget at the push, a client is disconnected; another map's
+    /// broadcast pushes the first map's before it.
+    #[test]
+    fn a_broadcast_over_budget_disconnects_and_maps_dont_mix() {
+        let (small, mut rs) = queue(10);
+        let (big, mut rb) = Outbound::detached();
+        {
+            let _cork = Cork::new();
+            let one = |i: usize| (i == 0).then(|| small.clone());
+            broadcast(1, &frame(1, &[0; 4]), &clients(&[0]), one);
+            broadcast(1, &frame(2, &[0; 4]), &clients(&[0]), one);
+            let other = |i: usize| (i == 0).then(|| big.clone());
+            broadcast(2, &frame(3, &[0; 4]), &clients(&[0]), other);
+            assert!(small.is_closed(), "pushed, and over");
+        }
+        assert!(rs.try_recv().is_none());
+        assert_eq!(opcodes(&mut rb), [3]);
+    }
+
+    /// Parked, what a cork held waits for the next cork, and goes before
+    /// what that one is sent; dropped, it is pushed.
+    #[test]
+    fn a_parked_cork_goes_on_with_the_next_or_is_pushed_when_dropped() {
+        let (a, mut ra) = Outbound::detached();
+        let table = |i: usize| (i == 0).then(|| a.clone());
+        let cork = Cork::new();
+        broadcast(1, &frame(1, &[0; 4]), &clients(&[0]), table);
+        a.send_frame(frame(2, &[0; 4]));
+        let parked = cork.park().expect("it holds something");
+        assert!(ra.rx.is_empty(), "parked, not pushed");
+        // Elsewhere meanwhile, uncorked: on its way at once.
+        assert!(!CORKED.get());
+        let parked = std::thread::spawn(move || {
+            let cork = Cork::resume(parked);
+            cork.park().expect("still")
+        })
+        .join()
+        .unwrap();
+        let cork = Cork::resume(parked);
+        broadcast(1, &frame(3, &[0; 4]), &clients(&[0]), table);
+        let parked = cork.park().unwrap();
+        assert!(ra.rx.is_empty());
+        drop(parked);
+        assert_eq!(opcodes(&mut ra), [1, 2, 3]);
+        assert!(Cork::new().park().is_none(), "an empty cork parks nothing");
+    }
+
     #[test]
     fn a_held_client_over_budget_is_disconnected() {
         let (out, _frames) = queue(10);
@@ -1108,8 +1825,16 @@ mod tests {
         assert!(outbound.is_closed());
         let max = crate::config::config().network.max_overspeed_pings as usize;
         let mut pongs = 0;
-        while frames.rx.try_recv().is_ok() {
-            pongs += 1;
+        // Closed, the queue hands out nothing: what it held, counted.
+        while let Ok(item) = frames.rx.try_recv() {
+            pongs += match item {
+                Item::One(_) => 1,
+                Item::Corked(c) => {
+                    let mut n = 0;
+                    c.for_each(|_| n += 1);
+                    n
+                }
+            };
         }
         assert_eq!(pongs, 1 + max, "the first, and those let through");
     }

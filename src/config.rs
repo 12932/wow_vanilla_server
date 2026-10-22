@@ -195,6 +195,11 @@ settings! {
         /// `WOW_REALM_ADDRESS`, the realm list sends clients to
         /// `localhost` on its port.
         world_address: String = "0.0.0.0:8085".to_owned(), Any, Restart, "";
+        /// Milliseconds a map may keep players' movement before it sends
+        /// it on, gathering what each client is sent into one write: a
+        /// crowd's packets cost far less so, a little later. 0 sends each
+        /// burst of movement as it is handled.
+        broadcast_batch_ms: u64 = 10, Clamp(0.0, 50.0), Live, "";
     }
 }
 
@@ -300,6 +305,15 @@ settings! {
         /// only, before each map applies them; 1 works them out on the
         /// map's own thread, 0 takes the machine's cores, up to 8.
         refresh_threads: usize = 0, Clamp(0.0, 64.0), Restart, "";
+        /// Past these yards from a player who moves, those who see them
+        /// get only every `distant_move_every`th of their heartbeats (a
+        /// start, a stop, a jump, a turn or a landing always): fewer
+        /// packets for a crowd's far side. 0 sends every heartbeat to
+        /// everyone, as 1.12's servers do.
+        distant_move_yards: f32 = 0.0, Clamp(0.0, 500.0), Live, "";
+        /// Of a mover's heartbeats, the share an observer past
+        /// `distant_move_yards` gets: one in this many. 1 is every one.
+        distant_move_every: u32 = 1, Clamp(1.0, 100.0), Live, "";
     }
 }
 

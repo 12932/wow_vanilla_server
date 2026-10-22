@@ -6,7 +6,6 @@
 
 use std::time::{Duration, Instant};
 
-use ahash::AHashSet;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
@@ -31,7 +30,7 @@ pub struct DynamicObject {
     pub orientation: f32,
     pub radius: f32,
     pub fields: Fields,
-    pub observers: AHashSet<Guid>,
+    pub observers: crate::game::map::observers::Observers,
     pub cell: CellKey,
     /// When it goes; `None` while its spell (a channel) holds it.
     pub ends: Option<Instant>,
@@ -88,7 +87,7 @@ pub fn spawn(
         orientation,
         radius,
         fields: f,
-        observers: AHashSet::new(),
+        observers: Default::default(),
         cell,
         ends: ms.map(|ms| now + Duration::from_millis(u64::from(ms))),
     };
@@ -195,7 +194,7 @@ mod tests {
             orientation: 0.5,
             radius: 8.0,
             fields: f,
-            observers: AHashSet::new(),
+            observers: Default::default(),
             cell: cell_of(at.x, at.y),
             ends: None,
         };

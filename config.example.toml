@@ -57,6 +57,13 @@ auth_address = "0.0.0.0:3724"
 # Default "0.0.0.0:8085". Needs a restart.
 world_address = "0.0.0.0:8085"
 
+# Milliseconds a map may keep players' movement before it sends
+# it on, gathering what each client is sent into one write: a
+# crowd's packets cost far less so, a little later. 0 sends each
+# burst of movement as it is handled.
+# Default 10. Range 0 to 50, clamped. Changes at a reload.
+broadcast_batch_ms = 10
+
 # The world: saves, the message of the day, the character store and
 # the data's paths.
 [world]
@@ -174,6 +181,19 @@ refresh_budget_ms = 10
 # map's own thread, 0 takes the machine's cores, up to 8.
 # Default 0. Range 0 to 64, clamped. Needs a restart.
 refresh_threads = 0
+
+# Past these yards from a player who moves, those who see them
+# get only every `distant_move_every`th of their heartbeats (a
+# start, a stop, a jump, a turn or a landing always): fewer
+# packets for a crowd's far side. 0 sends every heartbeat to
+# everyone, as 1.12's servers do.
+# Default 0.0. Range 0 to 500, clamped. Changes at a reload.
+distant_move_yards = 0.0
+
+# Of a mover's heartbeats, the share an observer past
+# `distant_move_yards` gets: one in this many. 1 is every one.
+# Default 1. Range 1 to 100, clamped. Changes at a reload.
+distant_move_every = 1
 
 # Chat: how far it carries, and the flood control. GMs aren't
 # muted.

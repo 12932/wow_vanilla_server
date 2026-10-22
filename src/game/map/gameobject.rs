@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use ahash::AHashSet;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
@@ -24,7 +23,7 @@ pub struct GameObject {
     pub fields: Fields,
     pub position: Vector3d,
     pub orientation: f32,
-    pub observers: AHashSet<Guid>,
+    pub observers: crate::game::map::observers::Observers,
     pub cell: CellKey,
     pub loot: Option<crate::game::map::loot::Loot>,
     /// The zone and area it stands in, once worked out.
@@ -68,7 +67,7 @@ impl GameObject {
             fields: f,
             position,
             orientation: s.orientation,
-            observers: AHashSet::new(),
+            observers: Default::default(),
             cell: cell_of(s.x, s.y),
             loot: None,
             zone_area: None,

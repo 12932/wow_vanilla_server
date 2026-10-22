@@ -418,8 +418,9 @@ async fn a_watcher_sees_a_creature_and_a_player_stop_where_they_die_on_the_run()
 #[ignore = "extended"]
 async fn deaths_on_the_run_pass_the_client() {
     use crate::game::tests_client_emu::{capture, checker, run_checker};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let (mut a, mut b) = deaths_on_the_run().await;
     for _ in 0..5 {
         tokio::time::sleep(Duration::from_millis(100)).await;

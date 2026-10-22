@@ -118,6 +118,7 @@ Connections: queues, timeouts and limits.
 | `max_overspeed_pings` | Pings a client may send in a row each less than 27 seconds after the last (the client pings every 30) before it is disconnected; 0 never disconnects. | `2` | 0 to 1000, clamped | restart | `MaxOverspeedPings` |
 | `auth_address` | Where the login server listens, `ip:port`. Every interface by default (decision 53); `127.0.0.1:3724` keeps it to this machine, as a load test should. | `"0.0.0.0:3724"` | any | restart | |
 | `world_address` | Where the world server listens, `ip:port`. Without `WOW_REALM_ADDRESS`, the realm list sends clients to `localhost` on its port. | `"0.0.0.0:8085"` | any | restart | |
+| `broadcast_batch_ms` | Milliseconds a map may keep players' movement before it sends it on, gathering what each client is sent into one write: a crowd's packets cost far less so, a little later. 0 sends each burst of movement as it is handled. | `10` | 0 to 50, clamped | live | |
 
 ### `[world]`
 
@@ -155,6 +156,8 @@ How far players see, in yards (further costs the server more and the client more
 | `flight_yards` | On a flight master's gryphon or wyvern: further, as the land goes by below. Back to the map's own on landing. | `400.0` | 20 to 500, clamped | live |  |
 | `refresh_budget_ms` | How long a map's update may spend on visibility's refreshes, in milliseconds: past it the rest wait for the next update (20 a second), oldest first, so a crowd moving in step can't stall a map. At least one chunk (128) is done each update. | `10` | 0 to 1000, clamped | live |  |
 | `refresh_threads` | Threads that work out visibility's refreshes for the maps, read only, before each map applies them; 1 works them out on the map's own thread, 0 takes the machine's cores, up to 8. | `0` | 0 to 64, clamped | restart |  |
+| `distant_move_yards` | Past these yards from a player who moves, those who see them get only every `distant_move_every`th of their heartbeats (a start, a stop, a jump, a turn or a landing always): fewer packets for a crowd's far side. 0 sends every heartbeat to everyone, as 1.12's servers do. | `0.0` | 0 to 500, clamped | live |  |
+| `distant_move_every` | Of a mover's heartbeats, the share an observer past `distant_move_yards` gets: one in this many. 1 is every one. | `1` | 1 to 100, clamped | live |  |
 
 ### `[chat]`
 

@@ -498,8 +498,9 @@ fn the_real_fireworks_call_their_guys_to_the_launchers() {
 #[ignore = "extended"]
 async fn a_launchs_packets_pass_the_client() {
     use crate::game::tests_client_emu::{capture, checker, run_checker};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let (_realm, mut a, g, map) =
         setup_with(world(crate::game::omen::LAUNCHER), Class::Warrior).await;
     ready(&map, g, LUCKY_CLUSTER).await;

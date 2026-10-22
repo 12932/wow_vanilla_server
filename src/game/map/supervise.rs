@@ -202,6 +202,7 @@ pub fn send_to_screen(map: &mut Map, g: Guid) {
         map.key
     );
     if let Some(session) = gone_unsaved(map, g) {
+        crate::game::conn::uncork();
         let _ = session.send(crate::game::session::Control::LoggedOut);
     }
 }
@@ -234,6 +235,8 @@ fn gone_unsaved(map: &mut Map, g: Guid) -> Option<UnboundedSender<Control>> {
     let _ = catch(|| map.let_go(g));
     let mut session = None;
     if let Some(p) = map.players.remove(&g) {
+        crate::game::conn::uncork();
+        map.clients.release(g);
         // What `take_player` does once its own steps are past.
         map.grid.remove(g, p.cell);
         map.visibility_dirty.remove(&g);

@@ -835,8 +835,9 @@ async fn a_scripts_teleport_to_where_a_creature_stands_turns_it_for_all_to_see()
 #[ignore = "extended"]
 async fn a_scripts_teleports_pass_the_client() {
     use crate::game::tests_client_emu::{capture, checker, run_checker};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let (_realm, mut a, ga, map) = setup_with(walker_world(), Class::Mage).await;
     let [g] = walkers(&mut a, &map, ga, [5.0]).await;
     on(&map, move |m| {

@@ -459,8 +459,9 @@ async fn a_flyer_falling_dead_passes_the_client() {
     if !bake.join("Azeroth.map").exists() {
         return;
     }
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     const BAT: u32 = 3_795;
     const HIGH: (f32, f32, f32) = (-9460.0, 62.0, 120.0);
     let mut d = data();

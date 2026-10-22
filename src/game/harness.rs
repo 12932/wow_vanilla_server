@@ -142,6 +142,8 @@ pub fn test_config() -> RealmConfig {
         // the budget sets one).
         visibility_budget: Duration::from_secs(1),
         visibility_threads: visibility.refresh_threads,
+        distant_move_yards: visibility.distant_move_yards,
+        distant_move_every: visibility.distant_move_every,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,
@@ -198,6 +200,7 @@ pub fn test_config() -> RealmConfig {
         events: Default::default(),
         anticheat: Default::default(),
         gm: Default::default(),
+        broadcast_batch: Duration::ZERO,
     }
 }
 

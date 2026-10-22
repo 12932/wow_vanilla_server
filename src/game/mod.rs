@@ -125,6 +125,8 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_order;
 #[cfg(test)]
+mod tests_outbound;
+#[cfg(test)]
 mod tests_own_guids;
 #[cfg(test)]
 mod tests_p10_ai_autocast;
@@ -1342,6 +1344,10 @@ pub struct RealmConfig {
     /// The threads visibility's decisions are worked out on (`[visibility]
     /// refresh_threads`; 1 none but the map's).
     pub visibility_threads: usize,
+    /// `[visibility] distant_move_yards` and `distant_move_every`: past the
+    /// yards, an observer gets one in so many of a mover's heartbeats.
+    pub distant_move_yards: f32,
+    pub distant_move_every: u32,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -1415,6 +1421,8 @@ pub struct RealmConfig {
     pub events: crate::config::EventsConfig,
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
+    /// `[network] broadcast_batch_ms`.
+    pub broadcast_batch: Duration,
 }
 
 impl RealmConfig {
@@ -1428,6 +1436,8 @@ impl RealmConfig {
             flight_visibility_yards: c.visibility.flight_yards,
             visibility_budget: Duration::from_millis(c.visibility.refresh_budget_ms),
             visibility_threads: c.visibility.refresh_threads,
+            distant_move_yards: c.visibility.distant_move_yards,
+            distant_move_every: c.visibility.distant_move_every,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,
@@ -1472,6 +1482,7 @@ impl RealmConfig {
             events: c.events.clone(),
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),
+            broadcast_batch: Duration::from_millis(c.network.broadcast_batch_ms),
         }
     }
 

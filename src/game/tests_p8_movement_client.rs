@@ -58,8 +58,9 @@ fn swings(m: &mut crate::game::map::Map, attacker: Guid, victim: Guid) {
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_melee_blow_of_every_kind_passes_the_client() {
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm_with(brute());
     let map = realm.maps.get(&realm, MapKey::world(0));
     let (mut a, ga) = enter(&realm, "A", "Alice").await;

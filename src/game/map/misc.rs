@@ -64,6 +64,9 @@ pub struct PlayerMisc {
     pub quest_shared: Option<(Guid, u32)>,
     /// A GM's god mode: no damage taken.
     pub god: bool,
+    /// The heartbeats the player's client has sent, for
+    /// [`crate::game::map::Map::send_move`]'s thinning.
+    pub heartbeats: u32,
     /// `.god`, for load tests: the player takes their blows (the blows,
     /// their packets and the health they cost) but never falls below 1
     /// health, so never dies. Saved nowhere.

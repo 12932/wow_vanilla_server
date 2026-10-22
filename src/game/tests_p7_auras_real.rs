@@ -589,8 +589,9 @@ async fn transformed_grown_and_marked_units_pass_the_client() {
     const TRANSFORM: u32 = 97_910;
     const GROWTH: u32 = 97_911;
     const MARK: u32 = 97_912;
-    let (check_py, wow_exe) = emu::checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = emu::checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let mut d = GameData::empty();
     d.creature_templates
         .insert(BEAST, emu::template(BEAST, "Beast", 7));

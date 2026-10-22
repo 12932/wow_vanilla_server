@@ -6,7 +6,6 @@
 
 use std::time::{Duration, Instant};
 
-use ahash::AHashSet;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
@@ -60,7 +59,7 @@ pub struct Corpse {
     pub fields: Fields,
     pub position: Vector3d,
     pub orientation: f32,
-    pub observers: AHashSet<Guid>,
+    pub observers: crate::game::map::observers::Observers,
     pub cell: CellKey,
 }
 
@@ -119,7 +118,7 @@ impl Corpse {
             fields: f,
             position: pos,
             orientation,
-            observers: AHashSet::new(),
+            observers: Default::default(),
             cell: cell_of(pos.x, pos.y),
         }
     }

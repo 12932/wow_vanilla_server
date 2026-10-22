@@ -275,8 +275,9 @@ async fn damage_and_resistances_go_to_the_master_and_to_an_empathys_caster() {
 #[ignore = "extended"]
 async fn each_viewers_own_view_passes_the_client() {
     use crate::game::tests_client_emu as emu;
-    let (check_py, wow_exe) = emu::checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = emu::checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let realm = harness::realm_with(world());
     let (mut a, ga, map) = enter(&realm, "A", "Ari", Race::Dwarf, Class::Hunter).await;
     let (mut b, gb, _) = enter(&realm, "B", "Bo", Race::Dwarf, Class::Hunter).await;

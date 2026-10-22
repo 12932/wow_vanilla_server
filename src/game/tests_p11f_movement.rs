@@ -261,8 +261,9 @@ async fn facing_on_the_way() -> [Client; 2] {
 #[ignore = "extended"]
 async fn the_creates_with_a_jump_an_elevation_or_a_final_facing_pass_the_client() {
     use crate::game::tests_client_emu::{capture, checker, run_checker};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let [mut a, mut b, mut c] = jumper_and_raised().await;
     let (frames, counts) = capture(vec![&mut a, &mut b, &mut c]);
     assert!(

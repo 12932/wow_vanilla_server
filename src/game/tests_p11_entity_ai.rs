@@ -336,8 +336,9 @@ async fn a_create_with_a_walks_final_facing_passes_the_client() {
     use crate::game::map::scripts;
     use crate::game::tests_client_emu::{capture, checker, run_checker};
     use crate::game::tests_p3_combat::{BRUTE, data, setup_with, spawn};
-    let (check_py, wow_exe) = checker()
-        .expect("the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md");
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
     let (realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
     let brute = map
         .query(move |m| {
