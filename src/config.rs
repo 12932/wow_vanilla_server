@@ -199,7 +199,7 @@ settings! {
         /// it on, gathering what each client is sent into one write: a
         /// crowd's packets cost far less so, a little later. 0 sends each
         /// burst of movement as it is handled.
-        broadcast_batch_ms: u64 = 0, Clamp(0.0, 50.0), Live, "";
+        broadcast_batch_ms: u64 = 10, Clamp(0.0, 50.0), Live, "";
     }
 }
 
