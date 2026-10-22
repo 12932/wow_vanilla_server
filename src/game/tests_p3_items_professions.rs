@@ -235,6 +235,8 @@ const TARGET_NOT_DEAD: u8 = 0x6e;
 const TARGET_NOT_LOOTED: u8 = 0x70;
 const TARGET_NO_POCKETS: u8 = 0x72;
 const TARGET_UNSKINNABLE: u8 = 0x74;
+const CHEST_IN_USE: u8 = 0x15;
+const SMSG_CAST_RESULT: u16 = 0x130;
 const CANT_BE_DISENCHANTED: u8 = 0x0c;
 
 /// Thistle Tea's `Skinning.validate_target` and `sync/1`: not alive, not
@@ -434,6 +436,94 @@ async fn pockets_are_picked_once_a_life() {
     })
     .await;
     assert_eq!(window(&mut b).await, (0, vec![LETTER]));
+}
+
+/// A second rogue's Pick Pocket at pockets another has open is refused as
+/// a chest in use is (mangos's `LOOT_ERROR_LOCKED`, "Someone is already
+/// looting"), and the first's window keeps its loot; once it is shut, the
+/// second picks them, finding what their quest wants.
+#[tokio::test]
+async fn pockets_open_to_one_rogue_are_refused_to_another() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Rogue).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Rogue).await;
+    let mark = unit(3);
+    a.sees(mark).await;
+    b.sees(mark).await;
+    a.clear();
+    on_map(&realm, move |m| {
+        for g in [ga, gb] {
+            crate::game::map::spells::cast_triggered(m, g, STEALTH, Some(g));
+        }
+        m.players
+            .get_mut(&gb)
+            .unwrap()
+            .journal
+            .add(crate::game::store::Logged {
+                quest: 50,
+                ..Default::default()
+            });
+        run(m, ga, PICK, at(mark));
+    })
+    .await;
+    let (gold, items) = window(&mut a).await;
+    assert_eq!(items, vec![COIN]);
+    b.clear();
+    let refused = on_map(&realm, move |m| {
+        let why = why(m, gb, PICK, at(mark));
+        if let Some(p) = m.players.get_mut(&gb) {
+            p.caster.gcd_until = None;
+            p.caster.casting = None;
+        }
+        crate::game::map::spells::cast(m, gb, PICK, at(mark), None);
+        // Its effect alone, as if it flew as Alice opened them.
+        professions::pick_pocket(m, gb, mark);
+        why
+    })
+    .await;
+    assert_eq!(refused, Some(CHEST_IN_USE), "Bob is refused");
+    let f = b
+        .wait_frame("SMSG_CAST_RESULT", SMSG_CAST_RESULT, |f| {
+            u32::from_le_bytes(f[0..4].try_into().unwrap()) == PICK
+        })
+        .await;
+    assert_eq!(
+        (f[4], f.get(5).copied()),
+        (2, Some(CHEST_IN_USE)),
+        "and told"
+    );
+    let (alices, bobs) = on_map(&realm, move |m| {
+        let l = m.creature(mark).and_then(|c| c.loot.as_ref());
+        (l.map(|l| (l.gold, l.owner)), looting(m, gb))
+    })
+    .await;
+    assert_eq!(
+        alices,
+        Some((gold, Some(ga))),
+        "Alice's window keeps its loot"
+    );
+    assert_eq!(bobs, None, "Bob looks in nothing");
+    // Alice shuts them: Bob picks them, his quest's letter alone.
+    b.clear();
+    let after = on_map(&realm, move |m| {
+        loot::release(m, ga, mark);
+        let why = why(m, gb, PICK, at(mark));
+        run(m, gb, PICK, at(mark));
+        why
+    })
+    .await;
+    assert_eq!(after, None, "Bob may pick them now");
+    assert_eq!(window(&mut b).await, (0, vec![LETTER]));
+    // Alice's own, left in them, are still hers to find.
+    a.clear();
+    on_map(&realm, move |m| {
+        loot::release(m, gb, mark);
+        run(m, ga, PICK, at(mark));
+    })
+    .await;
+    assert_eq!(window(&mut a).await, (gold, vec![COIN]));
 }
 
 /// Thistle Tea's `Disenchant`: an enchanter of any skill disenchants high

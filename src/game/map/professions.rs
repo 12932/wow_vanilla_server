@@ -584,6 +584,9 @@ pub fn check(
                 if !pockets {
                     return Some(FAIL_TARGET_NO_POCKETS);
                 }
+                if pockets_open_to_another(c, caster) {
+                    return Some(FAIL_CHEST_IN_USE);
+                }
             }
             // Thistle Tea's `Disenchant.validate_item`: an enchanter, and a
             // single carried item that may be.
@@ -996,6 +999,13 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     loot::show(map, caster, creature);
 }
 
+/// Whether `c`'s pockets are open in another than `rogue`'s window.
+fn pockets_open_to_another(c: &crate::game::map::creature::Creature, rogue: Guid) -> bool {
+    c.loot
+        .as_ref()
+        .is_some_and(|l| l.kind == LootKind::Pickpocket && l.looters.iter().any(|g| *g != rogue))
+}
+
 /// Picking a living creature's pockets: once a life. A pick's effect, run
 /// as it lands (`spells::effects`), so a resisted one picks nothing.
 pub fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
@@ -1007,6 +1017,18 @@ pub fn pick_pocket(map: &mut Map, caster: Guid, creature: Guid) {
     else {
         return;
     };
+    // Not while another rogue looks in them: the new pick would take
+    // their window's loot from under them. They're refused as a chest in
+    // use is (mangos's `LOOT_ERROR_LOCKED`, "Someone is already looting",
+    // as a cast result the client shows), till the window is shut; then
+    // the pockets are picked as before. `check` refuses the cast; this is
+    // for one opened as it flew.
+    if map
+        .creature(creature)
+        .is_some_and(|c| pockets_open_to_another(c, caster))
+    {
+        return;
+    }
     // What they left in them before, as it was.
     if let Some(left) = map.loot_state.pockets.remove(&(creature, caster)) {
         if let Some(c) = map.creature_mut(creature) {
