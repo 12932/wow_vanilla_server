@@ -16,9 +16,11 @@
 //!   acknowledged. It reports the newcomers placed a second, each step's
 //!   wait, and the map thread's CPU by event kind and by update step.
 //! - `movement`: the N run about the disc, a heartbeat each every
-//!   `CROWD_BEAT_MS` (250) ms, for `CROWD_SECS` (10) s: the map's events
-//!   handled a second, its mailbox after each update, its updates' time,
-//!   and the broadcasts the crowd got.
+//!   `CROWD_BEAT_MS` (250) ms, for `CROWD_SECS` (10) s (every
+//!   `CROWD_OTHER`th packet a `MSG_MOVE_SET_FACING` instead, which isn't
+//!   coalesced; `CROWD_QUEUED` sets `[network] max_queued_packets`): the
+//!   map's events handled a second, its mailbox after each update, its
+//!   updates' time, and the broadcasts the crowd got.
 //!
 //! With `WVS_DATA` (a `data/` with `db`), the real world's items, spells
 //! and creatures; without, an empty world (`.gear` gives nothing).
@@ -85,6 +87,7 @@ fn main() {
     cfg.spawn.y = CENTER.1;
     cfg.spawn.z = CENTER.2;
     cfg.world.save_interval_secs = 3600;
+    cfg.network.max_queued_packets = env("CROWD_QUEUED", cfg.network.max_queued_packets);
     let data_dir = std::env::var_os("WVS_DATA").map(|d| std::path::PathBuf::from(d).join("db"));
     cfg.world.data_dir = data_dir.clone();
     let cfg = wow_vanilla_server::config::install(cfg);
@@ -569,7 +572,13 @@ async fn movement(
     bench_probe::take_mailbox();
     MOVES.store(0, Ordering::Relaxed);
     let sent = Arc::new(AtomicU64::new(0));
+    let refused = Arc::new(AtomicU64::new(0));
+    let other: u64 = env("CROWD_OTHER", 0);
     let stop = Arc::new(AtomicBool::new(false));
+    let (coalesced, held) = (
+        wow_vanilla_server::game::stats::COALESCED.load(Ordering::Relaxed),
+        wow_vanilla_server::game::stats::HELD_BACK.load(Ordering::Relaxed),
+    );
     // The crowd in 8 groups, each its own task, a tick each `beat`.
     let groups = 8;
     let mut tasks = Vec::new();
@@ -578,9 +587,11 @@ async fn movement(
     while !senders.is_empty() {
         let group: Vec<_> = senders.drain(..per.min(senders.len())).collect();
         let sent = sent.clone();
+        let refused = refused.clone();
         let stop = stop.clone();
         tasks.push(tokio::spawn(async move {
             let mut group = group;
+            let mut n = 0u64;
             let mut tick = tokio::time::interval(Duration::from_millis(beat));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let step = 7.0 * beat as f32 / 1000.0;
@@ -602,19 +613,29 @@ async fn movement(
                     } else {
                         *at = next;
                     }
-                    let m = MSG_MOVE_HEARTBEAT_Client {
-                        info: MovementInfo {
-                            flags: MovementInfo_MovementFlags::new_forward(),
-                            timestamp: ms,
-                            position: *at,
-                            orientation: *heading,
-                            fall_time: 0,
-                        },
+                    let info = MovementInfo {
+                        flags: MovementInfo_MovementFlags::new_forward(),
+                        timestamp: ms,
+                        position: *at,
+                        orientation: *heading,
+                        fall_time: 0,
                     };
-                    // As a socket's reader would: it waits when the session
-                    // is full.
-                    if tx.send(Inbound::Msg(m.into())).await.is_ok() {
-                        sent.fetch_add(1, Ordering::Relaxed);
+                    // Every `other`th a facing, which nothing coalesces.
+                    n += 1;
+                    let m: ClientOpcodeMessage = if other > 0 && n % other == 0 {
+                        MSG_MOVE_SET_FACING_Client { info }.into()
+                    } else {
+                        MSG_MOVE_HEARTBEAT_Client { info }.into()
+                    };
+                    // A client whose session takes no more (its socket's
+                    // buffers full) sends nothing more meanwhile.
+                    match tx.try_send(Inbound::Msg(m)) {
+                        Ok(()) => {
+                            sent.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            refused.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
@@ -627,9 +648,15 @@ async fn movement(
     let took = t0.elapsed().as_secs_f64();
     let sent = sent.load(Ordering::Relaxed);
     println!(
-        "  sent {sent} heartbeats ({:.0}/s); the crowd got {:.0} movement broadcasts a second",
+        "  sent {sent} ({:.0}/s; {} not taken, the session full); the crowd got {:.0} movement broadcasts a second",
         sent as f64 / took,
+        refused.load(Ordering::Relaxed),
         MOVES.load(Ordering::Relaxed) as f64 / took
+    );
+    println!(
+        "  heartbeats coalesced {}, packets held back {}",
+        wow_vanilla_server::game::stats::COALESCED.load(Ordering::Relaxed) - coalesced,
+        wow_vanilla_server::game::stats::HELD_BACK.load(Ordering::Relaxed) - held
     );
     report_map(key, took);
     bench_probe::disable();
