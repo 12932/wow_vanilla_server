@@ -384,37 +384,9 @@ impl Map {
                 }
             }
             ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(m) => self.set_action_button(guid, m),
-            ClientOpcodeMessage::CMSG_TUTORIAL_FLAG(m) => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    let word = (m.tutorial_flag / 32) as usize;
-                    if let Some(w) = p.row.state.tutorials.get_mut(word) {
-                        *w |= 1 << (m.tutorial_flag % 32);
-                    }
-                }
-            }
-            ClientOpcodeMessage::CMSG_TUTORIAL_CLEAR => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    p.row.state.tutorials = [u32::MAX; 8];
-                }
-            }
-            ClientOpcodeMessage::CMSG_TUTORIAL_RESET => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    p.row.state.tutorials = [0; 8];
-                }
-            }
-            ClientOpcodeMessage::CMSG_UPDATE_ACCOUNT_DATA(m) => {
-                let account = self.players.get(&guid).map(|p| p.account.clone());
-                if let Some(account) = account {
-                    let kind = m.data_type.as_int();
-                    let now = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
-                    self.realm
-                        .store
-                        .set_account_data(&account, kind, now, m.compressed_data);
-                }
-            }
-            ClientOpcodeMessage::CMSG_REQUEST_ACCOUNT_DATA(_)
-            | ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC
-            | ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
+            // The tutorials, the account data and the cinematic's end are
+            // `misc::handle_all`'s (`account_data`, `cinematic`), above.
+            ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
             | ClientOpcodeMessage::CMSG_BUG(_)
             | ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO
             | ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET
