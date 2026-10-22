@@ -1196,7 +1196,17 @@ impl Session {
             let to = match back {
                 Ok(k) => k,
                 Err(()) => {
-                    if let Some(b) = row.state.bind {
+                    // Out of a match that is over: back where they joined
+                    // it from (mangos's battleground entry point), else
+                    // home.
+                    let joined = battleground.then(|| row.state.bg_return.take()).flatten();
+                    if let Some((m, x, y, z, o)) = joined {
+                        row.map = m;
+                        row.x = x;
+                        row.y = y;
+                        row.z = z;
+                        row.orientation = o;
+                    } else if let Some(b) = row.state.bind {
                         row.map = b.map;
                         row.x = b.x;
                         row.y = b.y;
