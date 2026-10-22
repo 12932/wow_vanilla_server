@@ -1712,3 +1712,82 @@ level 1 night elf hunter, as she starts (Worn Shortbow, Rough Arrows), auto-shoo
 off in the real world, and what she was sent passes the client check. With travel off the timing tests fail. The
 fast suite passes, and the extended tests on combat, ammunition, ranged AI, real data and the client check pass.
 Nothing on the hot path changes: one more `Vec` checked each update, empty unless someone is shooting.
+## The broadcast window, adaptive (2026-10-22)
+
+The cork's window (`[network] broadcast_batch_ms`, how long a map keeps its players' movement before it sends it
+on) was fixed, 10 ms: the same latency for a quiet map as for a crowd. Each map now steers its own
+(`map/batch.rs`, `Map::batch`), between `broadcast_batch_min_ms` (2) and `broadcast_batch_max_ms` (40), from
+`broadcast_batch_ms` (10); min equal to max fixes it. Once an update it looks at two loads, each smoothed over a
+second (an EWMA): its thread's busy share (updates, events and pushes, as the stats file counts them) and the
+server's CPU over the cores it may run on (`batch::cpu_share`, a `getrusage` four times a second on a task of its
+own). Past `broadcast_batch_busy_high` (0.9) or `broadcast_batch_cpu_high` (0.85), or with more than
+`broadcast_batch_mailbox` (2,000) events waiting, the window doubles; under both `busy_low` (0.6) and `cpu_low`
+(0.5) it halves (in whole milliseconds); between, it holds. After a change it holds a second, so that what the
+change did shows before the next. All live. Each map's window and both loads are in the stats file (`batch_ms`,
+`batch_busy`, `batch_cpu`) and in peon's drill summary per phase (the least, median and most, and each second's).
+
+The unit tests drive the controller on a fake clock: rising a step a second under sustained load, falling as it
+eases, holding between the thresholds and under a load swinging across the middle, the mailbox and the CPU each
+enough to raise it, never past its bounds (a reload's narrower ones held at the next look, a min of 0 reached and
+left). What each client is sent and in what order is as before: only when a parked run is pushed changes; the
+cork's tests pass, and `tests_outbound` runs the batched run with the adaptive window too.
+
+### What the first design showed
+
+The user's design steered the window by the map's thread alone (70% and 40%). Measured, the window hardly moves
+that thread any more: since the feed (round two) the clients' writers read a map's broadcasts themselves, on the
+runtime's other threads, so a short window costs their cores, not the map's. At 2,000 bots at random the thread was
+48-49% busy at 2, 10 and 20 ms; at 3,000, 86-87% at 10, 20 and 40. The server's CPU moved instead: 4.8 cores at
+2 ms, 3.4 at 10, 3.0 at 20 (2,000 bots). So the map's own load, near the old 70%, raised the window and held it
+there (2,000 bots: 2 to 32 ms after 44 s at random, latency p50 13 to 29 ms) with nothing gained, and on a box
+short of cores it saw nothing: the CPU is the signal that matters, the map's thread a guard at 90%.
+
+### Measured
+
+peon's drill (out 10 s, back 10 s, at random 120 s), on a 32-core box shared with other work: the server on 8 of
+its cores, peon on 16 others. The window is each second's of the phase, run-length coded; latency is a broadcast's,
+sender to receipt.
+
+| Bots | Window | Phase | Latency p50 / p99 ms | Delivered | Update p50 / p99 ms | Thread busy | Packets out / s | wvs CPU | Window ms |
+|---|---|---|---|---|---|---|---|---|---|
+| 200 | fixed 10 | out / back / random | 8 / 15, 8 / 15, 7 / 15 | 100.8% | 3.6 / 7.0 | 8% | 185k | 0.33 | 10 |
+| 200 | fixed 20 | out / back / random | 14 / 27, 14 / 27, 13 / 27 | 100.7% | 3.8 / 7.3 | 8% | 185k | 0.29 | 20 |
+| 200 | adaptive | out / back / random | 3 / 8, 3 / 8, 3 / 8 | 100.8% | 4.1 / 7.6 | 9% | 185k | 0.63 | 2 throughout |
+| 880 | fixed 10 | out / back / random | 11 / 33, 11 / 24, 10 / 30 | 100.7% | 7.4 / 22.5 | 20% | 3.60M | 1.34 | 10 |
+| 880 | fixed 20 | out / back / random | 17 / 37, 16 / 33, 14 / 35 | 100.8% | 7.2 / 18.8 | 18% | 3.59M | 1.10 | 20 |
+| 880 | adaptive | out / back / random | 4 / 17, 4 / 15, 4 / 18 | 100.7% | 7.1 / 17.4 | 18% | 3.59M | 2.69 | 2 throughout |
+| 2,000 | fixed 10 | out / back / random | 16 / 174, 15 / 50, 17 / 79 | 100.7% | 16.0 / 62.8 | 48% | 18.6M | 3.35 | 10 |
+| 2,000 | fixed 20 | out / back / random | 27 / 166, 25 / 59, 23 / 89 | 100.8% | 16.3 / 61.7 | 48% | 18.6M | 2.99 | 20 |
+| 2,000 | adaptive | out / back / random | 13 / 124, 13 / 59, 20 / 93 | 100.8% | 17.1 / 61.5 | 49% | 18.5M | 4.83 | 2 throughout |
+| 3,000 | fixed 10 | out / back / random | 33 / 381, 33 / 126, 101 / 307 | 100.4% | 41.7 / 157 | 87% | 41.5M | 4.58 | 10 |
+| 3,000 | fixed 20 | out / back / random | 43 / 463, 44 / 154, 103 / 356 | 99.8% | 40.2 / 220 | 86% | 41.2M | 4.57 | 20 |
+| 3,000 | adaptive | out / back / random | 45 / 422, 51 / 231, 145 / 389 | 100.0% | 45.4 / 173 | 89% | 40.0M | 4.37 | 2; at random 2 ×11 s, 4 ×4, 8 ×2, 16 ×2, 32, 40 ×96 |
+
+Delivered, update, busy, packets out and CPU are the random phase's. Packets out a second are the same whatever the
+window: every broadcast goes, the window only decides how many writes carry them. Run to run, on the shared box,
+latency moved by about a third (the first design's run at 2,000, also at 2 ms throughout: 8 / 145, 9 / 44,
+13 / 85; at 3,000, at 40 ms at random: 103 / 291).
+
+With the server on 4 cores (the same box), where the CPU is short:
+
+| Bots | Window | Latency p50 / p99 ms, out / back / random | Delivered | wvs CPU | Window ms |
+|---|---|---|---|---|---|
+| 2,000 | fixed 10 | 20 / 219, 18 / 56, 22 / 103 | 100.7% | 2.80 | 10 |
+| 2,000 | map's thread only (70%, 40%) | 11 / 170, 11 / 50, 15 / 87 | 100.7% | 3.15 | 2 throughout |
+| 2,000 | the map's thread or the CPU, 70% and 40% | 22 / 170, 24 / 75, 26 / 91 | 100.7% | 2.60 | 2 to 16 in the out phase, 16 after |
+| 2,000 | adaptive (the defaults) | 15 / 158, 21 / 67, 20 / 91 | 100.8% | 2.89 | 2 to 8 in the out phase, 8 after |
+| 3,000 | fixed 10 | 60 / 520, 62 / 186, 178 / 496 | 97.9% | 3.61 | 10 |
+| 3,000 | adaptive (the defaults) | 67 / 447, 81 / 178, 166 / 455 | 99.2% | 3.62 | 2 to 32 in the out phase, 40 at random |
+
+No run oscillated: a window rose in steps a second apart as the load came (the arrival, the crowd's first run, the
+map's thread saturated at 3,000) and held. Up to 2,000 bots on 8 cores the window stays at 2 ms: latency p50 3 to
+13 ms where 10 ms fixed gave 7 to 17, and 880 is under 20 ms p99 in every phase (17, 15, 18; fixed 10: 33, 24,
+30), for about twice the server's CPU (2.7 cores at 880, 4.8 at 2,000). Fixed 20 saves a tenth of the CPU of fixed
+10 and costs 6 to 10 ms of latency at every size. At 3,000 the map's thread is saturated (its update 42-45 ms at
+the median, of 50) whatever the window: latency is the update's, the window moves it no further. The tail at
+2,000 (p99 80-120 ms at random, 120-175 in the crowd's first run) is the update too (its p99 61 ms, `values` and
+`batches`, as round two found): the next lever is there, not in the window.
+
+Recommended: the defaults (2 to 40 ms from 10; the CPU's 0.85 and 0.5; the map's 0.9 and 0.6; the mailbox 2,000).
+A box whose cores are wanted for something else can lower `broadcast_batch_cpu_high`; `broadcast_batch_min_ms` =
+`broadcast_batch_max_ms` = 10 is the old behaviour.

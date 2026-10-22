@@ -1452,8 +1452,8 @@ pub struct RealmConfig {
     pub events: crate::config::EventsConfig,
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
-    /// `[network] broadcast_batch_ms`.
-    pub broadcast_batch: Duration,
+    /// `[network] broadcast_batch_*`: each map's window.
+    pub broadcast_batch: crate::game::map::batch::BatchConfig,
 }
 
 impl RealmConfig {
@@ -1517,7 +1517,7 @@ impl RealmConfig {
             events: c.events.clone(),
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),
-            broadcast_batch: Duration::from_millis(c.network.broadcast_batch_ms),
+            broadcast_batch: crate::game::map::batch::BatchConfig::from_config(&c.network),
         }
     }
 
@@ -1860,6 +1860,7 @@ pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
     }
     stats::start(&realm);
     memory_guard::start(&realm);
+    map::batch::start_cpu();
     info!("wow_vanilla_server {}", crate::VERSION);
     info!(
         "world: listening on {}",
