@@ -83,6 +83,10 @@ pub fn refused(map: &mut Map, player: Guid, msg: &ClientOpcodeMessage) -> bool {
             let from = (m.source_bag, m.source_slot);
             (banked(from), item(from))
         }
+        C::CMSG_OPEN_ITEM(m) => {
+            let at = (m.bag_index, m.slot);
+            (banked(at), item(at))
+        }
         C::CMSG_DESTROYITEM(m) => {
             let at = (m.bag, m.slot);
             (banked(at), item(at))

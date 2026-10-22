@@ -320,3 +320,25 @@ async fn nothing_in_the_buyback_is_wrapped() {
     .await;
     assert_eq!((gifts, paper_left, sold_entry), (0, 5, Some(TRINKET)));
 }
+
+/// The bank's items are refused away from a banker (inventory result 35):
+/// opening a clam there too.
+#[tokio::test]
+async fn a_clam_in_the_bank_doesnt_open_away_from_a_banker() {
+    let realm = realm();
+    let mut a = alice(&realm).await;
+    let g = a.guid;
+    give(&realm, g, CLAM, 1, Some((BAG_PLAYER, BANK_START))).await;
+    a.clear();
+    a.send(CMSG_OPEN_ITEM {
+        bag_index: BAG_PLAYER,
+        slot: BANK_START,
+    })
+    .await;
+    a.wait_frame("too far from the bank", 0x112, |b| {
+        b[0] == InventoryResult::TooFarAwayFromBank.as_int()
+    })
+    .await;
+    let open = on_map(&realm, move |m| m.players[&g].misc.item_loot.is_some()).await;
+    assert!(!open);
+}
