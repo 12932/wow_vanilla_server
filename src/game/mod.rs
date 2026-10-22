@@ -1852,6 +1852,7 @@ pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
     }
     stats::start(&realm);
     memory_guard::start(&realm);
+    map::batch::start_cpu();
     info!("wow_vanilla_server {}", crate::VERSION);
     info!(
         "world: listening on {}",

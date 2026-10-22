@@ -231,6 +231,11 @@ settings! {
         /// Events waiting in a map's mailbox (smoothed over a second) past
         /// which it counts as busy whatever its share. 0: never.
         broadcast_batch_mailbox: usize = 1000, Clamp(0.0, 1_000_000.0), Live, "";
+        /// Whether the server's CPU (its time over the cores it may run
+        /// on, smoothed over a second) counts as busy too, with the same
+        /// thresholds: a short window costs the clients' writers, on the
+        /// other threads, more than the map's.
+        broadcast_batch_cpu: bool = true, Any, Live, "";
     }
 }
 

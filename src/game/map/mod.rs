@@ -1035,7 +1035,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 let now = Instant::now();
                 map.batch.took(now - began);
                 let batching = map.cfg.broadcast_batch;
-                map.batch.look(&batching, now, rx.len());
+                map.batch.look(&batching, now, rx.len(), batch::cpu_share());
                 // An update that keeps panicking: a bad state, that a fresh
                 // map from the data won't have.
                 if supervise::escalated(&map) {

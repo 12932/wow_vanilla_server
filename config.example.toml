@@ -121,6 +121,13 @@ broadcast_batch_busy_low = 0.4
 # Default 1000. Range 0 to 1000000, clamped. Changes at a reload.
 broadcast_batch_mailbox = 1000
 
+# Whether the server's CPU (its time over the cores it may run
+# on, smoothed over a second) counts as busy too, with the same
+# thresholds: a short window costs the clients' writers, on the
+# other threads, more than the map's.
+# Default true. Changes at a reload.
+broadcast_batch_cpu = true
+
 # The world: saves, the message of the day, the character store and
 # the data's paths.
 [world]

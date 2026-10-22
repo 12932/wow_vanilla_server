@@ -134,6 +134,7 @@ Connections: queues, timeouts and limits.
 | `broadcast_batch_busy_high` | The share of its thread's time a map's updates and events take (smoothed over a second) past which its window doubles, at most once a second, up to `broadcast_batch_max_ms`. | `0.7` | 0 to 1, clamped | live | |
 | `broadcast_batch_busy_low` | The share under which a map's window halves, at most once a second, down to `broadcast_batch_min_ms` (at most `broadcast_batch_busy_high`). Between the two, it holds. | `0.4` | 0 to 1, clamped | live | |
 | `broadcast_batch_mailbox` | Events waiting in a map's mailbox (smoothed over a second) past which it counts as busy whatever its share. 0: never. | `1000` | 0 to 1000000, clamped | live | |
+| `broadcast_batch_cpu` | Whether the server's CPU (its time over the cores it may run on, smoothed over a second) counts as busy too, with the same thresholds: a short window costs the clients' writers, on the other threads, more than the map's. | `true` |  | live |  |
 
 ### `[world]`
 
