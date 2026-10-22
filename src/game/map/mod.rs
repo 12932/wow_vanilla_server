@@ -10,6 +10,7 @@ pub mod assistance;
 pub mod auction;
 pub mod auras;
 pub mod bank;
+pub mod batch;
 pub mod battleground;
 #[cfg(all(feature = "world-bench", unix))]
 pub mod bench_probe;
@@ -567,6 +568,9 @@ pub struct Map {
     /// crowd's creates for newcomers) is framed and compressed once.
     shared_frames: update::SharedFrames,
     pub stats: MapStats,
+    /// How long the map keeps its players' movement before it sends it on
+    /// ([`batch`]): its own, steered by its load.
+    pub batch: batch::BatchWindow,
     pub started: Instant,
     pub now: Instant,
     /// The next counters of the creatures and game objects the map makes
@@ -1005,13 +1009,14 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     loop {
         let flush_at = parked
             .as_ref()
-            .map(|p| tokio::time::Instant::from_std(p.since() + map.cfg.broadcast_batch));
+            .map(|p| tokio::time::Instant::from_std(p.since() + map.batch.window()));
         tokio::select! {
             // An update due runs before the next burst of events: the
             // burst's cap (`EVENT_BURST`) is only worth anything if the
             // ticker wins when both are ready (unbiased, it was a coin).
             biased;
             _ = ticker.tick() => {
+                let began = Instant::now();
                 // What the update sends each client goes in one push at its
                 // end.
                 {
@@ -1025,6 +1030,12 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 if map.stopping {
                     break;
                 }
+                // The window steered by the thread's load: the update and
+                // its push taken, then a look once an update.
+                let now = Instant::now();
+                map.batch.took(now - began);
+                let batching = map.cfg.broadcast_batch;
+                map.batch.look(&batching, now, rx.len());
                 // An update that keeps panicking: a bad state, that a fresh
                 // map from the data won't have.
                 if supervise::escalated(&map) {
@@ -1050,7 +1061,9 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     None => std::future::pending().await,
                 }
             } => {
+                let began = Instant::now();
                 drop(parked.take());
+                map.batch.took(began.elapsed());
             }
             event = rx.recv() => {
                 let Some(event) = event else { break };
@@ -1094,10 +1107,11 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // Kept for the next burst, while the batch's time lasts.
                 if let Some(c) = cork
                     && !stop
-                    && !map.cfg.broadcast_batch.is_zero()
+                    && !map.batch.window().is_zero()
                 {
                     parked = c.park();
                 }
+                map.batch.took(burst.elapsed());
                 if let Some(at) = sampled {
                     sampler.events(handled, at.elapsed());
                 }
@@ -1342,6 +1356,7 @@ impl Map {
             key,
             // The generation first: a reload in between is taken again.
             cfg_generation: realm.config_generation(),
+            batch: batch::BatchWindow::new(&realm.config().broadcast_batch),
             cfg: realm.config(),
             realm,
             handle,

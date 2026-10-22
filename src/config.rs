@@ -209,9 +209,28 @@ settings! {
         world_address: String = "0.0.0.0:8085".to_owned(), Any, Restart, "";
         /// Milliseconds a map may keep players' movement before it sends
         /// it on, gathering what each client is sent into one write: a
-        /// crowd's packets cost far less so, a little later. 0 sends each
-        /// burst of movement as it is handled.
+        /// crowd's packets cost far less so, a little later. Each map's
+        /// window starts here (within `broadcast_batch_min_ms` and
+        /// `broadcast_batch_max_ms`) and follows its thread's load: see
+        /// those. 0 sends each burst of movement as it is handled.
         broadcast_batch_ms: u64 = 10, Clamp(0.0, 50.0), Live, "";
+        /// The least a map's window goes to, quiet. With
+        /// `broadcast_batch_max_ms` equal to it, the window is fixed there.
+        broadcast_batch_min_ms: u64 = 2, Clamp(0.0, 50.0), Live, "";
+        /// The most a map's window goes to, loaded (at least
+        /// `broadcast_batch_min_ms`).
+        broadcast_batch_max_ms: u64 = 40, Clamp(0.0, 50.0), Live, "";
+        /// The share of its thread's time a map's updates and events take
+        /// (smoothed over a second) past which its window doubles, at most
+        /// once a second, up to `broadcast_batch_max_ms`.
+        broadcast_batch_busy_high: f64 = 0.7, Clamp(0.0, 1.0), Live, "";
+        /// The share under which a map's window halves, at most once a
+        /// second, down to `broadcast_batch_min_ms` (at most
+        /// `broadcast_batch_busy_high`). Between the two, it holds.
+        broadcast_batch_busy_low: f64 = 0.4, Clamp(0.0, 1.0), Live, "";
+        /// Events waiting in a map's mailbox (smoothed over a second) past
+        /// which it counts as busy whatever its share. 0: never.
+        broadcast_batch_mailbox: usize = 1000, Clamp(0.0, 1_000_000.0), Live, "";
     }
 }
 

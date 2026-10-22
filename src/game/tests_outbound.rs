@@ -228,7 +228,9 @@ async fn a_broadcast_follows_comings_and_goings() {
 #[tokio::test]
 async fn a_batched_run_reaches_each_observer_in_order() {
     let realm = realm(RealmConfig {
-        broadcast_batch: std::time::Duration::from_millis(20),
+        broadcast_batch: crate::game::map::batch::BatchConfig::fixed(
+            std::time::Duration::from_millis(20),
+        ),
         ..harness::test_config()
     });
     let ([mut a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
@@ -239,6 +241,29 @@ async fn a_batched_run_reaches_each_observer_in_order() {
     assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
     // Bob is near enough to hear it (Carol isn't), after the run.
     stop_before_say(&mut b, ga).await;
+}
+
+/// With the window steered by the map's load (the defaults: from 10 ms,
+/// between 2 and 40), the same: and the map's window is within its bounds.
+#[tokio::test]
+async fn an_adaptive_batch_keeps_each_observers_order() {
+    let batching = crate::game::map::batch::BatchConfig::default();
+    let realm = realm(RealmConfig {
+        broadcast_batch: batching,
+        ..harness::test_config()
+    });
+    let ([mut a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let at = on(&map, move |m| m.players[&ga].position()).await;
+    run(&mut a, at).await;
+    a.say("after the run").await;
+    assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
+    stop_before_say(&mut b, ga).await;
+    let window = on(&map, |m| m.batch.window()).await;
+    assert!(
+        (batching.min..=batching.max).contains(&window),
+        "{window:?}"
+    );
 }
 
 /// Of `mover`'s stop and a say, the stop came first.

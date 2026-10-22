@@ -87,10 +87,39 @@ world_address = "0.0.0.0:8085"
 
 # Milliseconds a map may keep players' movement before it sends
 # it on, gathering what each client is sent into one write: a
-# crowd's packets cost far less so, a little later. 0 sends each
-# burst of movement as it is handled.
+# crowd's packets cost far less so, a little later. Each map's
+# window starts here (within `broadcast_batch_min_ms` and
+# `broadcast_batch_max_ms`) and follows its thread's load: see
+# those. 0 sends each burst of movement as it is handled.
 # Default 10. Range 0 to 50, clamped. Changes at a reload.
 broadcast_batch_ms = 10
+
+# The least a map's window goes to, quiet. With
+# `broadcast_batch_max_ms` equal to it, the window is fixed there.
+# Default 2. Range 0 to 50, clamped. Changes at a reload.
+broadcast_batch_min_ms = 2
+
+# The most a map's window goes to, loaded (at least
+# `broadcast_batch_min_ms`).
+# Default 40. Range 0 to 50, clamped. Changes at a reload.
+broadcast_batch_max_ms = 40
+
+# The share of its thread's time a map's updates and events take
+# (smoothed over a second) past which its window doubles, at most
+# once a second, up to `broadcast_batch_max_ms`.
+# Default 0.7. Range 0 to 1, clamped. Changes at a reload.
+broadcast_batch_busy_high = 0.7
+
+# The share under which a map's window halves, at most once a
+# second, down to `broadcast_batch_min_ms` (at most
+# `broadcast_batch_busy_high`). Between the two, it holds.
+# Default 0.4. Range 0 to 1, clamped. Changes at a reload.
+broadcast_batch_busy_low = 0.4
+
+# Events waiting in a map's mailbox (smoothed over a second) past
+# which it counts as busy whatever its share. 0: never.
+# Default 1000. Range 0 to 1000000, clamped. Changes at a reload.
+broadcast_batch_mailbox = 1000
 
 # The world: saves, the message of the day, the character store and
 # the data's paths.

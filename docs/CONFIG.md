@@ -128,7 +128,12 @@ Connections: queues, timeouts and limits.
 | `max_overspeed_pings` | Pings a client may send in a row each less than 27 seconds after the last (the client pings every 30) before it is disconnected; 0 never disconnects. | `2` | 0 to 1000, clamped | restart | `MaxOverspeedPings` |
 | `auth_address` | Where the login server listens, `ip:port`. Every interface by default (decision 53); `127.0.0.1:3724` keeps it to this machine, as a load test should. | `"0.0.0.0:3724"` | any | restart | |
 | `world_address` | Where the world server listens, `ip:port`. Without `WOW_REALM_ADDRESS`, the realm list sends clients to `localhost` on its port. | `"0.0.0.0:8085"` | any | restart | |
-| `broadcast_batch_ms` | Milliseconds a map may keep players' movement before it sends it on, gathering what each client is sent into one write: a crowd's packets cost far less so, a little later. 0 sends each burst of movement as it is handled. | `10` | 0 to 50, clamped | live | |
+| `broadcast_batch_ms` | Milliseconds a map may keep players' movement before it sends it on, gathering what each client is sent into one write: a crowd's packets cost far less so, a little later. Each map's window starts here (within `broadcast_batch_min_ms` and `broadcast_batch_max_ms`) and follows its thread's load. 0 sends each burst of movement as it is handled. | `10` | 0 to 50, clamped | live | |
+| `broadcast_batch_min_ms` | The least a map's window goes to, quiet. With `broadcast_batch_max_ms` equal to it, the window is fixed there. | `2` | 0 to 50, clamped | live | |
+| `broadcast_batch_max_ms` | The most a map's window goes to, loaded (at least `broadcast_batch_min_ms`). | `40` | 0 to 50, clamped | live | |
+| `broadcast_batch_busy_high` | The share of its thread's time a map's updates and events take (smoothed over a second) past which its window doubles, at most once a second, up to `broadcast_batch_max_ms`. | `0.7` | 0 to 1, clamped | live | |
+| `broadcast_batch_busy_low` | The share under which a map's window halves, at most once a second, down to `broadcast_batch_min_ms` (at most `broadcast_batch_busy_high`). Between the two, it holds. | `0.4` | 0 to 1, clamped | live | |
+| `broadcast_batch_mailbox` | Events waiting in a map's mailbox (smoothed over a second) past which it counts as busy whatever its share. 0: never. | `1000` | 0 to 1000000, clamped | live | |
 
 ### `[world]`
 
