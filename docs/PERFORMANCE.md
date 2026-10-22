@@ -1643,3 +1643,33 @@ start, which wvs leaves at 0, change nothing the client shows. The client is tol
 alive and known to it. What becomes of the impact after the death arrives is the client's own rendering, and a
 mangos-classic server would get the same result. The real-world tests run their packets through the client
 check too.
+## Out of sight, out of the fight (2026-10-22)
+
+A creature gives up on a victim the moment that victim's client is told to forget it: past `[world]
+visibility_yards` (100) and the 10-yard margin, by running or by a teleport. It no longer waits for the leash's 11
+to 15 seconds. The visibility step's `part` notes each creature a player's client forgets (`Map::lost_sight`). Once
+the step is done, `creature_combat::out_of_sight` looks at each one. If the creature has that player on its threat
+list, and is no player's pet and no one's charm, the player comes off the list. A creature that was fighting them
+turns to the next it may fight, or goes home evading if no one is left. That happens in the same update the client
+forgets it. The victim then leaves combat at the next look at their fight (every 1.2 s) if nothing else holds them.
+A creature that is hidden from the victim (its stealth, a script's concealment) is forgotten by their client too, but
+it isn't out of their sight, so it fights on. A creature told of again in the same step (a despawn and respawn)
+fights on as well. The setting is `[creatures] evade_out_of_sight`, on by default; off, the leash alone decides, as
+before.
+
+mangos-classic's `Player::BeforeVisibilityDestroy` does the same, but only outside dungeons and not for a creature
+with combat-only stealth. Its leash is off in dungeons too. wvs applies the rule in dungeons as well, at the
+user's ask. It also leaves the player's pet fighting the creature, where mangos stops the pet's attack.
+
+Cost: one push per creature a client forgets, and a look at each once the step is done. Nothing measurable in
+the update.
+
+Tests (`tests_out_of_sight`, fast suite): a victim who outruns the brute's sight (150 yards off at once). In the
+query that first finds the creature unknown to the client, it is evading with nothing on its list, and the victim is
+out of combat within the next look. The same for a teleport of 150 yards: before this change, the brute chased her
+for its leash's time. With Bob on the list too, still beside it, the brute drops Alice alone and fights Bob on.
+With the setting off, the brute fights Alice on once forgotten, and she stays in combat. A creature a script
+conceals is forgotten but fights on. The fast suite and the client check pass, and so does the extended suite,
+apart from `the_real_scripted_bosses_fight_without_trouble`. That test fails about one run in three (Onyxia not yet
+in phase 1 after 1.5 s), with or without this change: in its runs, no creature ever had the forgotten player on its
+list, so nothing gave up.
