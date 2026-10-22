@@ -60,7 +60,9 @@ impl Timings {
     /// The rest after one of `last`: twice it, from the first rest up to
     /// the longest (never under the first, whatever the config says).
     fn next_rest(&self, last: Duration) -> Duration {
-        (last * 2).max(self.rest_min).min(self.rest_max.max(self.rest_min))
+        (last * 2)
+            .max(self.rest_min)
+            .min(self.rest_max.max(self.rest_min))
     }
 }
 
@@ -270,7 +272,10 @@ mod tests {
         let t = Timings::default();
         assert_eq!(g.look(at(0), 2000, 1000, &t), Some(Change::On));
         assert_eq!(g.look(at(29), 2000, 1000, &t), None, "held");
-        assert_eq!(g.look(at(30), 2000, 1000, &t), Some(Change::GaveUp(REST_MIN)));
+        assert_eq!(
+            g.look(at(30), 2000, 1000, &t),
+            Some(Change::GaveUp(REST_MIN))
+        );
         assert!(!g.on());
         assert_eq!(g.look(at(89), 2000, 1000, &t), None, "resting");
         assert_eq!(g.look(at(90), 2000, 1000, &t), Some(Change::On));
@@ -285,7 +290,10 @@ mod tests {
             "brought down"
         );
         assert_eq!(g.look(at(251), 2000, 1000, &t), Some(Change::On));
-        assert_eq!(g.look(at(281), 2000, 1000, &t), Some(Change::GaveUp(REST_MIN)));
+        assert_eq!(
+            g.look(at(281), 2000, 1000, &t),
+            Some(Change::GaveUp(REST_MIN))
+        );
     }
 
     /// The timings are the config's (`[network] memory_guard_*_secs`), read
@@ -304,7 +312,10 @@ mod tests {
         let mut g = Guard::default();
         assert_eq!(g.look(at(0), 2000, 1000, &t), Some(Change::On));
         assert_eq!(g.look(at(4), 2000, 1000, &t), None, "held");
-        assert_eq!(g.look(at(5), 2000, 1000, &t), Some(Change::GaveUp(secs(10))));
+        assert_eq!(
+            g.look(at(5), 2000, 1000, &t),
+            Some(Change::GaveUp(secs(10)))
+        );
         assert_eq!(g.look(at(14), 2000, 1000, &t), None, "resting");
         assert_eq!(g.look(at(15), 2000, 1000, &t), Some(Change::On));
         assert_eq!(
@@ -313,14 +324,21 @@ mod tests {
             "doubled, up to the longest"
         );
         assert_eq!(g.look(at(35), 2000, 1000, &t), Some(Change::On));
-        assert_eq!(g.look(at(40), 2000, 1000, &t), Some(Change::GaveUp(secs(15))));
+        assert_eq!(
+            g.look(at(40), 2000, 1000, &t),
+            Some(Change::GaveUp(secs(15)))
+        );
         // A reload: hold 20 s now.
         let longer = Timings {
             most_held: secs(20),
             ..t
         };
         assert_eq!(g.look(at(55), 2000, 1000, &longer), Some(Change::On));
-        assert_eq!(g.look(at(70), 2000, 1000, &longer), None, "held past the old 5");
+        assert_eq!(
+            g.look(at(70), 2000, 1000, &longer),
+            None,
+            "held past the old 5"
+        );
         assert_eq!(
             g.look(at(75), 2000, 1000, &longer),
             Some(Change::GaveUp(secs(15)))

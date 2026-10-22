@@ -26,9 +26,56 @@ pub struct MoveGuard {
     bank: Option<f32>,
     /// Since when a root or stun has been seen holding the player.
     held_since: Option<Instant>,
-    /// A knockback taken and not yet landed: its horizontal speed, and
-    /// when (mangos's `IsLaunched`, `Movement::KnockBack`).
-    launch: Option<(f32, Instant)>,
+    /// A knockback taken and not yet landed (mangos's `IsLaunched`,
+    /// `Movement::KnockBack`).
+    launch: Option<Launch>,
+}
+
+/// A knockback's flight: where and when it began, and its speeds.
+#[derive(Debug, Clone, Copy)]
+struct Launch {
+    from: Vector3d,
+    since: Instant,
+    /// Horizontal, yards a second.
+    xy: f32,
+    /// Upward, yards a second (the client's jump has it downward, as
+    /// mangos sends `-verticalSpeed`).
+    vz: f32,
+}
+
+impl Launch {
+    /// How long its arc lasts: back to the height it began at
+    /// (`2 vz / g`), and [`LAND_MARGIN`] more of falling below it, no
+    /// longer than [`LAUNCH_LIMIT`].
+    fn arc(&self) -> Duration {
+        let up = 2.0 * self.vz.max(0.0) / GRAVITY;
+        (Duration::from_secs_f32(up) + LAND_MARGIN).min(LAUNCH_LIMIT)
+    }
+
+    /// The height of its arc `t` seconds in: under gravity, falling no
+    /// faster than the terminal velocity.
+    fn height(&self, t: f32) -> f32 {
+        let terminal = ((TERMINAL_VELOCITY + self.vz) / GRAVITY).max(0.0);
+        let at = |t: f32| self.from.z + self.vz * t - GRAVITY * t * t / 2.0;
+        if t <= terminal {
+            at(t)
+        } else {
+            at(terminal) - TERMINAL_VELOCITY * (t - terminal)
+        }
+    }
+
+    /// Whether it is still in flight `t` in, with the client at `z`: in
+    /// its arc, or past it falling (no higher than the arc would have it
+    /// `lag` seconds earlier, past the top, as a late packet may be), up
+    /// to [`LAUNCH_LIMIT`].
+    fn flying(&self, t: Duration, z: f32, lag: f32) -> bool {
+        if t <= self.arc() {
+            return true;
+        }
+        let top = self.vz.max(0.0) / GRAVITY;
+        let then = (t.as_secs_f32() - lag).max(top);
+        t <= LAUNCH_LIMIT && z <= self.height(then) + FALL_SLACK
+    }
 }
 
 impl MoveGuard {
@@ -45,6 +92,25 @@ pub const ROOT_GRACE: Duration = Duration::from_secs(1);
 /// The longest a knockback's flight is allowed for, if the client never
 /// says it landed.
 pub const LAUNCH_LIMIT: Duration = Duration::from_secs(10);
+
+/// How much longer than its arc back to the height it began at a
+/// knockback's flight lasts: a fall below it (about eighteen yards more,
+/// for a launch of 10 yards a second up). Past that, it lasts only as long
+/// as the client is falling as the arc would.
+const LAND_MARGIN: Duration = Duration::from_millis(1500);
+
+/// The client's gravity and the speed it falls no faster than, as a
+/// falling corpse's (`creature_motion`).
+const GRAVITY: f32 = 19.291_105;
+const TERMINAL_VELOCITY: f32 = 60.148_003;
+
+/// How far above its arc a client past it may be and still be falling:
+/// its float arithmetic.
+const FALL_SLACK: f32 = 1.0;
+
+/// The packet jitter a flight's horizontal reach allows for, in seconds of
+/// its speed: a packet that came quicker than the one before it.
+const FLIGHT_JITTER: f32 = 0.25;
 
 /// How far a held player's client may say it is from where the server
 /// holds it, horizontally, before its packet is refused: a fall or the
@@ -221,8 +287,11 @@ pub fn stripped_of(
 
 /// Whether the move from `last` (taken at `at`) to `info` is further than
 /// the player could go: its speed (the faster of run and swim, slows and
-/// all; a launch's, in its flight) at the tolerance, for the time since,
-/// drawn from what is banked. A move within it spends the bank.
+/// all) at the tolerance, for the time since, drawn from what is banked. A
+/// move within it spends the bank. In a knockback's flight, no further
+/// from where it began than its horizontal speed for the time since, at
+/// the tolerance; the flight lasts its arc, then only while the client
+/// falls as it would (a launch off a ledge), and then the bank is spent.
 pub fn too_fast(
     p: &mut Player,
     last: Vector3d,
@@ -260,13 +329,20 @@ pub fn too_fast_at(
     now: Instant,
     check: &AnticheatConfig,
 ) -> bool {
-    if let Some((_, since)) = guard.launch
-        && now.duration_since(since) > LAUNCH_LIMIT
-    {
+    if let Some(l) = guard.launch {
+        let t = now.saturating_duration_since(l.since);
+        if l.flying(t, info.position.z, check.latency_allowance_secs) {
+            let reach = l.xy * check.speed_tolerance * (t.as_secs_f32() + FLIGHT_JITTER)
+                + check.distance_allowance_yards;
+            guard.bank = None;
+            return horizontal(l.from, info.position) > reach;
+        }
+        // Landed by its arc, or never flew as it said: what it went
+        // ahead in its flight is spent.
         guard.launch = None;
+        guard.bank = Some(0.0);
     }
-    let launch = guard.launch.map_or(0.0, |(xy, _)| xy);
-    let speed = speeds.run.max(speeds.swim).max(launch).max(0.0);
+    let speed = speeds.run.max(speeds.swim).max(0.0);
     let rate = speed * check.speed_tolerance;
     let cap = rate * check.latency_allowance_secs + check.distance_allowance_yards;
     let dt = now.saturating_duration_since(at).as_secs_f32();
@@ -285,15 +361,30 @@ pub fn refill(p: &mut Player) {
     p.misc.move_guard.bank = None;
 }
 
-/// A knockback the client took: until it lands, it goes at the launch's
-/// speed, and its bank is full at it.
-pub fn launched(p: &mut Player, xy_speed: f32, now: Instant) {
-    launched_with(&mut p.misc.move_guard, xy_speed, now);
+/// A knockback the client took, from `from`, with the jump `j` it was
+/// sent: until it lands (or its arc ends), it goes at the launch's speed.
+pub fn launched(
+    p: &mut Player,
+    j: &MovementInfo_MovementFlags_Jumping,
+    from: Vector3d,
+    now: Instant,
+) {
+    launched_with(&mut p.misc.move_guard, j, from, now);
 }
 
 /// [`launched`], with the guard `guard`.
-pub fn launched_with(guard: &mut MoveGuard, xy_speed: f32, now: Instant) {
-    guard.launch = Some((xy_speed.abs(), now));
+pub fn launched_with(
+    guard: &mut MoveGuard,
+    j: &MovementInfo_MovementFlags_Jumping,
+    from: Vector3d,
+    now: Instant,
+) {
+    guard.launch = Some(Launch {
+        from,
+        since: now,
+        xy: j.xy_speed.abs(),
+        vz: -j.z_speed,
+    });
     guard.bank = None;
 }
 
@@ -315,6 +406,15 @@ pub fn taken_with(guard: &mut MoveGuard, info: &MovementInfo) {
 
 fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+/// As if `p`'s knockback had begun `by` earlier: a test's way along its
+/// flight without waiting it out.
+#[cfg(test)]
+pub fn backdate_launch(p: &mut Player, by: Duration) {
+    if let Some(l) = &mut p.misc.move_guard.launch {
+        l.since = l.since.checked_sub(by).unwrap_or(l.since);
+    }
 }
 
 /// As if the root or stun on `p` had been seen `by` earlier: a test's way
