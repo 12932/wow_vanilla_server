@@ -88,18 +88,33 @@ impl Backoff {
 
 /// Run a long-lived task, starting it again whenever it panics: OTP's
 /// permanent child. The first restart is at once, and each one after rests
-/// twice as long as the last, up to [`Backoff::MAX`]. It ends when the
+/// twice as long as the last, up to [`Backoff::MAX`]; a run that lasted
+/// that long before it panicked starts the count again. It ends when the
 /// task returns.
-pub async fn supervise<F, Fut>(what: &str, mut start: F)
+pub async fn supervise<F, Fut>(what: &str, start: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    supervise_after(what, Backoff::MAX, start).await
+}
+
+/// [`supervise`], a run of `lasted` or longer clearing the rest.
+async fn supervise_after<F, Fut>(what: &str, lasted: Duration, mut start: F)
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let mut rest = Duration::ZERO;
     loop {
+        let began = Instant::now();
         match tokio::spawn(start()).await {
             Ok(()) => return,
             Err(e) if e.is_panic() => {
+                // A panic days after the last isn't a loop of them.
+                if began.elapsed() >= lasted {
+                    rest = Duration::ZERO;
+                }
                 let e = message(&*e.into_panic());
                 error!(
                     "{what} panicked: {e}; starting it again in {} s",
@@ -218,6 +233,42 @@ impl Faults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A task that ran long before it panicked is started again at once:
+    /// its rest doesn't carry over from panics long before. (It never
+    /// cleared: after six panics in a server's life, every later restart
+    /// of the login server waited a minute.)
+    #[tokio::test]
+    async fn a_run_that_lasted_clears_the_rest() {
+        let times = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let seen = times.clone();
+        let supervised = supervise_after("a test's task", Duration::from_millis(200), move || {
+            let seen = seen.clone();
+            async move {
+                let n = {
+                    let mut t = seen.lock();
+                    t.push(Instant::now());
+                    t.len()
+                };
+                match n {
+                    1 | 2 => panic!("start {n} panics at once"),
+                    3 => {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        panic!("start 3 panics after a while");
+                    }
+                    _ => {}
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(10), supervised)
+            .await
+            .expect("it ends once the task returns");
+        let t = times.lock();
+        assert_eq!(t.len(), 4);
+        assert!(t[2] - t[1] >= Backoff::MIN, "a quick panic rests");
+        let gap = t[3] - t[2];
+        assert!(gap < Duration::from_millis(1000), "restarted after {gap:?}");
+    }
 
     #[test]
     fn a_step_that_panics_rests_longer_each_time_and_a_good_run_clears_it() {
