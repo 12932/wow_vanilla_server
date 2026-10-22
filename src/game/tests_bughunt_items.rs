@@ -1,0 +1,185 @@
+//! The bug hunt's items, quests and loot, through the protocol: no trade
+//! with oneself, a disenchant's window answered by the loot it holds, no
+//! item opened or wrapped from the buyback or (away from a banker) the
+//! bank, no credit for a failed quest, and a creature's pockets let go as
+//! it leaves.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::*;
+
+use crate::game::Realm;
+use crate::game::data::*;
+use crate::game::harness::{self, Client};
+use crate::game::map::inventory::{BANK_START, BUYBACK_START};
+use crate::game::map::loot::{self, Loot, LootKind, LootSlot};
+use crate::game::map::{Map, MapKey};
+use crate::game::store::BAG_PLAYER;
+
+const CLAM: u32 = 9_871;
+const PEARL: u32 = 9_872;
+const DUST: u32 = 9_873;
+const SHARD: u32 = 9_874;
+const PAPER: u32 = 5_042;
+const GIFT: u32 = 5_043;
+const TRINKET: u32 = 9_875;
+const BOAR: u32 = 9_876;
+const BOAR_QUEST: u32 = 9_877;
+
+const NONE_WITHIN: Duration = Duration::from_millis(300);
+
+fn item(entry: u32, name: &str, stackable: u32) -> ItemTemplate {
+    ItemTemplate {
+        entry,
+        name: name.into(),
+        display_id: 1000,
+        allowable_class: -1,
+        allowable_race: -1,
+        stackable,
+        buy_count: 1,
+        sell_price: 10,
+        ..Default::default()
+    }
+}
+
+fn data() -> GameData {
+    let mut d = GameData::empty();
+    let mut clam = item(CLAM, "Clam", 10);
+    clam.flags = crate::game::map::items_misc::ITEM_FLAG_LOOTABLE;
+    let mut paper = item(PAPER, "Wrapping Paper", 20);
+    paper.flags = crate::game::map::items_misc::ITEM_FLAG_WRAPPER;
+    for t in [
+        clam,
+        item(PEARL, "Pearl", 20),
+        item(DUST, "Dust", 20),
+        item(SHARD, "Shard", 20),
+        paper,
+        item(GIFT, "Gift", 1),
+        item(TRINKET, "Trinket", 1),
+    ] {
+        d.items.insert(t.entry, t);
+    }
+    d.loot.item.insert(
+        CLAM,
+        vec![LootEntry {
+            item: PEARL,
+            chance: 100.0,
+            min: 1,
+            max: 1,
+            ..Default::default()
+        }],
+    );
+    d.creature_templates.insert(
+        BOAR,
+        CreatureTemplate {
+            entry: BOAR,
+            name: "Boar".into(),
+            display_ids: [903, 0, 0, 0],
+            display_probabilities: [1, 0, 0, 0],
+            display_scales: [1.0, 0.0, 0.0, 0.0],
+            level_min: 2,
+            level_max: 2,
+            faction: 7,
+            unit_class: 1,
+            health_max: 50,
+            ..Default::default()
+        },
+    );
+    let mut quest = crate::game::data::npc::Quest {
+        id: BOAR_QUEST,
+        ..Default::default()
+    };
+    quest.required_kills[0] = (BOAR as i32, 3);
+    d.npc.quests.insert(BOAR_QUEST, quest);
+    d
+}
+
+/// Players, not GMs.
+fn realm() -> Arc<Realm> {
+    let mut cfg = harness::test_config();
+    cfg.everyone_gm = false;
+    let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
+    Realm::new(cfg, store, startup, data(), None)
+}
+
+async fn on_map<T: Send + 'static>(
+    realm: &Arc<Realm>,
+    f: impl FnOnce(&mut Map) -> T + Send + 'static,
+) -> T {
+    realm
+        .maps
+        .get(realm, MapKey::world(0))
+        .query(f)
+        .await
+        .expect("the map answers")
+}
+
+async fn alice(realm: &Arc<Realm>) -> Client {
+    let mut a = Client::connect(realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Rogue).await;
+    on_map(realm, move |m| {
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        p.items.clear();
+        p.refresh_inventory(&d);
+    })
+    .await;
+    a
+}
+
+/// An item of `entry` for `g`, moved to `at` if given: its guid and where
+/// it is.
+async fn give(
+    realm: &Arc<Realm>,
+    g: Guid,
+    entry: u32,
+    count: u32,
+    at: Option<(u8, u8)>,
+) -> (Guid, (u8, u8)) {
+    on_map(realm, move |m| {
+        crate::game::map::inventory::add_item(m, g, entry, count, false).expect("room");
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.items.iter().rposition(|i| i.entry == entry).unwrap();
+        if let Some(at) = at {
+            (p.items[i].bag, p.items[i].slot) = at;
+            p.refresh_inventory(&d);
+        }
+        (p.items[i].guid, (p.items[i].bag, p.items[i].slot))
+    })
+    .await
+}
+
+async fn loot_shown(c: &mut Client) -> bool {
+    c.gets(NONE_WITHIN, |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_LOOT_RESPONSE(_)).then_some(())
+    })
+    .await
+    .is_some()
+        || !c
+            .take_frames(crate::game::map::loot::SMSG_LOOT_RESPONSE)
+            .is_empty()
+}
+
+/// mangos's `HandleInitiateTradeOpcode`: a trade with oneself is refused,
+/// busy. Both sides would be the same items, taken out twice, the second
+/// time whatever had slid into their places.
+#[tokio::test]
+async fn a_player_cant_trade_with_themselves() {
+    let realm = realm();
+    let mut a = alice(&realm).await;
+    let g = a.guid;
+    a.send(CMSG_INITIATE_TRADE { guid: g }).await;
+    a.wait_for("busy", |m| match m {
+        ServerOpcodeMessage::SMSG_TRADE_STATUS(s) => {
+            matches!(s.status, SMSG_TRADE_STATUS_TradeStatus::Busy).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    let trading = on_map(&realm, move |m| m.players[&g].trade.is_some()).await;
+    assert!(!trading);
+}

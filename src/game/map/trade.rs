@@ -50,6 +50,12 @@ pub fn initiate(map: &mut Map, g: Guid, with: Guid) {
     if me.trade.is_some() {
         return;
     }
+    // Not with oneself (mangos's `HandleInitiateTradeOpcode`): both sides
+    // would be the same items, taken twice.
+    if with == g {
+        status(map, g, S::Busy);
+        return;
+    }
     if me.death != Death::Alive {
         status(map, g, S::YouDead);
         return;
@@ -346,6 +352,9 @@ pub fn accept(map: &mut Map, g: Guid) {
     let Some(with) = partner(map, g) else {
         return;
     };
+    if with == g {
+        return;
+    }
     if let Some(t) = map.players.get_mut(&g).and_then(|p| p.trade.as_mut()) {
         t.accepted = true;
     }
