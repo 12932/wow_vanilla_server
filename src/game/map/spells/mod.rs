@@ -285,6 +285,13 @@ pub struct MapSpells {
     /// Casters whose gathering, lockpicking or skinning took its roll as
     /// the cast ended, before its go: its effect doesn't roll again.
     pub openings_rolled: ahash::AHashSet<Guid>,
+    /// The charged cast-time modifiers (spell, caster) the cast now ending
+    /// began with, for its `execute`: only those are spent.
+    pub ending_began_with: Option<Vec<(u32, Guid)>>,
+    /// By caster, the charged cast-time modifiers (spell, caster) its cast
+    /// under way had its time worked out with (Shadow Trance's), if any:
+    /// only those are spent as it ends.
+    pub began_with: AHashMap<Guid, Vec<(u32, Guid)>>,
     /// Override for spells' travel time; `None` takes the realm's setting.
     pub travel: Option<bool>,
     /// Missiles and bolts on their way.
@@ -1122,6 +1129,17 @@ pub fn cast(
             at,
         });
     }
+    let began: Vec<(u32, Guid)> = m
+        .charged
+        .iter()
+        .filter(|c| c.2 == mods::OP_CASTING_TIME)
+        .map(|c| (c.0, c.1))
+        .collect();
+    if began.is_empty() {
+        map.spells.began_with.remove(&caster);
+    } else {
+        map.spells.began_with.insert(caster, began);
+    }
     true
 }
 
@@ -1418,6 +1436,8 @@ fn execute(
     item: Option<Guid>,
     triggered: bool,
 ) {
+    // A cast ending: the charged cast-time modifiers it began with.
+    let began_with = map.spells.ending_began_with.take();
     // An aura's cast, or a proc's; what it casts in turn is its own.
     let by_aura = BY_AURA.replace(false) || crate::game::map::procs::in_proc();
     // What a triggered cast is checked for still (mangos-classic's
@@ -1434,7 +1454,15 @@ fn execute(
         return;
     };
     let now = map.now;
-    let m = mods::for_spell(map, caster, s);
+    let mut m = mods::for_spell(map, caster, s);
+    // A charged cast-time modifier that came on during the cast changed
+    // nothing of it, and is kept for the next (mangos's `m_appliedMods`,
+    // taken at `prepare`): a Shadow Trance from a Corruption tick mid-cast
+    // isn't spent by the Shadow Bolt under way.
+    if let Some(began) = began_with {
+        m.charged
+            .retain(|c| c.2 != mods::OP_CASTING_TIME || began.contains(&(c.0, c.1)));
+    }
     // The item cast from, by its entry, before it is spent.
     let cast_entry = item.and_then(|g| {
         let p = map.players.get(&caster)?;
@@ -3057,11 +3085,7 @@ pub fn cancel_cast(map: &mut Map, g: Guid, spell: u32) {
     {
         interrupt(map, g);
     }
-    if map
-        .combat(g)
-        .and_then(|c| c.queued)
-        .is_some_and(named)
-    {
+    if map.combat(g).and_then(|c| c.queued).is_some_and(named) {
         crate::game::map::combat::cancel_queued(map, g);
     }
 }
@@ -3320,6 +3344,7 @@ pub fn update(map: &mut Map) {
             launch_failed(map, g, casting.spell, code);
             continue;
         }
+        map.spells.ending_began_with = Some(map.spells.began_with.remove(&g).unwrap_or_default());
         execute(map, g, s, casting.targets, casting.item, false);
         map.spells.openings_rolled.remove(&g);
     }

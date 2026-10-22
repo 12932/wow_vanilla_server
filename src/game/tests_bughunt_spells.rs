@@ -54,7 +54,11 @@ async fn auras_mangos_doesnt_save_dont_come_back_at_login() {
         .query(move |m| [PLAIN, LEAVES, SINGLE, ECHOES].map(|id| has(m, g, id)))
         .await
         .unwrap();
-    assert_eq!(back_on, [true, false, false, false], "only the plain one back");
+    assert_eq!(
+        back_on,
+        [true, false, false, false],
+        "only the plain one back"
+    );
 }
 
 /// `CMSG_CANCEL_CAST` stops only the spell it names, and takes back only a
@@ -214,7 +218,11 @@ async fn a_damage_shield_meets_immunity() {
         effect(&mut thorns, 0, aura(auras::AURA_DAMAGE_SHIELD, 0, 10, 1));
         let mut immune = bare(IMMUNE, 0);
         immune.duration_index = LASTS_LONG;
-        effect(&mut immune, 0, aura(auras::AURA_SCHOOL_IMMUNITY, 1 << 3, 0, 1));
+        effect(
+            &mut immune,
+            0,
+            aura(auras::AURA_SCHOOL_IMMUNITY, 1 << 3, 0, 1),
+        );
         insert(d, [thorns, immune]);
     });
     let (_c, g, map) = human(&realm, "BHDS", "Thorny", Class::Mage).await;
@@ -279,4 +287,54 @@ async fn a_waiting_cooldown_goes_with_an_aura_that_didnt_come_back() {
         .await
         .unwrap();
     assert_eq!(out, (false, false), "neither the aura nor its wait");
+}
+
+/// A charged cast-time modifier that comes on during a cast (Shadow Trance
+/// from a Corruption tick) isn't spent by the cast under way, whose time it
+/// didn't change, as mangos spends only the modifiers a cast was prepared
+/// with: the next one has it. One the cast began with is spent.
+#[tokio::test]
+async fn a_trance_gained_mid_cast_is_kept_for_the_next() {
+    use super::tests_p3_spells_kit::{at, dummy, pass};
+    use crate::game::map::spells;
+    const BOLT: u32 = 990_950;
+    const TRANCE: u32 = 990_951;
+    let realm = fast_realm(|d| {
+        let mut bolt = bare(BOLT, 5);
+        bolt.family_name = 5;
+        bolt.family_flags = 1;
+        bolt.casting_time_index = CAST_2S;
+        effect(&mut bolt, 0, damage(10));
+        let mut trance = bare(TRANCE, 5);
+        trance.family_name = 5;
+        trance.duration_index = LASTS_15S;
+        trance.proc_charges = 1;
+        let mut e = aura(
+            auras::AURA_ADD_PCT_MODIFIER,
+            spells::mods::OP_CASTING_TIME as i32,
+            -100,
+            1,
+        );
+        e.item_type = 1;
+        effect(&mut trance, 0, e);
+        insert(d, [bolt, trance]);
+    });
+    let (_c, g, map) = human(&realm, "BHST", "Tranced", Class::Warlock).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[BOLT]);
+            let k = dummy(m, g, 60, 4.0);
+            let t = m.realm.data.spells.get(TRANCE).unwrap().clone();
+            let began = spells::cast(m, g, BOLT, at(k), None);
+            apply_template(m, g, g, &t);
+            pass(m, 2_100);
+            let kept = has(m, g, TRANCE);
+            // The next is instant, and spends it.
+            let instant =
+                spells::cast(m, g, BOLT, at(k), None) && m.caster(g).unwrap().casting.is_none();
+            (began, kept, instant, has(m, g, TRANCE))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (true, true, true, false));
 }
