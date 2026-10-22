@@ -393,6 +393,17 @@ impl Nav {
         (points.0.len() >= 2).then(|| self.grounded(&points.0))
     }
 
+    /// [`Nav::path`] as the navmesh answers it, not put on the ground: for
+    /// the probe of what that costs.
+    #[cfg(test)]
+    pub fn path_as_found(&mut self, from: Vector3d, to: Vector3d) -> Option<Vec<Vector3d>> {
+        let mut points = Points(Vec::new());
+        self.map
+            .find_path(v(from), v(to), false, &mut points)
+            .ok()?;
+        (points.0.len() >= 2).then_some(points.0)
+    }
+
     /// The navmesh's ground under a point (its detail mesh's height),
     /// within [`GROUND_REACH`] of it.
     fn ground_near(&self, p: Vector3d) -> Option<f32> {

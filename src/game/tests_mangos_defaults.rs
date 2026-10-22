@@ -1,6 +1,7 @@
 //! The defaults taken from mangos-classic (`mangosd.conf.dist.in`, read in
 //! `World.cpp`), each through the harness's own config, which keeps them:
-//! a dungeon's view of 170 yards, a leash of 30, a call for help of 5, and
+//! a dungeon's view of 170 yards, a leash of 30 (31 in wvs, a yard more), a
+//! call for help of 5, and
 //! the corpses of rares, rare elites and bosses lying 15, 20 and 60
 //! minutes. (The call for help is in `tests_ai5`.)
 
@@ -143,7 +144,9 @@ fn realm_with(cfg: RealmConfig) -> Arc<Realm> {
     Realm::new(cfg, store, startup, data(), None)
 }
 
-/// The defaults are mangos-classic's, and the harness keeps them.
+/// The defaults are mangos-classic's, and the harness keeps them: but
+/// the leash's radius, a yard more than mangos's `LeashRadius` of 30 (the
+/// user's).
 #[test]
 fn the_defaults_are_mangos_classics() {
     let c = crate::config::ServerConfig::default();
@@ -151,7 +154,10 @@ fn the_defaults_are_mangos_classics() {
         c.visibility.instances_yards, 170.0,
         "Visibility.Distance.Instances"
     );
-    assert_eq!(c.creatures.leash_radius, 30.0, "LeashRadius");
+    assert_eq!(
+        c.creatures.leash_radius, 31.0,
+        "LeashRadius's 30, and a yard"
+    );
     assert_eq!(
         c.creatures.assistance_radius, 5.0,
         "CreatureFamilyAssistanceRadius"

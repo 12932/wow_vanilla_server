@@ -1326,6 +1326,11 @@ fn overtake_of(map: &Map, g: Guid, current: Guid, pruned: bool) -> Guid {
 
 fn fight_step(map: &mut Map, g: Guid) {
     let now = map.now;
+    // Standing in reach attacking, it goes on standing only where this
+    // step finds it so again.
+    let stood = map
+        .creature_mut(g)
+        .and_then(|c| c.engagement.standing_since.take());
     if crate::game::map::creature_motion::critter_step(map, g) {
         return;
     }
@@ -1453,6 +1458,10 @@ fn fight_step(map: &mut Map, g: Guid) {
                 face(map, g, victim);
             }
             combat::try_swing(map, g);
+            // Still in reach, attacking: its stand renews its leash.
+            if !runs_on {
+                crate::game::map::creature_combat::stood_attacking(map, g, stood.unwrap_or(now));
+            }
         } else if !runs_on && !faces(&me, &them) {
             face(map, g, victim);
         }

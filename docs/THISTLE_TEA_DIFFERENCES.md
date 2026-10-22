@@ -84,7 +84,7 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **A teleport within the map** ends the fight unless it is a near teleport under 100 yards (Blink, a spell's
   teleport, a chair), as mangos's `TELE_TO_NOT_LEAVE_COMBAT` callers have it; Thistle Tea goes by the teleport's
   type, and holds the pet until the client acknowledges.
-- **mangos's defaults:** a creature's leash is 30 yards (Thistle Tea's is 50) and its call for help reaches 5 yards.
+- **mangos's defaults:** a creature's leash is 31 yards (mangos's 30 and a yard; Thistle Tea's is 50) and its call for help reaches 5 yards.
 - **Lower ranks of rage and energy spells** stay in the spellbook; mangos takes them out.
 - **Battleground invitations** last two minutes and show the time left; Thistle Tea sends a flat 80 seconds.
 - **Pets, as mangos has them:** a pet on Stay answers an attacker from afar (`PetAI::AttackedBy`), though of its own

@@ -173,3 +173,63 @@ async fn a_chase_down_a_slope_keeps_to_the_ground() {
         assert!(off <= 1.0, "{from:?}: a point {off} yards off the ground");
     }
 }
+
+/// What putting a path on the ground costs (`Nav::path` against the
+/// navmesh's own answer): 2,000 chases of 5 to 40 yards about
+/// Waterspring Field, and how many points they gain. Run by hand, in
+/// release: `cargo nextest run --release --lib --profile extended
+/// --run-ignored all --no-capture --ignore-default-filter -E
+/// 'test(probe_path_on_the_ground)'` (the extended profile's default
+/// filter leaves the probes out).
+#[tokio::test]
+#[ignore = "extended"]
+async fn probe_path_on_the_ground() {
+    use rand::{RngExt, SeedableRng};
+    let (_a, _g, map) = in_tanaris(v((-7920.0, -4460.0, 9.0))).await;
+    on(&map, move |m| {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let pairs: Vec<(Vector3d, Vector3d)> = (0..2_000)
+            .filter_map(|_| {
+                let (x, y) = (
+                    -7920.0 + rng.random_range(-60.0..60.0),
+                    -4460.0 + rng.random_range(-60.0..60.0),
+                );
+                let (d, a) = (
+                    rng.random_range(5.0..40.0f32),
+                    rng.random_range(0.0..std::f32::consts::TAU),
+                );
+                let nav = m.nav.as_mut().unwrap();
+                let from = v((x, y, nav.ground(x, y, 10.0)?));
+                let (tx, ty) = (x + d * a.cos(), y + d * a.sin());
+                Some((from, v((tx, ty, nav.ground(tx, ty, 10.0)? - 1.0))))
+            })
+            .collect();
+        let nav = m.nav.as_mut().unwrap();
+        for _ in 0..2 {
+            let t = std::time::Instant::now();
+            let raw: usize = pairs
+                .iter()
+                .filter_map(|(a, b)| nav.path_as_found(*a, *b))
+                .map(|p| p.len())
+                .sum();
+            let raw_t = t.elapsed();
+            let t = std::time::Instant::now();
+            let grounded: usize = pairs
+                .iter()
+                .filter_map(|(a, b)| nav.path(*a, *b))
+                .map(|p| p.len())
+                .sum();
+            let grounded_t = t.elapsed();
+            println!(
+                "{} paths: as found {:?} ({:.1} us each, {raw} points), on the ground {:?} \
+                 ({:.1} us each, {grounded} points)",
+                pairs.len(),
+                raw_t,
+                raw_t.as_secs_f64() * 1e6 / pairs.len() as f64,
+                grounded_t,
+                grounded_t.as_secs_f64() * 1e6 / pairs.len() as f64,
+            );
+        }
+    })
+    .await;
+}

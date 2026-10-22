@@ -412,14 +412,20 @@ auction_cut = 1.0
 aggro_rate = 1.0
 
 # Yards from where a fight began that a creature chases before it
-# may give up.
-# Default 30.0. Range 5 to 500, clamped. Changes at a reload. mangos: LeashRadius.
-leash_radius = 30.0
+# may give up (mangos's default is 30).
+# Default 31.0. Range 5 to 500, clamped. Changes at a reload. mangos: LeashRadius.
+leash_radius = 31.0
 
 # Seconds beyond its leash without a hostile act before a creature
 # goes home.
 # Default 12. Range 1 to 600, clamped. Changes at a reload.
 leash_timeout_secs = 12
+
+# Milliseconds a creature stands still in reach of its victim,
+# attacking, before that renews its leash as a hostile act on it
+# would (and again each as long, while it stands and attacks).
+# Default 1250. Range 50 to 600000, clamped. Changes at a reload.
+leash_standing_ms = 1250
 
 # Seconds a creature tries for a victim it can't reach before it
 # goes home.
