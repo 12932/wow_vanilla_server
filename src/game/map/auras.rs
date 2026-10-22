@@ -3687,23 +3687,34 @@ pub fn held(map: &Map, g: Guid, casting: bool) -> bool {
 /// and its `stealth_holder?`, the user's #41; mangos's takes the spell
 /// named alone).
 pub fn cancel(map: &mut Map, player: Guid, spell: u32) {
+    const ATTR_EX_NO_AURA_ICON: u32 = 0x1000_0000;
     let data = map.realm.data.clone();
-    let Some(stealth) = map.players.get(&player).and_then(|p| {
-        p.auras
-            .holders
-            .iter()
-            .find(|h| h.spell == spell && h.positive && !h.passive)
-            .map(stealth_holder)
-    }) else {
+    let Some(s) = data.spells.get(spell) else {
         return;
     };
-    if data
-        .spells
-        .get(spell)
-        .is_some_and(|s| s.attr(0, sd::ATTR_CANT_CANCEL))
-    {
+    // Not one the client shows no icon for (but tracking), not while
+    // charmed, nor another's party aura (mangos's `HandleCancelAuraOpcode`).
+    let hidden = s.attr(1, ATTR_EX_NO_AURA_ICON)
+        && !s.effects.iter().any(|e| e.aura == AURA_TRACK_RESOURCES);
+    if s.attr(0, sd::ATTR_CANT_CANCEL) || hidden {
         return;
     }
+    let party = s.has_effect(crate::game::map::spells::EFFECT_APPLY_AREA_AURA_PARTY);
+    let Some(stealth) = map
+        .players
+        .get(&player)
+        .filter(|p| p.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero())
+        .and_then(|p| {
+            p.auras
+                .holders
+                .iter()
+                .find(|h| h.spell == spell && h.positive && !h.passive)
+                .filter(|h| !(party && h.caster != player))
+                .map(stealth_holder)
+        })
+    else {
+        return;
+    };
     remove_where(map, player, |h| {
         !h.passive && (h.spell == spell || (stealth && stealth_holder(h)))
     });

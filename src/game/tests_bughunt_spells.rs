@@ -338,3 +338,58 @@ async fn a_trance_gained_mid_cast_is_kept_for_the_next() {
         .unwrap();
     assert_eq!(out, (true, true, true, false));
 }
+
+/// `CMSG_CANCEL_AURA` refuses what mangos's `HandleCancelAuraOpcode` does:
+/// an aura the client shows no icon for, and another's party aura; one of
+/// the player's own goes.
+#[tokio::test]
+async fn a_cancel_aura_spares_hidden_and_others_party_auras() {
+    use super::tests_p3_spells_kit::dummy;
+    const HIDDEN: u32 = 990_960;
+    const PARTY: u32 = 990_961;
+    const PLAIN: u32 = 990_962;
+    let realm = fast_realm(|d| {
+        let made = |id: u32| {
+            let mut s = bare(id, 0);
+            s.duration_index = LASTS_LONG;
+            effect(&mut s, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+            s
+        };
+        let mut hidden = made(HIDDEN);
+        hidden.attributes[1] |= 0x1000_0000;
+        let mut party = made(PARTY);
+        party.effects[0].effect = crate::game::map::spells::EFFECT_APPLY_AREA_AURA_PARTY;
+        insert(d, [hidden, party, made(PLAIN)]);
+    });
+    let (mut c, g, map) = human(&realm, "BHCA", "Aurae", Class::Mage).await;
+    map.query(move |m| {
+        ready(m, g, 60, &[]);
+        let other = dummy(m, g, 60, 3.0);
+        for (id, by) in [(HIDDEN, g), (PARTY, other), (PLAIN, g)] {
+            let s = m.realm.data.spells.get(id).unwrap().clone();
+            apply_template(m, by, g, &s);
+        }
+    })
+    .await
+    .unwrap();
+    for id in [HIDDEN, PARTY, PLAIN] {
+        c.send(CMSG_CANCEL_AURA { id }).await;
+    }
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while map.query(move |m| has(m, g, PLAIN)).await.unwrap() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the plain one stays"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let left = map
+        .query(move |m| (has(m, g, HIDDEN), has(m, g, PARTY)))
+        .await
+        .unwrap();
+    assert_eq!(
+        left,
+        (true, true),
+        "the hidden and the other's party aura stay"
+    );
+}
