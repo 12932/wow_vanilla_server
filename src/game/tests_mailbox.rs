@@ -268,3 +268,34 @@ async fn a_heartbeat_with_other_flags_is_not_coalesced() {
     assert_eq!(seen, [("heartbeat", 2.0), ("heartbeat", 3.0)]);
     assert_eq!(COALESCED.load(Ordering::Relaxed), 1);
 }
+
+/// A burst of slow events doesn't starve the update: the map looks at its
+/// ticker again once a burst has run `EVENT_BURST`, not after 512 events.
+/// Here a hundred events of 5 ms each, sent at once, see the update run
+/// between them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn slow_events_dont_starve_the_update() {
+    let realm = realm(64);
+    let (_a, _b, _ga, map, _at) = pair(&realm).await;
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let release = hold(&map).await;
+    for _ in 0..100 {
+        let seen = seen.clone();
+        map.call(move |m| {
+            std::thread::sleep(Duration::from_millis(5));
+            seen.lock().push(m.stats.updates);
+        });
+    }
+    drop(release);
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while seen.lock().len() < 100 {
+        assert!(tokio::time::Instant::now() < deadline, "the events ran");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let seen = seen.lock();
+    let ran = seen.last().unwrap() - seen.first().unwrap();
+    assert!(
+        ran >= 5,
+        "{ran} updates over half a second of events: the update was starved"
+    );
+}

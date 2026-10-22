@@ -394,6 +394,10 @@ pub const REPORT_EVERY: Duration = Duration::from_secs(60);
 
 /// The map update's period.
 pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The most a burst of events runs before the map looks at its ticker
+/// again (`run`): an update is due every [`UPDATE_INTERVAL`].
+pub const EVENT_BURST: Duration = Duration::from_millis(20);
 /// How long a client has to acknowledge a teleport before its movement is
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -926,6 +930,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             event = rx.recv() => {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
+                let burst = map.now;
                 let sampled = crate::game::stats::on().then_some(map.now);
                 if handle_guarded(&mut map, event) {
                     break;
@@ -934,10 +939,15 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // burst's: what else it is sent waits no longer.
                 after_event(&mut map);
                 // Drain what else has arrived, a bounded amount, so the
-                // update isn't starved.
+                // update isn't starved: at most 512 events, and none begun
+                // past `EVENT_BURST` (a crowd's arrivals, a few ms each,
+                // held updates to two or three a second).
                 let mut stop = false;
                 let mut handled = 1;
                 for _ in 0..512 {
+                    if burst.elapsed() >= EVENT_BURST {
+                        break;
+                    }
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
