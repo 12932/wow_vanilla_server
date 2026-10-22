@@ -432,3 +432,37 @@ async fn a_bolt_of_a_caster_gone_doesnt_land() {
         .unwrap();
     assert_eq!(after, before, "it never lands");
 }
+
+/// An aura refreshed keeps its proc's cooldown (mangos keeps it on the
+/// unit, by spell): a seal cast again doesn't proc at once.
+#[tokio::test]
+async fn a_refreshed_aura_keeps_its_procs_cooldown() {
+    use super::tests_p3_spells_kit::holder;
+    const SEAL: u32 = 990_980;
+    let realm = fast_realm(|d| {
+        let mut seal = bare(SEAL, 0);
+        seal.duration_index = LASTS_LONG;
+        effect(&mut seal, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, [seal]);
+    });
+    let (_c, g, map) = human(&realm, "BHPR", "Sealed", Class::Paladin).await;
+    let (set, kept) = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let s = m.realm.data.spells.get(SEAL).unwrap().clone();
+            apply_template(m, g, g, &s);
+            let at = m.now + std::time::Duration::from_secs(10);
+            auras::auras_mut(m, g)
+                .unwrap()
+                .holders
+                .iter_mut()
+                .find(|h| h.spell == SEAL)
+                .unwrap()
+                .proc_ready_at = Some(at);
+            apply_template(m, g, g, &s);
+            (Some(at), holder(m, g, SEAL).and_then(|h| h.proc_ready_at))
+        })
+        .await
+        .unwrap();
+    assert_eq!(kept, set);
+}

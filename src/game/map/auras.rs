@@ -1126,9 +1126,13 @@ pub fn apply_spell(
                 .map(|x| (x.effect, x.next_tick, x.ticks))
                 .collect();
             let slot = old.slot;
+            // Its proc's cooldown runs on (mangos keeps it on the unit, by
+            // spell): a seal or a weapon's buff renewed doesn't proc at once.
+            let proc_ready_at = old.proc_ready_at;
             *old = Holder {
                 stacks,
                 slot,
+                proc_ready_at,
                 ..holder.clone()
             };
             old.heartbeat = beat.flatten();
