@@ -1165,5 +1165,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     over decision 61's mangos default of 30); a creature standing still in reach and swinging renews its leash every
     `[creatures] leash_standing_ms` (1250). mangos-classic's `AttackerStateUpdate` renews it on a swing only after 3 s
     standing and with its victim standing too; wvs's rule leaves the victim's movement out.
+    The leash's time goes by the creature's level, 1.12's brackets (`[creatures] leash_timeout_by_level`: 11 s to
+    level 29, 12 to 39, 13 to 44, 14 to 49, 15 from 50), and a creature looks at its leash every
+    `[creatures] leash_check_ms` (1000) from its fight's start, so it goes home up to a second past its time, never
+    before: your read of the variation as the server's coarse check, not a random offset.
 
 ## Left for later, and why

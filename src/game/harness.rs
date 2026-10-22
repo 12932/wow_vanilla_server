@@ -184,7 +184,14 @@ pub fn test_config() -> RealmConfig {
         arena: Default::default(),
         chat: Default::default(),
         rates: Default::default(),
-        creatures: Default::default(),
+        // A flat twelve-second leash, looked at every update: the leash's
+        // tests time it to the millisecond (those of its level brackets and
+        // its looks set them).
+        creatures: crate::config::CreaturesConfig {
+            leash_timeout_by_level: vec!["1:12".to_owned()],
+            leash_check_ms: 0,
+            ..Default::default()
+        },
         guards: Default::default(),
         // The tests' players fight with their weapon skills and Defense at
         // their caps, at every level a test gives them (mangos's

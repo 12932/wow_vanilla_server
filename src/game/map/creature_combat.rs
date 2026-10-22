@@ -28,8 +28,8 @@ use crate::game::map::creature::Motion;
 /// The leash's reach around where the fight began, by default
 /// (`[creatures] leash_radius`).
 pub const THREAT_RADIUS: f32 = 31.0;
-/// Without a hostile act this long, a creature beyond its threat radius
-/// goes home, by default (`[creatures] leash_timeout_secs`).
+/// Without a hostile act this long, a level 30 creature beyond its threat
+/// radius goes home, by default (`[creatures] leash_timeout_by_level`).
 pub const LEASH_TIMEOUT: Duration = Duration::from_secs(12);
 /// A victim it can't reach this long, and it goes home, by default
 /// (`[creatures] unreachable_timeout_secs`).
@@ -62,6 +62,9 @@ const CONTROLLED: u32 = 0x0004_0000 | 0x0040_0000 | 0x0080_0000;
 pub struct Engagement {
     /// Where the fight began.
     pub origin: Option<Vector3d>,
+    /// Whence its leash's looks are counted (`[creatures]
+    /// leash_check_ms`): as its fight began.
+    pub leash_ticks_from: Option<Instant>,
     /// The last hostile act on or by it.
     pub last_hostile: Option<Instant>,
     /// Since when its victim has been out of reach.
@@ -193,6 +196,7 @@ pub fn leash_begins(map: &mut Map, g: Guid) {
     };
     c.engagement.clock = None;
     c.engagement.control_extend_at = Some(now + CONTROL_EXTEND_EVERY);
+    c.engagement.leash_ticks_from = Some(now);
     let summoner = summoner_of(c);
     let summons = c
         .scripted
@@ -669,8 +673,44 @@ pub fn should_evade(map: &Map, g: Guid, victim: Guid) -> bool {
     {
         return false;
     }
-    let timeout = Duration::from_secs(map.cfg.creatures.leash_timeout_secs);
-    extended_at(map, c).is_none_or(|t| now.duration_since(t) > timeout)
+    let timeout = leash_timeout(map, c);
+    leash_lapsed(map, c, timeout)
+}
+
+/// How long `c` goes without a hostile act, beyond its leash, before it
+/// goes home: its level's bracket (`[creatures] leash_timeout_by_level`,
+/// the highest `level:seconds` at or below its level).
+fn leash_timeout(map: &Map, c: &crate::game::map::creature::Creature) -> Duration {
+    let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
+    let secs = map
+        .cfg
+        .creatures
+        .leash_timeout_by_level
+        .iter()
+        .filter_map(|t| {
+            let (l, s) = t.split_once(':')?;
+            Some((l.trim().parse::<u32>().ok()?, s.trim().parse::<u64>().ok()?))
+        })
+        .filter(|(from, _)| *from <= level.max(1))
+        .max_by_key(|(from, _)| *from)
+        .map_or(LEASH_TIMEOUT.as_secs(), |(_, s)| s);
+    Duration::from_secs(secs)
+}
+
+/// Whether `c` has gone `timeout` without a hostile act, as its leash
+/// looks: every `[creatures] leash_check_ms` from its fight's start, the
+/// last look at or before now deciding (so up to a look late, never early).
+fn leash_lapsed(map: &Map, c: &crate::game::map::creature::Creature, timeout: Duration) -> bool {
+    let now = map.now;
+    let every = Duration::from_millis(map.cfg.creatures.leash_check_ms);
+    let looked = match c.engagement.leash_ticks_from {
+        Some(from) if !every.is_zero() && now > from => {
+            let n = (now - from).as_nanos() / every.as_nanos();
+            from + every * u32::try_from(n).unwrap_or(u32::MAX)
+        }
+        _ => now,
+    };
+    extended_at(map, c).is_none_or(|t| looked > t && looked.duration_since(t) > timeout)
 }
 
 /// Whether `t`, on the list of `g` (a passive creature, which stays where
@@ -689,8 +729,8 @@ pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
     let far = map
         .position_of(t)
         .is_none_or(|p| dist(p, origin) > map.cfg.creatures.leash_radius);
-    let timeout = Duration::from_secs(map.cfg.creatures.leash_timeout_secs);
-    far && extended_at(map, c).is_none_or(|at| map.now.duration_since(at) > timeout)
+    let timeout = leash_timeout(map, c);
+    far && leash_lapsed(map, c, timeout)
 }
 
 /// `static_flags1`: no defence against spells (the water guardians').

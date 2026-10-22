@@ -228,7 +228,8 @@ Creatures: how near they notice players, how far they chase, how they call for h
 |---|---|---|---|---|---|
 | `aggro_rate` | Multiplies the distance at which creatures notice players. | `1.0` | 0 to 10, clamped | live | `Rate.Creature.Aggro` |
 | `leash_radius` | Yards from where a fight began that a creature chases before it may give up (mangos's default is 30). | `31.0` | 5 to 500, clamped | live | `LeashRadius` |
-| `leash_timeout_secs` | Seconds beyond its leash without a hostile act before a creature goes home. | `12` | 1 to 600, clamped | live |  |
+| `leash_timeout_by_level` | Seconds beyond its leash without a hostile act before a creature goes home, by its level: `level:seconds`, each from that level up (1.12's brackets). | `["1:11", "30:12", "40:13", "45:14", "50:15"]` | any | live |  |
+| `leash_check_ms` | How often a fighting creature looks at its leash, from when its fight began: it goes home at the first look past its time, so up to this much past it, never before (0: every update). | `1000` | 0 to 60000, clamped | live |  |
 | `leash_standing_ms` | Milliseconds a creature stands still in reach of its victim, attacking, before that renews its leash as a hostile act on it would (and again each as long, while it stands and attacks). | `1250` | 50 to 600000, clamped | live |  |
 | `unreachable_timeout_secs` | Seconds a creature tries for a victim it can't reach before it goes home. | `24` | 1 to 600, clamped | live |  |
 | `assistance_radius` | Yards a creature drawn into a fight calls its kind from. | `5.0` | 0 to 100, clamped | live | `CreatureFamilyAssistanceRadius` |

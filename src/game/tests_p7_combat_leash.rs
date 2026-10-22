@@ -483,3 +483,85 @@ async fn a_creature_chasing_with_no_hostile_act_goes_home_after_the_timeout() {
 fn p3_attacking(m: &Map, g: Guid, victim: Guid) -> bool {
     crate::game::tests_p7_combat::attacking(m, g, victim)
 }
+
+/// The leash's time goes by the creature's level, in 1.12's brackets (11 s
+/// to level 29, 12 to 39, 13 to 44, 14 to 49, 15 from 50), and it is looked
+/// at every `[creatures] leash_check_ms` from the fight's start: a creature
+/// goes home at the first look past its time, so up to a look late, never
+/// early.
+#[tokio::test]
+async fn the_leash_runs_by_level_and_is_looked_at_on_its_tick() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let r = map
+        .query(move |m| {
+            let mut cfg = (*m.cfg).clone();
+            cfg.creatures.leash_timeout_by_level =
+                crate::config::CreaturesConfig::default().leash_timeout_by_level;
+            cfg.creatures.leash_check_ms = 0;
+            m.cfg = std::sync::Arc::new(cfg.clone());
+            let mut brackets = Vec::new();
+            for (level, secs) in [
+                (10, 11),
+                (29, 11),
+                (30, 12),
+                (39, 12),
+                (40, 13),
+                (44, 13),
+                (45, 14),
+                (49, 14),
+                (50, 15),
+                (60, 15),
+            ] {
+                let brute = creature_at(m, ga, BRUTE, off(100.0, 0.0, 0.0));
+                m.unit_fields_mut(brute)
+                    .unwrap()
+                    .set_u32(UNIT_FIELD_LEVEL, level);
+                put(m, ga, off(98.0, 0.0, 0.0));
+                let start = m.now;
+                ai::attacked(m, brute, ga);
+                far(m, brute, 40.0, ga, 45.0);
+                let at = |m: &mut Map, ms: u64| {
+                    m.now = start + Duration::from_millis(ms);
+                    should_evade(m, brute, ga)
+                };
+                let edge = (at(m, secs * 1000), at(m, secs * 1000 + 1));
+                m.now = start;
+                brackets.push((level, edge));
+                m.remove_creature(brute);
+            }
+            // Looked at each second from the fight's start, a blow 0.9 s
+            // in: past its 11 s at 11.9, but looked at only at 12.
+            cfg.creatures.leash_check_ms = 1000;
+            m.cfg = std::sync::Arc::new(cfg);
+            let brute = creature_at(m, ga, BRUTE, off(100.0, 0.0, 0.0));
+            m.unit_fields_mut(brute)
+                .unwrap()
+                .set_u32(UNIT_FIELD_LEVEL, 20);
+            put(m, ga, off(98.0, 0.0, 0.0));
+            let start = m.now;
+            ai::attacked(m, brute, ga);
+            m.now = start + Duration::from_millis(900);
+            creature_combat::hostile_act(m, brute);
+            far(m, brute, 40.0, ga, 45.0);
+            let at = |m: &mut Map, ms: u64| {
+                m.now = start + Duration::from_millis(ms);
+                should_evade(m, brute, ga)
+            };
+            let ticked = (at(m, 11_950), at(m, 11_999), at(m, 12_000));
+            (brackets, ticked)
+        })
+        .await
+        .unwrap();
+    for (level, edge) in r.0 {
+        assert_eq!(
+            edge,
+            (false, true),
+            "level {level}: its bracket's time, to the millisecond"
+        );
+    }
+    assert_eq!(
+        r.1,
+        (false, false, true),
+        "past its time at 11.9 s, home at the next look (12 s), never before"
+    );
+}

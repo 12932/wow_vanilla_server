@@ -458,8 +458,15 @@ settings! {
         /// may give up (mangos's default is 30).
         leash_radius: f32 = 31.0, Clamp(5.0, 500.0), Live, "LeashRadius";
         /// Seconds beyond its leash without a hostile act before a creature
-        /// goes home.
-        leash_timeout_secs: u64 = 12, Clamp(1.0, 600.0), Live, "";
+        /// goes home, by its level: `level:seconds`, each from that level
+        /// up (1.12's brackets: 11 s to 29, 12 to 39, 13 to 44, 14 to 49,
+        /// 15 from 50).
+        leash_timeout_by_level: Vec<String> = ["1:11", "30:12", "40:13", "45:14", "50:15"].map(String::from).to_vec(), Any, Live, "";
+        /// How often a fighting creature looks at its leash, in
+        /// milliseconds, from when its fight began: it goes home at the first
+        /// look past its time, so up to this much past it, never before (0
+        /// looks every update).
+        leash_check_ms: u64 = 1000, Clamp(0.0, 60_000.0), Live, "";
         /// Milliseconds a creature stands still in reach of its victim,
         /// attacking, before that renews its leash as a hostile act on it
         /// would (and again each as long, while it stands and attacks).

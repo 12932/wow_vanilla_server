@@ -417,9 +417,18 @@ aggro_rate = 1.0
 leash_radius = 31.0
 
 # Seconds beyond its leash without a hostile act before a creature
-# goes home.
-# Default 12. Range 1 to 600, clamped. Changes at a reload.
-leash_timeout_secs = 12
+# goes home, by its level: `level:seconds`, each from that level
+# up (1.12's brackets: 11 s to 29, 12 to 39, 13 to 44, 14 to 49,
+# 15 from 50).
+# Default ["1:11", "30:12", "40:13", "45:14", "50:15"]. Changes at a reload.
+leash_timeout_by_level = ["1:11", "30:12", "40:13", "45:14", "50:15"]
+
+# How often a fighting creature looks at its leash, in
+# milliseconds, from when its fight began: it goes home at the first
+# look past its time, so up to this much past it, never before (0
+# looks every update).
+# Default 1000. Range 0 to 60000, clamped. Changes at a reload.
+leash_check_ms = 1000
 
 # Milliseconds a creature stands still in reach of its victim,
 # attacking, before that renews its leash as a hostile act on it
