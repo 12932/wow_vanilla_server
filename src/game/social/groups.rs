@@ -1850,11 +1850,18 @@ pub fn bg_closed(realm: &Realm, instance: u32) {
     }
 }
 
-/// `CMSG_REQUEST_PARTY_MEMBER_STATS`: all of a member's stats.
+/// `CMSG_REQUEST_PARTY_MEMBER_STATS`: all of a member's stats, to one in
+/// a group with them (their battleground's raid, or their own group);
+/// anyone else is told they are offline. Unchecked (as mangos has it), a
+/// client could follow any grouped player's zone and position.
 pub fn request_stats(realm: &Realm, me: &Online, of: Guid) {
     let groups = realm.social.groups.lock();
+    let mates = |gr: Option<&Group>| gr.is_some_and(|gr| gr.is_member(of));
+    let mine = of == me.guid
+        || mates(groups.group_of(me.guid))
+        || mates(groups.original_of(me.guid));
     let frame = match groups.stats.get(&of) {
-        Some(s) if realm.registry.online(of).is_some() => s.packet(of, s.all(), true),
+        Some(s) if mine && realm.registry.online(of).is_some() => s.packet(of, s.all(), true),
         _ => MemberStats::default().packet(of, STAT_STATUS, true),
     };
     me.outbound.send_frame(frame);

@@ -549,3 +549,40 @@ async fn the_instance_sweep_looks_at_the_online_list_once() {
     assert!(realm.social.instances.lock().saves.is_empty(), "all stale");
     assert!(took < Duration::from_millis(50), "{took:?}");
 }
+
+/// The status byte of `of`'s full stats, as `asker` requests them.
+async fn member_status(realm: &Arc<Realm>, asker: &mut Client, of: Guid) -> u8 {
+    use crate::game::social::groups::SMSG_PARTY_MEMBER_STATS_FULL;
+    on_map(realm, |m| {
+        m.member_stats_at = m.now;
+        crate::game::map::social::push_member_stats(m);
+    })
+    .await;
+    asker.clear();
+    asker
+        .send(CMSG_REQUEST_PARTY_MEMBER_STATS { guid: of })
+        .await;
+    let full = asker
+        .wait_frame("the full stats", SMSG_PARTY_MEMBER_STATS_FULL, |_| true)
+        .await;
+    // A packed GUID, the mask, then the status.
+    let at = 1 + full[0].count_ones() as usize + 4;
+    full[at]
+}
+
+/// `CMSG_REQUEST_PARTY_MEMBER_STATS` gave any grouped player's stats
+/// (health, zone, position, auras) to whoever asked, an enemy too. A
+/// member's are their group's; anyone else is told they are offline.
+#[tokio::test]
+async fn a_members_stats_are_for_their_group() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Carol", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Bob").await;
+    assert_eq!(member_status(&realm, &mut b, ga).await & 0x01, 0x01, "Bob's to see");
+    assert_eq!(member_status(&realm, &mut c, ga).await, 0, "not Carol's");
+}
