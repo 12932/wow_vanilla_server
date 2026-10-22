@@ -311,30 +311,50 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
                 continue;
             }
         }
-        // The next it may fight: not one it can't reach or see.
-        let next = pick_victim(map, c, false);
-        combat::stop_attack(map, c);
-        let pet = map.creature(c).is_some_and(|cr| cr.pet.is_some());
-        match next {
-            // A pet takes up the next itself (its own AI's choice); with
-            // none, its fight is over where it stands, whole as it is
-            // (Thistle Tea's `drop_threat` for a pet): no evade home.
-            Some(_) if pet => {}
-            None if pet => pet_fight_over(map, c),
-            Some(t) => {
-                if let Some(cr) = map.creature_mut(c) {
-                    cr.combat.attacking = false;
-                }
-                attacked(map, c, t);
-                map.note_fighting(c);
-                if let Some(cr) = map.creature_mut(c) {
-                    cr.combat.victim = t;
-                    cr.combat.attacking = true;
-                    cr.fields.set_guid(UNIT_FIELD_TARGET, t);
-                }
+        turn_to_next(map, c);
+    }
+}
+
+/// `g`'s victim is gone from its list: it fights the next it may (not one
+/// it can't reach or see), or, with none, its fight is over.
+fn turn_to_next(map: &mut Map, c: Guid) {
+    let next = pick_victim(map, c, false);
+    combat::stop_attack(map, c);
+    let pet = map.creature(c).is_some_and(|cr| cr.pet.is_some());
+    match next {
+        // A pet takes up the next itself (its own AI's choice); with
+        // none, its fight is over where it stands, whole as it is
+        // (Thistle Tea's `drop_threat` for a pet): no evade home.
+        Some(_) if pet => {}
+        None if pet => pet_fight_over(map, c),
+        Some(t) => {
+            if let Some(cr) = map.creature_mut(c) {
+                cr.combat.attacking = false;
             }
-            None => evade(map, c),
+            attacked(map, c, t);
+            map.note_fighting(c);
+            if let Some(cr) = map.creature_mut(c) {
+                cr.combat.victim = t;
+                cr.combat.attacking = true;
+                cr.fields.set_guid(UNIT_FIELD_TARGET, t);
+            }
         }
+        None => evade(map, c),
+    }
+}
+
+/// `g` gives up on `victim`, gone out of their sight
+/// ([`creature_combat::out_of_sight`](crate::game::map::creature_combat::out_of_sight)):
+/// they come off its list (its tap kept, if it fights on), and, if it was
+/// fighting them, it turns to the next, or goes home.
+pub fn lost_sight_of(map: &mut Map, g: Guid, victim: Guid) {
+    crate::game::map::spells::threat_sync::removed(map, g, victim);
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    c.threat.retain(|(t, _)| *t != victim);
+    if c.combat.victim == victim {
+        turn_to_next(map, g);
     }
 }
 

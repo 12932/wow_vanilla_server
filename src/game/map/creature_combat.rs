@@ -733,6 +733,62 @@ pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
     far && leash_lapsed(map, c, timeout)
 }
 
+/// The creatures whose victim's client forgot them in the visibility step
+/// just done ([`Map::lost_sight`]) give up on them at once, if `[creatures]
+/// evade_out_of_sight` (mangos-classic's `Player::BeforeVisibilityDestroy`,
+/// which drops the player's reference outside dungeons; here inside too):
+/// each comes off its list, and one that has no one left in sight goes
+/// home, without waiting for its leash. A player's pet or a charmed
+/// creature fights on; and a creature hidden from the victim (its stealth,
+/// a script's concealment), not out of their sight, does too, as does one
+/// whose victim's camera, not the victim, went (a cinematic, Far Sight).
+pub fn out_of_sight(map: &mut Map) {
+    if map.lost_sight.is_empty() {
+        return;
+    }
+    let lost = std::mem::take(&mut map.lost_sight);
+    if !map.cfg.creatures.evade_out_of_sight {
+        return;
+    }
+    for (g, victim) in lost {
+        if gives_up_on(map, g, victim) {
+            crate::game::map::ai::lost_sight_of(map, g, victim);
+        }
+    }
+}
+
+/// Whether `g`, forgotten by `victim`'s client, gives up on them: it has
+/// them on its list, it is no player's and no one's charm, and they still
+/// don't see it (told of it again in the same step, they do), as they
+/// would if near.
+fn gives_up_on(map: &Map, g: Guid, victim: Guid) -> bool {
+    let Some(c) = map.creature(g) else {
+        return false;
+    };
+    let Some(p) = map.players.get(&victim) else {
+        return false;
+    };
+    c.alive()
+        && c.threat.iter().any(|(t, _)| *t == victim)
+        && crate::game::map::ai::keeps_threat(c)
+        && c.fields.get_guid(UNIT_FIELD_CHARMEDBY).is_zero()
+        && !p.known.contains(&g)
+        && crate::game::map::death::can_see(map, victim, g)
+        && beyond_sight(map, p, c.position)
+}
+
+/// Whether the player themselves, not their camera, is past their sight of
+/// `at` (on the ground, as visibility measures): a client forgets what is
+/// far from its view point, which a cinematic, a Far Sight or a possessed
+/// unit's eyes take away from the player; a creature they are near fights
+/// on. Past the plain sight, not its margin as the forgetting is, so an
+/// anchor a little behind doesn't keep a creature on a player it has lost.
+fn beyond_sight(map: &Map, p: &crate::game::map::player::Player, at: Vector3d) -> bool {
+    let r = crate::game::map::visibility::sight(map, p);
+    let me = p.position();
+    (me.x - at.x).powi(2) + (me.y - at.y).powi(2) > r * r
+}
+
 /// `static_flags1`: no defence against spells (the water guardians').
 const STATIC_NO_SPELL_DEFENSE: u32 = 0x8000;
 

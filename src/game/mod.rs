@@ -144,6 +144,8 @@ mod tests_objects;
 #[cfg(test)]
 mod tests_order;
 #[cfg(test)]
+mod tests_out_of_sight;
+#[cfg(test)]
 mod tests_outbound;
 #[cfg(test)]
 mod tests_own_guids;

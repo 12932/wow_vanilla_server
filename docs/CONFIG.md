@@ -250,6 +250,7 @@ Creatures: how near they notice players, how far they chase, how they call for h
 | `leash_standing_ms` | Milliseconds a creature stands still in reach of its victim, attacking, before that renews its leash as a hostile act on it would (and again each as long, while it stands and attacks). | `1250` | 50 to 600000, clamped | live |  |
 | `spawn_grace_ms` | Milliseconds a hostile creature just come into the world from its spawn (its first, or a respawn; not a summon) looks for no one to attack, unless attacked: a respawn doesn't catch a player by surprise (0 for none). | `6000` | 0 to 600000, clamped | live |  |
 | `unreachable_timeout_secs` | Seconds a creature tries for a victim it can't reach before it goes home. | `24` | 1 to 600, clamped | live |  |
+| `evade_out_of_sight` | Whether a creature gives up on a victim the moment it drops out of their sight (their client is told to forget it): it drops them from its fight, and goes home if no one it fights is left in sight, without waiting for its leash. Off, the leash alone decides. | `true` |  | live |  |
 | `assistance_radius` | Yards a creature drawn into a fight calls its kind from. | `5.0` | 0 to 100, clamped | live | `CreatureFamilyAssistanceRadius` |
 | `assistance_delay_ms` | Milliseconds the called take to come. | `1500` | 0 to 60000, clamped | live | `CreatureFamilyAssistanceDelay` |
 | `flee_assistance_radius` | Yards a fleeing creature looks for help within. | `30.0` | 0 to 100, clamped | live | `CreatureFamilyFleeAssistanceRadius` |

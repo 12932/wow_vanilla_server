@@ -522,6 +522,12 @@ settings! {
         /// Seconds a creature tries for a victim it can't reach before it
         /// goes home.
         unreachable_timeout_secs: u64 = 24, Clamp(1.0, 600.0), Live, "";
+        /// Whether a creature gives up on a victim the moment it drops out
+        /// of their sight (their client is told to forget it): it drops
+        /// them from its fight, and goes home if no one it fights is left
+        /// in sight, without waiting for its leash. Off, the leash alone
+        /// decides.
+        evade_out_of_sight: bool = true, Any, Live, "";
         /// Yards a creature drawn into a fight calls its kind from.
         assistance_radius: f32 = 5.0, Clamp(0.0, 100.0), Live, "CreatureFamilyAssistanceRadius";
         /// Milliseconds the called take to come.
