@@ -305,6 +305,20 @@ async fn buffet_halves_threat(
         .await
         .unwrap();
     assert_eq!(before, 1000.0);
+    // Its cone is where it faces, and it turns to its victim on a fight
+    // turn of its own: the casts above, made due in queries, can all come
+    // between two updates (a fight thirty seconds old in the game, a few
+    // milliseconds here), before it has turned from its spawn's facing.
+    // Out of its last cast, it turns on its next update; wait for it.
+    map.query(move |m| crate::game::map::spells::interrupt(m, g))
+        .await;
+    assert!(
+        until(map, 4000, move |m| {
+            crate::game::map::spells::targets::in_cone(m, g, me, 60)
+        })
+        .await,
+        "it turns to face its victim"
+    );
     map.query(move |m| {
         if let Some(cr) = m.caster_mut(g) {
             cr.gcd_until = None;
