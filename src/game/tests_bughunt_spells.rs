@@ -199,3 +199,41 @@ async fn a_cast_ends_only_in_sight_and_unrestrained() {
         .await;
     }
 }
+
+/// A damage shield (Thorns) meets the striker's immunity to its school, as
+/// mangos's `DealMeleeDamage` tests it: one immune takes none.
+#[tokio::test]
+async fn a_damage_shield_meets_immunity() {
+    use super::tests_p3_spells_kit::{dummy, health, set_health};
+    use crate::game::map::procs;
+    const THORNS: u32 = 990_930;
+    const IMMUNE: u32 = 990_931;
+    let realm = fast_realm(|d| {
+        let mut thorns = bare(THORNS, 3);
+        thorns.duration_index = LASTS_LONG;
+        effect(&mut thorns, 0, aura(auras::AURA_DAMAGE_SHIELD, 0, 10, 1));
+        let mut immune = bare(IMMUNE, 0);
+        immune.duration_index = LASTS_LONG;
+        effect(&mut immune, 0, aura(auras::AURA_SCHOOL_IMMUNITY, 1 << 3, 0, 1));
+        insert(d, [thorns, immune]);
+    });
+    let (_c, g, map) = human(&realm, "BHDS", "Thorny", Class::Mage).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[]);
+            let s = m.realm.data.spells.get(THORNS).unwrap().clone();
+            apply_template(m, g, g, &s);
+            let k = dummy(m, g, 60, 3.0);
+            set_health(m, k, 10_000);
+            procs::damage_shields(m, k, g);
+            let struck = 10_000 - health(m, k);
+            let i = m.realm.data.spells.get(IMMUNE).unwrap().clone();
+            apply_template(m, k, k, &i);
+            set_health(m, k, 10_000);
+            procs::damage_shields(m, k, g);
+            (struck, 10_000 - health(m, k))
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (10, 0), "ten, then none through the immunity");
+}
