@@ -2036,9 +2036,10 @@ fn evade(map: &mut Map, g: Guid) {
             crate::game::map::creature_motion::health_changed(map, g);
         }
     }
+    // Already where it goes (sessile, or a follower at its place): home at
+    // once, as mangos-classic's `HomeMovementGenerator` finalizes.
     if map.creature(g).is_some_and(|c| !c.evading) {
-        crate::game::map::creature_combat::rest(map, g);
-        crate::game::map::spawn_auras::restore(map, g);
+        home_reached(map, g);
     }
 }
 
@@ -2086,26 +2087,36 @@ fn evade_step(map: &mut Map, g: Guid) {
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
-        // Home, it turns to its spawn's facing (a patroller as it is).
-        let (at, o) = (c.position, c.home_orientation);
-        let turned = c.orientation != o;
-        if turned && patrol_home(map, g).is_none() {
-            let spline_id = map.next_spline_id;
-            map.next_spline_id = map.next_spline_id.wrapping_add(1);
-            if let Some(c) = map.creature_mut(g) {
-                c.orientation = o;
-            }
-            map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
-        }
-        crate::game::map::creature_combat::rest(map, g);
-        crate::game::map::spawn_auras::restore(map, g);
-        crate::game::map::scripts::restore_faction(
-            map,
-            g,
-            crate::game::map::event_ai::FACTION_RESTORE_REACH_HOME,
-        );
-        crate::game::map::event_ai::reached_home(map, g);
+        home_reached(map, g);
     }
+}
+
+/// An evading creature is home: it turns to its spawn's facing, rests,
+/// has its own faction back if it was to on reaching home, and its
+/// `EVENT_REACHED_HOME` runs (mangos-classic's `JustReachedHome`).
+fn home_reached(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    // Home, it turns to its spawn's facing (a patroller as it is).
+    let (at, o) = (c.position, c.home_orientation);
+    let turned = c.orientation != o;
+    if turned && patrol_home(map, g).is_none() {
+        let spline_id = map.next_spline_id;
+        map.next_spline_id = map.next_spline_id.wrapping_add(1);
+        if let Some(c) = map.creature_mut(g) {
+            c.orientation = o;
+        }
+        map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
+    }
+    crate::game::map::creature_combat::rest(map, g);
+    crate::game::map::spawn_auras::restore(map, g);
+    crate::game::map::scripts::restore_faction(
+        map,
+        g,
+        crate::game::map::event_ai::FACTION_RESTORE_REACH_HOME,
+    );
+    crate::game::map::event_ai::reached_home(map, g);
 }
 
 /// Where a creature walking a path goes back to after a fight: the last

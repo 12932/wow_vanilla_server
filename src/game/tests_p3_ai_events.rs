@@ -1267,3 +1267,66 @@ async fn home_after_its_victim_dies_a_creature_fires_reached_home() {
     assert!(stealthed, "its spell on itself");
     assert!(!fighting);
 }
+
+/// Bug hunt (creatures): a creature that evades without walking (sessile,
+/// or a follower at its place) never reached home: no reached-home events,
+/// no turn to its spawn's facing, no faction back. It is home at once, as
+/// mangos-classic's `HomeMovementGenerator` finalizes.
+#[tokio::test]
+async fn a_sessile_creature_that_evades_is_home_at_once() {
+    const ROOTED: u32 = 4322;
+    let mut d = data();
+    let mut t = template(ROOTED, "Rooted", PACK);
+    // Sessile (vmangos's `CREATURE_STATIC_FLAG_SESSILE`).
+    t.static_flags1 |= 0x100;
+    d.creature_templates.insert(ROOTED, t);
+    d.scripts.ai_scripts.insert(
+        142,
+        vec![ScriptStep {
+            id: 142,
+            command: 0,
+            dataint: [114, 0, 0, 0],
+            ..Default::default()
+        }],
+    );
+    d.scripts
+        .ai_events
+        .insert(ROOTED, vec![ev(EVENT_REACHED_HOME, [0; 4], 0, 142)]);
+    let p = at(4.0, 0.0);
+    d.creature_spawns.get_mut(&0).unwrap().push(CreatureSpawn {
+        guid: 51,
+        entries: vec![ROOTED],
+        map: 0,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        orientation: 2.5,
+        respawn_min: 60,
+        respawn_max: 60,
+        ..Default::default()
+    });
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let me = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let rooted = unit(ROOTED, 51);
+    a.sees(rooted).await;
+    map.query(move |m| {
+        ai::attacked(m, rooted, me);
+        m.creature_mut(rooted).unwrap().orientation = 1.0;
+        crate::game::map::death::kill(m, me);
+    })
+    .await
+    .unwrap();
+    a.wait_for("its line at home", |m| match m {
+        ServerOpcodeMessage::SMSG_MESSAGECHAT(c) if c.message == "reached home" => Some(()),
+        _ => None,
+    })
+    .await;
+    let facing = map
+        .query(move |m| m.creature(rooted).unwrap().orientation)
+        .await
+        .unwrap();
+    assert_eq!(facing, 2.5, "its spawn's facing");
+}
