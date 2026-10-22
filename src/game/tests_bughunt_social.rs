@@ -810,3 +810,61 @@ async fn a_group_with_no_one_online_for_a_day_is_deleted() {
     );
     assert!(stored(&realm, id).await.is_none(), "and out of the store");
 }
+
+/// Group commands from a battleground act on the group the player is in
+/// there, its raid, as mangos's handlers take `GetGroup()` (the user's
+/// call 8): a raid's leader hands the raid's lead, not their own group's.
+/// No one is put out of a group from a battleground, their own one
+/// neither: mangos's `CanUninviteFromGroup` asks whether they lead the
+/// raid ("not leader"), then refuses them as in a battleground ("not in
+/// group"). wvs said "not leader" to the raid's leader too.
+#[tokio::test]
+async fn a_kick_from_a_battleground_leaves_ones_own_group_alone() {
+    use crate::game::social::groups;
+    type R = PartyResult;
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Bob").await;
+    let own = realm.social.groups.lock().group_of(ga).expect("grouped").id;
+    // Alice into a match's raid, its leader; Carol after her.
+    groups::bg_joined(&realm, ga, "Alice".into(), 1, 0);
+    groups::bg_joined(&realm, gc, "Carol".into(), 1, 0);
+    async fn kick(c: &mut Client, name: &str) -> R {
+        c.clear();
+        c.send(CMSG_GROUP_UNINVITE { name: name.into() }).await;
+        c.wait_for("SMSG_PARTY_COMMAND_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => Some(r.result),
+            _ => None,
+        })
+        .await
+    }
+    assert_eq!(kick(&mut a, "Bob").await, R::NotInGroup, "Alice, in a match");
+    assert_eq!(kick(&mut c, "Alice").await, R::NotLeader, "Carol leads nothing");
+    {
+        let groups = realm.social.groups.lock();
+        let mine = groups.get(own).expect("Alice's own group");
+        assert!(mine.is_member(gb), "Bob stays in Alice's group");
+        assert!(groups.original_of(ga).is_some_and(|g| g.id == own));
+    }
+    // The lead handed from the match goes with the raid's.
+    a.send(CMSG_GROUP_SET_LEADER { guid: gc }).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let led = realm.social.groups.lock().group_of(gc).map(|g| g.leader);
+        if led == Some(gc) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the raid's lead to Carol");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        realm.social.groups.lock().get(own).map(|g| g.leader),
+        Some(ga),
+        "Alice still leads her own group"
+    );
+}

@@ -1147,8 +1147,20 @@ pub fn decline(realm: &Realm, me: &Online) {
 }
 
 /// `CMSG_GROUP_UNINVITE` and `CMSG_GROUP_UNINVITE_GUID`: a member out, or
-/// an invite back.
-pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
+/// an invite back. `in_battleground`: the asker is in one's map.
+///
+/// In a battleground no one is put out of any group, the raid nor one's
+/// own: mangos's `CanUninviteFromGroup` asks the group the player is in
+/// (`GetGroup`, the raid there) whether they lead it ("not leader"), then
+/// refuses anyone in a battleground ("not in group", "not so appropriated
+/// but no other option for classic").
+pub fn uninvite(
+    realm: &Realm,
+    me: &Online,
+    target: Option<Guid>,
+    name: &str,
+    in_battleground: bool,
+) {
     let mut groups = realm.social.groups.lock();
     let Some(&id) = groups.of.get(&me.guid) else {
         result(
@@ -1161,14 +1173,23 @@ pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
         return;
     };
     let gr = &groups.groups[&id];
-    // A battleground's raid is the match's: no one is put out of it.
-    if !gr.can_lead(me.guid) || gr.battleground {
+    if !gr.can_lead(me.guid) {
         result(
             realm,
             me.guid,
             PartyOperation::Leave,
             "",
             PartyResult::NotLeader,
+        );
+        return;
+    }
+    if in_battleground || gr.battleground {
+        result(
+            realm,
+            me.guid,
+            PartyOperation::Leave,
+            "",
+            PartyResult::NotInGroup,
         );
         return;
     }
