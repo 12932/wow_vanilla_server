@@ -355,3 +355,57 @@ async fn the_roster_at_a_logout_shows_the_member_offline() {
         .await;
     assert!(!bob_online, "Bob is shown offline");
 }
+
+/// Whether `c` is sent a roster naming `other` within a moment.
+async fn sent_roster_with(c: &mut Client, other: Guid) -> bool {
+    handled(c).await;
+    c.gets(Duration::from_millis(200), |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) => {
+            l.members.iter().any(|m| m.guid == other).then_some(())
+        }
+        _ => None,
+    })
+    .await
+    .is_some()
+}
+
+/// A player in a battleground's raid who formed or joined a group of their
+/// own was sent its rosters, over the raid's on their client: only one
+/// made away by `bg_joined` was kept off them. One who forms it (inviting)
+/// and one who joins it (accepting) are away from it too.
+#[tokio::test]
+async fn a_group_made_in_a_battleground_leaves_its_raid_roster_alone() {
+    use crate::game::social::groups;
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
+    let mut d = Client::connect(&realm, "D");
+    let gd = d.enter("Dave", Race::Human, Class::Warrior).await;
+    groups::bg_joined(&realm, ga, "Alice".into(), 1, 0);
+    groups::bg_joined(&realm, gd, "Dave".into(), 2, 0);
+    // Alice, in a match, invites Bob.
+    group(&mut a, &mut b, "Bob").await;
+    assert!(!sent_roster_with(&mut a, gb).await, "Alice keeps her raid's");
+    // Dave, in a match, accepts Carol's invite.
+    c.send(CMSG_GROUP_INVITE {
+        name: "Dave".into(),
+    })
+    .await;
+    d.wait_for("SMSG_GROUP_INVITE", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+    })
+    .await;
+    d.send(CMSG_GROUP_ACCEPT {}).await;
+    c.wait_for("Carol's roster", |m| match m {
+        ServerOpcodeMessage::SMSG_GROUP_LIST(l) => {
+            l.members.iter().any(|m| m.guid == gd).then_some(())
+        }
+        _ => None,
+    })
+    .await;
+    assert!(!sent_roster_with(&mut d, gc).await, "Dave keeps his raid's");
+}

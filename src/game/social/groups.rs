@@ -721,9 +721,18 @@ impl Groups {
         }
     }
 
+    /// `g`'s own group is `id`. In a battleground's raid, they are away
+    /// from it, as `bg_joined` leaves one: its rosters aren't sent them,
+    /// over the raid's (mangos's `SendUpdate` skips a member whose
+    /// `GetGroup` is another).
     fn set_home(&mut self, g: Guid, id: u32) {
         if self.in_bg_raid(g) {
             self.original.insert(g, id);
+            if let Some(gr) = self.groups.get_mut(&id)
+                && !gr.away.contains(&g)
+            {
+                gr.away.push(g);
+            }
         } else {
             self.of.insert(g, id);
         }
@@ -1048,6 +1057,7 @@ pub fn accept(realm: &Realm, me: &Online) {
         return;
     };
     groups.invites.remove(&me.guid);
+    let away = groups.in_bg_raid(me.guid);
     let Some(gr) = groups.groups.get_mut(&id) else {
         return;
     };
@@ -1071,6 +1081,11 @@ pub fn accept(realm: &Realm, me: &Online) {
         subgroup,
         assistant: false,
     });
+    // In a battleground's raid, away from it from the first roster on
+    // (`set_home`).
+    if away && !gr.away.contains(&me.guid) {
+        gr.away.push(me.guid);
+    }
     if gr.looter.is_zero() {
         gr.looter = gr.leader;
     }
