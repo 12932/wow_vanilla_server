@@ -216,6 +216,7 @@ pub fn test_config() -> RealmConfig {
         gm: Default::default(),
         hyperspawn: Default::default(),
         broadcast_batch: crate::game::map::batch::BatchConfig::fixed(Duration::ZERO),
+        leash_brackets: Default::default(),
     }
 }
 

@@ -899,11 +899,7 @@ fn spawn_movement(map: &Map, g: Guid) -> Option<(u8, f32)> {
     let data = &map.realm.data;
     let c = map.creature(g)?;
     let (spawn, entry) = (c.spawn_guid?, c.entry);
-    let s = data
-        .creature_spawns
-        .get(&map.key.map)?
-        .iter()
-        .find(|s| s.guid == spawn)?;
+    let s = data.creature_spawn_in(map.key.map, spawn)?;
     let path = data.waypoints.get(&spawn).is_some_and(|p| !p.is_empty());
     // Set to walk one with none of its own, its entry's.
     let entry_path = data

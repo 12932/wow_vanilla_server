@@ -275,36 +275,151 @@ pub fn moved(
         return true;
     }
     if guid::is_player(unit) {
-        let Some(v) = map.players.get_mut(&unit) else {
-            return true;
-        };
-        // Feared or confused, the server moves them, as a creature; dead,
-        // no one does.
-        if v.driven.is_some() || v.death != crate::game::map::death::Death::Alive {
-            return true;
-        }
-        let (anchor, old_cell) = (v.vis_anchor, v.cell);
-        v.movement = *info;
-        let new_cell = crate::game::map::grid::cell_of(info.position.x, info.position.y);
-        v.cell = new_cell;
-        v.move_check = Some((info.position, map.now));
-        map.grid.relocate(unit, old_cell, new_cell);
-        crate::game::map::visibility::moved(map, unit, anchor, info.position);
-        if let Some(frame) = relay(unit, *info) {
-            // Its own client sees it walk too; the controller's, which
-            // moved it, isn't told back (mangos's `HandleMovementOpcodes`,
-            // `SendMessageToAllWhoSeeMeMove(data, _player)`).
-            map.send_to_observers_but(unit, &frame, true, player);
-        }
-        return true;
+        moved_player(map, player, unit, *info, relay);
+    } else {
+        moved_creature(map, player, unit, *info, relay);
     }
-    let Some(c) = map.creature_mut(unit) else {
-        return true;
+    true
+}
+
+/// A possessed player moved by `player`'s client: checked as their own
+/// client's movement is, against their speeds, roots and auras, with their
+/// own guard (mangos-classic's `VerifyMovementInfo` of the mover).
+fn moved_player(
+    map: &mut Map,
+    player: Guid,
+    unit: Guid,
+    info: MovementInfo,
+    relay: crate::game::map::movement::Relay,
+) {
+    use crate::game::map::move_guard::{self, Mover};
+    let walks_on_water = crate::game::map::death::walks_on_water(map, unit);
+    let now = map.now;
+    let check = map.cfg.anticheat.clone();
+    let (Some(v), Some(p)) = (map.players.get(&unit), map.players.get(&player)) else {
+        return;
+    };
+    // Feared or confused, the server moves them, as a creature; dead,
+    // no one does.
+    if v.driven.is_some() || v.death != crate::game::map::death::Death::Alive {
+        return;
+    }
+    // The controller's client says it: their GM status is what counts.
+    let mover = Mover {
+        gm: p.gm,
+        ..Mover::player_moved_by(v, &p.outbound)
+    };
+    let mut guard = v.misc.move_guard;
+    let (at, o) = (v.position(), v.movement.orientation);
+    // Held by a root or stun: refused, and put back if it went anywhere.
+    if move_guard::held_back_of(&mover, &mut guard, &info, now) {
+        let far = horizontal(at, info.position) > check.distance_allowance_yards;
+        if let Some(v) = map.players.get_mut(&unit) {
+            v.misc.move_guard = guard;
+        }
+        if far {
+            tracing::debug!("{unit:?} was moved under a root by {player:?}; put back");
+            crate::game::map::movement::teleport_within(map, unit, at, o);
+        }
+        return;
+    }
+    let info = move_guard::stripped_of(&mover, &guard, info, walks_on_water);
+    if let Some((last, since)) = v.move_check
+        && check.speed_check
+        && !p.gm
+        && info.flags.get_on_transport().is_none()
+        && move_guard::too_fast_at(v.speeds, &mut guard, last, since, &info, now, &check)
+    {
+        tracing::debug!("{unit:?} was moved too fast by {player:?}; pulled back");
+        crate::game::map::movement::teleport_within(map, unit, last, o);
+        return;
+    }
+    move_guard::taken_with(&mut guard, &info);
+    let Some(v) = map.players.get_mut(&unit) else {
+        return;
+    };
+    v.misc.move_guard = guard;
+    let (anchor, old_cell) = (v.vis_anchor, v.cell);
+    v.movement = info;
+    let new_cell = crate::game::map::grid::cell_of(info.position.x, info.position.y);
+    v.cell = new_cell;
+    v.move_check = Some((info.position, now));
+    map.grid.relocate(unit, old_cell, new_cell);
+    crate::game::map::visibility::moved(map, unit, anchor, info.position);
+    if let Some(frame) = relay(unit, info) {
+        // Its own client sees it walk too; the controller's, which
+        // moved it, isn't told back (mangos's `HandleMovementOpcodes`,
+        // `SendMessageToAllWhoSeeMeMove(data, _player)`).
+        map.send_to_observers_but(unit, &frame, true, player);
+    }
+}
+
+/// A possessed creature (Mind Control, an eye, Eyes of the Beast) moved by
+/// `player`'s client: checked against its speeds, roots and auras, with a
+/// guard of its own while it is controlled.
+fn moved_creature(
+    map: &mut Map,
+    player: Guid,
+    unit: Guid,
+    info: MovementInfo,
+    relay: crate::game::map::movement::Relay,
+) {
+    use crate::game::map::move_guard::{self, Mover};
+    let walks_on_water = crate::game::map::death::walks_on_water(map, unit);
+    let now = map.now;
+    let check = map.cfg.anticheat.clone();
+    let (Some(c), Some(p)) = (map.creature(unit), map.players.get(&player)) else {
+        return;
     };
     // Feared or confused, the server moves it (Thistle Tea's "possessed
     // creatures reject input"); dead, no one does.
     if c.engagement.control.is_some() || !c.alive() {
-        return true;
+        return;
+    }
+    let Some(s) = c.pet.as_deref() else {
+        return;
+    };
+    let mover = Mover {
+        guid: unit,
+        name: "",
+        position: c.position,
+        auras: &c.auras,
+        speeds: c.speeds,
+        orders: &p.outbound,
+        gm: p.gm,
+    };
+    let mut guard = s.move_guard;
+    let (at, o) = (c.position, c.orientation);
+    let since = s.moved_at.unwrap_or(now);
+    let held = move_guard::held_back_of(&mover, &mut guard, &info, now);
+    let info = move_guard::stripped_of(&mover, &guard, info, walks_on_water);
+    let fast = !held
+        && check.speed_check
+        && !p.gm
+        && info.flags.get_on_transport().is_none()
+        && move_guard::too_fast_at(c.speeds, &mut guard, at, since, &info, now, &check);
+    if held || fast {
+        let far = horizontal(at, info.position) > check.distance_allowance_yards;
+        if let Some(s) = super::state_mut(map, unit) {
+            if fast {
+                guard.refill();
+            }
+            s.move_guard = guard;
+        }
+        // Where the server has it, told to those who see it.
+        if fast || far {
+            tracing::debug!("{unit:?} was moved past its checks by {player:?}; put back");
+            crate::game::map::scripts::place(map, unit, at, o);
+        }
+        return;
+    }
+    move_guard::taken_with(&mut guard, &info);
+    let Some(c) = map.creature_mut(unit) else {
+        return;
+    };
+    if let Some(s) = c.pet.as_deref_mut() {
+        s.move_guard = guard;
+        s.moved_at = Some(now);
     }
     let (anchor, old_cell) = (c.vis_anchor, c.cell);
     c.position = info.position;
@@ -314,10 +429,13 @@ pub fn moved(
     c.cell = new_cell;
     map.grid.relocate(unit, old_cell, new_cell);
     crate::game::map::visibility::moved(map, unit, anchor, info.position);
-    if let Some(frame) = relay(unit, *info) {
+    if let Some(frame) = relay(unit, info) {
         map.send_to_observers_but(unit, &frame, false, player);
     }
-    true
+}
+
+fn horizontal(a: Vector3d, b: Vector3d) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
 /// The players under control: still held, and (charmed by a creature)

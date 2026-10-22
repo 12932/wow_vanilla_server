@@ -510,6 +510,265 @@ async fn the_eye_of_kilrogg_isnt_moved_out_of_the_world() {
     assert_eq!(position(&map, eye).await.z, at.z, "never out of the world");
 }
 
+/// Bug hunt (combat and pets): a possessed unit cast any spell its
+/// controller's client named, known or not (Death Touch from a Mind
+/// Controlled mob). It casts only what its bar has, as mangos-classic's
+/// `HandlePetCastSpellOpcode` (`HasSpell`): the eye has nothing.
+#[tokio::test]
+async fn a_possessed_unit_casts_no_spell_it_doesnt_have() {
+    let realm = harness::realm_with(more());
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[EYE_OF_KILROGG]);
+    let wolf = place(&map, gw, WOLF, 0x70_0101, 6.0).await;
+    cast(&w, EYE_OF_KILROGG, None).await;
+    let eye = w
+        .wait_for("control of the eye", |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid != gw && u.allow_movement =>
+            {
+                Some(u.guid)
+            }
+            _ => None,
+        })
+        .await;
+    w.sees(wolf).await;
+    let health = move |m: &mut crate::game::map::Map| {
+        m.creature(wolf)
+            .map(|c| c.fields.get_u32(UNIT_FIELD_HEALTH))
+    };
+    let before = map.query(health).await.flatten();
+    w.send(CMSG_PET_CAST_SPELL {
+        guid: eye,
+        id: FIRE,
+        targets: at(wolf),
+    })
+    .await;
+    let cast = w
+        .gets(Duration::from_millis(400), |m| match m {
+            ServerOpcodeMessage::SMSG_SPELL_GO(g) if g.spell == FIRE => Some(()),
+            ServerOpcodeMessage::SMSG_SPELL_START(g) if g.spell == FIRE => Some(()),
+            _ => None,
+        })
+        .await;
+    assert!(cast.is_none(), "the eye has no Fire");
+    assert_eq!(
+        map.query(health).await.flatten(),
+        before,
+        "the wolf unharmed"
+    );
+}
+
+const ROOT: u32 = 97_830;
+
+/// [`more`], with a root, on a realm whose players aren't GMs (a GM's
+/// movement isn't checked).
+fn checked_realm() -> std::sync::Arc<crate::game::Realm> {
+    use crate::game::map::auras::AURA_MOD_ROOT;
+    use crate::game::tests_p3_entity::aura_effect;
+    let mut d = more();
+    d.spells.spells.insert(
+        ROOT,
+        crate::game::tests_p3_entity::spell(ROOT, &[aura_effect(AURA_MOD_ROOT, 1, 0, 1)]),
+    );
+    crate::game::tests_p12c_speed::realm_on(d)
+}
+
+/// A heartbeat of the mover `c`'s client has, at `at` with `flags`.
+async fn beat_as(c: &Client, flags: MovementInfo_MovementFlags, at: Vector3d) {
+    c.send(MSG_MOVE_HEARTBEAT_Client {
+        info: crate::game::tests_p12c_speed::info(flags, at),
+    })
+    .await;
+}
+
+/// Bug hunt (combat and pets; map core): a possessed unit's movement had
+/// only `finite`'s check, so a priest's client could put the player they
+/// Mind Control 300 yards off in a packet, rooted or not, flying. It is
+/// checked as the controller's own is: too far is pulled back, a root
+/// holds, and flags with no aura for them are taken off.
+#[tokio::test]
+async fn a_possessed_player_moves_no_faster_than_they_can_nor_rooted() {
+    use crate::game::tests_p3_player2_ammo::handled;
+    let realm = checked_realm();
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (_b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    bring(&map, gb, ga, 8.0).await;
+    a.sees(gb).await;
+    flag_pvp(&map, vec![ga, gb]);
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(control_update(&mut a, gb).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: gb }).await;
+    handled(&mut a).await;
+    let at = position(&map, gb).await;
+    // Three hundred yards in a packet: pulled back.
+    let far = Vector3d {
+        x: at.x + 300.0,
+        ..at
+    };
+    beat_as(&a, MovementInfo_MovementFlags::new_forward(), far).await;
+    handled(&mut a).await;
+    let x = position(&map, gb).await.x;
+    assert!((x - at.x).abs() < 0.01, "not moved: {x} from {}", at.x);
+    // A step, flying and levitating: taken, the flags off.
+    let step = Vector3d {
+        x: at.x + 1.0,
+        ..at
+    };
+    let flags = MovementInfo_MovementFlags::new_forward()
+        .set_levitating()
+        .set_can_fly();
+    beat_as(&a, flags, step).await;
+    until(&map, "the step taken", move |m| {
+        (m.players[&gb].position().x - step.x).abs() < 0.01
+    })
+    .await;
+    let f = map
+        .query(move |m| m.players[&gb].movement.flags)
+        .await
+        .unwrap();
+    assert!(!f.get_levitating() && !f.get_can_fly(), "{f:?}");
+    // Rooted (the order to the priest's client, acknowledged): a run is
+    // refused and put back.
+    map.query(move |m| {
+        let s = m.realm.data.spells.get(ROOT).cloned().unwrap();
+        crate::game::map::auras::apply(m, gb, gb, &s, 0, 1);
+    })
+    .await;
+    let counter = a
+        .wait_for("SMSG_FORCE_MOVE_ROOT", |m| match m {
+            ServerOpcodeMessage::SMSG_FORCE_MOVE_ROOT(r) if r.guid == gb => Some(r.counter),
+            _ => None,
+        })
+        .await;
+    a.send(CMSG_FORCE_MOVE_ROOT_ACK {
+        guid: gb,
+        movement_counter: counter,
+        info: crate::game::tests_p12c_speed::info(MovementInfo_MovementFlags::new_root(), step),
+    })
+    .await;
+    let run = Vector3d {
+        x: step.x + 5.0,
+        ..step
+    };
+    beat_as(&a, MovementInfo_MovementFlags::new_forward(), run).await;
+    handled(&mut a).await;
+    let x = position(&map, gb).await.x;
+    assert!((x - step.x).abs() < 0.01, "held: {x} from {}", step.x);
+}
+
+/// The same of a possessed creature: an Eye of Kilrogg goes no faster
+/// than its speed.
+#[tokio::test]
+async fn the_eye_of_kilrogg_goes_no_faster_than_it_can() {
+    use crate::game::tests_p3_player2_ammo::handled;
+    let realm = checked_realm();
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[EYE_OF_KILROGG]);
+    cast(&w, EYE_OF_KILROGG, None).await;
+    let eye = w
+        .wait_for("control of the eye", |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid != gw && u.allow_movement =>
+            {
+                Some(u.guid)
+            }
+            _ => None,
+        })
+        .await;
+    w.send(CMSG_SET_ACTIVE_MOVER { guid: eye }).await;
+    handled(&mut w).await;
+    let at = position(&map, eye).await;
+    let far = Vector3d {
+        x: at.x + 300.0,
+        ..at
+    };
+    beat_as(&w, MovementInfo_MovementFlags::new_forward(), far).await;
+    handled(&mut w).await;
+    let x = position(&map, eye).await.x;
+    assert!((x - at.x).abs() < 0.01, "not moved: {x} from {}", at.x);
+    let step = Vector3d {
+        x: at.x + 2.0,
+        ..at
+    };
+    beat_as(&w, MovementInfo_MovementFlags::new_forward(), step).await;
+    until(&map, "the step taken", move |m| {
+        m.position_of(eye)
+            .is_some_and(|p| (p.x - step.x).abs() < 0.01)
+    })
+    .await;
+}
+
+/// Bug hunt (combat and pets): a Mind Controlled creature taken out of
+/// the map without dying (an event's end, a script's despawn) left its
+/// master's camera and movement on it, and their charm named it, so they
+/// could move nothing and charm nothing until they logged out. Its master
+/// has their own back, as at any release.
+#[tokio::test]
+async fn a_possessed_creature_removed_gives_its_master_their_own_back() {
+    let realm = harness::realm_with(more());
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    let wolf = place(&map, ga, WOLF, 0x70_0102, 8.0).await;
+    a.sees(wolf).await;
+    cast(&a, MIND_CONTROL, Some(wolf)).await;
+    assert!(control_update(&mut a, wolf).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: wolf }).await;
+    crate::game::tests_p3_player2_ammo::handled(&mut a).await;
+    map.call(move |m| {
+        m.remove_creature(wolf);
+    });
+    assert!(control_update(&mut a, ga).await, "the priest has their own");
+    let (charm, mover, sight, charm_field) = map
+        .query(move |m| {
+            let p = &m.players[&ga];
+            (
+                p.owned.charm,
+                p.owned.mover,
+                p.fields.get_guid(PLAYER_FARSIGHT),
+                p.fields.get_guid(UNIT_FIELD_CHARM),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(charm, None);
+    assert_eq!(mover, None);
+    assert!(sight.is_zero() && charm_field.is_zero());
+}
+
+/// Bug hunt (combat and pets): a creature charmed by a player leaving the
+/// map was let go turning on them: the departing player back on its list,
+/// its tap theirs, a fight with one no longer there. Let go as they leave,
+/// it turns on no one.
+#[tokio::test]
+async fn a_charmed_creature_let_go_as_its_master_leaves_turns_on_no_one() {
+    let realm = harness::realm_with(more());
+    let (_a, ga, map) = enter(&realm, "A", "Charmer", Race::Human, Class::Warlock).await;
+    let wolf = place(&map, ga, WOLF, 0x70_0103, 6.0).await;
+    let r = map
+        .query(move |m| {
+            pets::charmed(m, ga, wolf, false);
+            let held = pets::state(m, wolf).map(|s| s.kind);
+            let _gone = m.take_player(ga);
+            let c = m.creature(wolf).unwrap();
+            (
+                held,
+                c.pet.is_none(),
+                c.threat.len(),
+                c.tapped_by,
+                c.combat.attacking,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(r.0, Some(Kind::Charmed));
+    assert_eq!(
+        (r.1, r.2, r.3, r.4),
+        (true, 0, None, false),
+        "free, and fighting no one"
+    );
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());
@@ -837,4 +1096,28 @@ fn a_familys_size_runs_from_its_least_to_its_most() {
     assert_eq!(f.scale(60), Some(1.0));
     assert!((f.scale(31).unwrap() - (0.6 + 30.0 / 60.0 * 0.4)).abs() < 0.001);
     assert_eq!(crate::game::data::pets::Family::default().scale(10), None);
+}
+
+/// Bug hunt (creatures): a player's pet was noticed from as far as its
+/// master. One no client moves is noticed at 65% of that (mangos-classic's
+/// `GetAttackDistance`).
+#[tokio::test]
+async fn a_pet_is_noticed_from_nearer_than_its_master() {
+    let mut d = more();
+    d.creature_templates.get_mut(&WOLF).unwrap().detection_range = 20.0;
+    let (_realm, _h, gh, map, pet, wolf) = tamed_on(harness::realm_with(d)).await;
+    let (master, pets) = map
+        .query(move |m| {
+            (
+                crate::game::map::ai::attack_distance(m, wolf, gh),
+                crate::game::map::ai::attack_distance(m, wolf, pet),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(master > 0.0);
+    assert!(
+        (pets - master * 0.65).abs() < 0.01,
+        "{pets} against {master}"
+    );
 }

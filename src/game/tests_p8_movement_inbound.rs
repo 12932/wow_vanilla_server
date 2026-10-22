@@ -147,6 +147,10 @@ async fn a_pets_stop_and_a_possessed_casters_ground_spell_go_as_its_master_says(
             let other = place_in(m, gw, WOLF, 0x70_0802, 6.0);
             let possess = m.realm.data.spells.get(POSSESS).cloned().unwrap();
             crate::game::map::auras::apply(m, gw, other, &possess, 0, 0);
+            // A possessed unit casts what its bar has (its charm spells).
+            if let Some(s) = crate::game::map::pets::state_mut(m, other) {
+                s.spells.push(RAIN);
+            }
             let at = m.players[&gw].position();
             let place_at = Vector3d {
                 x: at.x + 3.0,

@@ -2487,6 +2487,26 @@ impl Map {
         }
     }
 
+    /// Whether `pred` takes any awake creature: [`Self::awake_where`],
+    /// stopping at the first (debug builds check it against a look through
+    /// every creature, so `pred` takes only creatures that are awake).
+    pub fn awake_any(&mut self, pred: impl Fn(&Creature) -> bool) -> bool {
+        let creatures = &self.creatures;
+        let any = self
+            .awake
+            .keys(self.stats.updates, creatures, &self.creature_by_guid)
+            .iter()
+            .filter_map(|&k| creatures.get(k))
+            .any(&pred);
+        debug_assert_eq!(
+            any,
+            self.creatures.iter().any(|(_, c)| pred(c)),
+            "{}: a creature is awake but not in Map::awake",
+            self.key
+        );
+        any
+    }
+
     /// What `out` makes of each awake creature `pred` takes, in the order
     /// of a look through every creature, which is what debug builds check
     /// it finds (so `pred` takes only creatures that are awake). The
@@ -2719,6 +2739,8 @@ impl Map {
     /// event's conditions on it read it as it was (vmangos's
     /// `SummonedCreatureDespawn` before the summon leaves the world).
     pub fn remove_creature(&mut self, guid: Guid) -> Option<Creature> {
+        // Charmed or possessed, its master has their own back.
+        pets::leaving(self, guid);
         let heard = self
             .creature(guid)
             .filter(|c| !c.despawned)
@@ -2749,6 +2771,8 @@ impl Map {
         }
         creature_groups::gone(self, guid);
         loot::forget_pockets(self, guid);
+        // What a taunt or a Fade held on it, or it on another, goes too.
+        spells::threat_sync::gone(self, guid);
         self.grid.remove(guid, c.cell);
         for o in c.observers.drain() {
             if let Some(p) = self.players.get_mut(&o) {

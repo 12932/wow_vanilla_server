@@ -263,6 +263,9 @@ fn end(map: &mut Map, loser: Guid, how: Option<DuelWinnerReason>) {
                 if let Some(c) = map.creature_mut(pet) {
                     c.threat.retain(|(t, _)| !foes.contains(t));
                 }
+                for foe in foes {
+                    crate::game::map::spells::threat_sync::removed(map, pet, foe);
+                }
             }
         }
     }

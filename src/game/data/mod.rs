@@ -479,6 +479,10 @@ pub struct GameData {
     pub appearances: appearance::Appearances,
     pub creature_templates: AHashMap<u32, CreatureTemplate>,
     pub creature_spawns: AHashMap<u32, Vec<CreatureSpawn>>,
+    /// Each creature spawn's map and place in its list, by its guid, worked
+    /// out from `creature_spawns` when first asked ([`Self::creature_spawn`]).
+    #[cfg_attr(test, serde(skip))]
+    pub spawn_index: std::sync::OnceLock<AHashMap<u32, (u32, usize)>>,
     pub creature_addons: AHashMap<u32, CreatureAddon>,
     pub creature_equipment: AHashMap<u32, [u32; 3]>,
     pub waypoints: AHashMap<u32, Vec<Waypoint>>,
@@ -590,6 +594,39 @@ impl GameData {
 
     pub fn creature_template(&self, entry: u32) -> Option<&CreatureTemplate> {
         self.creature_templates.get(&entry)
+    }
+
+    /// The creature spawn of guid `guid`, on whichever map: a lookup, not a
+    /// search of every spawn.
+    pub fn creature_spawn(&self, guid: u32) -> Option<&CreatureSpawn> {
+        let &(map, i) = self.spawn_indexed().get(&guid)?;
+        self.creature_spawns.get(&map)?.get(i)
+    }
+
+    /// The creature spawn of guid `guid` on map `map`.
+    pub fn creature_spawn_in(&self, map: u32, guid: u32) -> Option<&CreatureSpawn> {
+        match self.spawn_indexed().get(&guid) {
+            Some(&(m, i)) if m == map => self.creature_spawns.get(&m)?.get(i),
+            // A guid on two maps (a test's world) is looked for in this one.
+            Some(_) => self
+                .creature_spawns
+                .get(&map)?
+                .iter()
+                .find(|s| s.guid == guid),
+            None => None,
+        }
+    }
+
+    fn spawn_indexed(&self) -> &AHashMap<u32, (u32, usize)> {
+        self.spawn_index.get_or_init(|| {
+            let mut index = AHashMap::new();
+            for (map, spawns) in &self.creature_spawns {
+                for (i, s) in spawns.iter().enumerate() {
+                    index.entry(s.guid).or_insert((*map, i));
+                }
+            }
+            index
+        })
     }
 
     pub fn item(&self, entry: u32) -> Option<&ItemTemplate> {

@@ -1467,9 +1467,41 @@ pub struct RealmConfig {
     pub hyperspawn: crate::config::HyperspawnConfig,
     /// `[network] broadcast_batch_*`: each map's window.
     pub broadcast_batch: crate::game::map::batch::BatchConfig,
+    /// `creatures.leash_timeout_by_level` parsed, when first asked
+    /// ([`Self::leash_brackets`]).
+    pub leash_brackets: LeashBrackets,
+}
+
+/// `[creatures] leash_timeout_by_level` parsed once: (from level, seconds),
+/// the lowest level first. A clone starts empty, so a copy whose settings
+/// are then changed (a test's) parses its own.
+#[derive(Debug, Default)]
+pub struct LeashBrackets(std::sync::OnceLock<Vec<(u32, u64)>>);
+
+impl Clone for LeashBrackets {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 impl RealmConfig {
+    /// The leash's timeouts by level, parsed once for this config.
+    pub fn leash_brackets(&self) -> &[(u32, u64)] {
+        self.leash_brackets.0.get_or_init(|| {
+            let mut out: Vec<(u32, u64)> = self
+                .creatures
+                .leash_timeout_by_level
+                .iter()
+                .filter_map(|t| {
+                    let (l, s) = t.split_once(':')?;
+                    Some((l.trim().parse::<u32>().ok()?, s.trim().parse::<u64>().ok()?))
+                })
+                .collect();
+            out.sort_by_key(|(from, _)| *from);
+            out
+        })
+    }
+
     /// From a config checked at load (`crate::config::resolve`).
     pub fn from_config(c: &crate::config::ServerConfig) -> Self {
         let b = &c.battleground;
@@ -1532,6 +1564,7 @@ impl RealmConfig {
             gm: c.gm.clone(),
             hyperspawn: c.hyperspawn.clone(),
             broadcast_batch: crate::game::map::batch::BatchConfig::from_config(&c.network),
+            leash_brackets: LeashBrackets::default(),
         }
     }
 

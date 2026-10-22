@@ -563,3 +563,48 @@ async fn a_pet_turns_to_its_victim_with_a_facing_move() {
     })
     .await;
 }
+
+/// Bug hunt (creatures): a creature in a fight it doesn't swing in (a
+/// passive one) with only an unseen foe left on its list (gone invisible)
+/// neither fought nor went home, and held that foe in its fight for good.
+/// One it may not fight holds it in none, as in a fight it swings in: it
+/// goes home.
+#[tokio::test]
+async fn a_passive_creature_left_with_only_an_unseen_foe_goes_home() {
+    use crate::game::map::auras::AURA_MOD_INVISIBILITY;
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let r = on(&map, move |m| {
+        let dummy = spawn(m, ga, BRUTE, 20, 1.0);
+        m.creature_mut(dummy)
+            .unwrap()
+            .scripted
+            .get_or_insert_default()
+            .passive = true;
+        base::forced_swing(m, ga, dummy, Outcome::Hit);
+        let struck = m.creature(dummy).unwrap().threat.len();
+        aura_of(m, ga, 96_520, AURA_MOD_INVISIBILITY, 0, 100);
+        ai::update_creatures(m);
+        let c = m.creature(dummy).unwrap();
+        (struck, c.threat.len(), c.evading)
+    })
+    .await;
+    assert_eq!(r, (1, 0, true), "struck, then let go of, and home");
+}
+
+/// Bug hunt (creatures): a creature taken out of the map (an event's end,
+/// a summon despawned) with a taunt's or a Fade's threat held on it kept
+/// that hold in the map for good. It goes with the creature.
+#[tokio::test]
+async fn a_creature_removed_takes_the_threat_held_on_it() {
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let r = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        ai::attacked(m, brute, ga);
+        crate::game::map::spells::threat_sync::set_temporary(m, brute, ga, 50.0);
+        let held = m.spells.temp_threat.contains_key(&(brute, ga));
+        m.remove_creature(brute);
+        (held, m.spells.temp_threat.contains_key(&(brute, ga)))
+    })
+    .await;
+    assert_eq!(r, (true, false));
+}

@@ -2360,6 +2360,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
         // Tea's `combat_stop` and its threat drop).
         73 => {
             crate::game::map::combat::leave_combat(map, source);
+            crate::game::map::spells::threat_sync::wiped(map, source);
             if let Some(c) = creature_mut(map, source) {
                 c.threat.clear();
                 c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
@@ -2782,6 +2783,7 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
                 crate::game::map::pets::COMMAND_FOLLOW => {
                     crate::game::map::combat::stop_attack(map, source);
                     crate::game::map::spells::interrupt(map, source);
+                    crate::game::map::spells::threat_sync::wiped(map, source);
                     if let Some(c) = creature_mut(map, source) {
                         c.threat.clear();
                         c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());

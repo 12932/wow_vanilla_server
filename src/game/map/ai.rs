@@ -102,8 +102,17 @@ pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
     let lv = map
         .unit_fields(who)
         .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
-    aggro_reach(detection, level, lv, modifier) * map.cfg.creatures.aggro_rate
+    // A player's pet no client moves is noticed from nearer (mangos-
+    // classic's `GetAttackDistance`: "player pets do not aggro from so
+    // afar").
+    let pet =
+        who != t && guid::is_unit(t) && crate::game::map::movement::controller(map, t).is_none();
+    let pet_rate = if pet { PET_AGGRO_RATE } else { 1.0 };
+    aggro_reach(detection, level, lv, modifier) * pet_rate * map.cfg.creatures.aggro_rate
 }
+
+/// How much nearer a player's pet is noticed than its master.
+const PET_AGGRO_RATE: f32 = 0.65;
 
 /// The unit flags that put a unit out of any fight: not attackable (both),
 /// not selectable, on a flight.
@@ -303,10 +312,11 @@ pub fn forget_by(map: &mut Map, g: Guid, fighting: Vec<Guid>) {
             let Some(cr) = map.creature_mut(c) else {
                 continue;
             };
+            // Its tap stays: a creature's loot recipient goes only as it
+            // evades or respawns (mangos-classic's `TriggerEvadeEvents`,
+            // `Creature::Respawn`; Thistle Tea's `Engagement.leave`), not
+            // as its tapper dies, feigns or vanishes and it fights on.
             cr.threat.retain(|(t, _)| *t != g);
-            if cr.tapped_by == Some(g) {
-                crate::game::map::tap::clear(cr);
-            }
             if cr.combat.victim != g {
                 continue;
             }
@@ -331,7 +341,10 @@ fn turn_to_next(map: &mut Map, c: Guid) {
             if let Some(cr) = map.creature_mut(c) {
                 cr.combat.attacking = false;
             }
-            attacked(map, c, t);
+            // It called for help as its fight began, and calls no one
+            // again for a new victim in it (mangos-classic's
+            // `m_AlreadyCallAssistance`, reset only at `CombatStop`).
+            assist(map, c, t);
             map.note_fighting(c);
             if let Some(cr) = map.creature_mut(c) {
                 cr.combat.victim = t;
@@ -431,12 +444,7 @@ pub fn respawn_delay(
     rate: f32,
 ) -> Duration {
     spawn
-        .and_then(|g| {
-            data.creature_spawns
-                .values()
-                .flatten()
-                .find(|s| s.guid == g)
-        })
+        .and_then(|g| data.creature_spawn(g))
         .map(|s| {
             let (lo, hi) = (s.respawn_min, s.respawn_max.max(s.respawn_min));
             let secs = if hi > lo {
@@ -519,6 +527,7 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
+    // Its corpse lies its decay, but no longer than until it comes back.
     c.life = Life::Dead {
         corpse_until: now + corpse,
         respawn_at: now + respawn,
@@ -675,11 +684,7 @@ fn respawn(map: &mut Map, g: Guid) {
         .as_deref()
         .and_then(|s| s.reaction.map(|r| (r, s.passive)));
     let data = map.realm.data.clone();
-    let spawn = spawn_guid.and_then(|sg| {
-        data.creature_spawns
-            .get(&map.key.map)
-            .and_then(|v| v.iter().find(|s| s.guid == sg))
-    });
+    let spawn = spawn_guid.and_then(|sg| data.creature_spawn_in(map.key.map, sg));
     if !despawned {
         despawn_from_view(map, g);
         if let Some(s) = summoner {
@@ -764,11 +769,7 @@ fn spawn_creature_with(
     faction: Option<crate::game::map::event_ai::TempFaction>,
 ) {
     let data = map.realm.data.clone();
-    let Some(spawn) = data
-        .creature_spawns
-        .get(&map.key.map)
-        .and_then(|v| v.iter().find(|s| s.guid == spawn_guid))
-    else {
+    let Some(spawn) = data.creature_spawn_in(map.key.map, spawn_guid) else {
         return;
     };
     if !crate::game::map::battleground::spawn_allowed(map, true, spawn.guid) {
@@ -1166,10 +1167,9 @@ fn passive_fight(map: &mut Map, g: Guid) {
     let Some(c) = map.creature(g) else {
         return;
     };
-    let left = c
-        .threat
-        .iter()
-        .any(|(t, _)| map.unit_view(*t).is_some_and(|u| u.alive) && combat::can_attack(map, g, *t));
+    // Left to fight as [`fight_step`] has it: one it doesn't see (gone
+    // invisible) or believes dead holds it in no fight.
+    let left = c.threat.iter().any(|(t, _)| valid_victim(map, g, *t));
     // With none left, it doesn't go home while a creature it may fight is
     // attacking it, as in [`fight_step`]: that one is put on its list.
     // (Keeper Remulos, his phantasm dead and his attack stopped, waited
@@ -2044,9 +2044,10 @@ fn evade(map: &mut Map, g: Guid) {
             crate::game::map::creature_motion::health_changed(map, g);
         }
     }
+    // Already where it goes (sessile, or a follower at its place): home at
+    // once, as mangos-classic's `HomeMovementGenerator` finalizes.
     if map.creature(g).is_some_and(|c| !c.evading) {
-        crate::game::map::creature_combat::rest(map, g);
-        crate::game::map::spawn_auras::restore(map, g);
+        home_reached(map, g);
     }
 }
 
@@ -2094,26 +2095,36 @@ fn evade_step(map: &mut Map, g: Guid) {
         c.motion = Motion::Idle {
             until: Some(now + Duration::from_secs(2)),
         };
-        // Home, it turns to its spawn's facing (a patroller as it is).
-        let (at, o) = (c.position, c.home_orientation);
-        let turned = c.orientation != o;
-        if turned && patrol_home(map, g).is_none() {
-            let spline_id = map.next_spline_id;
-            map.next_spline_id = map.next_spline_id.wrapping_add(1);
-            if let Some(c) = map.creature_mut(g) {
-                c.orientation = o;
-            }
-            map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
-        }
-        crate::game::map::creature_combat::rest(map, g);
-        crate::game::map::spawn_auras::restore(map, g);
-        crate::game::map::scripts::restore_faction(
-            map,
-            g,
-            crate::game::map::event_ai::FACTION_RESTORE_REACH_HOME,
-        );
-        crate::game::map::event_ai::reached_home(map, g);
+        home_reached(map, g);
     }
+}
+
+/// An evading creature is home: it turns to its spawn's facing, rests,
+/// has its own faction back if it was to on reaching home, and its
+/// `EVENT_REACHED_HOME` runs (mangos-classic's `JustReachedHome`).
+fn home_reached(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    // Home, it turns to its spawn's facing (a patroller as it is).
+    let (at, o) = (c.position, c.home_orientation);
+    let turned = c.orientation != o;
+    if turned && patrol_home(map, g).is_none() {
+        let spline_id = map.next_spline_id;
+        map.next_spline_id = map.next_spline_id.wrapping_add(1);
+        if let Some(c) = map.creature_mut(g) {
+            c.orientation = o;
+        }
+        map.send_to_observers(g, &face_packet(g, at, o, spline_id), false);
+    }
+    crate::game::map::creature_combat::rest(map, g);
+    crate::game::map::spawn_auras::restore(map, g);
+    crate::game::map::scripts::restore_faction(
+        map,
+        g,
+        crate::game::map::event_ai::FACTION_RESTORE_REACH_HOME,
+    );
+    crate::game::map::event_ai::reached_home(map, g);
 }
 
 /// Where a creature walking a path goes back to after a fight: the last
@@ -2256,5 +2267,30 @@ mod tests {
         );
         // Header, packed guid (4 bytes here), position, id, type.
         assert_eq!(f.len(), 4 + 5 + 12 + 4 + 1);
+    }
+
+    /// Bug hunt (creatures): a death's respawn time searched every spawn
+    /// of every map, and a respawn its map's twice more. A spawn is looked
+    /// up by its guid, on any map or on one, and its time is its own.
+    #[test]
+    fn a_spawn_is_found_by_its_guid_and_its_respawn_time_is_its_own() {
+        use crate::game::data::{CreatureSpawn, GameData};
+        let mut d = GameData::empty();
+        let spawn = |guid, map, secs| CreatureSpawn {
+            guid,
+            map,
+            respawn_min: secs,
+            respawn_max: secs,
+            ..Default::default()
+        };
+        d.creature_spawns
+            .insert(0, vec![spawn(1, 0, 60), spawn(2, 0, 90)]);
+        d.creature_spawns.insert(1, vec![spawn(3, 1, 120)]);
+        assert_eq!(d.creature_spawn(3).map(|s| s.map), Some(1));
+        assert_eq!(d.creature_spawn_in(0, 2).map(|s| s.respawn_min), Some(90));
+        assert!(d.creature_spawn_in(0, 3).is_none(), "not on that map");
+        assert!(d.creature_spawn(4).is_none());
+        assert_eq!(respawn_delay(&d, Some(3), 1.0), Duration::from_secs(120));
+        assert_eq!(respawn_delay(&d, None, 1.0), Duration::from_secs(300));
     }
 }
