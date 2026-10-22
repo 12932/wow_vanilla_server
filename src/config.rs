@@ -214,9 +214,11 @@ settings! {
         /// `broadcast_batch_max_ms`) and follows its thread's load: see
         /// those. 0 sends each burst of movement as it is handled.
         broadcast_batch_ms: u64 = 10, Clamp(0.0, 50.0), Live, "";
-        /// The least a map's window goes to, quiet. With
+        /// The least a map's window goes to, quiet: 10, no smaller than the
+        /// fixed window was, so a quiet server spends no more CPU (lower it
+        /// for less latency at the cost of CPU). With
         /// `broadcast_batch_max_ms` equal to it, the window is fixed there.
-        broadcast_batch_min_ms: u64 = 2, Clamp(0.0, 50.0), Live, "";
+        broadcast_batch_min_ms: u64 = 10, Clamp(0.0, 50.0), Live, "";
         /// The most a map's window goes to, loaded (at least
         /// `broadcast_batch_min_ms`).
         broadcast_batch_max_ms: u64 = 40, Clamp(0.0, 50.0), Live, "";

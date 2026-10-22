@@ -94,10 +94,12 @@ world_address = "0.0.0.0:8085"
 # Default 10. Range 0 to 50, clamped. Changes at a reload.
 broadcast_batch_ms = 10
 
-# The least a map's window goes to, quiet. With
+# The least a map's window goes to, quiet: 10, no smaller than the
+# fixed window was, so a quiet server spends no more CPU (lower it
+# for less latency at the cost of CPU). With
 # `broadcast_batch_max_ms` equal to it, the window is fixed there.
-# Default 2. Range 0 to 50, clamped. Changes at a reload.
-broadcast_batch_min_ms = 2
+# Default 10. Range 0 to 50, clamped. Changes at a reload.
+broadcast_batch_min_ms = 10
 
 # The most a map's window goes to, loaded (at least
 # `broadcast_batch_min_ms`).

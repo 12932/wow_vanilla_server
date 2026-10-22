@@ -1183,4 +1183,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **Chase and evade:** a creature in melee chases as mangos-classic's `ChaseMovementGenerator`; an evading creature
       may be attacked, and what hits it evades.
 
+76. **Broadcast batching, your call** (2026-10-22): the window adapts per map (`perf/adaptive-batch`: steered by the
+    map's load and the server's CPU, between `[network] broadcast_batch_min_ms` and `broadcast_batch_max_ms`), but its
+    least is **10 ms** (the old fixed window): you'd rather keep the CPU down than have the lower latency (2 ms halved
+    880 bots' p99 to ~17 ms at twice the CPU). It still widens to 40 ms under load. Lower the minimum for latency.
+
 ## Left for later, and why
