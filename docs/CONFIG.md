@@ -317,11 +317,11 @@ Quests: which givers show what.
 
 ### `[spells]`
 
-Spells: how far past its radius an area about its caster or at a place (Arcane Explosion, Frost Nova, Blizzard) reaches a unit when one of the two is moving. A player's area reaches a creature's size (its combat reach) past the radius besides, as mangos-classic's does.
+Spells: how far past its radius an area about its caster or at a place (Arcane Explosion, Frost Nova, Blizzard) or a cone (Cone of Cold, a dragon's breath) reaches a unit when one of the two is moving. A player's area reaches a creature's size (its combat reach) past the radius besides, as mangos-classic's does.
 
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
-| `area_leeway_moving_yards` | Yards an area reaches past its radius when its caster or the unit runs (forward or back, not walking): mangos-classic's `AOE_LEEWAY`, which it gives for the caster's running alone. | `2.0` | 0 to 10, clamped | live |  |
+| `area_leeway_moving_yards` | Yards an area or a cone reaches past its radius when its caster or the unit runs (forward or back, not walking): mangos-classic's `AOE_LEEWAY`, which it gives for the caster's running alone. | `2.0` | 0 to 10, clamped | live |  |
 | `area_leeway_strafing_yards` | Yards it reaches when either strafes (no less than `area_leeway_moving_yards`): mangos-classic's `MELEE_LEEWAY`, its reach for two units running. | `2.6666667` | 0 to 10, clamped | live |  |
 
 The leeway goes beyond mangos-classic, which gives its 2 yards for the caster's running alone: here the unit's
@@ -459,7 +459,7 @@ These tunables were constants and are now keys, at the same defaults:
   the group reward range (XP, loot, quest credit, reputation, honor), resurrection sickness's first level, the
   primary professions, gear's wear from blows.
 - **Environment (`[environment]`):** the breath, fatigue and lava timers, and lava's damage.
-- **Spells (`[spells]`):** how far past its radius an area reaches a running or strafing unit, or a running or
+- **Spells (`[spells]`):** how far past its radius an area or a cone reaches a running or strafing unit, or a running or
   strafing caster's.
 - **Instances (`[instances]`):** an empty copy's unload time, the raids' reset hour, the copies an account enters an
   hour.

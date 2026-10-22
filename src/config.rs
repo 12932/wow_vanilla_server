@@ -668,13 +668,14 @@ settings! {
 
 settings! {
     /// Spells: how far past its radius an area about its caster or at a
-    /// place (Arcane Explosion, Frost Nova, Blizzard) reaches a unit when
-    /// one of the two is moving. A player's area reaches a creature's size
+    /// place (Arcane Explosion, Frost Nova, Blizzard) or a cone (Cone of
+    /// Cold, a dragon's breath) reaches a unit when one of the two is
+    /// moving. A player's area reaches a creature's size
     /// (its combat reach) past the radius besides, as mangos-classic's
     /// does.
     pub struct SpellsConfig in "spells" {
-        /// Yards an area reaches past its radius when its caster or the
-        /// unit runs (forward or back, not walking): mangos-classic's
+        /// Yards an area or a cone reaches past its radius when its caster
+        /// or the unit runs (forward or back, not walking): mangos-classic's
         /// `AOE_LEEWAY`, which it gives for the caster's running alone.
         area_leeway_moving_yards: f32 = crate::game::map::spells::targets::AREA_LEEWAY_MOVING, Clamp(0.0, 10.0), Live, "";
         /// Yards it reaches when either strafes (no less than
