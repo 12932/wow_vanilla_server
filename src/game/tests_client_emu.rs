@@ -32,7 +32,7 @@ const BAT: u32 = 304;
 const GULL: u32 = 305;
 
 // The opcodes the checker knows; others it would only skip.
-const CHECKED: &[u16] = &[0x0A9, 0x1F6, 0x0DD, 0x24B, 0x14A];
+const CHECKED: &[u16] = &[0x0A9, 0x1F6, 0x0DD, 0x24B, 0x14A, 0x12A, 0x129];
 
 pub(crate) fn template(entry: u32, name: &str, faction: u32) -> CreatureTemplate {
     CreatureTemplate {

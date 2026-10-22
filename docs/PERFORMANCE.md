@@ -1590,3 +1590,32 @@ for the category, the other food refused for it and eaten after it, the drink an
 at once, no `SMSG_ITEM_COOLDOWN`), its real-world twin, and `times`' unit test. No packet's layout changed; one is
 no longer sent. The fast and extended suites, the client check among them, pass, but for
 `tests_p6_player_real::corina_steele_sells_and_repairs`, which fails before this change too.
+
+## A spellbook lost at a far teleport (2026-10-22)
+
+The user, playing a priest: `.tele Deadmines`, `.character spells` there, Mind Control on a bar, then out of the
+Deadmines to Westfall (map 36 to map 0); after it, the spellbook had none of the class's spells. The server's own
+list was whole across the teleport (saved, handed between maps, the same spells); nothing it sent was malformed.
+What it didn't send was the cause. The 1.12 client (build 5875) keeps the last `SMSG_INITIAL_SPELLS` it was sent as
+a list (its handler `0x5E6510`, the list at `0xC4D2A0`), and the last `SMSG_ACTION_BUTTONS` (`0x5E6680`, at
+`0xC4C2B4`). Each time its own player is created (`0x5DEA50`: at a login, and after every far teleport, whose
+`SMSG_NEW_WORLD` destroys every object, its own player too), it empties the spellbook (`0x4B23A0`) and fills it
+from that list, and sets the bars from those buttons. A spell learned in the world (`SMSG_LEARNED_SPELL`,
+`0x5E61C0`; `SMSG_SUPERCEDED_SPELL`, `0x5E6330`) goes into the book it shows alone, and into the list only when
+it has no player of its own; a button the player sets goes into the bars alone. mangos sends both again at every
+`MSG_MOVE_WORLDPORT_ACK` (`HandleMoveWorldportAckOpcode`, `SendInitialPacketsBeforeAddToMap`); wvs sent them only
+at login, so a far teleport took back every spell learned, and every button set, since the login: the priest's
+book went back to a level-1 priest's Smite and Lesser Heal among the general spells, and Mind Control off the bar
+with it, as a spell the book no longer had.
+
+The fix: the worldport sends `SMSG_INITIAL_SPELLS` (with the cooldowns running, as at login) and
+`SMSG_ACTION_BUTTONS` before the player's own create (`login::send_spells_and_bars`, shared with the login). A near
+teleport sends neither, as mangos. What changes on the wire is those two packets at each far teleport; nothing
+else, and no layout. The client check gained a check of both (`tools/client_check/initial_spells.py`: the handlers
+must read each packet exactly, and the list and buttons the client keeps must be the packet's), run by the client
+emulation tests and by the new tests on what a map change sends. Tested by `tests_spellbook_lost`: a level 60
+priest, mage and warrior, on the real world, taught in the Deadmines, a spell of theirs (Mind Control, Frostbolt,
+Execute) on the first button, out through its exit (area trigger 119) to Westfall, with a model of the client's
+book and bars over every frame received (`Book`), which must be the server's after; and, in the fast suite, a
+spell learned and a button set after a login, kept across a far teleport and not told again at a near one. Without
+the fix all four fail, the client's model book back to the login's. The fast and extended suites pass.

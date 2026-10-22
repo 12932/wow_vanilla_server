@@ -104,29 +104,7 @@ fn send_world(map: &Map, p: &mut Player) {
     out.send(&SMSG_TUTORIAL_FLAGS {
         tutorial_data: p.row.state.tutorials,
     });
-    // A rank a higher one has taken the place of isn't in the spellbook.
-    let data = map.realm.data.clone();
-    out.send(&SMSG_INITIAL_SPELLS {
-        unknown1: 0,
-        initial_spells: p
-            .spells
-            .iter()
-            .filter(|s| !crate::game::map::spells::superseded_in_book(&data, &p.spells, **s))
-            .filter_map(|s| u16::try_from(*s).ok())
-            .map(|spell_id| InitialSpell {
-                spell_id,
-                unknown1: 0,
-            })
-            .collect(),
-        cooldowns: crate::game::map::spells::cooldowns::initial(p, &data, map.now),
-    });
-    let mut buttons = [0u32; 120];
-    for a in &p.row.actions {
-        if let Some(b) = buttons.get_mut(usize::from(a.button)) {
-            *b = u32::from(a.action) | (u32::from(a.kind) << 24);
-        }
-    }
-    out.send(&SMSG_ACTION_BUTTONS { data: buttons });
+    send_spells_and_bars(map, p);
     crate::game::map::reputation::send_login(p, &map.realm.data);
     let out = &p.outbound;
     out.send(&SMSG_LOGIN_SETTIMESPEED {
@@ -160,6 +138,43 @@ fn send_world(map: &Map, p: &mut Player) {
     for item in &mut p.items {
         item.fields.clear_dirty();
     }
+}
+
+/// `SMSG_INITIAL_SPELLS` and `SMSG_ACTION_BUTTONS`: the spellbook, its
+/// cooldowns and the bars, ahead of the player's own create. At a login,
+/// and at every far teleport's `MSG_MOVE_WORLDPORT_ACK` (mangos's
+/// `SendInitialPacketsBeforeAddToMap`): the 1.12 client empties its
+/// spellbook as its own player is created (`0x5DEA50`, `0x4B23A0`) and
+/// fills it, and its bars, from the last of these it was sent (kept at
+/// `0xC4D2A0` and `0xC4C2B4`); a spell learned in the world
+/// (`SMSG_LEARNED_SPELL`, `0x5E61C0`; `SMSG_SUPERCEDED_SPELL`, `0x5E6330`)
+/// or a button the player sets goes only into what it shows. Without them
+/// again, a far teleport takes back everything learned since the login.
+pub fn send_spells_and_bars(map: &Map, p: &Player) {
+    let out = &p.outbound;
+    // A rank a higher one has taken the place of isn't in the spellbook.
+    let data = &map.realm.data;
+    out.send(&SMSG_INITIAL_SPELLS {
+        unknown1: 0,
+        initial_spells: p
+            .spells
+            .iter()
+            .filter(|s| !crate::game::map::spells::superseded_in_book(data, &p.spells, **s))
+            .filter_map(|s| u16::try_from(*s).ok())
+            .map(|spell_id| InitialSpell {
+                spell_id,
+                unknown1: 0,
+            })
+            .collect(),
+        cooldowns: crate::game::map::spells::cooldowns::initial(p, data, map.now),
+    });
+    let mut buttons = [0u32; 120];
+    for a in &p.row.actions {
+        if let Some(b) = buttons.get_mut(usize::from(a.button)) {
+            *b = u32::from(a.action) | (u32::from(a.kind) << 24);
+        }
+    }
+    out.send(&SMSG_ACTION_BUTTONS { data: buttons });
 }
 
 /// What a client is told after a player's own create: their temporary

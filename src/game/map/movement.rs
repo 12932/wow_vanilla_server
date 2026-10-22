@@ -640,6 +640,12 @@ pub fn worldport_ack(map: &mut Map, guid: Guid) {
         .players
         .get(&guid)
         .map_or_else(Default::default, |p| p.position());
+    // The spellbook and the bars before the player's own create, which the
+    // client builds them again at (mangos's `HandleMoveWorldportAckOpcode`,
+    // `SendInitialPacketsBeforeAddToMap`).
+    if let Some(p) = map.players.get(&guid) {
+        crate::game::map::login::send_spells_and_bars(map, p);
+    }
     visibility::send_self(map, guid);
     // What follows waits for the world around them.
     map.hold_near(guid, at);
