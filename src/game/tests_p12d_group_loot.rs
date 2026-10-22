@@ -351,6 +351,56 @@ async fn round_robin_lets_the_rest_take_the_gold() {
     assert_eq!(money, [10, 10]);
 }
 
+/// The gold is shared by those it fell to who are still on the map: Cid,
+/// gone to Kalimdor since the kill, isn't counted, so Alice and Bob get
+/// half of the kobold's 30 copper each, rather than a third each and
+/// Cid's third lost.
+#[tokio::test]
+async fn the_gold_is_shared_by_those_still_on_the_map() {
+    let (realm, [mut a, b, mut c]) = group(GroupLootSetting::GroupLoot).await;
+    let (ga, gb, gc) = (a.guid, b.guid, c.guid);
+    let map = map_of(&realm);
+    let kobold = unit(KOBOLD, 37);
+    kill(&map, ga, kobold).await;
+    let fell_to = on(&map, move |m| {
+        loot::loot_ref(m, kobold).map(|l| l.allowed.len())
+    })
+    .await;
+    assert_eq!(fell_to, Some(3), "it fell to all three");
+    on(&map, move |m| {
+        let to = wow_world_messages::vanilla::Vector3d {
+            x: 1629.0,
+            y: -4373.0,
+            z: 31.0,
+        };
+        m.teleport(gc, MapKey::world(1), to, 0.0);
+    })
+    .await;
+    c.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while on(&map, move |m| m.players.contains_key(&gc)).await {
+        assert!(tokio::time::Instant::now() < deadline, "Cid leaves the map");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(open(&mut a, kobold).await.is_some(), "Alice opens it");
+    a.send(CMSG_LOOT_MONEY {}).await;
+    let share = a
+        .wait_for("SMSG_LOOT_MONEY_NOTIFY", |m| match m {
+            ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(n) => Some(n.amount),
+            _ => None,
+        })
+        .await;
+    assert_eq!(share, 15, "half each");
+    let money = on(&map, move |m| {
+        [ga, gb].map(|g| m.players.get(&g).map_or(0, |p| p.money()))
+    })
+    .await;
+    assert_eq!(money, [15, 15], "both present are paid half");
+}
+
 /// Master loot with the master away is group loot (mangos's
 /// `SetGroupLootRight`): the blade is rolled for.
 #[tokio::test]
