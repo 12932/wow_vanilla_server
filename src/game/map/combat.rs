@@ -3372,6 +3372,15 @@ pub fn death_wear(map: &mut Map, victim: Guid, by: Guid, spell: Option<u32>) {
 /// A tenth off everything worn, and the client told (mangos's
 /// `DurabilityLossAll(0.10f)`, `SMSG_DURABILITY_DAMAGE_DEATH`).
 pub fn wear_at_death(map: &mut Map, victim: Guid) {
+    // Gear that doesn't wear (`.durability off`) loses nothing, and the
+    // client isn't told it did.
+    if !map
+        .players
+        .get(&victim)
+        .is_some_and(crate::game::map::vendor::wears)
+    {
+        return;
+    }
     crate::game::map::vendor::wear(map, victim, 0.10);
     if let Some(p) = map.players.get(&victim) {
         p.outbound

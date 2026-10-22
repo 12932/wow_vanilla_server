@@ -1188,4 +1188,13 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     least is **10 ms** (the old fixed window): you'd rather keep the CPU down than have the lower latency (2 ms halved
     880 bots' p99 to ~17 ms at twice the CPU). It still widens to 40 ms under load. Lower the minimum for latency.
 
+77. **`.durability off|on`, your design** (2026-10-22): a GM's (level 2) toggle for load tests, which mangos-classic
+    hasn't. Off mends everything the character owns, free, by the repair-all's own loop (`vendor::mend`): worn,
+    carried, the keyring and the bank, broken gear giving its stats and auras again; what was sold isn't. While it
+    is off nothing takes durability off their gear, each path asking `vendor::wears`: death's tenth (and its
+    `SMSG_DURABILITY_DAMAGE_DEATH`, not sent), a fall's, a spirit healer's quarter (resurrection sickness is still
+    had), a blow taken or dealt, a thrown weapon's throw, and a spell's wear (its mending still mends);
+    `.debug durability` says it can't. On wears as usual again and mends nothing. The flag is the character's
+    (`no_wear` in its extra state, false by default), kept across a relog. peon's bots turn it off with their gear.
+
 ## Left for later, and why

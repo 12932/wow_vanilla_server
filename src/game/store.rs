@@ -213,6 +213,10 @@ pub struct CharacterState {
     /// at its value when the spell is learned again (mangos's
     /// `m_forgottenSkills`, 1.11's rule for Two-Handed Axes and Maces).
     pub forgotten_skills: Vec<(u32, u32)>,
+    /// A GM's `.durability off`: their gear loses no durability, to death,
+    /// blows, a spirit healer or a spell (false, the default, wears as
+    /// usual).
+    pub no_wear: bool,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

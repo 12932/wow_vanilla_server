@@ -141,7 +141,11 @@ pub fn spend(map: &mut Map, g: Guid, payment: Payment) {
             }
         }
         Payment::Wear(item) => {
-            let Some(p) = map.players.get_mut(&g) else {
+            let Some(p) = map
+                .players
+                .get_mut(&g)
+                .filter(|p| crate::game::map::vendor::wears(p))
+            else {
                 return;
             };
             let Some(i) = p.item_by_guid(item) else {

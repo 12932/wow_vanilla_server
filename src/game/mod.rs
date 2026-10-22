@@ -120,6 +120,8 @@ mod tests_ghost;
 #[cfg(test)]
 mod tests_gifts;
 #[cfg(test)]
+mod tests_gm_durability;
+#[cfg(test)]
 mod tests_guards;
 #[cfg(test)]
 mod tests_items3;

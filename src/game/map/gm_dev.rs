@@ -16,7 +16,7 @@ use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
 .character level <n>, .character spells, .gear [raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
-.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], \
+.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
 events [start|stop <id>]|explore|position [guid]|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
@@ -31,7 +31,7 @@ pub fn needed_level(name: &str) -> Option<u8> {
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
         | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "god"
         | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
-        | "event" => GAME_MASTER,
+        | "event" | "durability" => GAME_MASTER,
         _ => return None,
     })
 }
@@ -65,6 +65,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "talents" => talents(map, g, args),
         "tgm" => tgm(map, g, args),
         "god" => god(map, g, args),
+        "durability" => durability(map, g, args),
         "weather" => weather(map, g, args),
         "instance" => instance(map, g, args),
         "bg" | "battleground" => battleground(map, g, args),
@@ -1201,6 +1202,39 @@ fn god(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     ))
 }
 
+/// `.durability [off|on]`: a load test's unbreakable gear (mangos-classic
+/// has none). Off mends everything the GM owns, free, broken gear giving
+/// what it gives again, and nothing wears from then on: not death, blows,
+/// a spirit healer, a thrown weapon or a spell. On wears as usual again,
+/// mending nothing. Kept on the character; no argument says which it is.
+fn durability(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    let data = map.realm.data.clone();
+    let p = map.players.get_mut(&g)?;
+    let off = match args {
+        [] => {
+            return Some(format!(
+                "Durability is {}.",
+                if p.row.state.no_wear {
+                    "off: your gear doesn't wear"
+                } else {
+                    "on: your gear wears as usual"
+                }
+            ));
+        }
+        [a] if a.eq_ignore_ascii_case("off") => true,
+        [a] if a.eq_ignore_ascii_case("on") => false,
+        _ => return Some("Usage: .durability [off|on]".into()),
+    };
+    p.row.state.no_wear = off;
+    if !off {
+        return Some("Durability on: your gear wears as usual.".into());
+    }
+    let mended = crate::game::map::vendor::mend_everything(p, &data);
+    Some(format!(
+        "Durability off: your gear doesn't wear ({mended} items mended)."
+    ))
+}
+
 /// Whether a player is undying (`.god`): hurt, never below 1 health.
 pub fn undying(map: &Map, g: Guid) -> bool {
     map.players.get(&g).is_some_and(|p| p.misc.undying)
@@ -1501,6 +1535,13 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
                 return Some("Usage: .debug durability <percent, 0 to 100>".into());
             };
             let to = player_target(map, g);
+            if !map
+                .players
+                .get(&to)
+                .is_some_and(crate::game::map::vendor::wears)
+            {
+                return Some("That gear doesn't wear (.durability on first).".into());
+            }
             crate::game::map::vendor::wear(map, to, percent / 100.0);
             Some(format!("Wore gear down {percent}%."))
         }

@@ -1429,10 +1429,14 @@ fn effect(
             }
             if let Some(p) = map.players.get_mut(&target) {
                 let mut turned = false;
+                // Gear that doesn't wear (`.durability off`) may be mended,
+                // never worn.
+                let wears = crate::game::map::vendor::wears(p);
                 for it in p.items.iter_mut().filter(|i| scoped(i)) {
                     let max = it.fields.get_u32(ITEM_FIELD_MAXDURABILITY);
                     let now = it.fields.get_u32(ITEM_FIELD_DURABILITY);
                     let then = crate::game::map::vendor::worn(max, now, amount, pct);
+                    let then = if wears { then } else { then.max(now) };
                     it.fields.set_u32(ITEM_FIELD_DURABILITY, then);
                     turned |= max > 0 && (now == 0) != (then == 0);
                 }

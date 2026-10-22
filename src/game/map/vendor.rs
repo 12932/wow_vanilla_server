@@ -717,7 +717,17 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
             (1, it.bag, it.slot)
         }
     });
-    let mut mended = false;
+    if mend(p, &data, order, Some(discount)) > 0 {
+        broke(p, &data);
+    }
+}
+
+/// Mend the items at `order` (indices into `p.items`) to full, in turn:
+/// each paid for at `discount` while the money lasts (an item with no cost
+/// to its kind left as it is), or free with `None`. How many were mended;
+/// the caller works out what they give again ([`broke`]).
+fn mend(p: &mut Player, data: &GameData, order: Vec<usize>, discount: Option<f32>) -> usize {
+    let mut mended = 0;
     for i in order {
         let it = &p.items[i];
         let (max, now) = (
@@ -727,23 +737,44 @@ pub fn repair(map: &mut Map, player: Guid, npc: Guid, item: Guid) {
         if max == 0 || now >= max {
             continue;
         }
-        let Some(cost) = data
-            .item(it.entry)
-            .and_then(|t| repair_cost(&data, t, max - now, discount))
-        else {
-            continue;
-        };
-        if p.money() < cost {
-            continue;
+        if let Some(discount) = discount {
+            let Some(cost) = data
+                .item(it.entry)
+                .and_then(|t| repair_cost(data, t, max - now, discount))
+            else {
+                continue;
+            };
+            if p.money() < cost {
+                continue;
+            }
+            let money = p.money() - cost;
+            p.set_money(money);
         }
-        let money = p.money() - cost;
-        p.set_money(money);
         p.items[i].fields.set_u32(ITEM_FIELD_DURABILITY, max);
-        mended = true;
+        mended += 1;
     }
-    if mended {
-        broke(p, &data);
+    mended
+}
+
+/// Everything a player owns at full durability, free: worn, carried, on
+/// the keyring and in the bank, broken gear included and giving what it
+/// gives again, as a repair-all (`.durability off`). Not what was sold.
+/// How many items were mended.
+pub fn mend_everything(p: &mut Player, data: &GameData) -> usize {
+    let order = (0..p.items.len())
+        .filter(|i| !in_buyback(p.items[*i].bag, p.items[*i].slot))
+        .collect();
+    let mended = mend(p, data, order, None);
+    if mended > 0 {
+        broke(p, data);
     }
+    mended
+}
+
+/// Whether a player's gear wears: not with `.durability off`. Every path
+/// that takes durability off an item asks this.
+pub fn wears(p: &Player) -> bool {
+    !p.row.state.no_wear
 }
 
 /// Wear on everything worn: `fraction` of each item's full durability, at
@@ -760,7 +791,7 @@ pub fn wear_carried(map: &mut Map, player: Guid, fraction: f32) {
 }
 
 fn wear_where(map: &mut Map, player: Guid, fraction: f32, pick: impl Fn(&Item) -> bool) {
-    let Some(p) = map.players.get_mut(&player) else {
+    let Some(p) = map.players.get_mut(&player).filter(|p| wears(p)) else {
         return;
     };
     for it in p.items.iter_mut().filter(|i| pick(i)) {
@@ -822,7 +853,7 @@ pub fn wear_from_blow(map: &mut Map, attacker: Guid, victim: Guid) {
         if !guid::is_player(g) || roll >= chance {
             continue;
         }
-        let Some(p) = map.players.get_mut(&g) else {
+        let Some(p) = map.players.get_mut(&g).filter(|p| wears(p)) else {
             continue;
         };
         let Some(i) = p.item_at(BAG_PLAYER, slot) else {
