@@ -451,11 +451,15 @@ async fn charges_are_spent_and_cooldowns_kept() {
     })
     .await;
     map.query(use_item(POTION)).await;
-    a.wait_for("SMSG_ITEM_COOLDOWN", |m| match m {
-        ServerOpcodeMessage::SMSG_ITEM_COOLDOWN(c) if c.id == HEAL_SPELL => Some(()),
+    // Drunk: its go; no `SMSG_ITEM_COOLDOWN`, which is an equip's thirty
+    // seconds to the client (mangos's `ApplyEquipCooldown`), the go's cast
+    // item having the client start the potion's own.
+    a.wait_for("SMSG_SPELL_GO", |m| match m {
+        ServerOpcodeMessage::SMSG_SPELL_GO(c) if c.spell == HEAL_SPELL => Some(()),
         _ => None,
     })
     .await;
+    assert!(a.take_frames(0x0B0).is_empty(), "no SMSG_ITEM_COOLDOWN");
     let left = map.query(move |m| m.players[&g].count_of(POTION)).await;
     assert_eq!(left, Some(1), "a potion drunk is gone");
     // The category's cooldown holds the next.

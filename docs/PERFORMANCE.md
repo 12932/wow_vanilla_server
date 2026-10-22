@@ -1427,3 +1427,29 @@ release, one cone's targets, 2,000 times; the time is the whole of `effect_targe
 | 30 | 81.6 µs | 86.2 µs | 52 / 55 |
 
 Five to seven microseconds more a cone cast, in a crowd, as for areas: nothing beside an update's 50 ms.
+
+## Food and drink's cooldown (2026-10-22)
+
+The user: eating should not have a cooldown, only the first bite a second's wait, and the same for drink. Food and
+drink items (Tough Jerky 117, Refreshing Spring Water 159) have no cooldown of their own and a second for their
+category (11, 59); their spells (Food 433, Drink 430) wait a minute for the category in Spell.dbc, and have no
+global cooldown. The server already held the category a second, and told the client a second in
+`SMSG_SPELL_COOLDOWN`. What the client showed longer was `SMSG_ITEM_COOLDOWN`, sent twice on every use (once by
+`cooldowns::start`, once by `items::used`). The 1.12 client's handler for it (build 5875's, the opcode's
+registration at `0x6E71BA`, the handler `0x6E95D0`) finds the item by its GUID and starts thirty seconds on the
+item's spell under its entry, whatever the item's times: it is the equip cooldown, which is the only place mangos
+sends it (`Player::ApplyEquipCooldown`). So each bite put the food on thirty seconds. Neither the start nor
+`SMSG_SPELL_COOLDOWN` added a global cooldown: the client's `SMSG_SPELL_COOLDOWN` handler (`0x6E9460`) starts the
+spell's start-recovery wait only from Spell.dbc, nothing for Food's 0.
+
+The fix: no `SMSG_ITEM_COOLDOWN` for a use (the go's cast item, the item's GUID, has the client start the item's own
+times from its cache, `0x6E2D23`: an item spell's time of zero or more, else the spell's). And the server picks an
+item's times as mangos's `AddCooldown` and the client do, each on its own (`cooldowns::times`): a time of zero or
+more over the spell's, -1 the spell's, a category of 0 the spell's. Before, an item with neither time above zero
+(319 on-use items, as `0, 0`) took its spell's times, and one with a single time set lost the spell's other.
+`items::used` no longer starts cooldowns of its own, unmodified, over `start`'s. Tested by
+`tests_p11g_cooldowns::food_and_drink_wait_a_second_for_their_category_and_no_more` (two foods and a drink: a second
+for the category, the other food refused for it and eaten after it, the drink and a spell on the global cooldown
+at once, no `SMSG_ITEM_COOLDOWN`), its real-world twin, and `times`' unit test. No packet's layout changed; one is
+no longer sent. The fast and extended suites, the client check among them, pass, but for
+`tests_p6_player_real::corina_steele_sells_and_repairs`, which fails before this change too.

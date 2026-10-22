@@ -45,14 +45,7 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
         .items
         .get(&item_entry)
         .and_then(|t| t.spells.iter().find(|x| x.id == s.id).copied());
-    let (recovery, category, category_recovery) = match item_spell {
-        Some(x) if x.cooldown > 0 || x.category_cooldown > 0 => (
-            x.cooldown.max(0) as u32,
-            x.category,
-            x.category_cooldown.max(0) as u32,
-        ),
-        _ => (s.recovery_time, s.category, s.category_recovery_time),
-    };
+    let (recovery, category, category_recovery) = times(s, item_spell.as_ref());
     let raw = charm_cooldown(map, caster, s.id).unwrap_or(recovery);
     let raw_category = category_recovery;
     let recovery = m.apply_ms(mods::OP_COOLDOWN, raw);
@@ -114,14 +107,32 @@ pub fn start(map: &mut Map, caster: Guid, s: &SpellTemplate, m: &Mods, item: Opt
     }
     send(map, caster, &told);
     send_to_master(map, caster, &[(s.id, ms)]);
-    if item.is_some()
-        && let Some(p) = map.players.get(&caster)
-    {
-        p.outbound.send(&SMSG_ITEM_COOLDOWN {
-            guid: item.unwrap_or_default(),
-            id: s.id,
-        });
-    }
+    // No `SMSG_ITEM_COOLDOWN` for a use: that is an equip's (mangos's
+    // `ApplyEquipCooldown`), and the client starts thirty seconds on the
+    // item's spell for it, whatever the item's own times. The go's cast
+    // item has the client start the item's times itself.
+}
+
+/// The times `s` waits, cast from an item whose spell it is (`item`) or
+/// not: (its own, its category, the category's). An item's time of zero
+/// or more is had in place of the spell's, -1 leaves the spell's, as does
+/// a category of 0 the spell's category (mangos's
+/// `Player::AddCooldown`, the client's own reading of an item's spells):
+/// food's and drink's one second for the category, not the minute of
+/// their spells.
+pub fn times(s: &SpellTemplate, item: Option<&ItemSpell>) -> (u32, u32, u32) {
+    let Some(x) = item else {
+        return (s.recovery_time, s.category, s.category_recovery_time);
+    };
+    (
+        u32::try_from(x.cooldown).unwrap_or(s.recovery_time),
+        if x.category != 0 {
+            x.category
+        } else {
+            s.category
+        },
+        u32::try_from(x.category_cooldown).unwrap_or(s.category_recovery_time),
+    )
 }
 
 /// `SMSG_SPELL_COOLDOWN` to a player.
@@ -248,11 +259,21 @@ pub fn release(map: &mut Map, target: Guid, spell: u32, start: bool) {
 /// Whether an item's spell is still cooling down.
 pub fn item_on_cooldown(map: &Map, player: Guid, spell: &ItemSpell) -> bool {
     let now = map.now;
+    // Its category as the cast's cooldowns have it ([`times`]).
+    let category = match spell.category {
+        0 => map
+            .realm
+            .data
+            .spells
+            .get(spell.id)
+            .map_or(0, |s| s.category),
+        c => c,
+    };
     map.caster(player).is_some_and(|c| {
         c.cooldowns.get(&spell.id).is_some_and(|t| *t > now)
-            || (spell.category != 0
+            || (category != 0
                 && c.category_cooldowns
-                    .get(&spell.category)
+                    .get(&category)
                     .is_some_and(|t| *t > now))
     })
 }
@@ -622,5 +643,35 @@ mod tests {
         // One saved before the flag was kept reads as not triggered.
         let old: SavedAura = serde_json::from_str(r#"{"spell":1243,"caster":7}"#).unwrap();
         assert!(!old.triggered);
+    }
+
+    /// An item's times stand each on its own over its spell's, as
+    /// mangos's `AddCooldown` picks them: zero or more had, -1 the
+    /// spell's; a category of 0 the spell's.
+    #[test]
+    fn an_items_times_stand_each_over_its_spells() {
+        let s = SpellTemplate {
+            id: 433,
+            category: 11,
+            recovery_time: 5_000,
+            category_recovery_time: 60_000,
+            ..Default::default()
+        };
+        let item = |cooldown, category, category_cooldown| ItemSpell {
+            id: 433,
+            cooldown,
+            category,
+            category_cooldown,
+            ..Default::default()
+        };
+        assert_eq!(times(&s, None), (5_000, 11, 60_000), "no item, the spell's");
+        // Food's: none of its own, a second for the category.
+        assert_eq!(times(&s, Some(&item(0, 11, 1_000))), (0, 11, 1_000));
+        // Both zero: no wait at all, not the spell's minute.
+        assert_eq!(times(&s, Some(&item(0, 0, 0))), (0, 11, 0));
+        // -1 leaves the spell's, each on its own.
+        assert_eq!(times(&s, Some(&item(1_000, 0, -1))), (1_000, 11, 60_000));
+        assert_eq!(times(&s, Some(&item(-1, 4, 3_000))), (5_000, 4, 3_000));
+        assert_eq!(times(&s, Some(&item(-1, 0, -1))), (5_000, 11, 60_000));
     }
 }
