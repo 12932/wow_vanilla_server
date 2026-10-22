@@ -1001,3 +1001,39 @@ async fn a_spawns_creature_is_found_in_its_own_copy_alone() {
     );
     assert_eq!(none, None, "none in the world of map 0");
 }
+
+/// The Deadmines' cannon fired, and the copy gone before its alarm three
+/// seconds on (timers aren't kept): loaded again, the alarm is due again,
+/// rather than the pirates never charging and the cannon not to be fired
+/// again.
+#[tokio::test]
+async fn the_deadmines_alarm_comes_after_a_copy_loaded_again_in_its_window() {
+    let mut d = GameData::empty();
+    d.maps.insert(
+        36,
+        MapInfo {
+            id: 36,
+            internal_name: "DeadminesInstance".into(),
+            name: "Deadmines".into(),
+            instance_type: 1,
+            player_limit: 0,
+        },
+    );
+    let realm = harness::realm_with(d);
+    let copy = realm.maps.get(
+        &realm,
+        MapKey {
+            map: 36,
+            instance: 1,
+        },
+    );
+    let due = copy
+        .query(|m| {
+            m.instance.script = Some(Script::Deadmines);
+            instance_script::load(m, &[(1, 1)].into());
+            instance_script::settle_spawns(m);
+            waits(m)
+        })
+        .await;
+    assert_eq!(due, Some(vec![secs(3.0)]), "the alarm in three seconds");
+}

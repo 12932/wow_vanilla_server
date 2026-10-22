@@ -423,6 +423,11 @@ pub fn settle_spawns(map: &mut Map) {
             DM_IRON_CLAD_DOOR,
             super::instance_adapters::Act::Destroy,
         );
+        // Fired, but the copy went before its alarm: the alarm again, or
+        // the pirates would never charge and the cannon not fire again.
+        if get_data(map, 1) == 1 {
+            schedule(map, T_DEADMINES_ALARM, Duration::from_secs(3));
+        }
     }
     super::instance_adapters::settle_spawns(map, s);
     if s == Script::MoltenCore {
