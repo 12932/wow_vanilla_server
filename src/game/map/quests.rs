@@ -460,12 +460,21 @@ const GO_GOOBER: u8 = 10;
 /// Whether a quest object is usable to `player`: a quest giver with
 /// something for them, a goober for a quest of theirs under way, or for
 /// anyone (Thistle Tea's `QuestGivers`, mangos' `ActivateToQuest`).
-fn activates(map: &Map, player: Guid, object: Guid, kind: u8, data: &[u32; 24]) -> bool {
+/// `wanted`: the player's [`wanted`] items, worked out at the first chest
+/// that asks, once a pass.
+fn activates(
+    map: &Map,
+    player: Guid,
+    object: Guid,
+    kind: u8,
+    data: &[u32; 24],
+    wanted: &mut Option<Vec<u32>>,
+) -> bool {
     if kind == GO_QUESTGIVER {
         return !giver_quests(map, player, object).is_empty();
     }
     if kind == GO_CHEST {
-        return chest_for_quest(map, player, object, data[1]);
+        return chest_for_quest(map, player, object, data[1], wanted);
     }
     let Some(p) = map.players.get(&player) else {
         return false;
@@ -488,41 +497,43 @@ fn activates(map: &Map, player: Guid, object: Guid, kind: u8, data: &[u32; 24]) 
 
 /// Whether a chest holds what a quest of `player`'s wants (mangos's
 /// `ActivateToQuest` for a chest, `HaveQuestLootForPlayer`): a quest chest
-/// the client lets one use only so (`GO_FLAG_INTERACT_COND`).
-fn chest_for_quest(map: &Map, player: Guid, object: Guid, loot_id: u32) -> bool {
+/// the client lets one use only so (`GO_FLAG_INTERACT_COND`). Most (herbs
+/// and veins) have no quest drop, and ask nothing of the player.
+fn chest_for_quest(
+    map: &Map,
+    player: Guid,
+    object: Guid,
+    loot_id: u32,
+    wanted: &mut Option<Vec<u32>>,
+) -> bool {
     if map.gameobject(object).is_none() {
         return false;
     }
     let tables = &map.realm.data.loot;
-    let quest_items = |t: &[crate::game::data::LootEntry]| -> Vec<u32> {
-        t.iter()
-            .flat_map(|e| {
-                if e.min < 0 {
-                    tables
-                        .reference
-                        .get(&e.item)
-                        .map(|r| {
-                            r.iter()
-                                .filter(|x| x.chance < 0.0 && x.min >= 0)
-                                .map(|x| x.item)
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                } else if e.chance < 0.0 {
-                    vec![e.item]
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect()
-    };
-    let Some(items) = tables.gameobject.get(&loot_id).map(|t| quest_items(t)) else {
+    let Some(table) = tables.gameobject.get(&loot_id) else {
         return false;
     };
-    !items.is_empty() && {
-        let wanted = wanted(map, player);
-        items.iter().any(|i| wanted.contains(i))
-    }
+    let mut quest_items = table.iter().flat_map(|e| {
+        let (from, of_reference): (&[crate::game::data::LootEntry], bool) = if e.min < 0 {
+            (
+                tables.reference.get(&e.item).map_or(&[][..], |r| &r[..]),
+                true,
+            )
+        } else {
+            (std::slice::from_ref(e), false)
+        };
+        from.iter()
+            .filter(move |x| x.chance < 0.0 && (!of_reference || x.min >= 0))
+            .map(|x| x.item)
+    });
+    let Some(first) = quest_items.next() else {
+        return false;
+    };
+    let wanted = wanted.get_or_insert_with(|| self::wanted(map, player));
+    !wanted.is_empty()
+        && std::iter::once(first)
+            .chain(quest_items)
+            .any(|i| wanted.contains(&i))
 }
 
 /// Every few updates: each player's quest objects shown as usable to them
@@ -541,6 +552,7 @@ pub fn update_objects(map: &mut Map) {
             .filter(|k| guid::is_game_object(*k))
             .collect();
         let mut changed = Vec::new();
+        let mut wanted = None;
         for o in known {
             let Some(t) = map
                 .gameobject(o)
@@ -549,7 +561,7 @@ pub fn update_objects(map: &mut Map) {
             else {
                 continue;
             };
-            let on = activates(map, g, o, t.kind, &t.data);
+            let on = activates(map, g, o, t.kind, &t.data, &mut wanted);
             if on != map.players[&g].quest_objects.contains(&o) {
                 changed.push((o, on));
             }
