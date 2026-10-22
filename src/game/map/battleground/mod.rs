@@ -1007,6 +1007,19 @@ pub fn use_object(map: &mut Map, g: Guid, object: Guid) -> bool {
     }
 }
 
+/// Whether `object` is a PvP objective under a lock (Arathi Basin's and
+/// Alterac Valley's banners, Silithus's silithyst), to be opened by its
+/// spell alone.
+pub fn locked_objective(map: &Map, object: Guid) -> bool {
+    let Some(entry) = map.gameobject(object).map(|o| o.entry) else {
+        return false;
+    };
+    (ab::BANNERS.contains(&entry)
+        || av::BANNERS.contains(&entry)
+        || crate::game::map::outdoor_pvp::SILITHYST.contains(&entry))
+        && crate::game::map::professions::object_lock(&map.realm.data, entry) != 0
+}
+
 /// A lock opened by a spell (the client's Opening and Attacking casts):
 /// in the match, a banner assaulted, a beacon disarmed; out of one,
 /// silithyst picked up. Returns whether it was one.

@@ -2034,3 +2034,33 @@ async fn a_battleground_is_seen_further_than_the_world() {
     }
     assert_eq!(seen, Some((true, 400.0)), "300 yards off in the gulch");
 }
+
+/// A banner under its lock (Arathi Basin's, lock 1479, a 10-second
+/// Opening) is taken by that cast alone: `CMSG_GAMEOBJ_USE` for it does
+/// nothing (mangos's `HandleGameObjectUseOpcode` refuses a spell-locked
+/// object), the Opening's end claims it.
+#[tokio::test]
+async fn a_locked_banner_is_claimed_by_its_opening_not_by_a_hand() {
+    let mut d = basin();
+    for e in [180087, 180088, 180089, 180090, 180091] {
+        if let Some(t) = d.gameobject_templates.get_mut(&e) {
+            t.data[0] = 1479;
+        }
+    }
+    let realm = harness::realm_with(d);
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = super::tests_pvp::both_into(&realm, &mut a, &mut b, Map::ArathiBasin).await;
+    let alice = a.guid;
+    let banner = use_banner(&map, &mut a, 0, 90000).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        map.query(|m| node_state(m, 0)).await,
+        Some(0),
+        "not by a hand"
+    );
+    map.query(move |m| crate::game::map::battleground::opened(m, alice, banner))
+        .await;
+    said(&mut a, "claims the Stables").await;
+    assert_eq!(map.query(|m| node_state(m, 0)).await, Some(1), "by its Opening");
+}

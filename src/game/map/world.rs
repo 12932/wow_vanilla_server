@@ -695,6 +695,15 @@ pub fn use_object(map: &mut Map, player: Guid, object: Guid) {
     if inert || crate::game::map::instance_script::scripted_door(map, object) {
         return;
     }
+    // A banner or silithyst under a lock is taken by the Opening cast the
+    // client sends for it (`professions::opened`), interruptible and
+    // breaking stealth, never by a hand: mangos's `HandleGameObjectUseOpcode`
+    // refuses a spell-locked object, and takes a banner in `EffectOpenLock`
+    // alone.
+    if crate::game::map::battleground::locked_objective(map, object) {
+        tracing::debug!("{player} used {object}, a locked objective, by hand");
+        return;
+    }
     if crate::game::map::battleground::use_object(map, player, object)
         || crate::game::map::outdoor_pvp::use_object(map, player, object)
     {
