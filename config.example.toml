@@ -732,14 +732,15 @@ lava_damage_max = 610
 high_level_hide_diff = 7
 
 # Spells: how far past its radius an area about its caster or at a
-# place (Arcane Explosion, Frost Nova, Blizzard) reaches a unit when
-# one of the two is moving. A player's area reaches a creature's size
+# place (Arcane Explosion, Frost Nova, Blizzard) or a cone (Cone of
+# Cold, a dragon's breath) reaches a unit when one of the two is
+# moving. A player's area reaches a creature's size
 # (its combat reach) past the radius besides, as mangos-classic's
 # does.
 [spells]
 
-# Yards an area reaches past its radius when its caster or the
-# unit runs (forward or back, not walking): mangos-classic's
+# Yards an area or a cone reaches past its radius when its caster
+# or the unit runs (forward or back, not walking): mangos-classic's
 # `AOE_LEEWAY`, which it gives for the caster's running alone.
 # Default 2.0. Range 0 to 10, clamped. Changes at a reload.
 area_leeway_moving_yards = 2.0

@@ -1,8 +1,9 @@
 //! An area's reach past its radius: a creature's size for a player's area
 //! (mangos-classic's `SpellNotifierCreatureAndPlayer`), and `[spells]`'s
 //! leeways when the caster or the unit runs (mangos-classic's
-//! `AOE_LEEWAY`, its caster's alone) or strafes. Frost Nova and Arcane
-//! Explosion on the real world.
+//! `AOE_LEEWAY`, its caster's alone) or strafes. Cones alike, their angle
+//! unchanged. Frost Nova, Arcane Explosion and Cone of Cold on the real
+//! world.
 
 use std::sync::Arc;
 
@@ -26,6 +27,8 @@ const BURST: u32 = 991_700;
 const GROUND: u32 = 991_701;
 /// A heal of friends about the caster, ten yards.
 const FRIENDS: u32 = 991_702;
+/// Damage in a cone before the caster, ten yards (60 degrees).
+const CONE: u32 = 991_703;
 
 fn data(d: &mut GameData) {
     sides(d);
@@ -55,6 +58,7 @@ fn data(d: &mut GameData) {
         spell(BURST, area(22, 15)),
         spell(GROUND, area(16, 0)),
         spell(FRIENDS, heal),
+        spell(CONE, area(24, 0)),
     ];
     insert(d, spells);
 }
@@ -242,6 +246,94 @@ async fn a_places_area_and_a_players_reach_alike_but_a_players_size() {
     assert!(!foe, "a creature's area, no player's size");
 }
 
+/// A cone reaches as an area about the caster does: a creature's size
+/// past its radius, two yards more as either runs, 8/3 as the caster
+/// strafes, none past those; its angle is the caster's facing's, and a
+/// creature outside it is never hit, however near or however either
+/// moves. A creature's cone reaches no player's size, but its own run's
+/// leeway.
+#[tokio::test]
+async fn a_cone_reaches_a_creatures_size_and_further_when_either_moves() {
+    let realm = fast_realm(data);
+    let (_c, a, map) = human(&realm, "AOEF", "Coner", Class::Mage).await;
+    let (_d, b, _) = human(&realm, "AOEG", "Breathed", Class::Priest).await;
+    let out = map
+        .query(move |m| {
+            kit::ready(m, a, 60, &[]);
+            face_east(m, a);
+            let none = Targets::default();
+            let at = |m: &mut Map, x: f32, y: f32, run: bool| {
+                let g = beast(m, a, x, 1.5);
+                put(m, g, off(m, a, x, y));
+                if run {
+                    walks(m, g, true);
+                }
+                let hit = hits(m, a, CONE, &none, g);
+                m.remove_creature(g);
+                hit
+            };
+            let size = [
+                at(m, 9.9, 0.0, false),
+                at(m, 11.4, 0.0, false),
+                at(m, 11.6, 0.0, false),
+            ];
+            let runs = [at(m, 13.4, 0.0, true), at(m, 13.6, 0.0, true)];
+            // 45 degrees off the facing, past the cone's 30 each side.
+            let aside = |m: &mut Map, run: bool| [at(m, 5.0, 5.0, run), at(m, 8.0, 8.0, run)];
+            let mut outside = vec![aside(m, false), aside(m, true)];
+            moves(m, a, still().set_forward());
+            let caster_runs = [at(m, 13.4, 0.0, false), at(m, 13.6, 0.0, false)];
+            outside.push(aside(m, true));
+            moves(m, a, still().set_strafe_left());
+            let strafes = [at(m, 14.1, 0.0, false), at(m, 14.3, 0.0, false)];
+            outside.push(aside(m, true));
+            // Behind the caster, near.
+            let behind = at(m, -3.0, 0.0, true);
+            moves(m, a, still());
+            // A beast's cone at a player: the radius alone, standing; its
+            // run, two yards more.
+            let source = beast(m, a, 0.0, 1.5);
+            let from = off(m, b, -10.4, 0.0);
+            put(m, source, from);
+            m.creature_mut(source).unwrap().orientation = 0.0;
+            let foe = hits(m, source, CONE, &none, b);
+            walks(m, source, true);
+            let foe_runs = hits(m, source, CONE, &none, b);
+            (
+                size,
+                runs,
+                outside,
+                caster_runs,
+                strafes,
+                behind,
+                foe,
+                foe_runs,
+            )
+        })
+        .await
+        .unwrap();
+    let (size, runs, outside, caster_runs, strafes, behind, foe, foe_runs) = out;
+    assert_eq!(
+        size,
+        [true, true, false],
+        "in the radius; within the creature's 1.5 past it; past that"
+    );
+    assert_eq!(runs, [true, false], "the creature running: two yards more");
+    assert_eq!(
+        caster_runs,
+        [true, false],
+        "the caster running: two yards more"
+    );
+    assert_eq!(strafes, [true, false], "the caster strafing: 8/3");
+    assert!(
+        outside.iter().flatten().all(|h| !h),
+        "outside the angle, never: {outside:?}"
+    );
+    assert!(!behind, "behind the caster, never");
+    assert!(!foe, "a creature's cone, no player's size");
+    assert!(foe_runs, "but its own run's leeway");
+}
+
 /// Through the protocol: a caster's strafe told in a heartbeat takes their
 /// area to a beast 14 yards off (ten, its 1.5 and 8/3); stopped, the area
 /// no longer reaches it.
@@ -373,5 +465,92 @@ async fn frost_nova_and_arcane_explosion_reach_as_far_as_their_leeways() {
             .await
             .unwrap();
         }
+    }
+}
+
+/// On the real world: a mage's Cone of Cold reaches a Young Wolf before
+/// them as far as its size past the radius; further as it runs, the mage
+/// runs or strafes; not beyond; and one beside the mage, outside the
+/// cone, never. Each cast is told to the mage's client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn cone_of_cold_reaches_as_far_as_its_leeways_within_its_angle() {
+    if !kit::have_data() {
+        return;
+    }
+    const CONE_OF_COLD: u32 = 120;
+    const YOUNG_WOLF: u32 = 299;
+    let realm = kit::realm();
+    let (mut c, mage, map) = kit::player(&realm, "AOEH", "Conea", Race::Human, Class::Mage).await;
+    let (radius, reach) = map
+        .query(move |m| {
+            kit::ready(m, mage, 30, &[CONE_OF_COLD]);
+            face_east(m, mage);
+            let data = m.realm.data.clone();
+            let s = data.spells.get(CONE_OF_COLD).cloned().unwrap();
+            let w = kit::spawn(m, mage, YOUNG_WOLF, 1, 5.0);
+            let reach = m.unit_fields(w).unwrap().get_f32(UNIT_FIELD_COMBATREACH);
+            m.remove_creature(w);
+            (data.spells.radius(s.effects[0].radius_index), reach)
+        })
+        .await
+        .unwrap();
+    assert!(radius > 0.0, "a radius");
+    assert!(reach > 0.0, "a wolf has a size");
+    let moving = targets::AREA_LEEWAY_MOVING;
+    let strafing = targets::AREA_LEEWAY_STRAFING;
+    let r = radius + reach;
+    // (the mage's flags, the wolf running, where the wolf is, hit)
+    let cases = [
+        (still(), false, (r - 0.1, 0.0), true),
+        (still(), false, (r + 0.1, 0.0), false),
+        (still(), true, (r + moving - 0.1, 0.0), true),
+        (still().set_forward(), false, (r + moving - 0.1, 0.0), true),
+        (still().set_forward(), false, (r + moving + 0.1, 0.0), false),
+        (
+            still().set_strafe_right(),
+            false,
+            (r + strafing - 0.1, 0.0),
+            true,
+        ),
+        (
+            still().set_strafe_right(),
+            false,
+            (r + strafing + 0.1, 0.0),
+            false,
+        ),
+        // Due north, beside the mage: outside the cone, however near.
+        (still(), false, (0.0, 3.0), false),
+        (still().set_strafe_right(), true, (0.0, 3.0), false),
+    ];
+    for (i, (flags, runs, (x, y), expect)) in cases.into_iter().enumerate() {
+        // The wolf placed, its run and the mage's flags, and the cast, in
+        // one turn of the map: no update moves either between.
+        c.clear();
+        let (wolf, cast) = map
+            .query(move |m| {
+                let w = kit::spawn(m, mage, YOUNG_WOLF, 1, 5.0);
+                put(m, w, off(m, mage, x, y));
+                if runs {
+                    walks(m, w, true);
+                }
+                moves(m, mage, flags);
+                face_east(m, mage);
+                (
+                    w,
+                    kit::cast_fresh(m, mage, CONE_OF_COLD, Targets::default()),
+                )
+            })
+            .await
+            .unwrap();
+        assert!(cast, "Cone of Cold goes off ({i})");
+        let hit = go(&mut c, CONE_OF_COLD).await;
+        assert_eq!(hit.contains(&wolf), expect, "case {i}: {hit:?}");
+        map.query(move |m| {
+            m.remove_creature(wolf);
+            moves(m, mage, still());
+        })
+        .await
+        .unwrap();
     }
 }

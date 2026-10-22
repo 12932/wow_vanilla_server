@@ -1357,7 +1357,7 @@ whose centres were within its radius, nothing more. Now (`spells::targets::area_
   mangos-classic's `MELEE_LEEWAY`) when either strafes. Walking gives none. mangos-classic gives its 2 yards for the
   caster's running alone; the unit's running and the strafe's larger leeway go beyond it (the user's call).
 
-Cones, script areas, party and raid areas are as they were.
+Cones (since given the same reach, below), script areas, party and raid areas are as they were.
 
 The grid is asked for the radius, the strafe's leeway and 30 yards (the world's largest model reaches 26.25) as a
 disc (`Grid::within`), so a 10-yard area still looks in at most nine cells. A unit past the radius costs a lookup of
@@ -1407,3 +1407,23 @@ A creature on its way home after a leash was refused as a target ("Invalid targe
 of no sound, `VICTIMSTATE_EVADES`, no damage), as mangos-classic's `MELEE_HIT_EVADE`; neither puts anyone in a fight
 with it. Areas still pass it by, pets and creatures still let go of it, and its evade still stops those swinging at
 it (mangos's `RemoveAllAttackers`). The evaded blows pass the client check.
+## Cones' reach (2026-10-22)
+
+A cone before its caster (Cone of Cold, Frost Breath, Flame Breath, a creature's breath) took the units whose
+centres were within its radius and its angle. Now it reaches as an area about its caster does (`area_units`, the
+same code): a creature's size past the radius for a player's cone, and `[spells]`'s leeways when either side runs
+or strafes. The angle is as it was, from the caster's facing, at the unit's centre. A player in a player's cone still
+gets no size; a creature's own running still gives its leeway. Script cones (target 60) are as they were.
+
+The grid is asked for the larger disc an area's is, and a unit past the radius costs its creature's lookup, as for
+areas. Measured as areas' were (400 creatures in a 60-yard square about the caster, on 4 cores of a 32-core box,
+release, one cone's targets, 2,000 times; the time is the whole of `effect_targets`, the enemy checks included):
+
+| Radius | Before | After | Units taken, before / after |
+|---|---|---|---|
+| 8 | 9.1 µs | 14.6 µs | 2 / 2 |
+| 10 | 11.7 µs | 18.8 µs | 3 / 6 |
+| 20 | 36.6 µs | 42.7 µs | 23 / 27 |
+| 30 | 81.6 µs | 86.2 µs | 52 / 55 |
+
+Five to seven microseconds more a cone cast, in a crowd, as for areas: nothing beside an update's 50 ms.

@@ -237,8 +237,8 @@ impl Leeways {
     }
 }
 
-/// Units around `at` that an area of `radius` about `about` reaches, that
-/// `pick` keeps: within the radius, a creature's combat reach past it for
+/// Units around `at` that an area (or a cone) of `radius` about `about`
+/// reaches, that `pick` keeps: within the radius, a creature's combat reach past it for
 /// a player's area (mangos-classic's `SpellNotifierCreatureAndPlayer`, for
 /// the player-controlled at the not), and the [`Leeways`] past that when
 /// `about` or the unit moves.
@@ -429,7 +429,9 @@ pub fn effect_targets(
                 .get(&s.id)
                 .copied()
                 .unwrap_or(60);
-            units_around(map, center(map, caster, t, false), r, |g| {
+            // A cone reaches as an area about the caster does; its angle
+            // is from the caster's facing, as it was.
+            area_units(map, about, center(map, caster, t, false), r, |g| {
                 g != about && enemy(g) && in_cone(map, caster, g, degrees)
             })
         }
