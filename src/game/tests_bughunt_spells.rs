@@ -361,7 +361,7 @@ async fn a_cancel_aura_spares_hidden_and_others_party_auras() {
         party.effects[0].effect = crate::game::map::spells::EFFECT_APPLY_AREA_AURA_PARTY;
         insert(d, [hidden, party, made(PLAIN)]);
     });
-    let (mut c, g, map) = human(&realm, "BHCA", "Aurae", Class::Mage).await;
+    let (c, g, map) = human(&realm, "BHCA", "Aurae", Class::Mage).await;
     map.query(move |m| {
         ready(m, g, 60, &[]);
         let other = dummy(m, g, 60, 3.0);
