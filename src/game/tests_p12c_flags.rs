@@ -136,3 +136,28 @@ async fn a_gm_keeps_its_flags() {
     beat(&a, MovementInfo_MovementFlags::new_hover(), at(1.0, 0.0)).await;
     assert!(told(&mut b, 1.0).await.get_hover());
 }
+
+/// The bug hunt's map core: in a knockback's flight no flag was taken off,
+/// so a client kept "launched" (its jumping flag on) could fly. Flying,
+/// being able to fly and levitating go in a launch too; its jump stays.
+#[tokio::test]
+async fn a_knockbacks_flight_gives_no_flying() {
+    let (mut a, g, mut b, map, _realm) = two().await;
+    crate::game::tests_p12c_speed::knocked_back(&mut a, &map, g, 10.0).await;
+    let jump = MovementInfo_MovementFlags::new_jumping(MovementInfo_MovementFlags_Jumping {
+        cos_angle: 1.0,
+        sin_angle: 0.0,
+        xy_speed: 10.0,
+        z_speed: 10.0,
+    });
+    let cheat = jump.set_flying().set_can_fly().set_levitating();
+    beat(&a, cheat, at(1.0, 0.0)).await;
+    let seen = told(&mut b, 1.0).await;
+    assert!(seen.get_jumping().is_some(), "the launch's jump stays");
+    assert!(
+        !seen.get_flying() && !seen.get_can_fly() && !seen.get_levitating(),
+        "{seen:?}"
+    );
+    let k = kept(&map, g).await;
+    assert!(!k.get_flying() && !k.get_can_fly() && !k.get_levitating());
+}

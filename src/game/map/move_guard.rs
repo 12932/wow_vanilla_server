@@ -100,14 +100,23 @@ pub fn held_back_with(
 /// water walking, slow falling or hovering with no aura for it and no order
 /// taking it away on its way. wvs takes flying alone off too (no 1.12
 /// player flies but on a flight's spline) and hovering (mangos's "things to
-/// check: hover"). Not for a GM, nor in a launch's flight (mangos: "maybe
-/// false positives").
+/// check: hover"). Not for a GM. In a launch's flight (mangos: "maybe
+/// false positives"), only flying, being able to fly and levitating go: no
+/// knockback gives them, and a launch otherwise left a client free to fly
+/// at its speed until it said it had landed.
 pub fn stripped(p: &Player, info: MovementInfo, walks_on_water: bool) -> MovementInfo {
-    if p.gm || p.misc.move_guard.launch.is_some() {
+    if p.gm {
         return info;
     }
     let mut f = info.flags;
     let was = f;
+    if p.misc.move_guard.launch.is_some() {
+        f = f.clear_levitating().clear_can_fly().clear_flying();
+        if f != was {
+            tracing::debug!("{} flew in a knockback's flight; taken off", p.name);
+        }
+        return MovementInfo { flags: f, ..info };
+    }
     if f.get_walk_mode()
         && f.get_swimming().is_some()
         && f.get_hover()
