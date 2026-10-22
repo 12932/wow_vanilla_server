@@ -792,10 +792,16 @@ fn usable_by(
         && !learned
 }
 
+/// An auction's bytes in a list (wow_messages' `AuctionListItem`).
+const LISTED_BYTES: usize = 64;
+
 /// `CMSG_AUCTION_LIST_OWNER_ITEMS` and `CMSG_AUCTION_LIST_BIDDER_ITEMS`:
 /// the player's auctions, or those they hold the bid on and those they ask
-/// after, outbid (mangos's `HandleAuctionListBidderItems`).
-pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32]) {
+/// after, outbid (mangos's `HandleAuctionListBidderItems`), from the
+/// `from`th on, as many as the client's cap holds (`mail::LIST_BYTES`);
+/// the total counts them all. Unbounded, a seller with a thousand auctions
+/// had a frame too big to send, and was sent nothing.
+pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32], from: u32) {
     let realm = &map.realm;
     let Some(house) = house_at(map, g, auctioneer) else {
         return;
@@ -808,7 +814,7 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32
     let mut asked: Vec<u32> = outbid.to_vec();
     asked.sort_unstable();
     asked.dedup();
-    let mine: Vec<AuctionListItem> = auctions
+    let all: Vec<&Auction> = auctions
         .auctions
         .values()
         .filter(|a| {
@@ -819,9 +825,15 @@ pub fn list_mine(map: &Map, g: Guid, auctioneer: Guid, bids: bool, outbid: &[u32
                     a.owner == me
                 }
         })
+        .collect();
+    let total = all.len() as u32;
+    let room = (mail::LIST_BYTES - 8) / LISTED_BYTES;
+    let mine: Vec<AuctionListItem> = all
+        .into_iter()
+        .skip(from as usize)
+        .take(room)
         .map(|a| a.list_item(&realm.data))
         .collect();
-    let total = mine.len() as u32;
     let Some(p) = map.players.get(&g) else {
         return;
     };

@@ -456,3 +456,49 @@ fn two_joins_at_once_queue_a_player_once() {
         assert_eq!((ok, held), (1, 1), "round {round}");
     }
 }
+
+/// `c`'s owner list from `from`: its ids and total.
+async fn owned(c: &mut Client, from: u32) -> (Vec<u32>, u32) {
+    c.clear();
+    c.send(CMSG_AUCTION_LIST_OWNER_ITEMS {
+        auctioneer: auctioneer(),
+        list_from: from,
+    })
+    .await;
+    c.wait_for("SMSG_AUCTION_OWNER_LIST_RESULT", |m| match m {
+        ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(l) => Some((
+            l.auctions.iter().map(|x| x.id).collect::<Vec<_>>(),
+            l.total_amount_of_auctions,
+        )),
+        _ => None,
+    })
+    .await
+}
+
+/// The owner list was unpaged: a seller with a thousand auctions made a
+/// frame past the largest one sent, and was sent nothing. It lists as many
+/// as the client's cap holds, from where the client asks, with the true
+/// total.
+#[tokio::test]
+async fn a_seller_with_many_auctions_is_sent_what_fits() {
+    let realm = harness::realm_with(auction_data());
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(auctioneer()).await;
+    let later = mail::now() + 7200;
+    {
+        let mut auctions = realm.social.auctions.lock();
+        for id in 1..=1000 {
+            let mut x = axe(id, later);
+            x.owner = guid::counter(ga);
+            auctions.auctions.insert(id, x);
+        }
+    }
+    let (first, total) = owned(&mut a, 0).await;
+    assert_eq!(total, 1000);
+    assert!((400..1000).contains(&first.len()), "{}", first.len());
+    assert_eq!(first[0], 1);
+    let (rest, total) = owned(&mut a, 900).await;
+    assert_eq!(total, 1000);
+    assert_eq!(rest, (901..=1000).collect::<Vec<_>>());
+}

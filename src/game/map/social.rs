@@ -561,10 +561,17 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_AUCTION_PLACE_BID(m) => auction::bid(map, g, &m),
         C::CMSG_AUCTION_REMOVE_ITEM(m) => auction::cancel(map, g, &m),
         C::CMSG_AUCTION_LIST_ITEMS(m) => auction::list(map, g, &m),
-        C::CMSG_AUCTION_LIST_OWNER_ITEMS(m) => auction::list_mine(map, g, m.auctioneer, false, &[]),
-        C::CMSG_AUCTION_LIST_BIDDER_ITEMS(m) => {
-            auction::list_mine(map, g, m.auctioneer, true, &m.outbid_item_ids)
+        C::CMSG_AUCTION_LIST_OWNER_ITEMS(m) => {
+            auction::list_mine(map, g, m.auctioneer, false, &[], m.list_from)
         }
+        C::CMSG_AUCTION_LIST_BIDDER_ITEMS(m) => auction::list_mine(
+            map,
+            g,
+            m.auctioneer,
+            true,
+            &m.outbid_item_ids,
+            m.start_from_page,
+        ),
         other => return Some(other),
     }
     None
