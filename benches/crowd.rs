@@ -622,7 +622,7 @@ async fn movement(
                     };
                     // Every `other`th a facing, which nothing coalesces.
                     n += 1;
-                    let m: ClientOpcodeMessage = if other > 0 && n % other == 0 {
+                    let m: ClientOpcodeMessage = if other > 0 && n.is_multiple_of(other) {
                         MSG_MOVE_SET_FACING_Client { info }.into()
                     } else {
                         MSG_MOVE_HEARTBEAT_Client { info }.into()
