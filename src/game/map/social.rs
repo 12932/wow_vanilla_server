@@ -746,18 +746,26 @@ pub fn push_member_stats(map: &mut Map) {
             Some((g, others, stats_of(map, p), seen))
         })
         .collect();
-    type Kept = (Option<MemberStats>, Vec<Guid>);
+    type Kept = Option<(Option<MemberStats>, Vec<Guid>)>;
     let kept: Vec<Kept> = {
         let mut groups = realm.social.groups.lock();
         read.iter()
             .map(|(g, _, now, seen)| {
+                // Out of their group since the first lock (a kick or a
+                // leave from another map, which clears their stats): kept,
+                // an ungrouped player's stats would stay until they logged
+                // out, and be sent to those they left.
+                groups.group_of(*g)?;
                 let before = groups.stats.insert(*g, now.clone());
                 let was_seen = groups.seen_by.insert(*g, seen.clone()).unwrap_or_default();
-                (before, was_seen)
+                Some((before, was_seen))
             })
             .collect()
     };
-    for ((g, others, now, seen), (before, was_seen)) in read.iter().zip(kept) {
+    for ((g, others, now, seen), kept) in read.iter().zip(kept) {
+        let Some((before, was_seen)) = kept else {
+            continue;
+        };
         let mask = before.as_ref().map_or(now.all(), |b| now.changed(b));
         let frame = (mask != 0).then(|| now.packet(*g, mask, before.is_none()));
         let mut all = None;
