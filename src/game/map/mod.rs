@@ -47,6 +47,7 @@ pub mod gm_dev;
 pub mod grid;
 pub mod guards;
 pub mod handlers;
+pub mod hyperspawn;
 pub(crate) mod instance_adapters;
 pub mod instance_script;
 pub mod intoxication;
@@ -670,6 +671,8 @@ pub struct Map {
     pub arena: arena::Arena,
     /// Objects spells summoned, traps, rituals and quest objects.
     pub objects: objects::Objects,
+    /// Hyperspawn's pockets (`[hyperspawn]`).
+    pub hyperspawn: hyperspawn::Hyperspawn,
     /// The clients held ([`Map::hold`]) until their creates go.
     pub holding: Vec<(Guid, crate::game::conn::Outbound)>,
     /// What came into the map (or was placed in it) since the update's
@@ -1424,6 +1427,7 @@ impl Map {
             camps: AHashMap::new(),
             arena: Default::default(),
             objects: Default::default(),
+            hyperspawn: Default::default(),
             holding: Vec::new(),
             fresh: Vec::new(),
             lost_sight: Vec::new(),

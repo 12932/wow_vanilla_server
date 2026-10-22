@@ -214,6 +214,7 @@ pub fn test_config() -> RealmConfig {
         events: Default::default(),
         anticheat: Default::default(),
         gm: Default::default(),
+        hyperspawn: Default::default(),
         broadcast_batch: crate::game::map::batch::BatchConfig::fixed(Duration::ZERO),
     }
 }

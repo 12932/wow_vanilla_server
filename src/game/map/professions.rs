@@ -1528,7 +1528,12 @@ fn despawn(map: &mut Map, object: Guid) {
         .get(&map.key.map)
         .and_then(|l| l.iter().find(|s| s.guid == spawn))
         .map_or(300, |s| s.respawn_min.max(1));
-    let after = Duration::from_secs(u64::from(secs));
+    // A quest object sooner in a busy pocket (`[hyperspawn]`).
+    let after = crate::game::map::hyperspawn::object_used(
+        map,
+        crate::game::map::hyperspawn::Spot::of(&o),
+        Duration::from_secs(u64::from(secs)),
+    );
     map.loot_state.respawns.push((map.now + after, spawn));
     crate::game::instances::object_gone(&map.realm, map.key, spawn, after);
     crate::game::map::instance_script::chest_gone(map, spawn, after);
