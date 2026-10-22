@@ -1557,6 +1557,45 @@ async fn an_escort_asks_the_party_to_join_and_one_who_confirms_has_it() {
     assert!(on_map(&realm, move |m| m.players[&gb].journal.has(QUEST)).await);
 }
 
+/// One asked to join an escort may confirm from where they were asked:
+/// mangos's `HandleQuestConfirmAccept` checks no distance, so a member 20
+/// yards off (asked within 30) isn't told they are too far.
+#[tokio::test]
+async fn an_escort_confirmed_twenty_yards_off_is_taken() {
+    let mut d = data();
+    d.npc.quests.get_mut(&QUEST).unwrap().flags =
+        crate::game::map::questshare::QUEST_FLAGS_PARTY_ACCEPT;
+    let realm = harness::realm_with(d);
+    let (mut a, mut b) = party(&realm).await;
+    let (ga, gb) = (a.guid, b.guid);
+    let giver = guid::unit(QUEST_GIVER, 14);
+    a.sees(giver).await;
+    on_map(&realm, move |m| {
+        let at = m.players[&ga].position();
+        m.players.get_mut(&gb).unwrap().movement.position.x = at.x + 20.0;
+    })
+    .await;
+    a.send(CMSG_QUESTGIVER_ACCEPT_QUEST {
+        guid: giver,
+        quest_id: QUEST,
+    })
+    .await;
+    b.wait_for("SMSG_QUEST_CONFIRM_ACCEPT", |m| match m {
+        ServerOpcodeMessage::SMSG_QUEST_CONFIRM_ACCEPT(c) => (c.quest_id == QUEST).then_some(()),
+        _ => None,
+    })
+    .await;
+    b.send(CMSG_QUEST_CONFIRM_ACCEPT { quest_id: QUEST }).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while !on_map(&realm, move |m| m.players[&gb].journal.has(QUEST)).await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the escort taken 20 yards off"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn the_deep_sea_tires_a_swimmer_out() {
     let (realm, mut a) = setup().await;

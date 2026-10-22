@@ -367,6 +367,46 @@ async fn an_enchanter_enchants_the_item_their_partner_shows() {
     assert_eq!(dust, 0);
 }
 
+/// A trade's enchantment spends carried reagents only (mangos's
+/// `HasItemCount`), as any cast: dust in the bank or sold to a vendor
+/// (waiting in the buyback) doesn't pay for it.
+#[tokio::test]
+async fn a_trade_enchant_wont_spend_banked_or_sold_reagents() {
+    use crate::game::map::inventory::{BANK_START, BUYBACK_START};
+    let realm = players_realm();
+    let (mut a, mut b) = two(&realm).await;
+    let (ga, gb) = (a.guid, b.guid);
+    on_map(&realm, move |m| {
+        m.players.get_mut(&ga).unwrap().spells.push(ENCHANT_BRACER)
+    })
+    .await;
+    let (_, at) = give(&realm, gb, BRACER, 1).await;
+    trading(&mut a, &mut b, at).await;
+    for slot in [BANK_START, BUYBACK_START] {
+        let (dust, _) = give(&realm, ga, DUST, 1).await;
+        on_map(&realm, move |m| {
+            let d = m.realm.data.clone();
+            let p = m.players.get_mut(&ga).unwrap();
+            let i = p.item_by_guid(dust).unwrap();
+            (p.items[i].bag, p.items[i].slot) = (BAG_PLAYER, slot);
+            p.refresh_inventory(&d);
+        })
+        .await;
+        a.send(CMSG_CAST_SPELL {
+            spell: ENCHANT_BRACER,
+            targets: at_trade_slot(),
+        })
+        .await;
+        assert_eq!(
+            cast_result(&mut a, ENCHANT_BRACER).await,
+            Some(crate::game::map::spells::checks::fail::REAGENTS),
+            "dust at slot {slot} isn't carried"
+        );
+    }
+    let carried = on_map(&realm, move |m| m.players[&ga].carried_count_of(DUST)).await;
+    assert_eq!(carried, 0);
+}
+
 #[tokio::test]
 async fn a_trade_spell_is_checked_again_at_the_accept_and_goes_with_its_item() {
     let realm = players_realm();

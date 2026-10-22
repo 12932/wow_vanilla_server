@@ -137,13 +137,16 @@ pub fn push(map: &mut Map, g: Guid, quest: u32) {
 /// A shared quest taken: still near the sharer and able to take it, or
 /// the sharer hears why not and the offer goes (Thistle Tea's
 /// `QuestSharing.accept`). The sharer's time left, for a timed quest
-/// (mangos's `AddQuest`); none, refused.
-pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32) -> Option<i64> {
+/// (mangos's `AddQuest`); none, refused. `asked`: a member asked to join
+/// a party-accept quest (`SMSG_QUEST_CONFIRM_ACCEPT`), who may be anywhere
+/// they were asked from (mangos's `HandleQuestConfirmAccept` checks no
+/// distance); a shared quest must be taken near its sharer.
+pub fn admit(map: &mut Map, g: Guid, sharer: Guid, quest: u32, asked: bool) -> Option<i64> {
     let data = map.realm.data.clone();
     let q = data.npc.quests.get(&quest)?;
     let near = match (map.players.get(&g), map.players.get(&sharer)) {
         (Some(p), Some(s)) => {
-            crate::game::map::combat::dist(p.position(), s.position()) <= SHARE_YARDS
+            asked || crate::game::map::combat::dist(p.position(), s.position()) <= SHARE_YARDS
         }
         _ => false,
     };

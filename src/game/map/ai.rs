@@ -686,6 +686,7 @@ fn respawn(map: &mut Map, g: Guid) {
     {
         drop(c);
     }
+    crate::game::map::loot::forget_pockets(map, g);
     let Some(spawn) = spawn else {
         return;
     };

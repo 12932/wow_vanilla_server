@@ -27,7 +27,7 @@ use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
 use crate::game::map::inventory::{
-    self, BAG_END, BAG_START, BUYBACK_END, BUYBACK_START, EQUIPMENT_END, Fail,
+    self, BAG_END, BAG_START, BUYBACK_END, BUYBACK_START, EQUIPMENT_END, Fail, MAX_MONEY,
 };
 use crate::game::map::player::{Item, Player};
 use crate::game::store::BAG_PLAYER;
@@ -37,8 +37,6 @@ pub const NPC_FLAG_VENDOR: u32 = 0x4;
 pub const NPC_FLAG_REPAIR: u32 = 0x4000;
 /// How far a player may stand from an NPC to use it.
 pub const NPC_YARDS: f32 = 8.0;
-/// The most money a player holds.
-const MAX_MONEY: u32 = 2_147_483_647;
 /// A buyback slot's timestamp counts from login, thirty hours on.
 const BUYBACK_OFFSET_SECS: u32 = 108_000;
 /// One blow in two hundred wears a point off something worn, by default

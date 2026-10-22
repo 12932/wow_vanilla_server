@@ -666,7 +666,7 @@ fn skinning_fails(map: &Map, p: &Player, t: &Targets) -> Option<u8> {
     if !has_skin(data, c) {
         return Some(FAIL_TARGET_UNSKINNABLE);
     }
-    if c.loot.as_ref().is_some_and(|l| !l.is_empty()) {
+    if c.loot.as_ref().is_some_and(|l| !l.looted_for_all()) {
         return Some(FAIL_TARGET_NOT_LOOTED);
     }
     let level = c.fields.get_u32(UNIT_FIELD_LEVEL);
@@ -933,7 +933,7 @@ fn skin(map: &mut Map, caster: Guid, creature: Guid, spell: u32) {
     let Some((entry, level)) = map
         .creature(creature)
         .filter(|c| {
-            !c.alive() && has_skin(&data, c) && c.loot.as_ref().is_none_or(|l| l.is_empty())
+            !c.alive() && has_skin(&data, c) && c.loot.as_ref().is_none_or(|l| l.looted_for_all())
         })
         .map(|c| (c.entry, c.fields.get_u32(UNIT_FIELD_LEVEL)))
     else {

@@ -10,6 +10,7 @@ use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::combat::dist;
 use crate::game::map::death::Death;
+use crate::game::map::inventory::MAX_MONEY;
 
 pub const SLOTS: usize = 7;
 /// The slot whose item stays with its owner.
@@ -48,6 +49,12 @@ pub fn initiate(map: &mut Map, g: Guid, with: Guid) {
         return;
     };
     if me.trade.is_some() {
+        return;
+    }
+    // Not with oneself (mangos's `HandleInitiateTradeOpcode`): both sides
+    // would be the same items, taken twice.
+    if with == g {
+        status(map, g, S::Busy);
         return;
     }
     if me.death != Death::Alive {
@@ -337,15 +344,15 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// The most money a player may hold.
-const MAX_MONEY: u32 = 2_147_483_647;
-
 /// `CMSG_ACCEPT_TRADE`: when both have, it goes through.
 pub fn accept(map: &mut Map, g: Guid) {
     type S = SMSG_TRADE_STATUS_TradeStatus;
     let Some(with) = partner(map, g) else {
         return;
     };
+    if with == g {
+        return;
+    }
     if let Some(t) = map.players.get_mut(&g).and_then(|p| p.trade.as_mut()) {
         t.accepted = true;
     }
@@ -427,11 +434,15 @@ pub fn accept(map: &mut Map, g: Guid) {
     };
     let to_them = take(map, g, mine);
     let to_me = take(map, with, theirs);
-    for row in &to_them {
-        let _ = crate::game::map::inventory::attach_item(map, with, row);
-    }
-    for row in &to_me {
-        let _ = crate::game::map::inventory::attach_item(map, g, row);
+    // Room was planned for them; an item that still finds none is mailed
+    // to its new owner, never lost.
+    for (to, rows) in [(with, &to_them), (g, &to_me)] {
+        for row in rows {
+            if let Err(e) = crate::game::map::inventory::attach_item(map, to, row) {
+                tracing::warn!(?e, entry = row.entry, "a traded item found no room; mailed");
+                crate::game::map::inventory::mail_back(&map.realm, to, row.clone());
+            }
+        }
     }
     crate::game::map::trade_spells::perform(map, &casts);
     let money = |map: &Map, s: Guid| {

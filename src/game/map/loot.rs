@@ -180,6 +180,18 @@ impl Loot {
                 && self.rolls.is_empty())
     }
 
+    /// Looted for all, so its corpse may be skinned (mangos's
+    /// `IsLootedForAll`): a corpse's that fell to someone once
+    /// [`Loot::done`], with every quest and free-for-all drop of theirs
+    /// taken; any other once [`Loot::is_empty`].
+    pub fn looted_for_all(&self) -> bool {
+        if self.kind == LootKind::Corpse && (self.owner.is_some() || !self.allowed.is_empty()) {
+            self.done
+        } else {
+            self.is_empty()
+        }
+    }
+
     /// Whether `g` has a right to it: its owner, one of the group it fell
     /// to (mangos's `m_ownerSet`), or one who opened its lock. What in it
     /// is theirs to take is [`Loot::slot_type`]'s.
@@ -624,8 +636,7 @@ pub fn creature_died(map: &mut Map, creature: Guid, tapper: Guid) {
         setup_group(map, &mut loot, creature, tapper, tap_group, group);
     }
     let rolls: Vec<usize> = loot.rolls.iter().map(|r| r.slot).collect();
-    map.loot_state.picked.remove(&creature);
-    map.loot_state.pockets.retain(|(c, _), _| *c != creature);
+    forget_pockets(map, creature);
     // Its pockets, open as it dies, shut on those looking in them: the
     // corpse's loot is another (mangos's `Loot::~Loot`, `SendReleaseForAll`,
     // as `PrepareCorpseLoot` replaces the pickpocketing loot).
@@ -1263,6 +1274,14 @@ pub fn loot_mut(map: &mut Map, g: Guid) -> Option<&mut Loot> {
     } else {
         None
     }
+}
+
+/// A creature's pockets are let go: picked or not, and what rogues left
+/// in them. At its death, and as it leaves the map (despawned by a
+/// script, a pool or an event, or come back as new).
+pub fn forget_pockets(map: &mut Map, creature: Guid) {
+    map.loot_state.picked.remove(&creature);
+    map.loot_state.pockets.retain(|(c, _), _| *c != creature);
 }
 
 /// Loot on an item opens at once: a disenchanted item's dust, an opened
