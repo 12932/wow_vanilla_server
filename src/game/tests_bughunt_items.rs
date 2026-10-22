@@ -235,3 +235,88 @@ async fn a_disenchants_window_takes_and_releases_through_the_protocol() {
     .await;
     assert_eq!(had, (1, 3, false));
 }
+
+/// A clam sold, waiting in the buyback, can't be opened: the sale's money
+/// is had already. One in the bags opens.
+#[tokio::test]
+async fn a_clam_in_the_buyback_doesnt_open() {
+    let realm = realm();
+    let mut a = alice(&realm).await;
+    let g = a.guid;
+    give(&realm, g, CLAM, 1, Some((BAG_PLAYER, BUYBACK_START))).await;
+    a.clear();
+    a.send(CMSG_OPEN_ITEM {
+        bag_index: BAG_PLAYER,
+        slot: BUYBACK_START,
+    })
+    .await;
+    assert!(!loot_shown(&mut a).await, "no loot from the buyback");
+    let open = on_map(&realm, move |m| m.players[&g].misc.item_loot.is_some()).await;
+    assert!(!open);
+    let (_, at) = give(&realm, g, CLAM, 1, None).await;
+    a.send(CMSG_OPEN_ITEM {
+        bag_index: at.0,
+        slot: at.1,
+    })
+    .await;
+    let open = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if on_map(&realm, move |m| m.players[&g].misc.item_loot.is_some()).await {
+                break true;
+            }
+            if tokio::time::Instant::now() > deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    assert!(open, "one carried opens");
+}
+
+/// Nor is an item in the buyback wrapped, nor wrapped with paper there.
+#[tokio::test]
+async fn nothing_in_the_buyback_is_wrapped() {
+    let realm = realm();
+    let a = alice(&realm).await;
+    let g = a.guid;
+    let (_, paper) = give(&realm, g, PAPER, 5, None).await;
+    let (trinket, sold) = give(&realm, g, TRINKET, 1, Some((BAG_PLAYER, BUYBACK_START))).await;
+    a.send(CMSG_WRAP_ITEM {
+        gift_bag_index: paper.0,
+        gift_slot: paper.1,
+        item_bag_index: sold.0,
+        item_slot: sold.1,
+    })
+    .await;
+    let (_, carried) = give(&realm, g, TRINKET, 1, None).await;
+    on_map(&realm, move |m| {
+        let d = m.realm.data.clone();
+        let p = m.players.get_mut(&g).unwrap();
+        let i = p.items.iter().position(|i| i.entry == PAPER).unwrap();
+        (p.items[i].bag, p.items[i].slot) = (BAG_PLAYER, BUYBACK_START + 1);
+        p.refresh_inventory(&d);
+    })
+    .await;
+    a.send(CMSG_WRAP_ITEM {
+        gift_bag_index: BAG_PLAYER,
+        gift_slot: BUYBACK_START + 1,
+        item_bag_index: carried.0,
+        item_slot: carried.1,
+    })
+    .await;
+    harness::an_update(&realm.maps.get(&realm, MapKey::world(0))).await;
+    let (gifts, paper_left, sold_entry) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        let sold = p.item_by_guid(trinket).map(|i| p.items[i].entry);
+        let paper: u32 = p
+            .items
+            .iter()
+            .filter(|i| i.entry == PAPER)
+            .map(|i| i.count())
+            .sum();
+        (p.count_of(GIFT), paper, sold)
+    })
+    .await;
+    assert_eq!((gifts, paper_left, sold_entry), (0, 5, Some(TRINKET)));
+}

@@ -199,7 +199,11 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
     let Some(p) = map.players.get_mut(&g) else {
         return;
     };
-    let Some(i) = p.item_at(bag, slot) else {
+    // Not one sold, waiting in the buyback (its money is had already).
+    let Some(i) = p
+        .item_at(bag, slot)
+        .filter(|_| !crate::game::map::vendor::in_buyback(bag, slot))
+    else {
         fail(p, InventoryResult::SlotIsEmpty, Guid::zero());
         return;
     };
@@ -308,7 +312,8 @@ pub fn open_as(map: &mut Map, g: Guid, bag: u8, slot: u8, kind: LootKind) {
 /// is.
 fn window(p: &mut crate::game::map::player::Player) -> Option<&mut Loot> {
     let item = p.misc.item_loot.as_ref()?.0;
-    if p.item_by_guid(item).is_none() {
+    let sold = |i: usize| crate::game::map::vendor::in_buyback(p.items[i].bag, p.items[i].slot);
+    if p.item_by_guid(item).is_none_or(sold) {
         p.misc.item_loot = None;
         return None;
     }
@@ -455,7 +460,11 @@ fn wrap(map: &mut Map, g: Guid, paper: (u8, u8), what: (u8, u8)) {
         fail(p, InventoryResult::CantDoRightNow, Guid::zero());
         return;
     }
-    let Some(pi) = p.item_at(paper.0, paper.1) else {
+    use crate::game::map::vendor::in_buyback;
+    let Some(pi) = p
+        .item_at(paper.0, paper.1)
+        .filter(|_| !in_buyback(paper.0, paper.1))
+    else {
         fail(p, InventoryResult::ItemNotFound, Guid::zero());
         return;
     };
@@ -475,7 +484,10 @@ fn wrap(map: &mut Map, g: Guid, paper: (u8, u8), what: (u8, u8)) {
         fail(p, InventoryResult::ItemNotFound, p.items[pi].guid);
         return;
     };
-    let Some(wi) = p.item_at(what.0, what.1) else {
+    let Some(wi) = p
+        .item_at(what.0, what.1)
+        .filter(|_| !in_buyback(what.0, what.1))
+    else {
         fail(p, InventoryResult::ItemNotFound, Guid::zero());
         return;
     };
