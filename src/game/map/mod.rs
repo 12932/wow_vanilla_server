@@ -953,6 +953,42 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             .as_ref()
             .map(|p| tokio::time::Instant::from_std(p.since() + map.cfg.broadcast_batch));
         tokio::select! {
+            // An update due runs before the next burst of events: the
+            // burst's cap (`EVENT_BURST`) is only worth anything if the
+            // ticker wins when both are ready (unbiased, it was a coin).
+            biased;
+            _ = ticker.tick() => {
+                // What the update sends each client goes in one push at its
+                // end.
+                {
+                    let _cork = match parked.take() {
+                        Some(p) => crate::game::conn::Cork::resume(p),
+                        None => crate::game::conn::Cork::new(),
+                    };
+                    guarded(&mut map, "the update", Map::update);
+                }
+                if map.stopping {
+                    break;
+                }
+                // An update that keeps panicking: a bad state, that a fresh
+                // map from the data won't have.
+                if supervise::escalated(&map) {
+                    map = supervise::restart(map);
+                    continue;
+                }
+                if map.now >= report_at {
+                    report_at = map.now + REPORT_EVERY;
+                    map.report(rx.len());
+                }
+                map.plot(rx.len());
+                #[cfg(all(feature = "world-bench", unix))]
+                if bench_probe::enabled() {
+                    bench_probe::mailbox(map.key, rx.len());
+                }
+                if crate::game::stats::on() {
+                    sampler.update(&map, rx.len());
+                }
+            }
             () = async {
                 match flush_at {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -1014,38 +1050,6 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
                 if stop {
                     break;
-                }
-            }
-            _ = ticker.tick() => {
-                // What the update sends each client goes in one push at its
-                // end.
-                {
-                    let _cork = match parked.take() {
-                        Some(p) => crate::game::conn::Cork::resume(p),
-                        None => crate::game::conn::Cork::new(),
-                    };
-                    guarded(&mut map, "the update", Map::update);
-                }
-                if map.stopping {
-                    break;
-                }
-                // An update that keeps panicking: a bad state, that a fresh
-                // map from the data won't have.
-                if supervise::escalated(&map) {
-                    map = supervise::restart(map);
-                    continue;
-                }
-                if map.now >= report_at {
-                    report_at = map.now + REPORT_EVERY;
-                    map.report(rx.len());
-                }
-                map.plot(rx.len());
-                #[cfg(all(feature = "world-bench", unix))]
-                if bench_probe::enabled() {
-                    bench_probe::mailbox(map.key, rx.len());
-                }
-                if crate::game::stats::on() {
-                    sampler.update(&map, rx.len());
                 }
             }
         }
