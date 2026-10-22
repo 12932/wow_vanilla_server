@@ -2433,46 +2433,35 @@ pub fn refresh_area_auras(map: &mut Map) {
         .map(|(_, c)| c.guid)
         .filter(|g| crate::game::map::pets::owner_of(map, *g).is_some())
         .collect();
-    let holders_of = |g: Guid| -> Vec<auras::Holder> {
-        auras::auras(map, g)
-            .map(|a| a.holders.clone())
-            .unwrap_or_default()
-    };
-    let units: Vec<(Guid, Vec<auras::Holder>)> = map
-        .players
-        .keys()
-        .copied()
-        .chain(owned)
-        .map(|g| (g, holders_of(g)))
-        .collect();
-    let sources: Vec<Source> = units
-        .iter()
-        .flat_map(|(g, holders)| {
-            let g = *g;
-            holders
+    // Read in place: only the party auras' own holders are taken.
+    let party_aura = |spell: u32| {
+        data.spells.get(spell).is_some_and(|s| {
+            s.effects
                 .iter()
-                .filter(move |h| h.caster == g)
-                .filter(|h| {
-                    data.spells.get(h.spell).is_some_and(|s| {
-                        s.effects
-                            .iter()
-                            .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
-                    })
-                })
-                .map(move |h| {
-                    (
-                        g,
-                        h.spell,
-                        h.effects
-                            .iter()
-                            .map(|x| (x.effect as usize, x.amount))
-                            .collect(),
-                        h.expires,
-                    )
-                })
-                .collect::<Vec<_>>()
+                .any(|e| e.effect == EFFECT_APPLY_AREA_AURA_PARTY)
         })
-        .collect();
+    };
+    let mut sources: Vec<Source> = Vec::new();
+    for g in map.players.keys().copied().chain(owned) {
+        let Some(a) = auras::auras(map, g) else {
+            continue;
+        };
+        for h in a
+            .holders
+            .iter()
+            .filter(|h| h.caster == g && party_aura(h.spell))
+        {
+            sources.push((
+                g,
+                h.spell,
+                h.effects
+                    .iter()
+                    .map(|x| (x.effect as usize, x.amount))
+                    .collect(),
+                h.expires,
+            ));
+        }
+    }
     for (caster, spell, effects, expires) in sources {
         let Some(s) = data.spells.get(spell) else {
             continue;
