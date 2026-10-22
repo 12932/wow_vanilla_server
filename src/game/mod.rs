@@ -103,6 +103,8 @@ mod tests_events;
 #[cfg(test)]
 mod tests_gear;
 #[cfg(test)]
+mod tests_gear_unique;
+#[cfg(test)]
 mod tests_ghost;
 #[cfg(test)]
 mod tests_gifts;

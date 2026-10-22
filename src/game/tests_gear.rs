@@ -288,3 +288,52 @@ async fn gear_replaces_what_was_worn() {
         "two weapons: {slots:?}"
     );
 }
+
+/// Over the real items, `.gear` at 28 (where a battleground's rings are of
+/// one name at 18 and 28, and the unique rings and trinkets about the
+/// level are many) never puts two of one unique item, nor of one unique
+/// name, on; and `.gear enchant` puts Crusader on the weapon worn.
+#[tokio::test]
+#[ignore = "extended"]
+async fn gear_puts_on_one_of_each_unique_item_and_enchant_puts_crusader_on() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let mut c = Client::connect(&realm, "GEARU");
+    let g: Guid = c.enter("Gearuniq", Race::Human, Class::Priest).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    c.say(".character level 28").await;
+    c.system_message("Level 28").await;
+    for _ in 0..10 {
+        c.say(".gear").await;
+        c.system_message("Equipped").await;
+        let worn: Vec<(String, u32)> = on(&map, move |m| {
+            let data = m.realm.data.clone();
+            let p = &m.players[&g];
+            p.items
+                .iter()
+                .filter(|i| i.bag == BAG_PLAYER && i.slot < 19)
+                .filter_map(|i| data.item(i.entry))
+                .filter(|t| t.max_count > 0)
+                .map(|t| (t.name.clone(), t.entry))
+                .collect()
+        })
+        .await;
+        let mut names: Vec<&String> = worn.iter().map(|(n, _)| n).collect();
+        names.sort();
+        let all = names.len();
+        names.dedup();
+        assert_eq!(names.len(), all, "a unique one twice: {worn:?}");
+    }
+    c.say(".gear enchant mainhand 1900").await;
+    let reply = c.system_message("Enchanted").await;
+    assert!(reply.ends_with("with Crusader."), "{reply}");
+    let on_it = on(&map, move |m| {
+        let p = &m.players[&g];
+        let i = p.item_at(BAG_PLAYER, 15).expect("a weapon");
+        crate::game::map::enchant::get(&p.items[i], crate::game::map::enchant::PERM_SLOT).id
+    })
+    .await;
+    assert_eq!(on_it, 1900);
+}
