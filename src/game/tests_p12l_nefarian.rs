@@ -334,6 +334,6 @@ async fn nefarians_lair_lost_is_put_back() {
         .await
         .flatten();
     assert_eq!(table, Some((35, 0x100)), "friendly, immune to players");
-    hello(&mut c, nef).await;
+    hello(&c, nef).await;
     option(&mut c, nef, "I've made no mistakes.").await;
 }
