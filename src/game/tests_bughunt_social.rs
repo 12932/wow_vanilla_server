@@ -308,3 +308,50 @@ fn a_mail_sent_back_since_the_sweep_found_it_is_kept() {
         "kept, item and all"
     );
 }
+
+/// `leader` invites `member` by `name`, who accepts.
+async fn group(leader: &mut Client, member: &mut Client, name: &str) {
+    leader.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+    member
+        .wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+    member.send(CMSG_GROUP_ACCEPT {}).await;
+    member
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) if !l.members.is_empty() => Some(()),
+            _ => None,
+        })
+        .await;
+}
+
+/// The roster a group was sent as a member logged out was worked out with
+/// them still online: it showed them connected (the raid UI's online flag
+/// reads it) until the next roster change.
+#[tokio::test]
+async fn the_roster_at_a_logout_shows_the_member_offline() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Carol", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Bob").await;
+    group(&mut a, &mut c, "Carol").await;
+    a.clear();
+    b.send(CMSG_LOGOUT_REQUEST {}).await;
+    harness::offline(&realm, gb).await;
+    let bob_online = a
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) => l
+                .members
+                .iter()
+                .find(|m| m.guid == gb)
+                .map(|m| m.is_online),
+            _ => None,
+        })
+        .await;
+    assert!(!bob_online, "Bob is shown offline");
+}

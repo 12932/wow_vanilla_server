@@ -317,18 +317,28 @@ impl Group {
     /// `SMSG_GROUP_LIST` to each member online: everyone else, the leader
     /// and the loot rules.
     fn send_update(&self, realm: &Realm) {
+        self.send_update_without(realm, None);
+    }
+
+    /// [`Self::send_update`], `gone` taken as offline though still in the
+    /// registry: a member logging out, who leaves it after their group has
+    /// heard (mangos sends the update once the player is gone).
+    fn send_update_without(&self, realm: &Realm, gone: Option<Guid>) {
         for me in &self.members {
-            if self.away.contains(&me.guid) || realm.registry.online(me.guid).is_none() {
+            if Some(me.guid) == gone
+                || self.away.contains(&me.guid)
+                || realm.registry.online(me.guid).is_none()
+            {
                 continue;
             }
             set_leader_flag(realm, me.guid, me.guid == self.leader);
-            if let Some(frame) = list_frame(&self.list_for(realm, me)) {
+            if let Some(frame) = list_frame(&self.list_for(realm, me, gone)) {
                 send_frame(realm, me.guid, &frame);
             }
         }
     }
 
-    fn list_for(&self, realm: &Realm, me: &Slot) -> SMSG_GROUP_LIST {
+    fn list_for(&self, realm: &Realm, me: &Slot, gone: Option<Guid>) -> SMSG_GROUP_LIST {
         let flags = |s: &Slot| s.subgroup | if s.assistant { 0x80 } else { 0 };
         let members: Vec<GroupListMember> = self
             .members
@@ -337,7 +347,7 @@ impl Group {
             .map(|m| GroupListMember {
                 name: m.name.to_string(),
                 guid: m.guid,
-                is_online: realm.registry.online(m.guid).is_some(),
+                is_online: Some(m.guid) != gone && realm.registry.online(m.guid).is_some(),
                 flags: flags(m),
             })
             .collect();
@@ -1670,7 +1680,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
         if gr.leader == g {
             gr.leader_away_since = Some(now());
         }
-        gr.send_update(realm);
+        gr.send_update_without(realm, Some(g));
         let offline = MemberStats::default();
         gr.broadcast(realm, &offline.packet(g, STAT_STATUS, false), Some(g));
     }
@@ -1678,7 +1688,7 @@ pub fn logged_out(realm: &Realm, g: Guid) {
     if groups.in_bg_raid(g)
         && let Some(gr) = groups.original_of(g)
     {
-        gr.send_update(realm);
+        gr.send_update_without(realm, Some(g));
     }
 }
 
