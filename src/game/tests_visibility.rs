@@ -357,7 +357,7 @@ fn invisibility_parts_a_pair_the_quick_path_would_skip() {
     let _in = rt.enter();
     horde(&mut c.map, g);
     hide(&mut c.map, g);
-    assert_eq!(none_know(&c, g).0, true, "forgotten at once");
+    assert!(none_know(&c, g).0, "forgotten at once");
     c.drain();
     // The others move on: none sees it again.
     c.shift(1, 0, 9.0);
