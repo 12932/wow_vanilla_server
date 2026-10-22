@@ -160,6 +160,12 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
+# Rust 1.99.1's LLVM (23.1.1), tuning for Zen 4 or 5 (`-Ctarget-cpu=native`), fails
+# libm's `acoshf` at opt-level 2: "Missing .seh_endepilogue". Nightly's LLVM
+# 23.1.4 builds it; drop this once stable has that.
+[profile.dev.package.libm]
+opt-level = 3
+
 [profile.release]
 debug = 0
 # Thin LTO and one codegen unit let the compiler inline across modules.
