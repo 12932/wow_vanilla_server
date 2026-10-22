@@ -565,6 +565,41 @@ async fn ramsteins_death_opens_the_square_calls_the_black_guard_and_lets_the_bar
     );
 }
 
+/// Ramstein called stays until he dies (mangos-classic's dead-despawn
+/// summon): no time of his own runs out on him. And a copy loaded again
+/// with him called but not beaten (his summon gone with the copy) has him
+/// back at his post, the fourth ziggurat shut behind him, rather than the
+/// Baron locked for the copy's life.
+#[tokio::test]
+async fn ramstein_called_but_not_beaten_is_back_when_the_copy_loads_again() {
+    let (realm, _a, key) = inside().await;
+    let seen = on(&realm, key, |m| {
+        for (s, _) in ABOMINATIONS {
+            let g = of_spawn(m, s);
+            instance_script::creature_event(m, g, Event::Death);
+        }
+        let called = living(m, RAMSTEIN);
+        let timed = called.iter().any(|r| {
+            event_ai::scripted(m, *r).is_some_and(|s| s.despawn_after.is_some())
+        });
+        for r in &called {
+            scripts::despawn(m, *r);
+        }
+        let saved = m.instance.data.clone();
+        instance_script::load(m, &saved);
+        let gone = living(m, RAMSTEIN).len();
+        instance_script::settle_spawns(m);
+        let back = living(m, RAMSTEIN);
+        let post = back
+            .first()
+            .and_then(|r| m.creature(*r))
+            .is_some_and(|c| near(c.position, (4_033.009, -3_404.329_3, 115.355_4)));
+        (called.len(), timed, gone, back.len(), post, state(m, ZIGGURAT_FOUR))
+    })
+    .await;
+    assert_eq!(seen, (1, false, 0, 1, true, 1), "Ramstein back at his post");
+}
+
 /// `step`, its final targets swapped to the creature of spawn `spawn`.
 fn to_spawn(spawn: u32, step: ScriptStep) -> ScriptStep {
     ScriptStep {
