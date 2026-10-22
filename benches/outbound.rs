@@ -14,9 +14,12 @@
 //!   trickle in) or as they come. `item/s` is packets written a second.
 //! - `fanout`: the map's side: movement packets (a heartbeat's size) from
 //!   `MOVERS` movers each to `n` observers, the queues emptied between rounds,
-//!   untimed, sent one by one (`send_frame`) or corked
-//!   (`conn::Cork`, a push per observer at the end). `item/s` is deliveries a
-//!   second, on the map's thread.
+//!   untimed, sent one by one (`send_frame`), corked (`conn::Cork`, a push
+//!   per observer at the end), or broadcast (`conn::broadcast`, as the map
+//!   sends now: each packet kept once with its set). `item/s` is deliveries
+//!   a second, on the map's thread.
+//! - `lookups`: `fanout`'s corked sends with the map's own lookups around
+//!   them (a GUID set, the players' table).
 //! - `delivered`: end to end: the bench's thread (the map) sends the round's
 //!   packets to `n` clients, each with a writer task on the tokio runtime
 //!   and a loopback socket read on threads of their own; the round ends when
@@ -190,6 +193,15 @@ mod writer {
     }
 }
 
+/// Every one of `n` clients.
+fn all_of(n: usize) -> conn::Clients {
+    let mut c = conn::Clients::default();
+    for i in 0..n {
+        c.insert(i);
+    }
+    c
+}
+
 /// Movers a round in `fanout` and `delivered`.
 const MOVERS: usize = 64;
 
@@ -221,6 +233,26 @@ mod fanout {
                     for o in &outs {
                         o.send_frame(m.clone());
                     }
+                }
+            });
+    }
+
+    /// Corked, as `Map::send_to_observers` sends now: each packet kept
+    /// once with its set of observers (`conn::broadcast`), each observer's
+    /// writer taking its share; a push per observer at the end, the
+    /// budget counted then.
+    #[divan::bench(args = [100, 880, 2000, 3000])]
+    fn broadcast(bencher: Bencher, n: usize) {
+        let (outs, mut frames) = queues(n);
+        let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
+        let all = Arc::new(all_of(n));
+        bencher
+            .counter(ItemsCount::new(MOVERS * n))
+            .with_inputs(|| empty(&mut frames))
+            .bench_local_values(|()| {
+                let _cork = conn::Cork::new();
+                for m in &movers {
+                    conn::broadcast(1, m, &all, |i| outs.get(i).cloned());
                 }
             });
     }
@@ -387,19 +419,31 @@ mod delivered {
         }
     }
 
-    fn round(bencher: Bencher, n: usize, corked: bool) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum How {
+        Direct,
+        Corked,
+        Broadcast,
+    }
+
+    fn round(bencher: Bencher, n: usize, how: How) {
         let mut clients = Clients::new(n);
         let movers: Vec<Arc<[u8]>> = (0..MOVERS).map(|_| heartbeat()).collect();
         let per_round = (MOVERS * heartbeat().len()) as u64;
+        let all = Arc::new(all_of(n));
         bencher
             .counter(ItemsCount::new(MOVERS * n))
             .bench_local(|| {
                 clients.rounds += 1;
                 {
-                    let _cork = corked.then(conn::Cork::new);
+                    let _cork = (how != How::Direct).then(conn::Cork::new);
                     for m in &movers {
-                        for o in &clients.outs {
-                            o.send_frame(m.clone());
+                        if how == How::Broadcast {
+                            conn::broadcast(1, m, &all, |i| clients.outs.get(i).cloned());
+                        } else {
+                            for o in &clients.outs {
+                                o.send_frame(m.clone());
+                            }
                         }
                     }
                 }
@@ -409,11 +453,16 @@ mod delivered {
 
     #[divan::bench(args = [100, 880, 2000])]
     fn direct(bencher: Bencher, n: usize) {
-        round(bencher, n, false);
+        round(bencher, n, How::Direct);
     }
 
     #[divan::bench(args = [100, 880, 2000])]
     fn corked(bencher: Bencher, n: usize) {
-        round(bencher, n, true);
+        round(bencher, n, How::Corked);
+    }
+
+    #[divan::bench(args = [100, 880, 2000, 3000])]
+    fn broadcast(bencher: Bencher, n: usize) {
+        round(bencher, n, How::Broadcast);
     }
 }

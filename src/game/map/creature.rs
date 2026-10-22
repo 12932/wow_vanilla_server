@@ -5,7 +5,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ahash::AHashSet;
 use rand::RngExt;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::{
@@ -291,7 +290,7 @@ pub struct Creature {
     pub last_waypoint: Option<usize>,
     pub motion: Motion,
     /// Players whose clients know this creature.
-    pub observers: AHashSet<Guid>,
+    pub observers: crate::game::map::observers::Observers,
     /// Awake though no one sees it and it isn't fighting, so that it moves
     /// (`map::awake`): Rexxar and his company running into a city from out
     /// of sight (`champions.rs`). Set through `Map::keep_awake`.
@@ -447,7 +446,7 @@ impl Creature {
             waypoint: 0,
             last_waypoint: None,
             motion: Motion::Idle { until: None },
-            observers: AHashSet::new(),
+            observers: Default::default(),
             keep_awake: false,
             vis_anchor: position,
             cell: cell_of(position.x, position.y),

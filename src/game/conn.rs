@@ -39,22 +39,127 @@ pub fn encode<M: ServerMessage>(m: &M) -> Option<Arc<[u8]>> {
     Some(Arc::from(buf))
 }
 
-/// What a queue carries: a frame, or a cork's frames for the client, in
-/// order ([`Cork`]).
+/// What a queue carries: a frame, or what a cork kept for the client
+/// ([`Cork`]).
 enum Item {
     One(Arc<[u8]>),
-    Many(Vec<Arc<[u8]>>),
+    Corked(Corked),
+}
+
+/// A cork's frames for one client: the map's broadcasts it is among, and
+/// what was sent to it alone, each of those before the broadcast its `u32`
+/// numbers (all of them, if past the last).
+struct Corked {
+    log: Option<Arc<Vec<Broadcast>>>,
+    /// The client's index among the map's ([`Clients`]).
+    me: usize,
+    direct: Vec<(u32, Arc<[u8]>)>,
+}
+
+impl Corked {
+    /// Every frame, in the order sent.
+    fn for_each(self, mut f: impl FnMut(Arc<[u8]>)) {
+        let mut direct = self.direct.into_iter().peekable();
+        if let Some(log) = &self.log {
+            for (k, b) in log.iter().enumerate() {
+                while let Some((_, d)) = direct.next_if(|(seq, _)| *seq as usize <= k) {
+                    f(d);
+                }
+                if b.to.contains(self.me) {
+                    f(b.frame.clone());
+                }
+            }
+        }
+        for (_, d) in direct {
+            f(d);
+        }
+    }
+}
+
+/// A set of a map's clients, by their index on the map (the map's own
+/// numbering, `map::ClientTable`): a bit each.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Clients(Vec<u64>);
+
+impl Clients {
+    pub fn insert(&mut self, i: usize) {
+        let w = i / 64;
+        if self.0.len() <= w {
+            self.0.resize(w + 1, 0);
+        }
+        self.0[w] |= 1 << (i % 64);
+    }
+
+    pub fn remove(&mut self, i: usize) {
+        if let Some(w) = self.0.get_mut(i / 64) {
+            *w &= !(1 << (i % 64));
+        }
+    }
+
+    pub fn contains(&self, i: usize) -> bool {
+        self.0.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|w| *w == 0)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.iter().map(|w| w.count_ones() as usize).sum()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The indices, in order.
+    pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().flat_map(|(w, &word)| {
+            let mut word = word;
+            std::iter::from_fn(move || {
+                if word == 0 {
+                    return None;
+                }
+                let bit = word.trailing_zeros() as usize;
+                word &= word - 1;
+                Some(w * 64 + bit)
+            })
+        })
+    }
+
+    /// Whether any of `other` is here too.
+    fn meets(&self, other: &Clients) -> bool {
+        self.0.iter().zip(&other.0).any(|(a, b)| a & b != 0)
+    }
+
+    /// These, but not `other`'s.
+    fn without(&self, other: &Clients) -> Clients {
+        let mut out = self.clone();
+        for (a, b) in out.0.iter_mut().zip(&other.0) {
+            *a &= !b;
+        }
+        out
+    }
+}
+
+/// A frame to a set of a map's clients.
+struct Broadcast {
+    frame: Arc<[u8]>,
+    to: Arc<Clients>,
 }
 
 /// While one is alive, what this thread queues for a client waits, in the
 /// order it was sent, and goes in one push a client when the last cork on
-/// the thread is dropped (or at [`uncork`]): a map's burst of events and
-/// its update hand each observer one batch, not a push (and a wake of its
-/// writer) a packet. Only the push waits: the budget is taken, a hold
-/// keeps what it keeps and a closed client takes nothing, at the send, as
-/// uncorked. What other threads send isn't corked, so a map uncorks
-/// before it hands a client, or word of one, to another task (see
-/// `map::run`).
+/// the thread is dropped (or at [`uncork`]): a map's run of movement packets
+/// and its update hand each client one batch, not a push (and a wake of its
+/// writer) a packet. A map's broadcast ([`broadcast`]) is kept once, with
+/// the set of clients it goes to, and each of them takes its share of the
+/// cork's broadcasts in its writer: the map's cost is a packet's, not a
+/// packet's times its observers. Only the push waits: the budget is taken
+/// (a broadcast's at the push), a hold keeps what it keeps and a closed
+/// client takes nothing, as uncorked. What other threads send isn't
+/// corked, so a map uncorks before it hands a client, or word of one, to
+/// another task (see `map::run`).
 pub struct Cork {
     _not_send: std::marker::PhantomData<*const ()>,
 }
@@ -89,68 +194,212 @@ pub fn uncork() {
     if !CORKED.get() {
         return;
     }
-    let slots = CORK.with_borrow_mut(|c| {
-        c.index.clear();
-        std::mem::take(&mut c.slots)
+    let (slots, log, mut bytes) = CORK.with_borrow_mut(|c| {
+        c.by_address.clear();
+        c.by_index.clear();
+        c.reached.clear();
+        c.held.clear();
+        c.gone.clear();
+        c.table = 0;
+        let mut bytes = std::mem::take(&mut c.bytes);
+        bytes.clear();
+        (
+            std::mem::take(&mut c.slots),
+            std::mem::take(&mut c.log),
+            bytes,
+        )
     });
-    let mut emptied = Vec::with_capacity(slots.len());
-    for (inner, mut frames) in slots {
-        if !inner.shared.closed.load(Ordering::Acquire) {
-            let item = if frames.len() == 1 {
-                Item::One(frames.pop().expect("one"))
-            } else {
-                Item::Many(std::mem::take(&mut frames))
-            };
-            let _ = inner.tx.send(item);
-        }
-        frames.clear();
-        emptied.push((inner, frames));
+    if slots.is_empty() {
+        return;
     }
-    // The slots' vectors kept for the next cork (the clients let go).
-    CORK.with_borrow_mut(|c| {
-        for (_, frames) in emptied {
-            if frames.capacity() > 0 && c.spare.len() < MAX_SPARE {
-                c.spare.push(frames);
+    // What each client is due of the broadcasts, for its budget.
+    bytes.resize(slots.len(), 0);
+    let log = if log.is_empty() {
+        None
+    } else {
+        let mut slot_of = vec![u32::MAX; 0];
+        for (s, slot) in slots.iter().enumerate() {
+            if let Some(i) = slot.index {
+                if slot_of.len() <= i {
+                    slot_of.resize(i + 1, u32::MAX);
+                }
+                slot_of[i] = s as u32;
             }
         }
-    });
+        for b in &log {
+            let n = b.frame.len();
+            for i in b.to.iter() {
+                if let Some(&s) = slot_of.get(i)
+                    && s != u32::MAX
+                {
+                    bytes[s as usize] += n;
+                }
+            }
+        }
+        Some(Arc::new(log))
+    };
+    for (s, slot) in slots.into_iter().enumerate() {
+        let out = Outbound { inner: slot.inner };
+        if out.inner.shared.closed.load(Ordering::Acquire) {
+            continue;
+        }
+        let due = bytes[s];
+        if due > 0 && !out.take_budget(due) {
+            out.overflow();
+            continue;
+        }
+        let item = match (due, slot.direct.len()) {
+            (0, 0) => continue,
+            (0, 1) => Item::One(slot.direct.into_iter().next().expect("one").1),
+            _ => Item::Corked(Corked {
+                log: if due > 0 { log.clone() } else { None },
+                me: slot.index.unwrap_or(usize::MAX),
+                direct: slot.direct,
+            }),
+        };
+        let _ = out.inner.tx.send(item);
+    }
+    CORK.with_borrow_mut(|c| c.bytes = bytes);
 }
 
-/// The vectors a thread's cork keeps for its next batches.
-const MAX_SPARE: usize = 4096;
+/// Send `frame` to the map's clients `to`, `client` naming the queue of
+/// each by its index (none for one no longer there), and `table` the map
+/// whose numbering `to` is in. Corked, it is kept once, with the set, and
+/// each client takes it in its writer; a held client's goes into its hold
+/// at once. Uncorked, each is sent it now.
+pub fn broadcast(
+    table: usize,
+    frame: &Arc<[u8]>,
+    to: &Arc<Clients>,
+    client: impl Fn(usize) -> Option<Outbound>,
+) {
+    if !CORKED.get() {
+        for i in to.iter() {
+            if let Some(out) = client(i) {
+                out.send_frame(frame.clone());
+            }
+        }
+        return;
+    }
+    if CORK.with_borrow(|c| c.table != 0 && c.table != table) {
+        // Another map's numbering: what was kept in the last goes first.
+        uncork();
+    }
+    let held = CORK.with_borrow_mut(|c| {
+        c.table = table;
+        // Those it reaches for the first time since the push: their
+        // queues, held or gone.
+        for (w, &word) in to.0.iter().enumerate() {
+            let known = c.reached.0.get(w).copied().unwrap_or(0);
+            let mut new = word & !known;
+            while new != 0 {
+                let i = w * 64 + new.trailing_zeros() as usize;
+                new &= new - 1;
+                c.reached.insert(i);
+                match client(i) {
+                    Some(out) => {
+                        if out.inner.holding.load(Ordering::Acquire) {
+                            c.held.insert(i);
+                        }
+                        let s = c.slot(&out.inner);
+                        c.slots[s].index = Some(i);
+                        c.by_index.insert(i, s);
+                    }
+                    None => c.gone.insert(i),
+                }
+            }
+        }
+        let mut held = Vec::new();
+        let to = if to.meets(&c.held) || to.meets(&c.gone) {
+            for i in to.iter().filter(|i| c.held.contains(*i)) {
+                held.push(c.slots[c.by_index[&i]].inner.clone());
+            }
+            Arc::new(to.without(&c.held).without(&c.gone))
+        } else {
+            to.clone()
+        };
+        if !to.is_empty() {
+            c.log.push(Broadcast {
+                frame: frame.clone(),
+                to,
+            });
+        }
+        held
+    });
+    // Into their holds, behind what waits there.
+    for inner in held {
+        Outbound { inner }.send_frame(frame.clone());
+    }
+}
 
 thread_local! {
     static CORKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static CORK: std::cell::RefCell<CorkState> = std::cell::RefCell::new(CorkState::default());
 }
 
-/// A client corked, and its frames.
-type Slot = (Arc<OutboundInner>, Vec<Arc<[u8]>>);
+/// A client corked: what was sent to it alone, and its index among the
+/// map's if a broadcast reached it.
+struct Slot {
+    inner: Arc<OutboundInner>,
+    index: Option<usize>,
+    direct: Vec<(u32, Arc<[u8]>)>,
+}
 
 #[derive(Default)]
 struct CorkState {
     depth: usize,
-    /// Each client corked, in the order first sent to, and its frames.
+    /// Each client corked, in the order first sent to.
     slots: Vec<Slot>,
     /// A client's slot, by its queue's address.
-    index: ahash::AHashMap<usize, usize>,
-    spare: Vec<Vec<Arc<[u8]>>>,
+    by_address: ahash::AHashMap<usize, usize>,
+    /// A client's slot, by its index among the map's.
+    by_index: ahash::AHashMap<usize, usize>,
+    /// The broadcasts, in order.
+    log: Vec<Broadcast>,
+    /// The map whose numbering the broadcasts are in.
+    table: usize,
+    /// The indices a broadcast has reached; of those, the held and the
+    /// gone.
+    reached: Clients,
+    held: Clients,
+    gone: Clients,
+    /// Kept between pushes, for the budget's count.
+    bytes: Vec<usize>,
 }
 
 impl CorkState {
-    fn push(&mut self, inner: &Arc<OutboundInner>, frame: Arc<[u8]>) {
+    fn slot(&mut self, inner: &Arc<OutboundInner>) -> usize {
         let key = Arc::as_ptr(inner) as usize;
-        let slot = match self.index.get(&key) {
-            Some(&i) => i,
-            None => {
-                let i = self.slots.len();
-                let frames = self.spare.pop().unwrap_or_else(|| Vec::with_capacity(16));
-                self.slots.push((inner.clone(), frames));
-                self.index.insert(key, i);
-                i
+        if let Some(&s) = self.by_address.get(&key) {
+            return s;
+        }
+        let s = self.slots.len();
+        self.slots.push(Slot {
+            inner: inner.clone(),
+            index: None,
+            direct: Vec::new(),
+        });
+        self.by_address.insert(key, s);
+        s
+    }
+
+    fn push(&mut self, inner: &Arc<OutboundInner>, frame: Arc<[u8]>) {
+        let s = self.slot(inner);
+        let seq = self.log.len() as u32;
+        self.slots[s].direct.push((seq, frame));
+    }
+
+    /// A client's hold began or ended: its broadcasts from now go into
+    /// the hold, or into the log again.
+    fn held(&mut self, inner: &Arc<OutboundInner>, on: bool) {
+        let key = Arc::as_ptr(inner) as usize;
+        if let Some(i) = self.by_address.get(&key).and_then(|&s| self.slots[s].index) {
+            if on {
+                self.held.insert(i);
+            } else {
+                self.held.remove(i);
             }
-        };
-        self.slots[slot].1.push(frame);
+        }
     }
 }
 
@@ -345,7 +594,7 @@ impl Frames {
     fn unpack(&mut self, item: Item) {
         match item {
             Item::One(f) => self.batch.push_back(f),
-            Item::Many(v) => self.batch.extend(v),
+            Item::Corked(c) => c.for_each(|f| self.batch.push_back(f)),
         }
     }
 
@@ -532,7 +781,11 @@ impl Outbound {
     /// for, so that nothing it sends naming those objects arrives before
     /// them. True if the client wasn't held already.
     pub fn hold(&self) -> bool {
-        !self.inner.holding.swap(true, Ordering::AcqRel)
+        let fresh = !self.inner.holding.swap(true, Ordering::AcqRel);
+        if fresh && CORKED.get() {
+            CORK.with_borrow_mut(|c| c.held(&self.inner, true));
+        }
+        fresh
     }
 
     /// Whether frames are waiting on a hold.
@@ -551,6 +804,9 @@ impl Outbound {
             self.enqueue(frame);
         }
         self.inner.holding.store(false, Ordering::Release);
+        if CORKED.get() {
+            CORK.with_borrow_mut(|c| c.held(&self.inner, false));
+        }
     }
 
     pub fn send<M: ServerMessage>(&self, m: &M) -> bool {
@@ -811,12 +1067,10 @@ pub async fn run_writer<W>(
                     drained += buf.len();
                     written += put(&mut scratch, &mut encrypter, &buf);
                 }
-                Item::Many(bufs) => {
-                    for buf in bufs {
-                        drained += buf.len();
-                        written += put(&mut scratch, &mut encrypter, &buf);
-                    }
-                }
+                Item::Corked(c) => c.for_each(|buf| {
+                    drained += buf.len();
+                    written += put(&mut scratch, &mut encrypter, &buf);
+                }),
             }
         }
         shared.queued.fetch_sub(drained, Ordering::Relaxed);
@@ -1336,6 +1590,92 @@ mod tests {
         assert_eq!(opcodes(&mut rx), [7]);
     }
 
+    fn clients(of: &[usize]) -> Arc<Clients> {
+        let mut c = Clients::default();
+        for i in of {
+            c.insert(*i);
+        }
+        Arc::new(c)
+    }
+
+    /// A broadcast is kept once; each client gets it in its place among
+    /// what was sent it alone, and the budget is taken for it at the push.
+    #[test]
+    fn a_broadcast_reaches_each_client_in_its_place() {
+        let queues: Vec<(Outbound, Frames)> = (0..3).map(|_| Outbound::detached()).collect();
+        let table = |i: usize| queues.get(i).map(|(o, _)| o.clone());
+        {
+            let _cork = Cork::new();
+            queues[0].0.send_frame(frame(1, &[0; 4]));
+            broadcast(7, &frame(2, &[0; 4]), &clients(&[0, 2]), table);
+            queues[0].0.send_frame(frame(3, &[0; 4]));
+            queues[1].0.send_frame(frame(3, &[0; 4]));
+            broadcast(7, &frame(4, &[0; 4]), &clients(&[0, 1, 2, 9]), table);
+            assert_eq!(
+                queues[2].0.queued_bytes(),
+                0,
+                "a broadcast's budget at the push"
+            );
+        }
+        let mut q = queues;
+        assert_eq!(q[2].0.queued_bytes(), 16);
+        assert_eq!(opcodes(&mut q[0].1), [1, 2, 3, 4]);
+        assert_eq!(opcodes(&mut q[1].1), [3, 4]);
+        assert_eq!(opcodes(&mut q[2].1), [2, 4]);
+        // Uncorked, each is sent it at once.
+        let table = |i: usize| q.get(i).map(|(o, _)| o.clone());
+        broadcast(7, &frame(5, &[0; 4]), &clients(&[1]), table);
+        assert_eq!(opcodes(&mut q[1].1), [5]);
+    }
+
+    /// A broadcast to a held client goes into its hold, before the hold or
+    /// after it into the log, as uncorked.
+    #[test]
+    fn a_broadcast_keeps_a_holds_order() {
+        let (a, mut ra) = Outbound::detached();
+        let table = |i: usize| (i == 0).then(|| a.clone());
+        let cork = Cork::new();
+        broadcast(1, &frame(1, &[0; 4]), &clients(&[0]), table);
+        assert!(a.hold());
+        broadcast(1, &frame(3, &[0; 4]), &clients(&[0]), table);
+        a.send_frame(frame(4, &[0; 4]));
+        assert!(a.has_held());
+        a.release(vec![frame(2, &[0; 4])]);
+        broadcast(1, &frame(5, &[0; 4]), &clients(&[0]), table);
+        drop(cork);
+        assert_eq!(opcodes(&mut ra), [1, 2, 3, 4, 5]);
+        // Held before the cork's first broadcast reaches it.
+        let (b, mut rb) = Outbound::detached();
+        let table = |i: usize| (i == 0).then(|| b.clone());
+        assert!(b.hold());
+        {
+            let _cork = Cork::new();
+            broadcast(1, &frame(7, &[0; 4]), &clients(&[0]), table);
+            assert!(rb.rx.is_empty() && b.has_held());
+        }
+        b.release(vec![frame(6, &[0; 4])]);
+        assert_eq!(opcodes(&mut rb), [6, 7]);
+    }
+
+    /// Over budget at the push, a client is disconnected; another map's
+    /// broadcast pushes the first map's before it.
+    #[test]
+    fn a_broadcast_over_budget_disconnects_and_maps_dont_mix() {
+        let (small, mut rs) = queue(10);
+        let (big, mut rb) = Outbound::detached();
+        {
+            let _cork = Cork::new();
+            let one = |i: usize| (i == 0).then(|| small.clone());
+            broadcast(1, &frame(1, &[0; 4]), &clients(&[0]), one);
+            broadcast(1, &frame(2, &[0; 4]), &clients(&[0]), one);
+            let other = |i: usize| (i == 0).then(|| big.clone());
+            broadcast(2, &frame(3, &[0; 4]), &clients(&[0]), other);
+            assert!(small.is_closed(), "pushed, and over");
+        }
+        assert!(rs.try_recv().is_none());
+        assert_eq!(opcodes(&mut rb), [3]);
+    }
+
     #[test]
     fn a_held_client_over_budget_is_disconnected() {
         let (out, _frames) = queue(10);
@@ -1395,7 +1735,11 @@ mod tests {
         while let Ok(item) = frames.rx.try_recv() {
             pongs += match item {
                 Item::One(_) => 1,
-                Item::Many(v) => v.len(),
+                Item::Corked(c) => {
+                    let mut n = 0;
+                    c.for_each(|_| n += 1);
+                    n
+                }
             };
         }
         assert_eq!(pongs, 1 + max, "the first, and those let through");

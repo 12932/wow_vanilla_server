@@ -18,7 +18,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashMap;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::Vector3d;
 
@@ -117,7 +117,7 @@ pub fn convert(map: &mut Map, owner: Guid, lies: Duration, dynamic_flags: u32) -
         fields,
         position,
         orientation,
-        observers: AHashSet::new(),
+        observers: Default::default(),
         cell,
     };
     if map.key.instance == 0 {
@@ -190,7 +190,7 @@ fn bones_of(r: &BonesRow) -> Corpse {
         fields: f,
         position,
         orientation: r.orientation,
-        observers: AHashSet::new(),
+        observers: Default::default(),
         cell: cell_of(r.x, r.y),
     }
 }

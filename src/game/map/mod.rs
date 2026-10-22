@@ -67,6 +67,7 @@ pub mod nav;
 pub mod necrotic_camps;
 pub mod npc;
 pub mod objects;
+pub mod observers;
 pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;
@@ -451,6 +452,8 @@ pub struct Map {
     cfg_generation: u64,
     pub handle: MapHandle,
     pub players: AHashMap<Guid, Player>,
+    /// The players' clients, numbered for the sets a broadcast goes to.
+    pub clients: observers::ClientTable,
     pub creatures: Slab<Creature>,
     pub creature_by_guid: AHashMap<Guid, usize>,
     pub gameobjects: Slab<GameObject>,
@@ -1137,6 +1140,7 @@ impl Map {
             gameobjects: Slab::new(),
             gameobject_by_guid: AHashMap::new(),
             touched_objects: Vec::new(),
+            clients: Default::default(),
             corpses: AHashMap::new(),
             bones: Vec::new(),
             dead_creatures: Vec::new(),
@@ -1532,8 +1536,10 @@ impl Map {
             self.remove_observer(known, guid);
         }
         // What was corked goes before they go: to another map, which sends
-        // them its own, or out of the world, their session told.
+        // them its own, or out of the world, their session told; and their
+        // index is let go only then.
         crate::game::conn::uncork();
+        self.clients.release(guid);
         Some(p)
     }
 
@@ -2511,7 +2517,7 @@ impl Map {
     }
 
     /// The players whose clients know `object`.
-    pub fn observers(&self, object: Guid) -> Option<&ahash::AHashSet<Guid>> {
+    pub fn observers(&self, object: Guid) -> Option<&observers::Observers> {
         if guid::is_player(object) {
             self.players.get(&object).map(|p| &p.observers)
         } else if guid::is_unit(object) {
@@ -2527,7 +2533,7 @@ impl Map {
         }
     }
 
-    pub fn observers_mut(&mut self, object: Guid) -> Option<&mut ahash::AHashSet<Guid>> {
+    pub fn observers_mut(&mut self, object: Guid) -> Option<&mut observers::Observers> {
         if guid::is_player(object) {
             self.players.get_mut(&object).map(|p| &mut p.observers)
         } else if guid::is_unit(object) {
@@ -2562,11 +2568,18 @@ impl Map {
         let Some(observers) = self.observers(object) else {
             return;
         };
-        for o in observers {
-            if let Some(p) = self.players.get(o) {
-                p.outbound.send_frame(frame.clone());
-            }
+        if observers.is_empty() {
+            return;
         }
+        self.broadcast(frame, &observers.clients(&self.clients));
+    }
+
+    /// `frame` to the clients `to` ([`crate::game::conn::broadcast`]).
+    pub fn broadcast(&self, frame: &Arc<[u8]>, to: &Arc<crate::game::conn::Clients>) {
+        crate::game::conn::broadcast(self.clients.id, frame, to, |i| {
+            let g = self.clients.guid(i)?;
+            self.players.get(&g).map(|p| p.outbound.clone())
+        });
     }
 
     /// A player's movement packet to those who see them: as
@@ -2591,14 +2604,16 @@ impl Map {
         let at = p.position();
         let far = yards * yards;
         let p = &self.players[&mover];
-        for o in &p.observers {
-            if let Some(o) = self.players.get(o) {
+        let mut to = crate::game::conn::Clients::default();
+        for g in &p.observers {
+            if let Some(o) = self.players.get(g) {
                 let d = o.position();
                 if (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= far {
-                    o.outbound.send_frame(frame.clone());
+                    to.insert(self.clients.index_of(*g));
                 }
             }
         }
+        self.broadcast(frame, &Arc::new(to));
     }
 
     /// As [`Map::send_to_observers`], but not to `except`: a moved unit's
@@ -2620,11 +2635,16 @@ impl Map {
         let Some(observers) = self.observers(object) else {
             return;
         };
-        for o in observers.iter().filter(|o| **o != except) {
-            if let Some(p) = self.players.get(o) {
-                p.outbound.send_frame(frame.clone());
-            }
+        if observers.is_empty() {
+            return;
         }
+        let mut to = observers.clients(&self.clients);
+        if observers.contains(&except) {
+            let mut but = (*to).clone();
+            but.remove(self.clients.index_of(except));
+            to = Arc::new(but);
+        }
+        self.broadcast(frame, &to);
     }
 
     /// Players within `radius` yards of `at`, in three dimensions (Thistle

@@ -223,7 +223,7 @@ pub struct Player {
     /// Objects the client has been sent and not told to forget.
     pub known: AHashSet<Guid>,
     /// Players whose clients know this one.
-    pub observers: AHashSet<Guid>,
+    pub observers: crate::game::map::observers::Observers,
     /// Whose marks were on them as their observers were last told
     /// (`map::views`).
     pub views_told: crate::game::map::views::Viewers,
@@ -361,7 +361,7 @@ impl Player {
             items,
             spells: row.spells.clone(),
             known: AHashSet::new(),
-            observers: AHashSet::new(),
+            observers: Default::default(),
             views_told: Default::default(),
             vis_anchor: position,
             cell: cell_of(position.x, position.y),

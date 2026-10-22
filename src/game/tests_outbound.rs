@@ -161,3 +161,44 @@ async fn distant_observers_get_one_in_n_heartbeats_and_every_other_move() {
         "far off"
     );
 }
+
+/// The kept sets follow who sees whom: one who left gets no more, their
+/// index going to the next to come, who is told of the mover's moves only
+/// once introduced to them.
+#[tokio::test]
+async fn a_broadcast_follows_comings_and_goings() {
+    let realm = realm(harness::test_config());
+    let mut a = Client::connect(&realm, "OUTA");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "OUTB");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    b.sees(ga).await;
+    a.sees(gb).await;
+    let map = realm.registry.online(ga).unwrap().map();
+    let at = on(&map, move |m| m.players[&ga].position()).await;
+    run(&a, at).await;
+    assert_eq!(moves_until_stop(&mut b, ga).await, RUN);
+    let index = on(&map, move |m| m.clients.index_of(gb)).await;
+    b.disconnect();
+    harness::offline(&realm, gb).await;
+    run(&a, at).await;
+    let mut c = Client::connect(&realm, "OUTC");
+    let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
+    // Told of her, then of her moves.
+    let first = c
+        .wait_for("Alice, or her moves", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(h) if h.guid == ga => Some(false),
+            ServerOpcodeMessage::MSG_MOVE_STOP(h) if h.guid == ga => Some(false),
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_)
+            | ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(_) => Some(true),
+            _ => None,
+        })
+        .await;
+    assert!(first, "a move before her create");
+    c.sees(ga).await;
+    c.clear();
+    run(&a, at).await;
+    assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
+    let carol = on(&map, move |m| m.clients.index_of(gc)).await;
+    assert_eq!(carol, index, "Bob's index, Carol's now");
+}
