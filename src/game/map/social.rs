@@ -418,8 +418,12 @@ pub fn handle(map: &mut Map, g: Guid, msg: C) -> Option<C> {
         C::CMSG_GROUP_INVITE(m) => groups::invite(&realm, &me, &m.name),
         C::CMSG_GROUP_ACCEPT => groups::accept(&realm, &me),
         C::CMSG_GROUP_DECLINE => groups::decline(&realm, &me),
-        C::CMSG_GROUP_UNINVITE(m) => groups::uninvite(&realm, &me, None, &m.name),
-        C::CMSG_GROUP_UNINVITE_GUID(m) => groups::uninvite(&realm, &me, Some(m.guid), ""),
+        C::CMSG_GROUP_UNINVITE(m) => {
+            groups::uninvite(&realm, &me, None, &m.name, map.battleground.is_some())
+        }
+        C::CMSG_GROUP_UNINVITE_GUID(m) => {
+            groups::uninvite(&realm, &me, Some(m.guid), "", map.battleground.is_some())
+        }
         C::CMSG_GROUP_SET_LEADER(m) => groups::set_leader(&realm, &me, m.guid),
         C::CMSG_GROUP_DISBAND => groups::leave(&realm, &me),
         C::CMSG_LOOT_METHOD(m) => groups::loot_method(&realm, &me, &m),

@@ -713,6 +713,16 @@ settings! {
 }
 
 settings! {
+    /// Groups kept across restarts.
+    pub struct GroupsConfig in "groups" {
+        /// Hours a group may go with no member online before it is
+        /// deleted, in memory and in the store; a member logging in before
+        /// then keeps it.
+        expire_offline_hours: u64 = 24, Clamp(1.0, 87_600.0), Live, "";
+    }
+}
+
+settings! {
     /// Quests: which givers show what.
     pub struct QuestsConfig in "quests" {
         /// Levels a player may be short of a quest's least level and still
@@ -1042,6 +1052,7 @@ pub struct ServerConfig {
     pub creatures: CreaturesConfig,
     pub guards: GuardsConfig,
     pub players: PlayersConfig,
+    pub groups: GroupsConfig,
     pub environment: EnvironmentConfig,
     pub quests: QuestsConfig,
     pub spells: SpellsConfig,
@@ -1068,6 +1079,7 @@ pub const SECTIONS: &[&Section] = &[
     &CreaturesConfig::SECTION,
     &GuardsConfig::SECTION,
     &PlayersConfig::SECTION,
+    &GroupsConfig::SECTION,
     &EnvironmentConfig::SECTION,
     &QuestsConfig::SECTION,
     &SpellsConfig::SECTION,

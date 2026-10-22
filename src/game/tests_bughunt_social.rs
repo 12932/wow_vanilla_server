@@ -680,3 +680,191 @@ async fn an_auction_run_out_takes_no_bid_nor_cancel() {
     let money = on_map(&realm, move |m| m.players[&ga].money()).await;
     assert_eq!(money, 10_000, "no buyout");
 }
+
+/// The money on a mail went to its taker whole, past the most a player may
+/// hold, and what was past it was lost (the review's finding; the user's
+/// call 6). What fits is taken and the rest left in the mail, in memory,
+/// in the store and in the list the client is sent; with no room, nothing.
+#[tokio::test]
+async fn mail_money_past_the_cap_is_left_in_the_mail() {
+    use crate::game::map::inventory::MAX_MONEY;
+    type Two = SMSG_SEND_MAIL_RESULT_MailResultTwo;
+    const GOLD: u32 = 10_000;
+    let realm = harness::realm();
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let id = mail::post(
+        &realm,
+        mail::Mail {
+            kind: mail::NORMAL,
+            sender: 99,
+            receiver: guid::counter(gb),
+            subject: "Takings".into(),
+            money: 50 * GOLD,
+            deliver_at: mail::now() - 1,
+            expires_at: mail::now() + 30 * mail::DAY,
+            ..Default::default()
+        },
+    );
+    set_money(&realm, gb, MAX_MONEY - 10 * GOLD).await;
+    async fn take(b: &mut Client, id: u32) -> Two {
+        b.clear();
+        b.send(CMSG_MAIL_TAKE_MONEY {
+            mailbox: Guid::zero(),
+            mail_id: id,
+        })
+        .await;
+        b.wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => match r.action {
+                SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2 } => Some(result2),
+                _ => None,
+            },
+            _ => None,
+        })
+        .await
+    }
+    let r = take(&mut b, id).await;
+    assert!(matches!(r, Two::Ok), "{r:?}");
+    let listed = b
+        .wait_for("SMSG_MAIL_LIST_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(l) => l
+                .mails
+                .iter()
+                .find(|m| m.message_id == id)
+                .map(|m| m.money.as_int()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(listed, 40 * GOLD, "the list sent shows what is left");
+    let money = on_map(&realm, move |m| m.players[&gb].money()).await;
+    assert_eq!(money, MAX_MONEY, "Bob takes what fits");
+    let kept = realm.social.mail.lock().mails[&id].money;
+    assert_eq!(kept, 40 * GOLD, "the rest stays in the mail");
+    let stored = realm
+        .store
+        .record(mail::KIND_MAIL, u64::from(id))
+        .await
+        .expect("the mail stored");
+    let stored: mail::Mail = serde_json::from_str(&stored).expect("a mail");
+    assert_eq!(stored.money, 40 * GOLD, "and in the store");
+
+    // At the cap: nothing taken, an error.
+    let r = take(&mut b, id).await;
+    assert!(matches!(r, Two::ErrInternalError), "{r:?}");
+    assert_eq!(realm.social.mail.lock().mails[&id].money, 40 * GOLD);
+}
+
+/// Groups were deleted only as their roster fell to one: a group whose
+/// members never came back stayed in memory and in the store for good,
+/// and the sweep looked at it every five seconds (the review's finding;
+/// the user's call 7). A group with no member online for `[groups]
+/// expire_offline_hours` (24) goes; one a member came back to before then
+/// stays. The sweep's clock is skipped ahead, not waited on.
+#[tokio::test]
+async fn a_group_with_no_one_online_for_a_day_is_deleted() {
+    use crate::game::social::groups::{self, KIND_GROUP};
+    const HOUR: i64 = 3600;
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Bob").await;
+    let id = realm.social.groups.lock().group_of(ga).expect("grouped").id;
+    let kept = |realm: &Arc<Realm>| realm.social.groups.lock().get(id).is_some();
+    async fn stored(realm: &Arc<Realm>, id: u32) -> Option<String> {
+        on_map(realm, |_| ()).await;
+        realm.store.record(KIND_GROUP, u64::from(id)).await
+    }
+    assert!(stored(&realm, id).await.is_some(), "the group is stored");
+
+    // With someone online, never.
+    groups::expire_empty(&realm, mail::now() + 100 * HOUR);
+    assert!(kept(&realm), "kept while Alice and Bob are on");
+
+    a.disconnect();
+    harness::offline(&realm, ga).await;
+    b.disconnect();
+    harness::offline(&realm, gb).await;
+    let gone_at = mail::now();
+    groups::expire_empty(&realm, gone_at + 23 * HOUR);
+    assert!(kept(&realm), "kept within the day");
+
+    // Bob back within the day keeps it, past the day.
+    let mut b = Client::connect(&realm, "B");
+    b.login(gb).await;
+    groups::expire_empty(&realm, gone_at + 25 * HOUR);
+    assert!(kept(&realm), "Bob's return keeps it");
+    b.disconnect();
+    harness::offline(&realm, gb).await;
+    let back_at = mail::now();
+    groups::expire_empty(&realm, back_at + 23 * HOUR);
+    assert!(kept(&realm), "a day counted from Bob's going again");
+
+    // A day from the last one going: gone, in memory and in the store.
+    groups::expire_empty(&realm, back_at + 24 * HOUR);
+    assert!(!kept(&realm), "deleted a day after");
+    assert!(
+        realm.social.groups.lock().group_of(ga).is_none(),
+        "Alice is in none"
+    );
+    assert!(stored(&realm, id).await.is_none(), "and out of the store");
+}
+
+/// Group commands from a battleground act on the group the player is in
+/// there, its raid, as mangos's handlers take `GetGroup()` (the user's
+/// call 8): a raid's leader hands the raid's lead, not their own group's.
+/// No one is put out of a group from a battleground, their own one
+/// neither: mangos's `CanUninviteFromGroup` asks whether they lead the
+/// raid ("not leader"), then refuses them as in a battleground ("not in
+/// group"). wvs said "not leader" to the raid's leader too.
+#[tokio::test]
+async fn a_kick_from_a_battleground_leaves_ones_own_group_alone() {
+    use crate::game::social::groups;
+    type R = PartyResult;
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Bob").await;
+    let own = realm.social.groups.lock().group_of(ga).expect("grouped").id;
+    // Alice into a match's raid, its leader; Carol after her.
+    groups::bg_joined(&realm, ga, "Alice".into(), 1, 0);
+    groups::bg_joined(&realm, gc, "Carol".into(), 1, 0);
+    async fn kick(c: &mut Client, name: &str) -> R {
+        c.clear();
+        c.send(CMSG_GROUP_UNINVITE { name: name.into() }).await;
+        c.wait_for("SMSG_PARTY_COMMAND_RESULT", |m| match m {
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r) => Some(r.result),
+            _ => None,
+        })
+        .await
+    }
+    assert_eq!(kick(&mut a, "Bob").await, R::NotInGroup, "Alice, in a match");
+    assert_eq!(kick(&mut c, "Alice").await, R::NotLeader, "Carol leads nothing");
+    {
+        let groups = realm.social.groups.lock();
+        let mine = groups.get(own).expect("Alice's own group");
+        assert!(mine.is_member(gb), "Bob stays in Alice's group");
+        assert!(groups.original_of(ga).is_some_and(|g| g.id == own));
+    }
+    // The lead handed from the match goes with the raid's.
+    a.send(CMSG_GROUP_SET_LEADER { guid: gc }).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let led = realm.social.groups.lock().group_of(gc).map(|g| g.leader);
+        if led == Some(gc) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the raid's lead to Carol");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        realm.social.groups.lock().get(own).map(|g| g.leader),
+        Some(ga),
+        "Alice still leads her own group"
+    );
+}

@@ -13,6 +13,7 @@ use crate::game::Realm;
 use crate::game::fields::*;
 use crate::game::guid;
 use crate::game::map::Map;
+use crate::game::map::inventory::MAX_MONEY;
 use crate::game::registry::Team;
 use crate::game::social::send_to;
 use crate::game::store::{ItemRow, Records};
@@ -556,20 +557,40 @@ fn own_mail(mails: &mut Mails, g: Guid, id: u32) -> Option<&mut Mail> {
         .filter(|m| m.receiver == guid::counter(g) && m.deliver_at <= now())
 }
 
-/// `CMSG_MAIL_TAKE_MONEY`.
+/// `CMSG_MAIL_TAKE_MONEY`: what fits under `MAX_MONEY`, the rest left in
+/// the mail (mangos's `ModifyMoney` loses it; the user's call). With no
+/// room at all, nothing is taken and the client is told of an internal
+/// error: 1.12's mail results have no gold cap's (mangos sends that one for
+/// a mail it can't take).
 pub fn take_money(map: &mut Map, g: Guid, id: u32) {
     let realm = map.realm.clone();
     let mut mails = realm.social.mail.lock();
     let Some(m) = own_mail(&mut mails, g, id) else {
         return;
     };
-    let money = std::mem::take(&mut m.money);
-    if money > 0 {
+    let Some(have) = map.players.get(&g).map(|p| p.money()) else {
+        return;
+    };
+    let take = m.money.min(MAX_MONEY.saturating_sub(have));
+    if m.money > 0 && take == 0 {
+        drop(mails);
+        result(
+            map,
+            g,
+            id,
+            SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken {
+                result2: Two::ErrInternalError,
+            },
+        );
+        return;
+    }
+    m.money -= take;
+    let left = m.money;
+    if take > 0 {
         let mut records = Records::new();
         records.put(KIND_MAIL, u64::from(id), m);
         if let Some(p) = map.players.get_mut(&g) {
-            let have = p.money();
-            p.set_money(have.saturating_add(money));
+            p.set_money(have + take);
         }
         // The mail and its taker in one transaction, sent under the mail's
         // lock so that no later change to the mail is written before it.
@@ -582,6 +603,11 @@ pub fn take_money(map: &mut Map, g: Guid, id: u32) {
         id,
         SMSG_SEND_MAIL_RESULT_MailAction::MoneyTaken { result2: Two::Ok },
     );
+    // The client takes it all off the mail it shows: the list again, with
+    // what is left.
+    if left > 0 {
+        list(map, g);
+    }
 }
 
 /// `CMSG_MAIL_TAKE_ITEM`: cash on delivery is paid, and goes to the sender.

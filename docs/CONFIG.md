@@ -314,6 +314,14 @@ New characters, the level cap, the realm's type, and what is left of the dead.
 | `durability_loss_chance_damage` | The chance, in percent, a blow dealt or taken wears a point off a random piece of a player's gear. | `0.5` | 0 to 100, clamped | live | `DurabilityLossChance.Damage` |
 | `group_offline_leader_secs` | Seconds a group's leader may be offline before the lead goes to a member online (a raid's assistant first); with no one online, it waits. | `300` | 0 to 86400, clamped | live | `Group.OfflineLeaderDelay` |
 
+### `[groups]`
+
+Groups kept across restarts.
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `expire_offline_hours` | Hours a group may go with no member online before it is deleted, in memory and in the store; a member logging in before then keeps it. | `24` | 1 to 87600, clamped | live |  |
+
 ### `[environment]`
 
 Water and lava: how long a player has before they come to harm, and lava's burn.
@@ -494,6 +502,7 @@ These tunables were constants and are now keys, at the same defaults:
 - **Players (`[players]`):** the start level and money, the level cap, the characters per account, the PvP realm,
   the group reward range (XP, loot, quest credit, reputation, honor), resurrection sickness's first level, the
   primary professions, gear's wear from blows.
+- **Groups (`[groups]`):** how long a group with no member online is kept.
 - **Environment (`[environment]`):** the breath, fatigue and lava timers, and lava's damage.
 - **Spells (`[spells]`):** how far past its radius an area or a cone reaches a running or strafing unit, or a running or
   strafing caster's.

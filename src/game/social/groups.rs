@@ -6,7 +6,8 @@
 //! A group is kept in the store (a record of kind [`KIND_GROUP`]) as its
 //! roster changes, and comes back at start-up, as mangos's `groups` and
 //! `group_member` tables do: its members, leader, assistants, subgroups,
-//! loot rules and icons. Invitations aren't kept.
+//! loot rules and icons. Invitations aren't kept. One with no member
+//! online for `[groups] expire_offline_hours` is deleted (`expire_empty`).
 
 use std::sync::Arc;
 
@@ -104,6 +105,11 @@ pub struct Group {
     /// the sweep knows (mangos's `m_leaderLastOnline`); `None` while they
     /// are on.
     pub leader_away_since: Option<i64>,
+    /// Since when (Unix seconds) no member has been online, kept in the
+    /// store: set as the last goes offline (or at start-up), cleared as
+    /// one comes back. At `[groups] expire_offline_hours` the sweep
+    /// deletes the group.
+    pub empty_since: Option<i64>,
 }
 
 /// A group as the store keeps it.
@@ -118,6 +124,7 @@ struct GroupRecord {
     threshold: u8,
     icons: [u64; 8],
     round_robin: u64,
+    empty_since: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -151,6 +158,7 @@ impl Group {
             battleground: false,
             away: Vec::new(),
             leader_away_since: None,
+            empty_since: None,
         }
     }
 
@@ -176,6 +184,7 @@ impl Group {
             battleground: true,
             away: Vec::new(),
             leader_away_since: None,
+            empty_since: None,
         }
     }
 
@@ -198,6 +207,7 @@ impl Group {
             threshold: self.threshold.as_int(),
             icons: self.icons.map(|g| g.guid()),
             round_robin: self.round_robin.guid(),
+            empty_since: self.empty_since,
         }
     }
 
@@ -242,6 +252,8 @@ impl Group {
             // Everyone is offline at start-up: the leader's five minutes
             // start now.
             leader_away_since: Some(now),
+            // And no one has been on since the record's time, or since now.
+            empty_since: Some(r.empty_since.unwrap_or(now).min(now)),
             battleground: false,
             away: Vec::new(),
         })
@@ -1074,6 +1086,7 @@ pub fn accept(realm: &Realm, me: &Online) {
     }
     let forms = !gr.formed;
     gr.formed = true;
+    gr.empty_since = None;
     let subgroup = gr.free_subgroup();
     gr.members.push(Slot {
         guid: me.guid,
@@ -1134,8 +1147,20 @@ pub fn decline(realm: &Realm, me: &Online) {
 }
 
 /// `CMSG_GROUP_UNINVITE` and `CMSG_GROUP_UNINVITE_GUID`: a member out, or
-/// an invite back.
-pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
+/// an invite back. `in_battleground`: the asker is in one's map.
+///
+/// In a battleground no one is put out of any group, the raid nor one's
+/// own: mangos's `CanUninviteFromGroup` asks the group the player is in
+/// (`GetGroup`, the raid there) whether they lead it ("not leader"), then
+/// refuses anyone in a battleground ("not in group", "not so appropriated
+/// but no other option for classic").
+pub fn uninvite(
+    realm: &Realm,
+    me: &Online,
+    target: Option<Guid>,
+    name: &str,
+    in_battleground: bool,
+) {
     let mut groups = realm.social.groups.lock();
     let Some(&id) = groups.of.get(&me.guid) else {
         result(
@@ -1148,14 +1173,23 @@ pub fn uninvite(realm: &Realm, me: &Online, target: Option<Guid>, name: &str) {
         return;
     };
     let gr = &groups.groups[&id];
-    // A battleground's raid is the match's: no one is put out of it.
-    if !gr.can_lead(me.guid) || gr.battleground {
+    if !gr.can_lead(me.guid) {
         result(
             realm,
             me.guid,
             PartyOperation::Leave,
             "",
             PartyResult::NotLeader,
+        );
+        return;
+    }
+    if in_battleground || gr.battleground {
+        result(
+            realm,
+            me.guid,
+            PartyOperation::Leave,
+            "",
+            PartyResult::NotInGroup,
         );
         return;
     }
@@ -1285,9 +1319,43 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
-/// The sweep: [`replace_offline_leaders`] now.
+/// The sweep: [`replace_offline_leaders`] and [`expire_empty`] now.
 pub fn sweep(realm: &Realm) {
-    replace_offline_leaders(realm, now());
+    let now = now();
+    replace_offline_leaders(realm, now);
+    expire_empty(realm, now);
+}
+
+/// Groups with no member online for `[groups] expire_offline_hours` (24)
+/// are deleted, in memory and in the store: their members, gone for good
+/// or not, find themselves in none when they come back. `now` in Unix
+/// seconds.
+pub fn expire_empty(realm: &Realm, now: i64) {
+    let after = realm.config().groups.expire_offline_hours.saturating_mul(3600) as i64;
+    let mut gone = Vec::new();
+    {
+        let mut groups = realm.social.groups.lock();
+        let ids: Vec<u32> = groups
+            .groups
+            .values()
+            .filter(|gr| {
+                gr.formed
+                    && !gr.battleground
+                    && gr.empty_since.is_some_and(|t| now - t >= after)
+                    // One online the sweep wasn't told of keeps it.
+                    && gr.members.iter().all(|m| realm.registry.online(m.guid).is_none())
+            })
+            .map(|gr| gr.id)
+            .collect();
+        for id in ids {
+            let members = groups.groups[&id].members.iter().map(|m| m.guid).collect();
+            groups.disband(realm, id);
+            gone.push(Left::Disbanded { id, members });
+        }
+    }
+    for left in gone {
+        left.tell(realm);
+    }
 }
 
 /// A leader offline `[players] group_offline_leader_secs` (300) hands the
@@ -1299,7 +1367,13 @@ pub fn replace_offline_leaders(realm: &Realm, now: i64) {
     let mut changed = Vec::new();
     {
         let mut groups = realm.social.groups.lock();
-        for gr in groups.groups.values_mut().filter(|gr| gr.formed) {
+        // A group with no one online has no one to hand the lead to: it
+        // costs the sweep nothing until one comes back.
+        for gr in groups
+            .groups
+            .values_mut()
+            .filter(|gr| gr.formed && gr.empty_since.is_none())
+        {
             if realm.registry.online(gr.leader).is_some() {
                 gr.leader_away_since = None;
                 continue;
@@ -1659,8 +1733,12 @@ pub fn chat(
 /// At login: a member back gets the roster, and the others see them
 /// online.
 pub fn logged_in(realm: &Realm, g: Guid) {
-    let groups = realm.social.groups.lock();
-    if let Some(gr) = groups.group_of(g) {
+    let mut groups = realm.social.groups.lock();
+    if let Some(gr) = groups.group_of_mut(g) {
+        // Someone is on: it is kept.
+        if gr.empty_since.take().is_some() {
+            gr.save(realm);
+        }
         gr.send_update(realm);
         // And the target markers (Thistle Tea resends them).
         if gr.icons.iter().any(|i| !i.is_zero()) {
@@ -1691,6 +1769,19 @@ pub fn logged_out(realm: &Realm, g: Guid) {
     }
     groups.stats.remove(&g);
     groups.seen_by.remove(&g);
+    // The last of their own group to go: it is empty from now.
+    if let Some(id) = groups.home(g)
+        && let Some(gr) = groups.get_mut(id)
+        && !gr.battleground
+        && gr.empty_since.is_none()
+        && gr
+            .members
+            .iter()
+            .all(|m| m.guid == g || realm.registry.online(m.guid).is_none())
+    {
+        gr.empty_since = Some(now());
+        gr.save(realm);
+    }
     if let Some(gr) = groups.group_of_mut(g) {
         if gr.leader == g {
             gr.leader_away_since = Some(now());
