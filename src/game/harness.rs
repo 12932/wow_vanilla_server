@@ -206,6 +206,7 @@ pub fn test_config() -> RealmConfig {
             always_max_skill_for_level: true,
             ..Default::default()
         },
+        groups: Default::default(),
         environment: Default::default(),
         quests: Default::default(),
         spells: Default::default(),

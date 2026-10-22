@@ -782,6 +782,15 @@ durability_loss_chance_damage = 0.5
 # Default 300. Range 0 to 86400, clamped. Changes at a reload. mangos: Group.OfflineLeaderDelay.
 group_offline_leader_secs = 300
 
+# Groups kept across restarts.
+[groups]
+
+# Hours a group may go with no member online before it is
+# deleted, in memory and in the store; a member logging in before
+# then keeps it.
+# Default 24. Range 1 to 87600, clamped. Changes at a reload.
+expire_offline_hours = 24
+
 # Water and lava: how long a player has before they come to harm,
 # and lava's burn.
 [environment]

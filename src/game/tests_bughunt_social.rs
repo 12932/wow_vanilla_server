@@ -753,3 +753,60 @@ async fn mail_money_past_the_cap_is_left_in_the_mail() {
     assert!(matches!(r, Two::ErrInternalError), "{r:?}");
     assert_eq!(realm.social.mail.lock().mails[&id].money, 40 * GOLD);
 }
+
+/// Groups were deleted only as their roster fell to one: a group whose
+/// members never came back stayed in memory and in the store for good,
+/// and the sweep looked at it every five seconds (the review's finding;
+/// the user's call 7). A group with no member online for `[groups]
+/// expire_offline_hours` (24) goes; one a member came back to before then
+/// stays. The sweep's clock is skipped ahead, not waited on.
+#[tokio::test]
+async fn a_group_with_no_one_online_for_a_day_is_deleted() {
+    use crate::game::social::groups::{self, KIND_GROUP};
+    const HOUR: i64 = 3600;
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    group(&mut a, &mut b, "Bob").await;
+    let id = realm.social.groups.lock().group_of(ga).expect("grouped").id;
+    let kept = |realm: &Arc<Realm>| realm.social.groups.lock().get(id).is_some();
+    async fn stored(realm: &Arc<Realm>, id: u32) -> Option<String> {
+        on_map(realm, |_| ()).await;
+        realm.store.record(KIND_GROUP, u64::from(id)).await
+    }
+    assert!(stored(&realm, id).await.is_some(), "the group is stored");
+
+    // With someone online, never.
+    groups::expire_empty(&realm, mail::now() + 100 * HOUR);
+    assert!(kept(&realm), "kept while Alice and Bob are on");
+
+    a.disconnect();
+    harness::offline(&realm, ga).await;
+    b.disconnect();
+    harness::offline(&realm, gb).await;
+    let gone_at = mail::now();
+    groups::expire_empty(&realm, gone_at + 23 * HOUR);
+    assert!(kept(&realm), "kept within the day");
+
+    // Bob back within the day keeps it, past the day.
+    let mut b = Client::connect(&realm, "B");
+    b.login(gb).await;
+    groups::expire_empty(&realm, gone_at + 25 * HOUR);
+    assert!(kept(&realm), "Bob's return keeps it");
+    b.disconnect();
+    harness::offline(&realm, gb).await;
+    let back_at = mail::now();
+    groups::expire_empty(&realm, back_at + 23 * HOUR);
+    assert!(kept(&realm), "a day counted from Bob's going again");
+
+    // A day from the last one going: gone, in memory and in the store.
+    groups::expire_empty(&realm, back_at + 24 * HOUR);
+    assert!(!kept(&realm), "deleted a day after");
+    assert!(
+        realm.social.groups.lock().group_of(ga).is_none(),
+        "Alice is in none"
+    );
+    assert!(stored(&realm, id).await.is_none(), "and out of the store");
+}
