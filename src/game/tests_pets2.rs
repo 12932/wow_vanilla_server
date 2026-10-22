@@ -1097,3 +1097,27 @@ fn a_familys_size_runs_from_its_least_to_its_most() {
     assert!((f.scale(31).unwrap() - (0.6 + 30.0 / 60.0 * 0.4)).abs() < 0.001);
     assert_eq!(crate::game::data::pets::Family::default().scale(10), None);
 }
+
+/// Bug hunt (creatures): a player's pet was noticed from as far as its
+/// master. One no client moves is noticed at 65% of that (mangos-classic's
+/// `GetAttackDistance`).
+#[tokio::test]
+async fn a_pet_is_noticed_from_nearer_than_its_master() {
+    let mut d = more();
+    d.creature_templates.get_mut(&WOLF).unwrap().detection_range = 20.0;
+    let (_realm, _h, gh, map, pet, wolf) = tamed_on(harness::realm_with(d)).await;
+    let (master, pets) = map
+        .query(move |m| {
+            (
+                crate::game::map::ai::attack_distance(m, wolf, gh),
+                crate::game::map::ai::attack_distance(m, wolf, pet),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(master > 0.0);
+    assert!(
+        (pets - master * 0.65).abs() < 0.01,
+        "{pets} against {master}"
+    );
+}

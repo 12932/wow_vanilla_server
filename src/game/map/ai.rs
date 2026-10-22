@@ -102,8 +102,17 @@ pub fn attack_distance(map: &Map, g: Guid, t: Guid) -> f32 {
     let lv = map
         .unit_fields(who)
         .map_or(1, |f| f.get_u32(UNIT_FIELD_LEVEL));
-    aggro_reach(detection, level, lv, modifier) * map.cfg.creatures.aggro_rate
+    // A player's pet no client moves is noticed from nearer (mangos-
+    // classic's `GetAttackDistance`: "player pets do not aggro from so
+    // afar").
+    let pet =
+        who != t && guid::is_unit(t) && crate::game::map::movement::controller(map, t).is_none();
+    let pet_rate = if pet { PET_AGGRO_RATE } else { 1.0 };
+    aggro_reach(detection, level, lv, modifier) * pet_rate * map.cfg.creatures.aggro_rate
 }
+
+/// How much nearer a player's pet is noticed than its master.
+const PET_AGGRO_RATE: f32 = 0.65;
 
 /// The unit flags that put a unit out of any fight: not attackable (both),
 /// not selectable, on a flight.

@@ -335,7 +335,7 @@ async fn a_creatures_reach_for_a_pet_is_its_masters_level_and_auras_move_it_but_
             let pet = spawn_at(m, PREY, 60, east(30.0), 0.0);
             let wild = spawn_at(m, PREY, 60, east(31.0), 0.0);
             m.creature_mut(pet).unwrap().owner = Some(ga);
-            // A level-1 player's pet of 60 is reached as the player is.
+            // A level-1 player's pet of 60 is reached at the player's level.
             (
                 ai::attack_distance(m, watcher, pet),
                 ai::attack_distance(m, watcher, ga),
@@ -344,7 +344,9 @@ async fn a_creatures_reach_for_a_pet_is_its_masters_level_and_auras_move_it_but_
         })
         .await
         .unwrap();
-    assert_eq!(r.0, r.1);
+    // At 65% of it: a player's pet is noticed from nearer (mangos-
+    // classic's `GetAttackDistance`).
+    assert_eq!(r.0, r.1 * 0.65);
     assert_eq!(r.1, 14.0);
     assert_eq!(r.2, 5.0, "far above it: no nearer than five");
     // Auras move it, never under five yards; none under a yard of

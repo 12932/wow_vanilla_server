@@ -253,8 +253,9 @@ async fn a_controlled_unit_is_noticed_at_its_masters_level() {
         .await
         .unwrap();
     // At 60 against 60, twenty yards; at 40, forty; at its own 10, the
-    // 25 levels' most, 45.
-    assert_eq!(r, [(20.0, 10), (40.0, 10), (45.0, 10)]);
+    // 25 levels' most, 45. A player's pet's at 65% (mangos-classic's
+    // "player pets do not aggro from so afar").
+    assert_eq!(r, [(20.0 * 0.65, 10), (40.0 * 0.65, 10), (45.0, 10)]);
 }
 
 const HEALER: u32 = 3792;
