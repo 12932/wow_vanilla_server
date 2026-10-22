@@ -810,21 +810,41 @@ pub fn make_letter(map: &mut Map, g: Guid, id: u32) {
     );
 }
 
-/// `CMSG_ITEM_TEXT_QUERY`: a mail's text, or a letter's.
+/// `CMSG_ITEM_TEXT_QUERY`: a mail's text, or a letter's, to one who may
+/// read it: the mail's receiver (who, for one returned, is its sender), or
+/// one holding a letter of the text. Anyone else is told an empty text:
+/// ids are realm-wide and sequential, so a client walking them would read
+/// every letter and auction invoice in the realm (mangos's
+/// `HandleItemTextQuery` has a "TODO: some check needed" there).
 pub fn text_query(map: &Map, g: Guid, text_id: u32) {
+    let Some(p) = map.players.get(&g) else {
+        return;
+    };
+    let holds = || {
+        text_id != 0
+            && p.items
+                .iter()
+                .any(|i| i.fields.get_u32(ITEM_FIELD_ITEM_TEXT_ID) == text_id)
+    };
     let mails = map.realm.social.mail.lock();
     let text = mails
         .texts
         .get(&text_id)
-        .or_else(|| mails.mails.get(&text_id).map(|m| &m.body))
+        .filter(|_| holds())
+        .or_else(|| {
+            mails
+                .mails
+                .get(&text_id)
+                .filter(|m| m.receiver == guid::counter(g))
+                .map(|m| &m.body)
+        })
         .map(|t| body(t).to_owned())
         .unwrap_or_default();
-    if let Some(p) = map.players.get(&g) {
-        p.outbound.send(&SMSG_ITEM_TEXT_QUERY_RESPONSE {
-            item_text_id: text_id,
-            text,
-        });
-    }
+    drop(mails);
+    p.outbound.send(&SMSG_ITEM_TEXT_QUERY_RESPONSE {
+        item_text_id: text_id,
+        text,
+    });
 }
 
 /// `MSG_QUERY_NEXT_MAIL_TIME`: 0 with unread mail, a day back without.

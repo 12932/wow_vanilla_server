@@ -133,3 +133,110 @@ async fn an_empty_built_in_channel_goes() {
     handled(&mut a).await;
     assert_eq!(realm.social.channels.lock().count(), before);
 }
+
+async fn set_money(realm: &Arc<Realm>, g: Guid, money: u32) {
+    on_map(realm, move |m| {
+        if let Some(p) = m.players.get_mut(&g) {
+            p.set_money(money);
+        }
+    })
+    .await;
+}
+
+fn letter(to: &str, body: &str) -> CMSG_SEND_MAIL {
+    CMSG_SEND_MAIL {
+        mailbox: Guid::zero(),
+        receiver: to.into(),
+        subject: "A word".into(),
+        body: body.into(),
+        unknown1: 0,
+        unknown2: 0,
+        item: Guid::zero(),
+        money: Gold::new(0),
+        cash_on_delivery_amount: 0,
+        unknown3: 0,
+        unknown4: 0,
+    }
+}
+
+async fn sent(a: &mut Client) -> u32 {
+    a.wait_for("SMSG_SEND_MAIL_RESULT", |m| match m {
+        ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(r) => matches!(
+            r.action,
+            SMSG_SEND_MAIL_RESULT_MailAction::Send {
+                result2: SMSG_SEND_MAIL_RESULT_MailResultTwo::Ok
+            }
+        )
+        .then_some(r.mail_id),
+        _ => None,
+    })
+    .await
+}
+
+/// The text `c` is told for `id`.
+async fn text_of(c: &mut Client, id: u32) -> String {
+    c.clear();
+    c.send(CMSG_ITEM_TEXT_QUERY {
+        item_text_id: id,
+        mail_id: id,
+        unknown1: 0,
+    })
+    .await;
+    c.wait_for("SMSG_ITEM_TEXT_QUERY_RESPONSE", |m| match m {
+        ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(t) if t.item_text_id == id => {
+            Some(t.text.clone())
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// `CMSG_ITEM_TEXT_QUERY` answered any mail's body, and any letter's text,
+/// to whoever asked its id: ids are sequential, so a client walking them
+/// read every letter and auction invoice in the realm. A mail's body is
+/// its receiver's to read, a letter's text its holder's.
+#[tokio::test]
+async fn a_mail_or_letter_is_read_only_by_its_reader() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    c.enter("Carol", Race::Human, Class::Warrior).await;
+    set_money(&realm, ga, 1000).await;
+    a.send(letter("Bob", "meet me at the bridge")).await;
+    let id = sent(&mut a).await;
+    assert_eq!(text_of(&mut c, id).await, "", "not Carol's");
+    assert_eq!(text_of(&mut a, id).await, "", "nor its sender's, sent");
+    assert_eq!(text_of(&mut b, id).await, "meet me at the bridge");
+
+    // Bob copies it onto a letter: its text is his, holding it.
+    b.send(CMSG_MAIL_CREATE_TEXT_ITEM {
+        mailbox: Guid::zero(),
+        mail_id: id,
+        mail_template_id: 0,
+    })
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let text_id = loop {
+        let held = on_map(&realm, move |m| {
+            m.players[&gb]
+                .items
+                .iter()
+                .find(|i| i.entry == mail::LETTER_ITEM)
+                .map(|i| {
+                    i.fields
+                        .get_u32(crate::game::fields::ITEM_FIELD_ITEM_TEXT_ID)
+                })
+        })
+        .await;
+        if let Some(t) = held {
+            break t;
+        }
+        assert!(Instant::now() < deadline, "no letter");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_ne!(text_id, id);
+    assert_eq!(text_of(&mut c, text_id).await, "", "not Carol's");
+    assert_eq!(text_of(&mut b, text_id).await, "meet me at the bridge");}
