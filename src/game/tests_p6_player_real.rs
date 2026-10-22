@@ -35,6 +35,10 @@ async fn corina_steele_sells_and_repairs() {
     assert_eq!(flags, Some(0x4004));
     let mut a = Client::connect(&realm, "A");
     let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // The intro's camera ended: else she is spawned beside a player who
+    // sees from it, high over Northshire, and is told of her only if the
+    // spawn beats the map's first update (it raced, before and since).
+    a.send(CMSG_COMPLETE_CINEMATIC {}).await;
     let map = realm.maps.get(&realm, MapKey::world(0));
     let corina = on(&map, move |m| {
         crate::game::tests_p3_combat::spawn(m, g, CORINA_STEELE, 10, 2.0)

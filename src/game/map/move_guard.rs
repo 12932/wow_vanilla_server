@@ -53,12 +53,25 @@ pub fn held(p: &Player) -> bool {
 /// launch in flight goes on, and a held player still falls: only steering
 /// or a step across is refused.
 pub fn held_back(p: &mut Player, info: &MovementInfo, now: Instant) -> bool {
+    let mut guard = p.misc.move_guard;
+    let held = held_back_with(p, &mut guard, info, now);
+    p.misc.move_guard = guard;
+    held
+}
+
+/// [`held_back`], with the guard `guard` (the player's own, or a copy).
+pub fn held_back_with(
+    p: &Player,
+    guard: &mut MoveGuard,
+    info: &MovementInfo,
+    now: Instant,
+) -> bool {
     if !held(p) {
-        p.misc.move_guard.held_since = None;
+        guard.held_since = None;
         return false;
     }
-    let since = *p.misc.move_guard.held_since.get_or_insert(now);
-    if p.misc.move_guard.launch.is_some() {
+    let since = *guard.held_since.get_or_insert(now);
+    if guard.launch.is_some() {
         return false;
     }
     let g = p.guid;
@@ -144,7 +157,22 @@ pub fn too_fast(
     now: Instant,
     check: &AnticheatConfig,
 ) -> bool {
-    let guard = &mut p.misc.move_guard;
+    let mut guard = p.misc.move_guard;
+    let fast = too_fast_with(p, &mut guard, last, at, info, now, check);
+    p.misc.move_guard = guard;
+    fast
+}
+
+/// [`too_fast`], with the guard `guard` (the player's own, or a copy).
+pub fn too_fast_with(
+    p: &Player,
+    guard: &mut MoveGuard,
+    last: Vector3d,
+    at: Instant,
+    info: &MovementInfo,
+    now: Instant,
+    check: &AnticheatConfig,
+) -> bool {
     if let Some((_, since)) = guard.launch
         && now.duration_since(since) > LAUNCH_LIMIT
     {
@@ -182,10 +210,15 @@ pub fn launched(p: &mut Player, xy_speed: f32, now: Instant) {
 /// (mangos's `SetLaunched(false)` at `MSG_MOVE_FALL_LAND` and
 /// `MSG_MOVE_START_SWIM`).
 pub fn taken(p: &mut Player, info: &MovementInfo) {
+    taken_with(&mut p.misc.move_guard, info);
+}
+
+/// [`taken`], with the guard `guard`.
+pub fn taken_with(guard: &mut MoveGuard, info: &MovementInfo) {
     let f = &info.flags;
     let aloft = f.get_jumping().is_some() || f.get_fallingfar();
     if !aloft || f.get_swimming().is_some() {
-        p.misc.move_guard.launch = None;
+        guard.launch = None;
     }
 }
 

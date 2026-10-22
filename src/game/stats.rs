@@ -197,6 +197,10 @@ async fn write(realm: Arc<Realm>, mut out: std::io::BufWriter<std::fs::File>) {
                 "flood": FLOOD.load(Ordering::Relaxed),
                 "stall": STALL.load(Ordering::Relaxed),
             },
+            "memory_guard": {
+                "on": crate::game::memory_guard::on(),
+                "engaged": crate::game::memory_guard::ENGAGED.load(Ordering::Relaxed),
+            },
             "cpu_secs": cpu_secs(),
             "rss_kb": rss_kb(),
             "maps": maps,
@@ -230,7 +234,7 @@ fn cpu_secs() -> Option<f64> {
 }
 
 /// The process's resident set, from `/proc/self/status`.
-fn rss_kb() -> Option<u64> {
+pub(crate) fn rss_kb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     status
         .lines()

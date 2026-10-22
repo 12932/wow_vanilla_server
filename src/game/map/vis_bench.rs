@@ -182,6 +182,14 @@ impl Crowd {
         }
     }
 
+    /// What the `i`th player's client has been sent since the last look,
+    /// each frame's bytes.
+    pub fn take_frames(&mut self, i: usize) -> Vec<Vec<u8>> {
+        std::iter::from_fn(|| self.frames[i].try_recv())
+            .map(|f| f.to_vec())
+            .collect()
+    }
+
     /// Every player's known set, sorted: what two ways of working must
     /// agree on.
     pub fn knowledge(&self) -> Vec<(Guid, Vec<Guid>)> {

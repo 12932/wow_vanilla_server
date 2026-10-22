@@ -20,6 +20,7 @@ pub mod instances;
 pub mod invasion;
 pub mod jaina;
 pub mod map;
+pub mod memory_guard;
 pub mod omen;
 pub mod registry;
 pub mod respawns;
@@ -128,6 +129,8 @@ mod tests_mangos_defaults;
 mod tests_misc;
 #[cfg(test)]
 mod tests_misc2;
+#[cfg(test)]
+mod tests_moves;
 #[cfg(test)]
 mod tests_net5;
 #[cfg(test)]
@@ -1358,6 +1361,9 @@ pub struct RealmConfig {
     /// yards, an observer gets one in so many of a mover's heartbeats.
     pub distant_move_yards: f32,
     pub distant_move_every: u32,
+    /// A burst's movement checked and taken across the threads
+    /// (`[world] parallel_moves`, `map::moves`).
+    pub parallel_moves: bool,
     pub save_interval: Duration,
     pub motd: String,
     pub everyone_gm: bool,
@@ -1393,6 +1399,9 @@ pub struct RealmConfig {
     /// Packets of a client's that may wait for its map at once
     /// (`[network] max_queued_packets`).
     pub max_queued_packets: usize,
+    /// The share of the machine's memory past which the sessions stop
+    /// reading their clients (`[network] memory_guard_fraction`, 0 never).
+    pub memory_guard_fraction: f64,
     /// How seldom a `/who`, whois or inspect may come (`session::Cooldowns`):
     /// mangos's 5 s; none in the tests.
     pub packet_cooldown: Duration,
@@ -1452,6 +1461,7 @@ impl RealmConfig {
             visibility_threads: c.visibility.refresh_threads,
             distant_move_yards: c.visibility.distant_move_yards,
             distant_move_every: c.visibility.distant_move_every,
+            parallel_moves: c.world.parallel_moves,
             save_interval: Duration::from_secs(c.world.save_interval_secs.max(10)),
             motd: c.world.motd.clone(),
             everyone_gm: c.accounts.everyone_gm,
@@ -1472,6 +1482,7 @@ impl RealmConfig {
             max_packets_per_sec: c.network.max_packets_per_sec,
             max_queries_per_sec: c.network.max_queries_per_sec,
             max_queued_packets: c.network.max_queued_packets,
+            memory_guard_fraction: c.network.memory_guard_fraction,
             packet_cooldown: session::COOLDOWN,
             honor_reset_weekday: c.world.honor_reset_weekday.clamp(1, 7),
             spell_rolls: true,
@@ -1840,6 +1851,7 @@ pub async fn run(users: crate::auth::UserCache, listener: TcpListener) -> u8 {
         tokio::spawn(plot_realm(realm.clone()));
     }
     stats::start(&realm);
+    memory_guard::start(&realm);
     info!("wow_vanilla_server {}", crate::VERSION);
     info!(
         "world: listening on {}",

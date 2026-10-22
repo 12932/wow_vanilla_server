@@ -299,3 +299,34 @@ async fn slow_events_dont_starve_the_update() {
         "{ran} updates over half a second of events: the update was starved"
     );
 }
+
+/// The memory guard on (`memory_guard`): the session reads nothing more of
+/// its client, which loses nothing; let go, what it sent meanwhile is
+/// handled, in order.
+#[tokio::test]
+async fn the_memory_guard_holds_the_clients_back_until_it_lets_go() {
+    let realm = realm(64);
+    let mut a = Client::connect(&realm, "ALICE");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.clear();
+    crate::game::memory_guard::set(true);
+    for _ in 0..3 {
+        a.send(CMSG_PLAYED_TIME {}).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    a.drain();
+    let played = |a: &Client| {
+        a.backlog
+            .iter()
+            .filter(|m| matches!(m, ServerOpcodeMessage::SMSG_PLAYED_TIME(_)))
+            .count()
+    };
+    assert_eq!(played(&a), 0, "not read while the guard is on");
+    crate::game::memory_guard::set(false);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while played(&a) < 3 {
+        assert!(tokio::time::Instant::now() < deadline, "read again");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        a.drain();
+    }
+}

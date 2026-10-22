@@ -63,6 +63,7 @@ pub mod misc;
 pub mod mounts;
 pub mod move_guard;
 pub mod movement;
+pub mod moves;
 pub mod nav;
 pub mod necrotic_camps;
 pub mod npc;
@@ -494,6 +495,10 @@ pub struct MapStats {
     pub quarantined: u32,
     /// Times the map was built again after its update kept panicking.
     pub restarts: u32,
+    /// A burst's movement packets taken across the threads, and handled
+    /// alone (`moves`).
+    pub moves_across: u64,
+    pub moves_alone: u64,
 }
 
 /// Holds being released: any left when it goes (a step that panicked) are
@@ -912,12 +917,61 @@ const MSG_MOVE_HEARTBEAT: u16 = 0xEE;
 /// to another task but through what uncorks first ([`Map::take_player`],
 /// [`MapHandle::send`], a session's control sent).
 fn corks(event: &MapEvent) -> bool {
-    matches!(event, MapEvent::Packet(_, m, _, _) if movement::is_movement(m))
+    match event {
+        MapEvent::Packet(_, m, _, _) => movement::is_movement(m),
+        // A heartbeat from its session's slot is a movement packet too:
+        // uncorked, each went to every observer's queue on its own.
+        MapEvent::Heartbeat(..) => true,
+        _ => false,
+    }
+}
+
+/// One event of a burst: a movement packet kept with the burst's others
+/// (`moves`), anything else handled, the movement kept so far first. True
+/// to stop the actor.
+fn dispatch(
+    map: &mut Map,
+    event: MapEvent,
+    moves: &mut Vec<moves::Move>,
+    cork: &mut Option<crate::game::conn::Cork>,
+    parked: &mut Option<crate::game::conn::Parked>,
+) -> bool {
+    // Under the movement's cork still: what it sends goes with the rest.
+    if !corks(&event) {
+        flush_moves(map, moves);
+    }
+    let feed = map.clients.feed.clone();
+    corking(&event, cork, parked, &feed);
+    let event = match moves::keep(map, event) {
+        Ok(Some(m)) => {
+            moves.push(m);
+            return false;
+        }
+        Ok(None) => return false,
+        Err(event) => event,
+    };
+    if handle_guarded(map, event) {
+        return true;
+    }
+    // A client the event held goes as it ends, not at the burst's: what
+    // else it is sent waits no longer.
+    after_event(map);
+    false
+}
+
+/// The movement kept, worked out ([`moves::handle_all`]), under guard.
+fn flush_moves(map: &mut Map, moves: &mut Vec<moves::Move>) {
+    if moves.is_empty() {
+        return;
+    }
+    guarded(map, "a burst's movement", |m| moves::handle_all(m, moves));
+    moves.clear();
+    after_event(map);
 }
 
 /// [`Map::after_events`], under guard (and, for the world benchmark,
 /// counted as an event of its own).
-fn after_event(map: &mut Map) {
+pub(crate) fn after_event(map: &mut Map) {
     if map.holding.is_empty() {
         return;
     }
@@ -961,10 +1015,11 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // What the update sends each client goes in one push at its
                 // end.
                 {
-                    let _cork = match parked.take() {
+                    let cork = match parked.take() {
                         Some(p) => crate::game::conn::Cork::resume(p),
                         None => crate::game::conn::Cork::new(),
                     };
+                    cork.feed(&map.clients.feed);
                     guarded(&mut map, "the update", Map::update);
                 }
                 if map.stopping {
@@ -1008,13 +1063,12 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 // answer, a session told, a client handed on, mustn't
                 // overtake what was sent before it.
                 let mut cork = None;
-                corking(&event, &mut cork, &mut parked);
-                if handle_guarded(&mut map, event) {
+                // The burst's movement, kept to be worked out at once
+                // (`moves`): before any other event, and at the burst's end.
+                let mut moves: Vec<moves::Move> = Vec::new();
+                if dispatch(&mut map, event, &mut moves, &mut cork, &mut parked) {
                     break;
                 }
-                // A client the event held goes as it ends, not at the
-                // burst's: what else it is sent waits no longer.
-                after_event(&mut map);
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved: at most 512 events, and none begun
                 // past `EVENT_BURST` (a crowd's arrivals, a few ms each,
@@ -1028,16 +1082,15 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
-                            corking(&event, &mut cork, &mut parked);
-                            if handle_guarded(&mut map, event) {
+                            if dispatch(&mut map, event, &mut moves, &mut cork, &mut parked) {
                                 stop = true;
                                 break;
                             }
-                            after_event(&mut map);
                         }
                         Err(_) => break,
                     }
                 }
+                flush_moves(&mut map, &mut moves);
                 // Kept for the next burst, while the batch's time lasts.
                 if let Some(c) = cork
                     && !stop
@@ -1065,15 +1118,18 @@ fn corking(
     event: &MapEvent,
     cork: &mut Option<crate::game::conn::Cork>,
     parked: &mut Option<crate::game::conn::Parked>,
+    feed: &Arc<crate::game::conn::Feed>,
 ) {
     if !corks(event) {
         *cork = None;
         *parked = None;
     } else if cork.is_none() {
-        *cork = Some(match parked.take() {
+        let c = match parked.take() {
             Some(p) => crate::game::conn::Cork::resume(p),
             None => crate::game::conn::Cork::new(),
-        });
+        };
+        c.feed(feed);
+        *cork = Some(c);
     }
 }
 
@@ -1664,6 +1720,7 @@ impl Map {
         // The client's first move is checked from where it came in.
         p.move_check = Some((p.position(), self.now));
         self.grid.insert(p.guid, p.cell);
+        self.clients.renew(p.guid);
         self.players.insert(p.guid, p);
     }
 
@@ -2732,8 +2789,17 @@ impl Map {
 
     /// `observer` no longer knows `object`.
     pub fn remove_observer(&mut self, object: Guid, observer: Guid) {
+        let (i, table) = (self.clients.get(observer), self.clients.id);
         if let Some(o) = self.observers_mut(object) {
-            o.remove(&observer);
+            o.take(&observer, i, table);
+        }
+    }
+
+    /// `observer` knows `object` now.
+    pub fn add_observer(&mut self, object: Guid, observer: Guid) {
+        let (i, table) = (self.clients.index_of(observer), self.clients.id);
+        if let Some(o) = self.observers_mut(object) {
+            o.add(observer, i, table);
         }
     }
 
@@ -2743,18 +2809,21 @@ impl Map {
         if to_self && let Some(p) = self.players.get(&object) {
             p.outbound.send_frame(frame.clone());
         }
+        let z = crate::zone!("observers: clients");
         let Some(observers) = self.observers(object) else {
             return;
         };
         if observers.is_empty() {
             return;
         }
-        self.broadcast(frame, &observers.clients(&self.clients));
+        let to = observers.clients(&self.clients);
+        drop(z);
+        self.broadcast(frame, &to);
     }
 
     /// `frame` to the clients `to` ([`crate::game::conn::broadcast`]).
     pub fn broadcast(&self, frame: &Arc<[u8]>, to: &Arc<crate::game::conn::Clients>) {
-        crate::game::conn::broadcast(self.clients.id, frame, to, |i| {
+        crate::game::conn::broadcast(&self.clients.feed, frame, to, |i| {
             let g = self.clients.guid(i)?;
             self.players.get(&g).map(|p| p.outbound.clone())
         });
@@ -2891,4 +2960,42 @@ pub fn packet_name(m: &ClientOpcodeMessage) -> &'static str {
     let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
     names.insert(leaked);
     leaked
+}
+
+#[cfg(test)]
+mod corking_tests {
+    use super::*;
+
+    /// A heartbeat that came through its session's slot runs corked, as
+    /// the movement packets do: uncorked, a crowd's heartbeats went to
+    /// every observer's queue one by one (the 2,000 drill's dearest cost).
+    #[test]
+    fn movement_and_heartbeats_run_corked_and_nothing_else() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let info = wow_world_messages::vanilla::MovementInfo::default();
+        let beat = MapEvent::Heartbeat(
+            Guid::new(1),
+            Arc::new(Heartbeat::new(info)),
+            tx.clone(),
+            None,
+        );
+        assert!(corks(&beat));
+        let moved = MapEvent::Packet(
+            Guid::new(1),
+            ClientOpcodeMessage::MSG_MOVE_SET_FACING(
+                wow_world_messages::vanilla::MSG_MOVE_SET_FACING_Client { info },
+            ),
+            tx.clone(),
+            None,
+        );
+        assert!(corks(&moved));
+        let other = MapEvent::Packet(
+            Guid::new(1),
+            ClientOpcodeMessage::CMSG_PLAYED_TIME,
+            tx,
+            None,
+        );
+        assert!(!corks(&other));
+        assert!(!corks(&MapEvent::Stop));
+    }
 }

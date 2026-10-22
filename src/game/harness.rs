@@ -144,6 +144,7 @@ pub fn test_config() -> RealmConfig {
         visibility_threads: visibility.refresh_threads,
         distant_move_yards: visibility.distant_move_yards,
         distant_move_every: visibility.distant_move_every,
+        parallel_moves: crate::config::WorldConfig::default().parallel_moves,
         save_interval: Duration::from_secs(300),
         motd: String::new(),
         everyone_gm: true,
@@ -168,6 +169,7 @@ pub fn test_config() -> RealmConfig {
         max_packets_per_sec: 200,
         max_queries_per_sec: 2000,
         max_queued_packets: 64,
+        memory_guard_fraction: 0.8,
         // A test asks `/who` as often as it likes.
         packet_cooldown: Duration::ZERO,
         honor_reset_weekday: crate::game::honor::DEFAULT_RESET_WEEKDAY,
@@ -413,7 +415,7 @@ impl Client {
     /// Close the connection, as a client that goes away.
     pub fn disconnect(self) {}
 
-    fn drain(&mut self) {
+    pub(crate) fn drain(&mut self) {
         while let Some(frame) = self.rx.try_recv() {
             self.frames.push(frame.clone());
             self.captured.push(frame.clone());
