@@ -1372,3 +1372,38 @@ a 32-core box (release, one area's targets, 2,000 times):
 | 30 | 9.6 µs | 13.5 µs | 316 / 336 |
 
 Four microseconds more an area cast, in a crowd: nothing beside an update's 50 ms.
+
+## A chase in melee, and blows at a creature on its way home (2026-10-22)
+
+A creature chasing its victim jerked about it: it aimed half a yard inside its reach (Thistle Tea's
+`chase_target_distance`), so every step its victim took back put it off the edge and sent it a new path, and it sent
+a turn (an `SMSG_MONSTER_MOVE` to where it stood) at a bite whenever its victim had moved a degree. Now
+(`ai::fight_step`) it chases as mangos-classic's `ChaseMovementGenerator` does:
+
+- it aims at **half its reach** from its victim (`CHASE_DEFAULT_RANGE_FACTOR`, `combat::chase_distance`);
+- it paths again only once its victim is **out of reach of where it is headed** (the walk's end, or where it
+  stands): `RequiresNewPosition`, the combined reach from the spline's end; no more re-chase distance from where it
+  last aimed, nor a path for every update it stood out of reach;
+- on its way in it stops short only when its victim, moved since, has come nearer than where it is headed (no more
+  stop at contact);
+- it turns to a victim near its front without a word (mangos's `SetInFront`: the client turns a creature to its
+  target itself); a turn is sent only when its victim is off its front (Thistle Tea's `face_melee_victim`, on bad
+  facing).
+
+Counted on the map's own clock at 20 Hz (`tests_chase_evade`), the moves one client is sent of a beast fighting it:
+
+| Six seconds of | Before | After |
+|---|---|---|
+| a victim standing | 0 | 0 |
+| a victim walking about a yard each way, the beast come in from 15 yards | 1 path, 1 turn | none |
+| a victim walking away at 2.5 yards a second | 21 paths | 5 paths |
+
+Each path is a navmesh query as well as a packet to every observer, so a crowd fighting a crowd paths about a
+quarter as often as it did. Pets chase as they did.
+
+A creature on its way home after a leash was refused as a target ("Invalid target", `SPELL_FAILED_BAD_TARGETS`, or
+"You cannot attack that target"). Now (`combat::can_aim_at`) a player's spell at it goes off and misses as an evade
+(`SPELL_MISS_EVADE` in the go), and a player's swing starts and each blow evades (`SMSG_ATTACKERSTATEUPDATE`, a miss
+of no sound, `VICTIMSTATE_EVADES`, no damage), as mangos-classic's `MELEE_HIT_EVADE`; neither puts anyone in a fight
+with it. Areas still pass it by, pets and creatures still let go of it, and its evade still stops those swinging at
+it (mangos's `RemoveAllAttackers`). The evaded blows pass the client check.
