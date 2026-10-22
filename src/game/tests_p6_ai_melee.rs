@@ -590,3 +590,21 @@ async fn a_passive_creature_left_with_only_an_unseen_foe_goes_home() {
     .await;
     assert_eq!(r, (1, 0, true), "struck, then let go of, and home");
 }
+
+/// Bug hunt (creatures): a creature taken out of the map (an event's end,
+/// a summon despawned) with a taunt's or a Fade's threat held on it kept
+/// that hold in the map for good. It goes with the creature.
+#[tokio::test]
+async fn a_creature_removed_takes_the_threat_held_on_it() {
+    let (_realm, _a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let r = on(&map, move |m| {
+        let brute = spawn(m, ga, BRUTE, 20, 3.0);
+        ai::attacked(m, brute, ga);
+        crate::game::map::spells::threat_sync::set_temporary(m, brute, ga, 50.0);
+        let held = m.spells.temp_threat.contains_key(&(brute, ga));
+        m.remove_creature(brute);
+        (held, m.spells.temp_threat.contains_key(&(brute, ga)))
+    })
+    .await;
+    assert_eq!(r, (true, false));
+}

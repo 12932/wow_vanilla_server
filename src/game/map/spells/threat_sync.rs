@@ -32,6 +32,13 @@ pub fn wiped(map: &mut Map, creature: Guid) {
     map.spells.temp_threat.retain(|(c, _), _| *c != creature);
 }
 
+/// `g` left the map: nothing is held on it, nor by it on another.
+pub fn gone(map: &mut Map, g: Guid) {
+    map.spells
+        .temp_threat
+        .retain(|(c, u), _| *c != g && *u != g);
+}
+
 /// `creature` forgot `unit` (Thistle Tea's `Threat.remove`).
 pub fn removed(map: &mut Map, creature: Guid, unit: Guid) {
     map.spells.temp_threat.remove(&(creature, unit));
