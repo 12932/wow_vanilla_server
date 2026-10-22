@@ -273,3 +273,38 @@ fn an_expired_cod_payment_is_not_sent_back() {
         .collect();
     assert_eq!(back, vec![plain], "only the plain mail went back");
 }
+
+/// The sweep found a mail expired, let the lock go, and acted later on
+/// whatever had that id: a mail its receiver had sent back meanwhile, with
+/// 30 days more, was taken as one returned and expired, and deleted with
+/// its item. Its expiry is read again.
+#[test]
+fn a_mail_sent_back_since_the_sweep_found_it_is_kept() {
+    let realm = harness::realm();
+    let now = mail::now();
+    // As `send_back` leaves it: returned, 30 days from now.
+    let id = mail::post(
+        &realm,
+        mail::Mail {
+            kind: mail::NORMAL,
+            sender: 12,
+            receiver: 11,
+            item: Some(ItemRow {
+                guid: 900_001,
+                entry: AXE,
+                count: 1,
+                ..Default::default()
+            }),
+            deliver_at: now,
+            expires_at: now + 30 * mail::DAY,
+            flags: mail::RETURNED,
+            ..Default::default()
+        },
+    );
+    let mut mails = realm.social.mail.lock();
+    mail::expire(&realm, &mut mails, id, now);
+    assert!(
+        mails.mails.get(&id).is_some_and(|m| m.item.is_some()),
+        "kept, item and all"
+    );
+}

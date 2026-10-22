@@ -898,20 +898,28 @@ pub fn sweep(realm: &Realm) {
     }
     for id in expired {
         let mut mails = realm.social.mail.lock();
-        let Some(m) = mails.mails.get(&id) else {
-            continue;
-        };
-        let keeps = m.item.is_some() || m.money > 0;
-        // Not a mail already sent back, nor a cash-on-delivery payment:
-        // back, it would pay the buyer, who kept the item, again (mangos's
-        // `ReturnOrDeleteOldMails`, `MAIL_CHECK_MASK_COD_PAYMENT |
-        // MAIL_CHECK_MASK_RETURNED`).
-        if m.kind == NORMAL && m.flags & (RETURNED | COD_PAYMENT) == 0 && keeps {
-            send_back(realm, &mut mails, id);
-        } else {
-            mails.remove(id);
-            realm.store.delete_record(KIND_MAIL, u64::from(id));
-        }
+        expire(realm, &mut mails, id, now);
+    }
+}
+
+/// Mail `id`, if it has expired by `now`, back to a player who sent it, or
+/// away. Its expiry is read again under the lock it is acted on under: let
+/// go since the sweep found it, its receiver may have sent it back, with
+/// 30 days more, and it is not to be deleted, item and all.
+pub(crate) fn expire(realm: &Realm, mails: &mut Mails, id: u32, now: i64) {
+    let Some(m) = mails.mails.get(&id).filter(|m| m.expires_at <= now) else {
+        return;
+    };
+    let keeps = m.item.is_some() || m.money > 0;
+    // Not a mail already sent back, nor a cash-on-delivery payment:
+    // back, it would pay the buyer, who kept the item, again (mangos's
+    // `ReturnOrDeleteOldMails`, `MAIL_CHECK_MASK_COD_PAYMENT |
+    // MAIL_CHECK_MASK_RETURNED`).
+    if m.kind == NORMAL && m.flags & (RETURNED | COD_PAYMENT) == 0 && keeps {
+        send_back(realm, mails, id);
+    } else {
+        mails.remove(id);
+        realm.store.delete_record(KIND_MAIL, u64::from(id));
     }
 }
 
