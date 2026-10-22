@@ -1993,10 +1993,14 @@ fn land_arrivals(map: &mut Map) {
     map.spells.in_flight = waiting;
     for mut f in due {
         // A target that died while it flew is missed, unless the spell is
-        // for the dead: Thistle Tea keeps only what works on a corpse.
+        // for the dead: Thistle Tea keeps only what works on a corpse. One
+        // whose caster left the map (logged out, teleported) is lost, as
+        // mangos ends a unit's spell events as it leaves the world (a
+        // caster's death doesn't stop it), and as a shot is.
         if map
             .unit_view(f.target)
             .is_none_or(|u| !u.alive && !checks::for_the_dead(&f.spell))
+            || map.unit_view(f.caster).is_none()
         {
             continue;
         }

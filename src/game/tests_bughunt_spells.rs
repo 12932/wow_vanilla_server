@@ -393,3 +393,42 @@ async fn a_cancel_aura_spares_hidden_and_others_party_auras() {
         "the hidden and the other's party aura stay"
     );
 }
+
+/// A bolt whose caster leaves the map while it flies (a logout) is lost,
+/// as mangos ends a unit's spell events as it leaves the world, and as an
+/// arrow is: it doesn't land for someone not there.
+#[tokio::test]
+async fn a_bolt_of_a_caster_gone_doesnt_land() {
+    use super::tests_p3_spells_kit::{at, dummy, health, pass};
+    use crate::game::map::spells;
+    const BOLT: u32 = 990_970;
+    let realm = fast_realm(|d| {
+        let mut bolt = bare(BOLT, 2);
+        bolt.speed = 1.0;
+        effect(&mut bolt, 0, damage(100));
+        insert(d, [bolt]);
+    });
+    let (c, g, map) = human(&realm, "BHIF", "Bolter", Class::Mage).await;
+    let (k, before, flying) = map
+        .query(move |m| {
+            ready(m, g, 60, &[BOLT]);
+            m.spells.travel = Some(true);
+            let k = dummy(m, g, 60, 4.0);
+            let before = health(m, k);
+            spells::cast(m, g, BOLT, at(k), None);
+            (k, before, m.spells.in_flight.len())
+        })
+        .await
+        .unwrap();
+    assert_eq!(flying, 1, "on its way");
+    c.disconnect();
+    harness::offline(&realm, g).await;
+    let after = map
+        .query(move |m| {
+            pass(m, 10_000);
+            health(m, k)
+        })
+        .await
+        .unwrap();
+    assert_eq!(after, before, "it never lands");
+}
