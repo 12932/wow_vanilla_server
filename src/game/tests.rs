@@ -4186,6 +4186,16 @@ pub(crate) mod transports {
         d
     }
 
+    /// The routes are built once: a passenger's arrival or a login aboard
+    /// finds the same one, not all of them built again.
+    #[tokio::test]
+    async fn a_transports_route_is_built_once() {
+        let realm = harness::realm_with(data());
+        let first = crate::game::transports::route_of(&realm, BOAT).expect("its route");
+        let again = crate::game::transports::route_of(&realm, BOAT).expect("its route");
+        assert!(std::ptr::eq(first, again));
+    }
+
     #[tokio::test]
     async fn a_boat_crossing_carries_its_passengers() {
         let realm = harness::realm_with(data());
