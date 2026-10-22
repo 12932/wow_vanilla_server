@@ -444,3 +444,19 @@ async fn the_invasions_follow_the_config() {
     crate::game::invasion::sweep(&realm);
     assert!(!realm.social.invasion.lock().enabled, "the GM's word holds");
 }
+
+/// A GM's connection is marked so, and a player's isn't: its reader
+/// spares a GM the ping rule, as mangos's `HandlePing` spares all but
+/// `SEC_PLAYER`.
+#[tokio::test]
+async fn a_gms_connection_is_spared_the_ping_rule() {
+    for gm in [false, true] {
+        let mut cfg = harness::test_config();
+        cfg.everyone_gm = gm;
+        let realm = realm_with(cfg);
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let online = realm.registry.online(ga).expect("online");
+        assert_eq!(online.outbound.is_gm(), gm);
+    }
+}

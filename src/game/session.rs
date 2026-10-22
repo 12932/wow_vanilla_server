@@ -320,6 +320,7 @@ impl Session {
         let mut cooldowns = Cooldowns::new(self.realm.config().packet_cooldown);
         // A GM's account asks `/who`, whois and inspect as often as it likes.
         let gm = self.gm_level() > crate::accounts::PLAYER;
+        self.outbound.set_gm(gm);
         let mut recent = Recent::default();
         #[allow(clippy::large_enum_variant)] // Each packet goes through once.
         enum Next {

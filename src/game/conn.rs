@@ -824,6 +824,9 @@ struct OutboundInner {
     /// sent it is stamped under this lock, so the stamps follow its `Sub`
     /// and come before its `Unsub`.
     sub: parking_lot::Mutex<Option<Subscription>>,
+    /// The account is a GM's: the ping rule spares it ([`PingRate`]), as
+    /// mangos's `HandlePing` spares all but `SEC_PLAYER`.
+    gm: AtomicBool,
 }
 
 /// A forced movement a client has been sent and hasn't acknowledged, by
@@ -1161,6 +1164,7 @@ fn queue(budget: usize) -> (Outbound, Frames) {
             held: parking_lot::Mutex::new(Vec::new()),
             orders: parking_lot::Mutex::new(Orders::default()),
             sub: parking_lot::Mutex::new(None),
+            gm: AtomicBool::new(false),
         }),
     };
     (
@@ -1397,6 +1401,16 @@ impl Outbound {
             .saturating_add(self.lag())
     }
 
+    /// The account is a GM's (or isn't): its reader spares it the ping
+    /// rule.
+    pub fn set_gm(&self, gm: bool) {
+        self.inner.gm.store(gm, Ordering::Relaxed);
+    }
+
+    pub fn is_gm(&self) -> bool {
+        self.inner.gm.load(Ordering::Relaxed)
+    }
+
     /// Closed, or the writer has gone.
     pub fn is_closed(&self) -> bool {
         self.inner.shared.closed.load(Ordering::Acquire) || self.inner.tx.is_closed()
@@ -1523,7 +1537,7 @@ pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
         };
         PACKETS_IN.fetch_add(1, Ordering::Relaxed);
         if let ClientOpcodeMessage::CMSG_PING(ping) = &msg {
-            if !pings.allow(Instant::now()) {
+            if !pings.allow(Instant::now()) && !outbound.is_gm() {
                 warn!("a client pings too fast; disconnecting it");
                 break;
             }
@@ -2433,6 +2447,41 @@ mod tests {
             };
         }
         assert_eq!(pongs, 1 + max, "the first, and those let through");
+    }
+
+    /// A GM's pings aren't counted against them, as mangos kicks only
+    /// `SEC_PLAYER` for them: GM tools and test clients ping faster.
+    #[tokio::test]
+    async fn a_gms_flood_of_pings_is_answered() {
+        let (server, client) = paired_crypto();
+        let (_, decrypter) = server.split();
+        let (mut encrypter, _) = client.split();
+        let (mut a, b) = duplex(1 << 20);
+        let (tx, _rx) = mpsc::channel(8);
+        let (outbound, mut frames) = queue(1 << 20);
+        outbound.set_gm(true);
+        let reader = tokio::spawn(run_reader(b, decrypter, tx, outbound.clone()));
+        for i in 0..100u32 {
+            let mut body = i.to_le_bytes().to_vec();
+            body.extend_from_slice(&0u32.to_le_bytes());
+            let mut packet = encrypter.encrypt_client_header(4 + 8, 0x1DC).to_vec();
+            packet.extend_from_slice(&body);
+            a.write_all(&packet).await.unwrap();
+        }
+        let mut pongs = 0;
+        while pongs < 100 {
+            let item = tokio::time::timeout(Duration::from_secs(5), frames.rx.recv())
+                .await
+                .expect("a pong for each")
+                .expect("the queue open");
+            pongs += match item {
+                Item::One(..) => 1,
+                Item::Corked(c, _) => c.len(),
+                Item::Sub { .. } | Item::Unsub(_) => 0,
+            };
+        }
+        assert!(!outbound.is_closed());
+        reader.abort();
     }
 
     #[test]
