@@ -1021,3 +1021,69 @@ second the outbound path (about 2 µs of CPU a packet) fills clients' queues to 
 known pairs well inside sight skipped); the fan-out batched per observer or moved off the map's thread; back-pressure
 on the mailbox (a mover's queued heartbeats coalesced); the writer's cost a packet; a crowd's creates and the login's
 GM commands at arrival (placement held at about 45 a second).
+
+## The outbound path (2026-10-22)
+
+What a packet costs from a map's thread to a client's socket (`conn.rs`, `map/observers.rs`), measured with
+`benches/outbound.rs` (`cargo bench --bench outbound`) on a 32-core box, the benchmark pinned to 8 cores that other
+work shared, and with the drill at 200 bots (wvs on 4 cores, peon on 4).
+
+What changed, in order:
+
+1. **The writer** copies each frame into the burst's one buffer and encrypts its header there (ARC4 in order), one write
+   a burst; the byte budget is a plain counter (one atomic add a frame) where it was a semaphore.
+2. **The cork** (`conn::Cork`): while one is alive on a thread, what it queues for a client waits and goes in one push a
+   client at its end. A map corks a run of movement packets and its update; any other event runs uncorked, what was
+   corked pushed first, and so do `MapHandle::send`, `Map::take_player` and a session's control: a call's answer, a
+   client handed on or a session told never overtakes what was sent before it. The budget is taken, a hold keeps what
+   it keeps and a closed client takes nothing, at the send, as before.
+3. **Broadcasts** (`conn::broadcast`): corked, a frame to an object's observers is kept once, with the set of them as
+   bits in the map's numbering of its clients (`map::observers::ClientTable`); each observer's writer takes its share of
+   the cork's broadcasts, in order with what was sent to it alone. An object's `Observers` keeps the set's bits until
+   the set changes (any mutable use is a new generation; a debug build checks the kept bits against the set at every
+   use). A held client's share goes into its hold at once. The map's cost is a packet's, not a packet's times its
+   observers; the budget for a broadcast is counted at the push.
+4. **Batches** (`[network] broadcast_batch_ms`, 10 by default): a map parks a run of movement's cork between bursts
+   (`Cork::park`, `Cork::resume`), so a client gets one push (one wake of its writer, one write) a batch, not one an
+   event. Pushed at the update, at any other event, or at the batch's end.
+5. **Fewer heartbeats for distant observers** (`[visibility] distant_move_yards`, `distant_move_every`; off by
+   default): past the yards, one in N of a mover's heartbeats; starts, stops, jumps, turns and landings always.
+
+The microbenchmarks (deliveries or packets a second, the median; the before is the drill's merge, 0.1.93):
+
+| Case | Before | After |
+|---|---|---|
+| writer, its queue full, to a sink | 62 M (16 ns a packet) | 65 to 74 M (14 to 15 ns) |
+| writer, a cork's broadcasts (one client of 3,000 in each) | | 38 M (26 ns) |
+| writer, a write a packet to a loopback socket | 150 k (6.6 µs) | the same: the system call |
+| writer, 64 a write | 7.5 M | 7.5 M |
+| the map's fan-out, 64 heartbeats to 100 / 880 / 2,000 / 3,000 observers | 41 / 40 / 40 / 40 M (25 ns) | 450 / 476 / 450 / 470 M (2.1 ns, broadcast) |
+| the same, corked one by one | | 42 / 35 / 31 / 31 M |
+| end to end to loopback sockets, 4 tokio workers, 100 / 880 / 2,000 / 3,000 | 12.2 / 12.7 / 10.8 / - M | 19.9 / 20.6 / 17.7 / 15.7 M |
+
+End to end is the box's: 4 workers writing to 3,000 sockets whose reading threads share the same 8 cores. A packet's
+write is about 6.6 µs a system call, so what counts is how many go in one: the batches.
+
+The drill at 200 bots, the random phase:
+
+| | Before | Cork and broadcasts, no batch | Batch 5 ms | Batch 10 ms |
+|---|---|---|---|---|
+| Kalimdor events, mean µs | 29.3 | 31.3 | 8.4 | 7.4 |
+| Kalimdor update p50 / p99 ms | 3.22 / 6.13 | 2.67 / 5.19 | 2.48 / 4.88 | 2.64 / 5.33 |
+| Kalimdor's thread busy | 9% | 8% | 6% | 6% |
+| wvs CPU (cores) | 0.89 | 0.83 | 0.33 | 0.26 |
+| broadcast latency p50 / p99 ms | 0 / 4 | 1 / 4 | 5.1 / 9.1 | 7 / 14 |
+| delivered | 100.8% | 100.8% | 100.8% | 100.7% |
+
+Without the batch an event cost what it did: at 200 bots the fan-out's pushes were cheap, and its cost was the wake of
+each observer's writer, one an event. With it, the server's CPU falls by two thirds for 170,000 packets a second, for
+7 ms more latency at the median. At 3,000 bots each moving as the drill's do (about 4 packets a second) the map's
+broadcasts cost about 2 ns a delivery, 38 million deliveries a second, about 8% of its thread, where one by one they
+would cost more than the thread.
+
+`SMSG_COMPRESSED_MOVES` (0x2FB), looked at for carrying other players' movement: mangos-classic never sends it
+(`Handle_ServerSide`), and wow_messages lays it out for monster moves and splines only. In the 1.12.1 client its
+handler reads a size, inflates the rest, and hands each inner packet (a byte of size, then the opcode and body) to the
+same dispatch as a packet from the socket, whose table has `MSG_MOVE_HEARTBEAT`'s handler: by the code, it would take
+players' movement. It isn't in the client check, and isn't sent: the batches already make one write of a client's
+packets, and compressing each client's share would cost the deflate a client, not once.
