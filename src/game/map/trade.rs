@@ -10,6 +10,7 @@ use crate::game::fields::*;
 use crate::game::map::Map;
 use crate::game::map::combat::dist;
 use crate::game::map::death::Death;
+use crate::game::map::inventory::MAX_MONEY;
 
 pub const SLOTS: usize = 7;
 /// The slot whose item stays with its owner.
@@ -342,9 +343,6 @@ pub fn update(map: &mut Map) {
         cancel(map, g, SMSG_TRADE_STATUS_TradeStatus::TargetToFar);
     }
 }
-
-/// The most money a player may hold.
-const MAX_MONEY: u32 = 2_147_483_647;
 
 /// `CMSG_ACCEPT_TRADE`: when both have, it goes through.
 pub fn accept(map: &mut Map, g: Guid) {
