@@ -552,9 +552,12 @@ fn gear_pool(
     use rand::seq::SliceRandom;
     let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
     let level = u32::from(level);
-    let mut out: Vec<&crate::game::data::ItemTemplate> = data
-        .items
-        .values()
+    // Each type's items, not all of them: a look through every item for
+    // each of the twenty or so slots was 2.3 ms of the map's thread a
+    // `.gear` (docs/PERFORMANCE.md, "Arrival").
+    let mut out: Vec<&crate::game::data::ItemTemplate> = types
+        .iter()
+        .flat_map(|t| data.items_of_type(*t))
         .filter(|t| match pick {
             Pick::Random => {
                 (2..=3).contains(&t.quality)
@@ -565,7 +568,6 @@ fn gear_pool(
                 (2..=4).contains(&t.quality) && t.required_level <= level && !unreal(&t.name)
             }
         })
-        .filter(|t| types.contains(&t.inventory_type))
         .filter(|t| {
             t.required_skill == 0
                 && t.required_spell == 0

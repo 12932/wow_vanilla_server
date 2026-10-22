@@ -545,6 +545,10 @@ pub struct Map {
     /// Create blocks built this update, by object, for every observer that
     /// needs one.
     create_cache: AHashMap<Guid, Arc<[u8]>>,
+    /// The update's frames of `SMSG_UPDATE_OBJECT`, by their packets'
+    /// content: one sent alike to many (a crowd told of a newcomer, the
+    /// crowd's creates for newcomers) is framed and compressed once.
+    shared_frames: update::SharedFrames,
     pub stats: MapStats,
     pub started: Instant,
     pub now: Instant,
@@ -888,6 +892,24 @@ impl Drop for EventProbe {
     }
 }
 
+/// [`Map::after_events`], under guard (and, for the world benchmark,
+/// counted as an event of its own).
+fn after_event(map: &mut Map) {
+    if map.holding.is_empty() {
+        return;
+    }
+    #[cfg(all(feature = "world-bench", unix))]
+    let _probe = bench_probe::enabled().then(|| {
+        EventProbe(
+            map.key,
+            bench_probe::event_start(),
+            Instant::now(),
+            "after events",
+        )
+    });
+    guarded(map, "after an event", Map::after_events);
+}
+
 /// Run a map's actor until it is told to stop.
 async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
     guarded(&mut map, "populating", |m| {
@@ -910,7 +932,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
                 // A client the event held goes as it ends, not at the
                 // burst's: what else it is sent waits no longer.
-                guarded(&mut map, "after an event", Map::after_events);
+                after_event(&mut map);
                 // Drain what else has arrived, a bounded amount, so the
                 // update isn't starved.
                 let mut stop = false;
@@ -923,7 +945,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                                 stop = true;
                                 break;
                             }
-                            guarded(&mut map, "after an event", Map::after_events);
+                            after_event(&mut map);
                         }
                         Err(_) => break,
                     }
@@ -1192,6 +1214,7 @@ impl Map {
             forget: AHashMap::new(),
             batches: AHashMap::new(),
             create_cache: AHashMap::new(),
+            shared_frames: update::SharedFrames::default(),
             stats: MapStats::default(),
             started: now,
             now,
@@ -1913,6 +1936,7 @@ impl Map {
         self.step("values", Map::flush_values);
         self.step("batches", Map::flush_batches);
         self.create_cache.clear();
+        self.shared_frames.clear();
 
         let took = started.elapsed();
         self.stats.last_update = took;
@@ -2047,10 +2071,10 @@ impl Map {
         let held = Held(std::mem::take(&mut self.holding));
         for (g, out) in &held.0 {
             let first = if out.has_held() {
-                self.batches
-                    .remove(g)
-                    .map(update::Batch::finish)
-                    .unwrap_or_default()
+                match self.batches.remove(g) {
+                    Some(b) => b.finish_shared(&mut self.shared_frames),
+                    None => Vec::new(),
+                }
             } else {
                 Vec::new()
             };
@@ -2098,11 +2122,10 @@ impl Map {
             if let Some(guids) = self.forget.remove(&g) {
                 self.settle_forgets(g, &guids);
             }
-            let first = self
-                .batches
-                .remove(&g)
-                .map(update::Batch::finish)
-                .unwrap_or_default();
+            let first = match self.batches.remove(&g) {
+                Some(b) => b.finish_shared(&mut self.shared_frames),
+                None => Vec::new(),
+            };
             one.0[0].1.release(first);
         }
     }
@@ -2210,7 +2233,7 @@ impl Map {
             let Some(p) = self.players.get(&guid) else {
                 continue;
             };
-            for frame in batch.finish() {
+            for frame in batch.finish_shared(&mut self.shared_frames) {
                 p.outbound.send_frame(frame);
             }
         }

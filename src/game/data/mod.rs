@@ -494,6 +494,11 @@ pub struct GameData {
     pub gameobject_templates: AHashMap<u32, GameObjectTemplate>,
     pub gameobject_spawns: AHashMap<u32, Vec<GameObjectSpawn>>,
     pub items: AHashMap<u32, ItemTemplate>,
+    /// The items' entries by inventory type, in entry order: built at its
+    /// first use (`.gear`'s look for each slot), the items being fixed by
+    /// then.
+    #[cfg_attr(test, serde(skip))]
+    pub items_by_type: std::sync::OnceLock<AHashMap<u32, Vec<u32>>>,
     pub areas: AHashMap<u32, AreaInfo>,
     pub area_triggers: AHashMap<u32, AreaTrigger>,
     pub maps: AHashMap<u32, MapInfo>,
@@ -585,6 +590,25 @@ impl GameData {
 
     pub fn item(&self, entry: u32) -> Option<&ItemTemplate> {
         self.items.get(&entry)
+    }
+
+    /// The items of inventory type `t`, in entry order.
+    pub fn items_of_type(&self, t: u32) -> impl Iterator<Item = &ItemTemplate> {
+        let by_type = self.items_by_type.get_or_init(|| {
+            let mut by: AHashMap<u32, Vec<u32>> = AHashMap::new();
+            for i in self.items.values() {
+                by.entry(i.inventory_type).or_default().push(i.entry);
+            }
+            for v in by.values_mut() {
+                v.sort_unstable();
+            }
+            by
+        });
+        by_type
+            .get(&t)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| self.items.get(e))
     }
 
     pub fn area(&self, id: u32) -> Option<&AreaInfo> {

@@ -9,7 +9,8 @@
 //! ```
 //!
 //! - `arrival`: N players stand on a 60-yard disc, out of GM mode; then
-//!   `CROWD_NEWCOMERS` (200) more come in at once as the drill's bots do:
+//!   `CROWD_NEWCOMERS` (200) more come in at once (or `CROWD_RATE` a
+//!   second) as the drill's bots do:
 //!   created, logged in at the disc, `.character level 30`, `.gear`,
 //!   `.god on`, `.gm off`, `.go xyz` to a spot on it, the teleport
 //!   acknowledged. It reports the newcomers placed a second, each step's
@@ -440,10 +441,17 @@ async fn arrival(cfg: &'static wow_vanilla_server::config::ServerConfig, data: G
     bench_probe::take();
     bench_probe::take_kinds();
     bench_probe::take_mailbox();
+    let rate: f64 = env("CROWD_RATE", 0.0);
+    if rate > 0.0 {
+        println!("  (spawned {rate} a second)");
+    }
     let t0 = Instant::now();
     let mut joins = Vec::with_capacity(newcomers);
     for i in 0..newcomers {
         let realm = realm.clone();
+        if rate > 0.0 {
+            tokio::time::sleep_until((t0 + Duration::from_secs_f64(i as f64 / rate)).into()).await;
+        }
         joins.push(tokio::spawn(async move {
             let mut marks = Vec::with_capacity(7);
             let start = Instant::now();
