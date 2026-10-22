@@ -3037,10 +3037,45 @@ pub fn combat_began(map: &mut Map, g: Guid) {
     }
 }
 
-/// `CMSG_CANCEL_CAST` and `CMSG_CANCEL_CHANNELLING`.
+/// Whatever the unit casts or channels stops, and a next-swing strike
+/// waiting is taken back.
 pub fn cancel(map: &mut Map, g: Guid) {
     interrupt(map, g);
     crate::game::map::combat::cancel_queued(map, g);
+}
+
+/// `CMSG_CANCEL_CAST`: the cast or channel of `spell` stops, if that is
+/// what is under way, and a next-swing strike of it waiting is taken back
+/// (mangos's `InterruptNonMeleeSpells(false, spellId)`; 0 names any). A
+/// cancel that comes after its cast is done stops nothing of the next.
+pub fn cancel_cast(map: &mut Map, g: Guid, spell: u32) {
+    let named = |id: u32| spell == 0 || id == spell;
+    if map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .is_some_and(|c| named(c.spell))
+    {
+        interrupt(map, g);
+    }
+    if map
+        .combat(g)
+        .and_then(|c| c.queued)
+        .is_some_and(named)
+    {
+        crate::game::map::combat::cancel_queued(map, g);
+    }
+}
+
+/// `CMSG_CANCEL_CHANNELLING`: the channel alone, whatever it names
+/// (mangos's `InterruptSpell(CURRENT_CHANNELED_SPELL)`).
+pub fn cancel_channel(map: &mut Map, g: Guid) {
+    if map
+        .caster(g)
+        .and_then(|c| c.casting.as_ref())
+        .is_some_and(|c| c.channel_until.is_some())
+    {
+        interrupt(map, g);
+    }
 }
 
 /// How far from where a cast began a caster may be before it has moved:

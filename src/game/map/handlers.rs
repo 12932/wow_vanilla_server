@@ -246,9 +246,11 @@ impl Map {
             ClientOpcodeMessage::CMSG_CAST_SPELL(m) => {
                 crate::game::map::spells::cast_request(self, guid, m.spell, &m.targets)
             }
-            ClientOpcodeMessage::CMSG_CANCEL_CAST(_)
-            | ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => {
-                crate::game::map::spells::cancel(self, guid)
+            ClientOpcodeMessage::CMSG_CANCEL_CAST(m) => {
+                crate::game::map::spells::cancel_cast(self, guid, m.id)
+            }
+            ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => {
+                crate::game::map::spells::cancel_channel(self, guid)
             }
             ClientOpcodeMessage::CMSG_CANCEL_AURA(m) => {
                 crate::game::map::auras::cancel(self, guid, m.id)
