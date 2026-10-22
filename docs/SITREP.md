@@ -1,9 +1,68 @@
-# Sitrep (2026-10-20)
+# Sitrep (2026-10-22)
 
 Two days of work toward the goal you set: align wvs with Thistle Tea, using mangos-classic as a second reference;
 fix the kobold's reach; focus on performance and robustness; write down every decision and question here; then
 review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS.md](DECISIONS.md) keeps every
 question and decision in full; this page is the index.
+
+## Since round 11: calls for you (2026-10-22)
+What was decided without you since round 11, or left for you. Each has a recommendation; say which to change.
+Answered ones move to DECISIONS.
+
+**Left for you (nothing done until you say):**
+1. **When a creature is tapped.** wvs, as Thistle Tea, taps it for whoever it aggroes; mangos-classic taps only
+   on damage, so a creature that runs at a passer-by isn't theirs until they hit it. *Recommend mangos's*: a
+   creature that aggroes a bystander no longer locks the kill from the player fighting it.
+2. **Overkill in a kill's damage shares** (who gets the reputation and XP split between players and NPCs). Both
+   references count the overkill. *Recommend keeping it* as both do.
+3. **A possessed player's spellbook.** The Mind Controller may cast any spell the victim knows (mangos checks the
+   spellbook; the client's possess bar can't send most). *Recommend keeping mangos's.*
+4. **Group loot money with a member on another map.** mangos pays them their share anyway; wvs counts them in the
+   split but pays nothing. *Recommend splitting among those present* (simple, and what the looters see).
+5. **A second rogue picking pockets someone has open.** mangos shows them the same loot; wvs keeps pockets per rogue.
+   *Recommend refusing the second until the first is done.*
+6. **Mail money past the gold cap.** Take what fits and leave the rest in the mail, or refuse (1.12 has no
+   gold-cap error to show). *Recommend taking what fits.*
+7. **Groups whose members are all gone for good.** Kept and swept for ever today. *Recommend expiring them after
+   30 days with no member online.*
+8. **Group commands from a battleground.** In a battleground raid, should kick, loot rules and the like act on the
+   player's own group? *Recommend yes, as mangos.*
+9. **Town guards.** No cap on the guards one town calls at once (mangos has none; decision 65). *Recommend a cap of
+   12 a town*, as a `[guards]` setting.
+10. **The memory guard's timings** (hold 30 s at most, then rest 1 minute doubling to 10). *Recommend settings*,
+    under `[network]`.
+11. **Old login protocols.** wvs answers two other client builds' login (a leftover TBC realm list among them);
+    mangos refuses every build but 5875. *Recommend refusing them.*
+12. **A knockback's flight** ends when the client says it landed (up to 10 s, as mangos). *Recommend ending it at
+    its ballistic time*, stricter than mangos: a launch can't be stretched into a flight.
+13. **A client that never acknowledges a far teleport** can now only ask, acknowledge and log out. Kick it after
+    a while? mangos doesn't. *Recommend a 60 s kick.*
+
+**Made without you (each followed mangos where it had an answer; say if you'd rather otherwise):**
+- **Round 12's own calls** (decision 73): a disconnect lingers 60 s; the speed allowance is a 2 s bank; an empty copy
+  lasts 30 minutes; groups are kept in the store, a battleground side's raid isn't; mining and skinning skill-ups
+  don't decrease; player commands are on; two HoTs of one family stand together; Blind has its own DR group.
+- **A creature gives up on a victim its client has forgotten** and who stands past its sight
+  (`[creatures] evade_out_of_sight`, on; a cinematic's or Far Sight's camera elsewhere ends no fight).
+- **The adaptive broadcast window's thresholds:** it doubles past a CPU of 0.85, a map at 0.9 of its update or a
+  mailbox of 2,000, halves under 0.5 and 0.6, between your 10 ms and 40 ms (`[network] broadcast_batch_*`).
+- **Hyperspawn's details** (decision 77): eight sibling subzones added to your six, where the navmesh puts the
+  starting creatures; a corpse with loot waits up to 30 s past a fast respawn (`loot_wait_secs`); a creature with
+  one spawn on its map counts as named and is exempt; the curve's defaults (7 s at 10 kills a minute in a pocket of
+  8, the 2 s floor from about 31).
+- **`.durability off`** (decision 78) leaves resurrection sickness (an aura, not wear); `.debug durability` is
+  refused while it's off.
+- **A moderator or above logs out at once** anywhere (mangos's `InstantLogout`).
+- **Zul'Farrak's pyramid waves face the altar** (every reference has them face north; none has them dance).
+
+**Found, not yet done:**
+- **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick
+  notice sent to a player in a battleground (it may clear the raid window).
+- **peon:** two warriors given no shield still try Shield Block; a hunter calls a dead pet instead of reviving it;
+  `.additem` stacks ammo and reagents again on each reconnect; the raid's casters don't wand.
+- **Next, by the survey** ([review6.md](review/review6.md)): 47 of 69 raid bosses have no AI (Naxxramas, the Temple
+  and Ruins of Ahn'Qiraj, Zul'Gurub); four quest events written in code (the Dreadsteed, Jail Break!, The
+  Challenge, the Avatar of Hakkar); no player limit or login queue; no shutdown countdown or AFK logout.
 
 ## In short
 - **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an

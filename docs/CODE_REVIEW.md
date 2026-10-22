@@ -10,6 +10,13 @@ are in [review/](review/):
 
 The review of 79b6def that this file held before predates the per-map rewrite, and is in the git history.
 
+## Review 6 (2026-10-22): done
+A bug hunt over seven areas (112 findings) and a second survey against mangos-classic:
+[review/review6.md](review/review6.md). 92 fixed with a test each, the architectural ones deferred, the calls for
+you in [SITREP.md](SITREP.md)'s "Since round 11". The most important: a Mind Controlled creature casting any spell,
+possessed units moved unchecked, trading with oneself, the client's own zone, banners taken with no cast, a rename
+deleting another character, and soft locks in Stratholme and Blackwing Lair.
+
 ## Review 5 (2026-10-20): open
 Six reviewers, by area: [review/review5.md](review/review5.md), its first table the 21 that matter most (6 high: a
 crafted flight route corrupting others' packet streams, a writer outliving its close, a long mail subject cutting
