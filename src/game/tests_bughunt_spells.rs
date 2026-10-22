@@ -237,3 +237,46 @@ async fn a_damage_shield_meets_immunity() {
         .unwrap();
     assert_eq!(out, (10, 0), "ten, then none through the immunity");
 }
+
+/// A saved aura whose spell's cooldown waits for its end (Stealth's kind)
+/// and which doesn't come back at login (run out while away) leaves no
+/// cooldown waiting, as mangos's `_LoadAuras` adds it only for an aura put
+/// back: the spell may be cast again, not locked until the next login.
+#[tokio::test]
+async fn a_waiting_cooldown_goes_with_an_aura_that_didnt_come_back() {
+    use crate::game::map::spells::cooldowns::{self, SavedAura};
+    const VEIL: u32 = 990_940;
+    let realm = fast_realm(|d| {
+        let mut veil = bare(VEIL, 0);
+        veil.duration_index = LASTS_15S;
+        veil.recovery_time = 10_000;
+        veil.attributes[0] |= 0x200_0000;
+        // Its time runs while its player is away.
+        veil.attributes[4] |= 0x4;
+        effect(&mut veil, 0, aura(auras::AURA_DUMMY, 0, 1, 1));
+        insert(d, [veil]);
+    });
+    let (_c, g, map) = human(&realm, "BHWC", "Veiled", Class::Rogue).await;
+    let out = map
+        .query(move |m| {
+            ready(m, g, 60, &[VEIL]);
+            let p = m.players.get_mut(&g).unwrap();
+            p.row.state.saved_at_ms = chrono::Utc::now().timestamp_millis() - 60_000;
+            p.row.state.auras = vec![SavedAura {
+                spell: VEIL,
+                caster: g.guid(),
+                stacks: 1,
+                left: Some(5_000),
+                amounts: vec![(0, 1)],
+                ..Default::default()
+            }];
+            cooldowns::restore(m, g);
+            (
+                has(m, g, VEIL),
+                m.caster(g).unwrap().pending_cooldowns.contains(&VEIL),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(out, (false, false), "neither the aura nor its wait");
+}

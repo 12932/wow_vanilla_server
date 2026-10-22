@@ -588,6 +588,13 @@ pub fn restore(map: &mut Map, player: Guid) {
     load(p, &data, now);
     let away = away_ms(p);
     let saved = std::mem::take(&mut p.row.state.auras);
+    // The spells `load` set waiting for their aura's end.
+    let waiting: Vec<u32> = saved
+        .iter()
+        .filter(|a| a.caster == 0 || a.caster == player.guid())
+        .map(|a| a.spell)
+        .filter(|id| p.caster.pending_cooldowns.contains(id))
+        .collect();
     for a in saved {
         let Some(s) = data.spells.get(a.spell) else {
             continue;
@@ -632,6 +639,17 @@ pub fn restore(map: &mut Map, player: Guid) {
         );
         // Its stacks, on its bar and in the stats.
         auras::set_stacks(map, player, a.spell, caster, item, a.stacks.max(1));
+    }
+    // One whose aura didn't come back (run out while away, or refused)
+    // waits for nothing: no cooldown, as mangos's `_LoadAuras` adds the
+    // waiting cooldown only for an aura it put back. Else it was locked
+    // until the next login.
+    for spell in waiting {
+        let back = auras::auras(map, player)
+            .is_some_and(|a| a.holders.iter().any(|h| h.spell == spell && h.caster == player));
+        if !back {
+            release(map, player, spell, false);
+        }
     }
 }
 
