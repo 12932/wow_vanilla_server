@@ -1944,6 +1944,13 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
 
 const SILITHYST_CAP_REWARD: u32 = 31_247;
 
+/// Effects whose `spell_effect_mod` row is left out, as mangos-classic
+/// scripts them on the client's data: Nefarian's Wild Magic (23410) is cast
+/// at the mages about him (enemies around the caster, `Spell::CheckTargetScript`
+/// keeping the mages), where vmangos's row turns it on Nefarian himself, and
+/// the mage's class call would reach no one.
+const KEPT_EFFECTS: [(u32, usize); 1] = [(23410, 0)];
+
 /// vmangos's corrections to `spell_template` (`spell_mod` and
 /// `spell_effect_mod`): -1 leaves a value as it is.
 fn apply_spell_mods(db: &Connection, spells: &mut AHashMap<u32, super::spells::SpellTemplate>) {
@@ -2063,6 +2070,9 @@ fn apply_spell_mods(db: &Connection, spells: &mut AHashMap<u32, super::spells::S
         )
     });
     for (id, i, v, f) in effect_mods {
+        if KEPT_EFFECTS.contains(&(id, i)) {
+            continue;
+        }
         let Some(e) = spells.get_mut(&id).and_then(|t| t.effects.get_mut(i)) else {
             continue;
         };
