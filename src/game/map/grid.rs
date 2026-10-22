@@ -246,6 +246,16 @@ impl Grid {
     }
 }
 
+/// The nearest a point in `cell` is to `(x, y)`, squared.
+pub fn nearest2(cell: CellKey, x: f32, y: f32) -> f32 {
+    let near = |v: f32, i: i32| {
+        let low = i as f32 * CELL_YARDS;
+        v.clamp(low, low + CELL_YARDS) - v
+    };
+    let (dx, dy) = (near(x, cell.0), near(y, cell.1));
+    dx * dx + dy * dy
+}
+
 /// The farthest a point in `cell` is from `(x, y)`, squared.
 pub fn farthest2(cell: CellKey, x: f32, y: f32) -> f32 {
     let far = |v: f32, i: i32| {

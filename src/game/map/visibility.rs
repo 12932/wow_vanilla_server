@@ -349,6 +349,18 @@ pub fn refresh_dirty(map: &mut Map) {
         map.grid.unplain_all();
         map.visibility_dirty.radius = r;
     }
+    // Those to be worked out whole, this update or later, are taken whole
+    // by the others meanwhile: what changed them may change who sees them.
+    let whole: Vec<Guid> = map
+        .visibility_dirty
+        .marked
+        .iter()
+        .filter(|(_, (k, _))| *k == Kind::Full)
+        .map(|(g, _)| *g)
+        .collect();
+    for g in whole {
+        unflag(map, g);
+    }
     let started = Instant::now();
     let budget = map.cfg.visibility_budget;
     let last = map.visibility_dirty.seq;
@@ -700,8 +712,11 @@ fn decide_moved(
 ) -> (u64, u64) {
     let r = radius(map);
     let keep = r + MARGIN;
+    let (r2, keep2) = (r * r, keep * keep);
     let sq = |v: f32| if v > 0.0 { v * v } else { -1.0 };
     let skip2 = sq(r - DRIFT - delta);
+    // An anchor further than this is of one out of sight now.
+    let beyond2 = (r + DRIFT) * (r + DRIFT);
     // A whole cell: its objects are within DRIFT of their anchors.
     let cell_skip2 = sq(r - 2.0 * DRIFT - delta);
     let me = map.players.get(&object);
@@ -714,6 +729,12 @@ fn decide_moved(
     let (mut skipped, mut looked) = (0u64, 0u64);
     let mut mine = Vec::new();
     for (key, cell) in map.grid.cells_around(pos.x, pos.y, keep) {
+        // A cell wholly past the margin, of plain objects: none of them is
+        // to be introduced either way, and one known (to be parted) shows
+        // in the counts below.
+        if cell.unplain() == 0 && grid::nearest2(key, pos.x, pos.y) > keep2 {
+            continue;
+        }
         if cell.unplain() == 0 && grid::farthest2(key, pos.x, pos.y) <= cell_skip2 {
             let here = usize::from(Some(key) == my_cell);
             if me.is_some() {
@@ -742,6 +763,34 @@ fn decide_moved(
             known += usize::from(knows && !(!e.plain && map.globals.contains(&e.guid)));
             knowing += usize::from(known_by);
             if e.batch != 0 && e.batch < place {
+                continue;
+            }
+            if e.plain {
+                // Two plain: each sees the other, from where it is, as far
+                // as the map's radius. Past it by more than DRIFT, and
+                // unknown both ways, nothing to look up.
+                let anchor2 = (e.ax - pos.x).powi(2) + (e.ay - pos.y).powi(2);
+                if !knows && !known_by && anchor2 > beyond2 {
+                    continue;
+                }
+                let Some(other) = map.position_of(e.guid) else {
+                    continue;
+                };
+                let d2 = dist2(other, pos);
+                if is_player {
+                    if !known_by && d2 <= r2 {
+                        acts.push(Act::Introduce(e.guid, object));
+                    } else if known_by && d2 > keep2 {
+                        acts.push(Act::Part(e.guid, object));
+                    }
+                }
+                if me.is_some() {
+                    if !knows && d2 <= r2 {
+                        mine.push(Act::Introduce(object, e.guid));
+                    } else if knows && d2 > keep2 {
+                        mine.push(Act::Part(object, e.guid));
+                    }
+                }
                 continue;
             }
             // Should they know it?

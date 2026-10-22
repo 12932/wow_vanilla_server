@@ -16,6 +16,9 @@
 //!   about 23 updates): a sample is an update's visibility in the drill's
 //!   random phase.
 //! - `one`: one player moves among the crowd: a refresh's own cost.
+//! - `wide`: `in_step` on a disc 300 yards across, as a city's crowd: each
+//!   sees about half the others, and many pairs are near the edge of
+//!   sight, where the quick path looks.
 //!
 //! Each as the server does it (`quick`: the quick path, the decisions on
 //! the visibility threads, `WVS_BENCH_THREADS` of them, else the machine's
@@ -48,6 +51,10 @@ enum Way {
 }
 
 fn crowd(n: usize, way: Way) -> (tokio::runtime::Runtime, Crowd) {
+    crowd_on(n, RADIUS, way)
+}
+
+fn crowd_on(n: usize, radius: f32, way: Way) -> (tokio::runtime::Runtime, Crowd) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -66,7 +73,7 @@ fn crowd(n: usize, way: Way) -> (tokio::runtime::Runtime, Crowd) {
     };
     let mut c = {
         let _in = rt.enter();
-        Crowd::with_config(cfg, n, RADIUS)
+        Crowd::with_config(cfg, n, radius)
     };
     c.map.visibility_dirty.one_by_one = matches!(way, Way::Before);
     (rt, c)
@@ -149,5 +156,32 @@ mod one {
     #[divan::bench(args = SIZES, sample_count = 100, sample_size = 1)]
     fn before(b: Bencher, n: usize) {
         one(b, n, Way::Before);
+    }
+}
+
+mod wide {
+    use super::*;
+
+    fn wide(b: Bencher, n: usize, way: Way) {
+        let (_rt, mut c) = crowd_on(n, 150.0, way);
+        b.bench_local(|| {
+            c.shift(1, 0, 9.0);
+            c.refresh();
+        });
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 20, sample_size = 1)]
+    fn quick(b: Bencher, n: usize) {
+        wide(b, n, Way::Quick);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 20, sample_size = 1)]
+    fn quick_one_thread(b: Bencher, n: usize) {
+        wide(b, n, Way::OneThread);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 5, sample_size = 1)]
+    fn before(b: Bencher, n: usize) {
+        wide(b, n, Way::Before);
     }
 }
