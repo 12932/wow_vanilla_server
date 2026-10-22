@@ -2225,3 +2225,26 @@ async fn one_not_of_the_match_who_comes_in_plays_no_part() {
         .await;
     assert_eq!(seen, Some((true, None, false)), "here, but of no side");
 }
+
+/// A flag whose carrier is no longer in the map, gone by any way that
+/// didn't drop it, goes home at the next update rather than being carried
+/// for good.
+#[tokio::test]
+async fn a_flag_whose_carrier_is_gone_goes_home() {
+    let realm = harness::realm_with(gulch());
+    let mut a = player(&realm, "A", "Alice", Race::Human).await;
+    let mut b = player(&realm, "B", "Grom", Race::Orc).await;
+    let map = all_in(&realm, &mut [&mut a, &mut b]).await;
+    stand(&map, 1).await;
+    map.query(|m| {
+        if let Some(b) = m.battleground.as_mut() {
+            b.flags[1] = Some(Flag::Carried(Guid::new(0xdead)));
+        }
+        wsg::update(m);
+    })
+    .await;
+    until(&map, "the flag home", |m| {
+        matches!(flags(m)[1], Some(Flag::AtBase(_)))
+    })
+    .await;
+}

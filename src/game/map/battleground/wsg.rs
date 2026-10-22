@@ -406,9 +406,16 @@ pub fn due(map: &mut Map, d: Due) {
 }
 
 /// Each update: a carrier whose flag aura is gone (cancelled, dispelled
-/// by an immunity) drops it (Thistle Tea's `Flags.after_remove`).
+/// by an immunity) drops it (Thistle Tea's `Flags.after_remove`); one
+/// gone from the map loses it home.
 pub fn update(map: &mut Map) {
     for (s, g) in carriers(map) {
+        // A carrier no longer here (who left by a way that didn't drop it)
+        // has it no more: home it goes, or it would be carried for good.
+        if !map.players.contains_key(&g) {
+            return_flag(map, s, None);
+            continue;
+        }
         // Data without the aura's spell can't show it lost.
         let known = map.realm.data.spells.get(SPELL_FLAG_CARRIED[s]).is_some();
         let lost = known
