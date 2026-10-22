@@ -1171,7 +1171,7 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     before: your read of the variation as the server's coarse check, not a random offset.
 
 75. **Your calls of 2026-10-22, the second batch:**
-    - **A spawn's grace:** a hostile creature just come into the world (spawned, respawned, by a GM) looks for no one
+    - **A spawn's grace:** a hostile creature just come into the world from its spawn (its first, or a respawn; a summon, a script's or a GM's has none) looks for no one
       to attack for `[creatures] spawn_grace_ms` (6000), unless attacked: a respawn mustn't catch a player by
       surprise. mangos-classic has none.
     - **A GM's `/who`:** a GM's account isn't held to `/who`'s, whois's and inspect's 5 s cooldown (mangos's

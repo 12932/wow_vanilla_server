@@ -466,9 +466,10 @@ leash_check_ms = 1000
 # Default 1250. Range 50 to 600000, clamped. Changes at a reload.
 leash_standing_ms = 1250
 
-# Milliseconds a hostile creature just come into the world (spawned,
-# respawned) looks for no one to attack, unless attacked: a
-# respawn doesn't catch a player by surprise (0 for none).
+# Milliseconds a hostile creature just come into the world from its
+# spawn (its first, or a respawn; not a summon) looks for no one to
+# attack, unless attacked: a respawn doesn't catch a player by
+# surprise (0 for none).
 # Default 6000. Range 0 to 600000, clamped. Changes at a reload.
 spawn_grace_ms = 6000
 
