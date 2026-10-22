@@ -224,7 +224,9 @@ pub fn check(map: &Map, caster: Guid, owner: Guid, c: &TradeCast) -> Option<u8> 
             return Some(fail::NO_POWER);
         }
     }
-    // What the caster offers isn't theirs to spend.
+    // What the caster offers isn't theirs to spend, nor what is banked or
+    // sold (mangos's `HasItemCount`: the carried only, as a cast's
+    // reagents are counted elsewhere).
     let offered: Vec<Guid> = p
         .trade
         .as_ref()
@@ -233,15 +235,20 @@ pub fn check(map: &Map, caster: Guid, owner: Guid, c: &TradeCast) -> Option<u8> 
     let spare = |entry: u32| -> u32 {
         p.items
             .iter()
-            .filter(|i| i.entry == entry && !offered.contains(&i.guid))
+            .filter(|i| i.entry == entry && i.carried() && !offered.contains(&i.guid))
             .map(|i| i.count())
             .sum()
     };
     if !p.gm && s.reagents.iter().any(|(r, n)| *r != 0 && spare(*r) < *n) {
         return Some(fail::REAGENTS);
     }
-    if s.totems.iter().any(|t| *t != 0 && p.count_of(*t) == 0) {
-        return Some(fail::TOTEMS);
+    if let Some(code) = s
+        .totems
+        .iter()
+        .filter(|t| **t != 0)
+        .find_map(|t| crate::game::map::professions::tool_missing(p, s, *t))
+    {
+        return Some(code);
     }
     let Some(t) = data.item(target.entry) else {
         return Some(fail::BAD_TARGETS);
@@ -429,11 +436,11 @@ fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, c: &TradeCast) {
     for (reagent, count) in s.reagents.iter().filter(|(r, _)| *r != 0 && !gm) {
         let mut left = *count;
         while left > 0 {
-            let Some(i) = map
-                .players
-                .get(&caster)
-                .and_then(|p| p.items.iter().position(|it| it.entry == *reagent))
-            else {
+            let Some(i) = map.players.get(&caster).and_then(|p| {
+                p.items
+                    .iter()
+                    .position(|it| it.entry == *reagent && it.carried())
+            }) else {
                 break;
             };
             let n = map.players[&caster].items[i].count().min(left);
