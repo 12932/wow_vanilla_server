@@ -558,6 +558,147 @@ async fn a_possessed_unit_casts_no_spell_it_doesnt_have() {
     );
 }
 
+const ROOT: u32 = 97_830;
+
+/// [`more`], with a root, on a realm whose players aren't GMs (a GM's
+/// movement isn't checked).
+fn checked_realm() -> std::sync::Arc<crate::game::Realm> {
+    use crate::game::map::auras::AURA_MOD_ROOT;
+    use crate::game::tests_p3_entity::aura_effect;
+    let mut d = more();
+    d.spells.spells.insert(
+        ROOT,
+        crate::game::tests_p3_entity::spell(ROOT, &[aura_effect(AURA_MOD_ROOT, 1, 0, 1)]),
+    );
+    crate::game::tests_p12c_speed::realm_on(d)
+}
+
+/// A heartbeat of the mover `c`'s client has, at `at` with `flags`.
+async fn beat_as(c: &Client, flags: MovementInfo_MovementFlags, at: Vector3d) {
+    c.send(MSG_MOVE_HEARTBEAT_Client {
+        info: crate::game::tests_p12c_speed::info(flags, at),
+    })
+    .await;
+}
+
+/// Bug hunt (combat and pets; map core): a possessed unit's movement had
+/// only `finite`'s check, so a priest's client could put the player they
+/// Mind Control 300 yards off in a packet, rooted or not, flying. It is
+/// checked as the controller's own is: too far is pulled back, a root
+/// holds, and flags with no aura for them are taken off.
+#[tokio::test]
+async fn a_possessed_player_moves_no_faster_than_they_can_nor_rooted() {
+    use crate::game::tests_p3_player2_ammo::handled;
+    let realm = checked_realm();
+    let (mut a, ga, map) = enter(&realm, "A", "Priest", Race::Human, Class::Priest).await;
+    let (_b, gb, _) = enter(&realm, "B", "Undying", Race::Undead, Class::Warrior).await;
+    learn(&map, ga, &[MIND_CONTROL]);
+    bring(&map, gb, ga, 8.0).await;
+    a.sees(gb).await;
+    flag_pvp(&map, vec![ga, gb]);
+    cast(&a, MIND_CONTROL, Some(gb)).await;
+    assert!(control_update(&mut a, gb).await, "the priest takes hold");
+    a.send(CMSG_SET_ACTIVE_MOVER { guid: gb }).await;
+    handled(&mut a).await;
+    let at = position(&map, gb).await;
+    // Three hundred yards in a packet: pulled back.
+    let far = Vector3d {
+        x: at.x + 300.0,
+        ..at
+    };
+    beat_as(&a, MovementInfo_MovementFlags::new_forward(), far).await;
+    handled(&mut a).await;
+    let x = position(&map, gb).await.x;
+    assert!((x - at.x).abs() < 0.01, "not moved: {x} from {}", at.x);
+    // A step, flying and levitating: taken, the flags off.
+    let step = Vector3d {
+        x: at.x + 1.0,
+        ..at
+    };
+    let flags = MovementInfo_MovementFlags::new_forward()
+        .set_levitating()
+        .set_can_fly();
+    beat_as(&a, flags, step).await;
+    until(&map, "the step taken", move |m| {
+        (m.players[&gb].position().x - step.x).abs() < 0.01
+    })
+    .await;
+    let f = map
+        .query(move |m| m.players[&gb].movement.flags)
+        .await
+        .unwrap();
+    assert!(!f.get_levitating() && !f.get_can_fly(), "{f:?}");
+    // Rooted (the order to the priest's client, acknowledged): a run is
+    // refused and put back.
+    map.query(move |m| {
+        let s = m.realm.data.spells.get(ROOT).cloned().unwrap();
+        crate::game::map::auras::apply(m, gb, gb, &s, 0, 1);
+    })
+    .await;
+    let counter = a
+        .wait_for("SMSG_FORCE_MOVE_ROOT", |m| match m {
+            ServerOpcodeMessage::SMSG_FORCE_MOVE_ROOT(r) if r.guid == gb => Some(r.counter),
+            _ => None,
+        })
+        .await;
+    a.send(CMSG_FORCE_MOVE_ROOT_ACK {
+        guid: gb,
+        movement_counter: counter,
+        info: crate::game::tests_p12c_speed::info(MovementInfo_MovementFlags::new_root(), step),
+    })
+    .await;
+    let run = Vector3d {
+        x: step.x + 5.0,
+        ..step
+    };
+    beat_as(&a, MovementInfo_MovementFlags::new_forward(), run).await;
+    handled(&mut a).await;
+    let x = position(&map, gb).await.x;
+    assert!((x - step.x).abs() < 0.01, "held: {x} from {}", step.x);
+}
+
+/// The same of a possessed creature: an Eye of Kilrogg goes no faster
+/// than its speed.
+#[tokio::test]
+async fn the_eye_of_kilrogg_goes_no_faster_than_it_can() {
+    use crate::game::tests_p3_player2_ammo::handled;
+    let realm = checked_realm();
+    let (mut w, gw, map) = enter(&realm, "W", "Warlock", Race::Human, Class::Warlock).await;
+    learn(&map, gw, &[EYE_OF_KILROGG]);
+    cast(&w, EYE_OF_KILROGG, None).await;
+    let eye = w
+        .wait_for("control of the eye", |m| match m {
+            ServerOpcodeMessage::SMSG_CLIENT_CONTROL_UPDATE(u)
+                if u.guid != gw && u.allow_movement =>
+            {
+                Some(u.guid)
+            }
+            _ => None,
+        })
+        .await;
+    w.send(CMSG_SET_ACTIVE_MOVER { guid: eye }).await;
+    handled(&mut w).await;
+    let at = position(&map, eye).await;
+    let far = Vector3d {
+        x: at.x + 300.0,
+        ..at
+    };
+    beat_as(&w, MovementInfo_MovementFlags::new_forward(), far).await;
+    handled(&mut w).await;
+    let x = position(&map, eye).await.x;
+    assert!((x - at.x).abs() < 0.01, "not moved: {x} from {}", at.x);
+    let step = Vector3d {
+        x: at.x + 2.0,
+        ..at
+    };
+    beat_as(&w, MovementInfo_MovementFlags::new_forward(), step).await;
+    until(&map, "the step taken", move |m| {
+        m.position_of(eye)
+            .is_some_and(|p| (p.x - step.x).abs() < 0.01)
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn the_eye_of_kilrogg_moves_for_its_master_and_goes_with_the_channel() {
     let realm = harness::realm_with(more());

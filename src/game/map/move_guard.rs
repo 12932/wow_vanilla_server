@@ -8,10 +8,13 @@ use std::time::{Duration, Instant};
 
 use wow_world_messages::vanilla::*;
 
+use wow_world_messages::Guid;
+
 use crate::config::AnticheatConfig;
-use crate::game::conn::Order;
-use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER, AURA_MOD_ROOT, AURA_MOD_STUN};
+use crate::game::conn::{Order, Outbound};
+use crate::game::map::auras::{AURA_FEATHER_FALL, AURA_HOVER, AURA_MOD_ROOT, AURA_MOD_STUN, Auras};
 use crate::game::map::player::Player;
+use crate::game::update::Speeds;
 
 /// A player's movement check, between packets.
 #[derive(Debug, Default, Clone, Copy)]
@@ -28,6 +31,13 @@ pub struct MoveGuard {
     launch: Option<(f32, Instant)>,
 }
 
+impl MoveGuard {
+    /// The bank refilled: the unit was put somewhere by the server.
+    pub fn refill(&mut self) {
+        self.bank = None;
+    }
+}
+
 /// How long a client may go on moving under a root or stun whose order it
 /// hasn't acknowledged: the order is on its way (mangos's pending root).
 pub const ROOT_GRACE: Duration = Duration::from_secs(1);
@@ -41,10 +51,50 @@ pub const LAUNCH_LIMIT: Duration = Duration::from_secs(10);
 /// client's float arithmetic, no more (wvs's dead body's half yard).
 const HELD_SLACK: f32 = 0.5;
 
+/// What the checks look at of the unit a client moves: its own player, or
+/// a unit it possesses (mangos-classic's `VerifyMovementInfo` checks the
+/// mover, whoever it is).
+pub struct Mover<'a> {
+    pub guid: Guid,
+    pub name: &'a str,
+    /// Where the server has it.
+    pub position: Vector3d,
+    pub auras: &'a Auras,
+    pub speeds: Speeds,
+    /// The client its orders (root, water walk, hover...) wait on.
+    pub orders: &'a Outbound,
+    /// A GM's flags aren't taken off.
+    pub gm: bool,
+}
+
+impl<'a> Mover<'a> {
+    /// A player their own client moves.
+    pub fn player(p: &'a Player) -> Self {
+        Self::player_moved_by(p, &p.outbound)
+    }
+
+    /// A player the client of `orders` moves (theirs, or a possessor's).
+    pub fn player_moved_by(p: &'a Player, orders: &'a Outbound) -> Self {
+        Self {
+            guid: p.guid,
+            name: &p.name,
+            position: p.position(),
+            auras: &p.auras,
+            speeds: p.speeds,
+            orders,
+            gm: p.gm,
+        }
+    }
+}
+
 /// Whether a root or stun holds `p` (mangos's `UNIT_STAT_ROOT`,
 /// `UNIT_STAT_STUNNED`).
 pub fn held(p: &Player) -> bool {
-    p.auras.has(AURA_MOD_ROOT) || p.auras.has(AURA_MOD_STUN)
+    held_auras(&p.auras)
+}
+
+fn held_auras(auras: &Auras) -> bool {
+    auras.has(AURA_MOD_ROOT) || auras.has(AURA_MOD_STUN)
 }
 
 /// Whether the client's packet tries to go somewhere while a root or stun
@@ -66,7 +116,12 @@ pub fn held_back_with(
     info: &MovementInfo,
     now: Instant,
 ) -> bool {
-    if !held(p) {
+    held_back_of(&Mover::player(p), guard, info, now)
+}
+
+/// [`held_back_with`], of any mover.
+pub fn held_back_of(p: &Mover, guard: &mut MoveGuard, info: &MovementInfo, now: Instant) -> bool {
+    if !held_auras(p.auras) {
         guard.held_since = None;
         return false;
     }
@@ -75,7 +130,7 @@ pub fn held_back_with(
         return false;
     }
     let g = p.guid;
-    let pending = p.outbound.pending_orders().iter().any(|(_, o)| {
+    let pending = p.orders.pending_orders().iter().any(|(_, o)| {
         *o == Order::Root {
             guid: g,
             root: true,
@@ -91,7 +146,7 @@ pub fn held_back_with(
         || f.get_strafe_right()
         || f.get_pitch_up()
         || f.get_pitch_down();
-    steering || horizontal(p.position(), info.position) > HELD_SLACK
+    steering || horizontal(p.position, info.position) > HELD_SLACK
 }
 
 /// `info` with the flags the player has no right to taken off, as mangos's
@@ -103,7 +158,17 @@ pub fn held_back_with(
 /// check: hover"). Not for a GM, nor in a launch's flight (mangos: "maybe
 /// false positives").
 pub fn stripped(p: &Player, info: MovementInfo, walks_on_water: bool) -> MovementInfo {
-    if p.gm || p.misc.move_guard.launch.is_some() {
+    stripped_of(&Mover::player(p), &p.misc.move_guard, info, walks_on_water)
+}
+
+/// [`stripped`], of any mover, with its guard.
+pub fn stripped_of(
+    p: &Mover,
+    guard: &MoveGuard,
+    info: MovementInfo,
+    walks_on_water: bool,
+) -> MovementInfo {
+    if p.gm || guard.launch.is_some() {
         return info;
     }
     let mut f = info.flags;
@@ -122,7 +187,7 @@ pub fn stripped(p: &Player, info: MovementInfo, walks_on_water: bool) -> Movemen
     }
     f = f.clear_levitating().clear_can_fly().clear_flying();
     let g = p.guid;
-    let pending = |off: Order| p.outbound.pending_orders().iter().any(|(_, o)| *o == off);
+    let pending = |off: Order| p.orders.pending_orders().iter().any(|(_, o)| *o == off);
     if f.get_waterwalking() && !walks_on_water && !pending(Order::WaterWalk { guid: g, on: false })
     {
         f = f.clear_waterwalking();
@@ -173,13 +238,26 @@ pub fn too_fast_with(
     now: Instant,
     check: &AnticheatConfig,
 ) -> bool {
+    too_fast_at(p.speeds, guard, last, at, info, now, check)
+}
+
+/// [`too_fast_with`], at the speeds `speeds`.
+pub fn too_fast_at(
+    speeds: Speeds,
+    guard: &mut MoveGuard,
+    last: Vector3d,
+    at: Instant,
+    info: &MovementInfo,
+    now: Instant,
+    check: &AnticheatConfig,
+) -> bool {
     if let Some((_, since)) = guard.launch
         && now.duration_since(since) > LAUNCH_LIMIT
     {
         guard.launch = None;
     }
     let launch = guard.launch.map_or(0.0, |(xy, _)| xy);
-    let speed = p.speeds.run.max(p.speeds.swim).max(launch).max(0.0);
+    let speed = speeds.run.max(speeds.swim).max(launch).max(0.0);
     let rate = speed * check.speed_tolerance;
     let cap = rate * check.latency_allowance_secs + check.distance_allowance_yards;
     let dt = now.saturating_duration_since(at).as_secs_f32();
@@ -201,7 +279,11 @@ pub fn refill(p: &mut Player) {
 /// A knockback the client took: until it lands, it goes at the launch's
 /// speed, and its bank is full at it.
 pub fn launched(p: &mut Player, xy_speed: f32, now: Instant) {
-    let guard = &mut p.misc.move_guard;
+    launched_with(&mut p.misc.move_guard, xy_speed, now);
+}
+
+/// [`launched`], with the guard `guard`.
+pub fn launched_with(guard: &mut MoveGuard, xy_speed: f32, now: Instant) {
     guard.launch = Some((xy_speed.abs(), now));
     guard.bank = None;
 }

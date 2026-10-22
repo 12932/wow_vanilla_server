@@ -210,6 +210,10 @@ pub struct PetState {
     /// or sight: the spell and its range's least and most (mangos's
     /// `CharmInfo::SetSpellOpener`).
     pub opener: Option<(u32, f32, f32)>,
+    /// Possessed, its movement's check as its controller's client moves it
+    /// (`move_guard`), and when that client last moved it.
+    pub move_guard: crate::game::map::move_guard::MoveGuard,
+    pub moved_at: Option<Instant>,
 }
 
 /// How often a pet's health comes back.
@@ -256,6 +260,8 @@ impl PetState {
             commanded: None,
             commanded_at: None,
             opener: None,
+            move_guard: Default::default(),
+            moved_at: None,
         }
     }
 }
