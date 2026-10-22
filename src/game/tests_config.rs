@@ -350,6 +350,10 @@ async fn a_new_character_starts_at_the_configs_level_and_money() {
         .await
         .flatten();
     assert_eq!(got, Some((10, 12_345)));
+    // So does its name entry, what `/who`, the guild roster and insignia
+    // read (it said 1 until a level-up or a restart).
+    let entry = realm.registry.name(ga).unwrap();
+    assert_eq!(entry.level.load(std::sync::atomic::Ordering::Relaxed), 10);
 }
 
 /// The keys the constants became: a reload puts in the live ones, at the

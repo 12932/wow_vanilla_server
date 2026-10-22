@@ -874,6 +874,7 @@ impl Session {
                 kind: *kind,
             });
         }
+        let level = row.level;
         match self.realm.store.create(row).await {
             Ok(()) => {
                 self.realm.registry.add_name(NameEntry {
@@ -883,7 +884,7 @@ impl Session {
                     race,
                     class,
                     gender,
-                    level: 1.into(),
+                    level: level.into(),
                 });
                 info!("{} created {name}", self.account);
                 WorldResult::CharCreateSuccess
