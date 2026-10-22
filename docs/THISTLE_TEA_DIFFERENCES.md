@@ -74,6 +74,9 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   Teleport there to the Stockade's door, the Mystic Ward, the Temple of the Moon), and Rexxar (with Misha) leaves
   Desolace for Orgrimmar, the Undercity or Thunder Bluff, running in from out of sight and off again; one of each in
   the world. Thistle Tea has no script of Rexxar: he walks his road in Desolace.
+- **Zul'Farrak's pyramid waves** gather at the foot of the stairs facing the altar atop the pyramid, where the
+  executioner stands over the cages; Thistle Tea and vmangos summon every troll at 0, so the whole wave faced due
+  north, across the stairs.
 - **`.gear`** replaces what is worn, teaches the skills its items need and leaves its target at full health and
   mana; Thistle Tea's `.debug random equipment` fills only empty slots.
 - **`.character spells`** teaches what the class's trainers would, rank by rank, prerequisites met, talent ranks only

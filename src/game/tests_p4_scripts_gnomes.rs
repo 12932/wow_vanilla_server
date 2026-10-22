@@ -4,9 +4,14 @@
 
 use std::time::Duration;
 
+use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::{MovementBlock_UpdateFlag_Living, Object_UpdateType, Vector3d};
+
 use super::tests_p3_scripts::*;
 use super::tests_p4_scripts_dungeons::*;
 use crate::game::fields::*;
+use crate::game::guid;
 use crate::game::map::instance_script::{self, DONE, Event, FAILED, IN_PROGRESS};
 use crate::game::map::{Map, scripts};
 
@@ -343,6 +348,93 @@ async fn zul_farraks_pyramid_waves() {
         until(&map, 3000, |m| living(m, 7273).len() == 1).await,
         "once a copy"
     );
+}
+
+/// The trolls a create in `m` brings of the pyramid's waves: each, where
+/// it is put and which way it faces.
+fn zf_troll_creates(m: &ServerOpcodeMessage) -> Vec<(Guid, Vector3d, f32)> {
+    let objects = match m {
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+        ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+        _ => return Vec::new(),
+    };
+    objects
+        .iter()
+        .filter_map(|o| match &o.update_type {
+            Object_UpdateType::CreateObject {
+                guid3, movement2, ..
+            }
+            | Object_UpdateType::CreateObject2 {
+                guid3, movement2, ..
+            } if ZF_TROLLS.contains(&guid::entry(*guid3)) => {
+                match movement2.update_flag.get_living()? {
+                    MovementBlock_UpdateFlag_Living::Living {
+                        living_position,
+                        living_orientation,
+                        ..
+                    } => Some((*guid3, *living_position, *living_orientation)),
+                    MovementBlock_UpdateFlag_Living::HasPosition { .. } => None,
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Zul'Farrak's pyramid: the first wave gathers at the foot of the stairs
+/// facing the altar atop the pyramid, the executioner's place over the
+/// cages, as a client below is shown each of its twenty-three created,
+/// creates `WoW.exe`'s own parser reads.
+/// vmangos and Thistle Tea summon them at 0, so all faced due north,
+/// across the stairs.
+#[tokio::test]
+#[ignore = "extended"]
+async fn zul_farraks_first_wave_faces_the_altar() {
+    const ALTAR: (f32, f32) = (1886.8, 1289.89);
+    let Some(realm) = realm() else {
+        return;
+    };
+    let (mut c, _me, _) = hero(&realm, "Altar").await;
+    let below = Vector3d {
+        x: 1886.0,
+        y: 1185.0,
+        z: 9.0,
+    };
+    let map = go(&realm, &mut c, 209, below).await;
+    map.query(|m| {
+        set(m, 1, 2);
+        assert_eq!(data(m, 1), 3, "the first wave");
+    })
+    .await
+    .unwrap();
+    let mut seen: Vec<(Guid, Vector3d, f32)> = Vec::new();
+    while seen.len() < 23 {
+        let more = c
+            .wait_for("the wave's creates", |m| {
+                let v = zf_troll_creates(m);
+                (!v.is_empty()).then_some(v)
+            })
+            .await;
+        seen.extend(more);
+    }
+    assert_eq!(seen.len(), 23);
+    for (g, at, o) in seen {
+        let toward = (ALTAR.1 - at.y).atan2(ALTAR.0 - at.x);
+        assert!(
+            (o - toward).abs() < 0.01,
+            "{g:?} at ({}, {}) faces {o}, the altar {toward}",
+            at.x,
+            at.y
+        );
+        assert!((1.3..1.8).contains(&o), "{g:?} faces up the stairs: {o}");
+    }
+    // And the client reads the wave's creates.
+    use crate::game::tests_client_emu::{capture, checker, run_checker};
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
+    let (frames, _) = capture(vec![&mut c]);
+    run_checker(&check_py, &wow_exe, &frames);
 }
 
 const ULD_FROZEN: u32 = 0x0200_0300;
