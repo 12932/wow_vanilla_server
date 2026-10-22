@@ -1510,8 +1510,10 @@ fn replaces(
         return false;
     }
     if old.spell == new.spell && old.caster == new.caster {
-        // Refreshed in place, unless from another item.
-        return old.item != new.item && old.item.is_some() && new.item.is_some() && false;
+        // Never replaced: from the same item it is refreshed in place
+        // (below); from another item, the two stand together, as mangos's
+        // holders of one spell and caster from two items do.
+        return false;
     }
     // Crowd control of a diminishing returns group takes the place of
     // another of its group, whoever cast it (mangos-classic's
