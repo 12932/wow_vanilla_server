@@ -12,7 +12,11 @@ fn git(args: &[&str]) -> Option<String> {
 /// The commit built, as `WVS_GIT_HASH` (git's short form, 7 characters):
 /// the environment's if a build without the repository sets it (a
 /// container's), else git's, else "unknown". Rebuilt as the commit moves:
-/// HEAD, the branch it names, and the packed refs (a worktree's too).
+/// HEAD, and the branch it names: its own ref file, or, only if git has
+/// packed it away, the packed refs (which a fetch or git's upkeep rewrites
+/// with no commit of ours moving: watched always, they rebuilt the crate
+/// minutes after a build with nothing changed). Only files that exist are
+/// watched: cargo takes a missing one as changed, every build.
 fn git_hash() {
     println!("cargo:rerun-if-env-changed=WVS_GIT_HASH");
     let hash = std::env::var("WVS_GIT_HASH")
@@ -21,14 +25,27 @@ fn git_hash() {
         .or_else(|| git(&["rev-parse", "--short=7", "HEAD"]))
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=WVS_GIT_HASH={hash}");
-    let mut watch = vec!["HEAD".to_owned(), "packed-refs".to_owned()];
-    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
-        watch.push(branch);
+    let path_of = |name: &str| {
+        git(&["rev-parse", "--git-path", name])
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.exists())
+    };
+    // HEAD, and the local branches' folder (a commit on a packed branch
+    // writes its file there anew; cargo scans a folder it watches): a
+    // fetch writes only `refs/remotes`, so it rebuilds nothing.
+    let mut watch: Vec<std::path::PathBuf> = ["HEAD", "refs/heads"]
+        .iter()
+        .filter_map(|n| path_of(n))
+        .collect();
+    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"])
+        && path_of(&branch).is_none()
+        && let Some(p) = path_of("packed-refs")
+    {
+        // The branch lives in the packed refs alone.
+        watch.push(p);
     }
-    for path in watch {
-        if let Some(p) = git(&["rev-parse", "--git-path", &path]) {
-            println!("cargo:rerun-if-changed={p}");
-        }
+    for p in watch {
+        println!("cargo:rerun-if-changed={}", p.display());
     }
 }
 
