@@ -318,6 +318,8 @@ impl Session {
         let mut rate = PacketRate::new(self.realm.config().max_packets_per_sec);
         let mut queries = PacketRate::new(self.realm.config().max_queries_per_sec);
         let mut cooldowns = Cooldowns::new(self.realm.config().packet_cooldown);
+        // A GM's account asks `/who`, whois and inspect as often as it likes.
+        let gm = self.gm_level() > crate::accounts::PLAYER;
         let mut recent = Recent::default();
         #[allow(clippy::large_enum_variant)] // Each packet goes through once.
         enum Next {
@@ -350,7 +352,7 @@ impl Session {
                         self.kicked = true;
                         break;
                     }
-                    if !cooldowns.allow(now, &msg) {
+                    if !gm && !cooldowns.allow(now, &msg) {
                         debug!("{}: a packet on its cooldown, dropped", self.account);
                         continue;
                     }
@@ -1524,7 +1526,7 @@ mod tests {
 
 /// What a client may ask only so often, whatever its rate: `/who`, whois
 /// and inspect, each once in [`COOLDOWN`], as mangos's `InitOpcodeCooldowns`
-/// has them; one sooner is dropped. A `/who` costs a look at everyone
+/// has them; one sooner is dropped. A GM's account isn't held to it. A `/who` costs a look at everyone
 /// online.
 pub struct Cooldowns {
     every: std::time::Duration,

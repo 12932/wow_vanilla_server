@@ -14,8 +14,13 @@ use crate::game::harness::{self, Client};
 use crate::game::map::social::SMSG_WHO;
 
 fn realm(cooldown: Duration) -> Arc<Realm> {
+    realm_as(cooldown, false)
+}
+
+fn realm_as(cooldown: Duration, everyone_gm: bool) -> Arc<Realm> {
     let mut cfg = harness::test_config();
     cfg.packet_cooldown = cooldown;
+    cfg.everyone_gm = everyone_gm;
     let (store, startup) = crate::game::store::Store::open(":memory:").unwrap();
     Realm::new(cfg, store, startup, Default::default(), None)
 }
@@ -55,6 +60,24 @@ async fn a_who_sooner_than_its_cooldown_is_dropped() {
     a.send(who()).await;
     a.wait_frame("SMSG_WHO after the cooldown", SMSG_WHO, |_| true)
         .await;
+}
+
+/// A GM's account isn't held to the cooldown: `/who` after `/who` at
+/// once, every one answered.
+#[tokio::test]
+async fn a_gms_who_has_no_cooldown() {
+    let realm = realm_as(Duration::from_secs(60), true);
+    let mut a = Client::connect(&realm, "GM");
+    a.enter("Gamma", Race::Human, Class::Warrior).await;
+    for i in 0..5 {
+        a.send(who()).await;
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            a.wait_frame("SMSG_WHO", SMSG_WHO, |_| true),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("the GM's /who {i} answered"));
+    }
 }
 
 fn zlib(data: &[u8]) -> Vec<u8> {
