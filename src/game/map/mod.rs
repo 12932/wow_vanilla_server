@@ -2871,15 +2871,20 @@ impl Map {
         let at = p.position();
         let far = yards * yards;
         let p = &self.players[&mover];
+        let near: Vec<Guid> = p
+            .observers
+            .iter()
+            .filter(|g| {
+                self.players.get(g).is_some_and(|o| {
+                    let d = o.position();
+                    (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= far
+                })
+            })
+            .copied()
+            .collect();
+        // Their indices under one take of the table's lock, not one each.
         let mut to = crate::game::conn::Clients::default();
-        for g in &p.observers {
-            if let Some(o) = self.players.get(g) {
-                let d = o.position();
-                if (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= far {
-                    to.insert(self.clients.index_of(*g));
-                }
-            }
-        }
+        self.clients.insert_all(&mut to, &near);
         self.broadcast(frame, &Arc::new(to));
     }
 

@@ -228,6 +228,29 @@ impl ClientTable {
         }
     }
 
+    /// [`ClientTable::index_of`] for each of `guids`, into `to`, under one
+    /// take of the lock.
+    pub fn insert_all(&self, to: &mut crate::game::conn::Clients, guids: &[Guid]) {
+        let mut found: smallvec::SmallVec<[usize; 4]> = smallvec::SmallVec::new();
+        {
+            let mut t = lock(&self.inner);
+            for &g in guids {
+                let i = match t.index.get(&g).copied() {
+                    Some(i) => i,
+                    None => {
+                        let i = t.index_of(g);
+                        found.push(i);
+                        i
+                    }
+                };
+                to.insert(i);
+            }
+        }
+        for i in found {
+            self.feed.found(i);
+        }
+    }
+
     /// `g`'s index, if they have one.
     pub fn get(&self, g: Guid) -> Option<usize> {
         lock(&self.inner).index.get(&g).copied()
