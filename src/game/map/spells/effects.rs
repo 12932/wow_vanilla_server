@@ -2126,6 +2126,7 @@ pub fn tick_areas(map: &mut Map) {
             continue;
         }
         let helpful = auras::positive(s);
+        let sees_through = super::targets::ignores_sight(s);
         let inside: Vec<Guid> = map
             .grid
             .around(area.at.x, area.at.y, area.radius)
@@ -2135,6 +2136,15 @@ pub fn tick_areas(map: &mut Map) {
                     .is_some_and(|p| dist(p, area.at) <= area.radius)
             })
             .filter(|g| map.unit_view(*g).is_some_and(|u| u.alive))
+            // Only those the area sees (mangos's `DynamicObjectUpdater`
+            // tests sight from the dynamic object): a Blizzard doesn't
+            // reach through a wall.
+            .filter(|g| {
+                sees_through
+                    || map
+                        .position_of(*g)
+                        .is_some_and(|p| super::checks::sight(map, area.at, p))
+            })
             .filter(|g| {
                 if helpful {
                     !combat::can_attack(map, area.caster, *g)

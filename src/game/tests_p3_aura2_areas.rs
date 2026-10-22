@@ -139,6 +139,45 @@ fn east(at: Vector3d, dx: f32) -> Vector3d {
     Vector3d { x: at.x + dx, ..at }
 }
 
+/// A persistent area's tick hits only those it sees from where it is, as
+/// mangos's `DynamicObjectUpdater` tests sight: one inside behind a wall
+/// is spared.
+#[tokio::test]
+async fn a_ground_tick_doesnt_reach_through_a_wall() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let got = map
+        .query(move |m| {
+            let open = spawn(m, ga, BRUTE, 20, 5.0);
+            let walled = spawn(m, ga, BRUTE, 20, 6.0);
+            let at = m.position_of(open).unwrap();
+            place(m, open, east(at, 2.0));
+            place(m, walled, east(at, -2.0));
+            let wall = |dy: f32| Vector3d {
+                x: at.x - 1.0,
+                y: at.y + dy,
+                z: at.z,
+            };
+            m.spells.walls.push((wall(-10.0), wall(10.0)));
+            spells::cast_triggered_with(
+                m,
+                ga,
+                GROUND,
+                spells::Targets {
+                    dest: Some(at),
+                    ..Default::default()
+                },
+            );
+            for _ in 0..5 {
+                pass(m, 1_000);
+            }
+            (health(m, open), health(m, walled))
+        })
+        .await
+        .unwrap();
+    assert!(got.0 < 100_000, "the one in sight is hit: {}", got.0);
+    assert_eq!(got.1, 100_000, "the one behind the wall isn't");
+}
+
 /// A tick that ends another area (its channeller killed) doesn't shift
 /// which areas tick: one cast later, not yet due, waits for its own time.
 #[tokio::test]
