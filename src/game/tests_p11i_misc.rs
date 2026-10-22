@@ -284,7 +284,7 @@ async fn a_teleport_no_spell_made_ends_the_fight_and_a_spells_short_one_keeps_it
             p.fields.get_guid(UNIT_FIELD_TARGET) == boar,
         )
     };
-    let (pet, boar, start) = on(&map, move |m| {
+    let (pet, boar, start, fighting) = on(&map, move |m| {
         let data = m.realm.data.clone();
         let p = m.players.get_mut(&h).unwrap();
         crate::game::map::stats::set_level(p, &data, 20);
@@ -302,11 +302,14 @@ async fn a_teleport_no_spell_made_ends_the_fight_and_a_spells_short_one_keeps_it
         crate::game::map::pets::sync_record(m, h);
         let boar = crate::game::tests_pets::place_in(m, h, BOAR, 0x71_2001, 4.0);
         fight(m, boar);
-        (pet, boar, at)
+        // Read in the same query: an update between two queries may end
+        // the set-up fight before it is looked at.
+        let fighting = state(m, boar);
+        (pet, boar, at, fighting)
     })
     .await;
     assert_eq!(
-        on(&map, move |m| state(m, boar)).await,
+        fighting,
         (true, true, true),
         "fighting"
     );
