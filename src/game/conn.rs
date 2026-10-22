@@ -14,7 +14,7 @@ use wow_srp::vanilla_header::{DecrypterHalf, EncrypterHalf, HeaderCrypto};
 use wow_world_messages::Guid;
 use wow_world_messages::errors::ExpectedOpcodeError;
 use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
-use wow_world_messages::vanilla::{SMSG_PONG, ServerMessage};
+use wow_world_messages::vanilla::{MSG_MOVE_TELEPORT_ACK_Client, SMSG_PONG, ServerMessage};
 
 /// Packets written to all clients since start-up.
 pub static PACKETS_OUT: AtomicU64 = AtomicU64::new(0);
@@ -1556,10 +1556,10 @@ pub(crate) async fn run_reader<R: AsyncRead + Unpin + Send>(
     outbound.close();
 }
 
-/// Read one packet: its header decrypted, its body whole; those read by
-/// hand stay raw, the rest go to wow_messages, which reserves no more than
-/// a body could hold however much it claims. `None` for a packet that
-/// wow_messages panicked on, as a backstop.
+/// Read one packet: its header decrypted, its body whole, and decoded
+/// ([`decode`]); wow_messages reserves no more than a body could hold
+/// however much it claims. `None` for a packet that wow_messages panicked
+/// on, as a backstop.
 async fn read_packet<R: AsyncRead + Unpin + Send>(
     read: &mut R,
     decrypter: &mut DecrypterHalf,
@@ -1570,24 +1570,71 @@ async fn read_packet<R: AsyncRead + Unpin + Send>(
     let size = header.size.saturating_sub(4) as usize;
     let mut body = vec![0u8; size];
     read.read_exact(&mut body).await?;
-    if RAW_OPCODES.contains(&header.opcode) {
-        return Ok(Some(Inbound::Raw(header.opcode as u16, body)));
+    decode(header.opcode, body)
+}
+
+/// Decode one client packet's body: those read by hand stay raw or are
+/// read here ([`teleport_ack`]), the rest go to wow_messages. `None` for a
+/// packet that wow_messages panicked on.
+pub fn decode(opcode: u32, body: Vec<u8>) -> Result<Option<Inbound>, ExpectedOpcodeError> {
+    if RAW_OPCODES.contains(&opcode) {
+        return Ok(Some(Inbound::Raw(opcode as u16, body)));
+    }
+    if let Some(ack) = teleport_ack(opcode, &body) {
+        return Ok(Some(Inbound::Msg(
+            ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(ack),
+        )));
     }
     let size = body.len();
     let mut plain = Vec::with_capacity(6 + size);
     plain.extend_from_slice(&((size + 4) as u16).to_be_bytes());
-    plain.extend_from_slice(&header.opcode.to_le_bytes());
+    plain.extend_from_slice(&opcode.to_le_bytes());
     plain.extend_from_slice(&body);
     match crate::game::supervisor::catch(|| ClientOpcodeMessage::read_unencrypted(&plain[..])) {
         Ok(m) => m.map(|m| Some(Inbound::Msg(m))),
         Err(e) => {
-            debug!(
-                "wow_messages panicked reading client packet 0x{:X}: {e}; dropped",
-                header.opcode
-            );
+            debug!("wow_messages panicked reading client packet 0x{opcode:X}: {e}; dropped");
             Ok(None)
         }
     }
+}
+
+/// `MSG_MOVE_TELEPORT_ACK`'s opcode.
+pub const MSG_MOVE_TELEPORT_ACK: u32 = 0xC7;
+
+/// The 1.12.1 client's `MSG_MOVE_TELEPORT_ACK`, read by hand: its mover's
+/// whole GUID (8 bytes), then the order's counter and the client's time,
+/// 16 bytes, as mangos-classic's `HandleMoveTeleportAckOpcode` reads it
+/// (`recv_data >> guid`, an `ObjectGuid`). wow_messages reads a packed
+/// GUID there, so it would read a real client's ack as another GUID and
+/// counter, and the teleport would never be settled.
+///
+/// A body of any other size goes on to wow_messages, which reads the
+/// packed form older load testers send (9 to 17 bytes). A packed body is
+/// 16 bytes only for a GUID with seven of its eight bytes set, which a
+/// player's (a 32-bit counter, its high half zero) never has, so 16 bytes
+/// is always the whole GUID.
+fn teleport_ack(opcode: u32, body: &[u8]) -> Option<MSG_MOVE_TELEPORT_ACK_Client> {
+    if opcode != MSG_MOVE_TELEPORT_ACK {
+        return None;
+    }
+    let body: &[u8; 16] = body.try_into().ok()?;
+    let word = |at: usize| u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    let guid = u64::from_le_bytes(body[..8].try_into().ok()?);
+    Some(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: Guid::new(guid),
+        movement_counter: word(8),
+        time: Duration::from_millis(word(12).into()),
+    })
+}
+
+/// [`teleport_ack`]'s layout: what a 1.12.1 client sends.
+pub fn teleport_ack_body(ack: &MSG_MOVE_TELEPORT_ACK_Client) -> [u8; 16] {
+    let mut body = [0u8; 16];
+    body[..8].copy_from_slice(&ack.guid.guid().to_le_bytes());
+    body[8..12].copy_from_slice(&ack.movement_counter.to_le_bytes());
+    body[12..].copy_from_slice(&(ack.time.as_millis() as u32).to_le_bytes());
+    body
 }
 
 /// The largest auth session the world handshake reads.

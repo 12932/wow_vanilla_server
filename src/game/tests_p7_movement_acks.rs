@@ -1080,3 +1080,60 @@ async fn a_pet_left_by_a_teleport_comes_back_at_its_acknowledgement() {
         "at her side: {back:?}"
     );
 }
+
+/// `.go` within the map, as a 1.12.1 client answers it: its
+/// `MSG_MOVE_TELEPORT_ACK` carries its whole GUID, 16 bytes
+/// (mangos-classic's `HandleMoveTeleportAckOpcode`), where wow_messages
+/// reads a packed one. Read by hand, it settles the teleport, and the
+/// client's next move is taken; the packed form older load testers send
+/// still does. Before, the 16 bytes read as another GUID and counter: the
+/// teleport waited for good, and every move after it was dropped.
+#[tokio::test]
+async fn a_teleport_acknowledged_with_the_whole_guid_is_settled_and_the_next_move_taken() {
+    let (_realm, mut a, ga, map) = setup_with(world(), Class::Warrior).await;
+    let start = position(&map, ga).await;
+    for (n, packed) in [(1.0f32, false), (2.0, true)] {
+        let to = Vector3d {
+            x: start.x + 20.0 * n,
+            ..start
+        };
+        a.say(&format!(".go {} {} {}", to.x, to.y, to.z)).await;
+        a.wait_for("the teleport", |m| match m {
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) if t.guid == ga => Some(()),
+            _ => None,
+        })
+        .await;
+        let ack = MSG_MOVE_TELEPORT_ACK_Client {
+            guid: ga,
+            movement_counter: a.teleport_order(),
+            time: Duration::from_millis(1234),
+        };
+        let body = if packed {
+            let mut b = Vec::new();
+            ClientOpcodeMessage::from(ack)
+                .write_unencrypted_client(&mut b)
+                .unwrap();
+            b.split_off(6)
+        } else {
+            crate::game::conn::teleport_ack_body(&ack).to_vec()
+        };
+        assert_eq!(body.len() == 16, !packed, "{body:?}");
+        assert!(
+            a.send_wire(crate::game::conn::MSG_MOVE_TELEPORT_ACK, &body)
+                .await
+        );
+        handled(&mut a).await;
+        assert!(
+            on(&map, move |m| m.players[&ga].teleport.is_none()).await,
+            "packed {packed}: settled"
+        );
+        assert!(pending(&map, ga).await.is_empty(), "packed {packed}");
+        let step = Vector3d {
+            y: to.y + 1.0,
+            ..to
+        };
+        a.heartbeat(step.x, step.y, step.z).await;
+        handled(&mut a).await;
+        assert_eq!(position(&map, ga).await, step, "packed {packed}: taken");
+    }
+}
