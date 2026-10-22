@@ -46,6 +46,13 @@ pub(super) fn start() -> Start {
 static ON: AtomicBool = AtomicBool::new(false);
 static SAMPLES: Mutex<Vec<Sample>> = Mutex::new(Vec::new());
 static EVENTS: Mutex<Option<AHashMap<MapKey, (u64, Duration)>>> = Mutex::new(None);
+/// The events' count and CPU time by map and kind (a packet's name, a GM
+/// command's).
+type Kinds = AHashMap<(MapKey, &'static str), (u64, Duration)>;
+static KINDS: Mutex<Option<Kinds>> = Mutex::new(None);
+/// The map's mailbox after each update: the events waiting.
+static MAILBOX: Mutex<Vec<(MapKey, usize)>> = Mutex::new(Vec::new());
+static NAMES: Mutex<Option<ahash::AHashSet<&'static str>>> = Mutex::new(None);
 
 thread_local! {
     static STEPS: std::cell::RefCell<Vec<(&'static str, Duration)>> =
@@ -72,6 +79,32 @@ pub fn take() -> (Vec<Sample>, AHashMap<MapKey, (u64, Duration)>) {
     let samples = std::mem::take(&mut *SAMPLES.lock());
     let events = EVENTS.lock().take().unwrap_or_default();
     (samples, events)
+}
+
+/// The events' count and CPU time by map and kind since the last take.
+pub fn take_kinds() -> Kinds {
+    KINDS.lock().take().unwrap_or_default()
+}
+
+/// The mailbox's length after each update since the last take.
+pub fn take_mailbox() -> Vec<(MapKey, usize)> {
+    std::mem::take(&mut *MAILBOX.lock())
+}
+
+pub(super) fn mailbox(key: MapKey, len: usize) {
+    MAILBOX.lock().push((key, len));
+}
+
+/// `name`, kept for good, once.
+pub(super) fn intern(name: &str) -> &'static str {
+    let mut names = NAMES.lock();
+    let names = names.get_or_insert_with(Default::default);
+    if let Some(n) = names.get(name) {
+        return n;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(leaked);
+    leaked
 }
 
 /// This thread's context switches: voluntary (it waited: on the disk, a
@@ -154,7 +187,7 @@ pub(super) fn event_start() -> Start {
     }
 }
 
-pub(super) fn event_done(key: MapKey, start: &Start, wall: Duration, kind: &str) {
+pub(super) fn event_done(key: MapKey, start: &Start, wall: Duration, kind: &'static str) {
     let cpu = thread_cpu().saturating_sub(start.cpu);
     if wall >= SLOW_EVENT {
         let (v, i) = thread_switches();
@@ -168,6 +201,14 @@ pub(super) fn event_done(key: MapKey, start: &Start, wall: Duration, kind: &str)
     }
     let mut e = EVENTS.lock();
     let n = e.get_or_insert_with(AHashMap::new).entry(key).or_default();
+    n.0 += 1;
+    n.1 += cpu;
+    drop(e);
+    let mut k = KINDS.lock();
+    let n = k
+        .get_or_insert_with(AHashMap::new)
+        .entry((key, kind))
+        .or_default();
     n.0 += 1;
     n.1 += cpu;
 }

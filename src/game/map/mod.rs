@@ -787,6 +787,11 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Login(_) => "a login",
                 ArrivalKind::Transfer(_) => "a transfer",
             },
+            MapEvent::Packet(_, ClientOpcodeMessage::CMSG_MESSAGECHAT(c), _)
+                if c.message.starts_with('.') =>
+            {
+                bench_probe::intern(c.message.split(' ').next().unwrap_or("."))
+            }
             MapEvent::Packet(_, m, _) => packet_name(m),
             MapEvent::Disconnect(..) => "a disconnect",
             MapEvent::Call(_) => "a call",
@@ -879,6 +884,10 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     map.report(rx.len());
                 }
                 map.plot(rx.len());
+                #[cfg(all(feature = "world-bench", unix))]
+                if bench_probe::enabled() {
+                    bench_probe::mailbox(map.key, rx.len());
+                }
                 if crate::game::stats::on() {
                     sampler.update(&map, rx.len());
                 }
