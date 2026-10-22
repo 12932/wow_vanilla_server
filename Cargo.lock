@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "wow_vanilla_server"
-version = "0.1.107"
+version = "0.1.108"
 dependencies = [
  "ahash",
  "arc-swap",
