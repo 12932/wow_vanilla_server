@@ -183,6 +183,12 @@ settings! {
         /// walking into a crowd asks after everyone in it at once. One that
         /// floods them is disconnected.
         max_queries_per_sec: u32 = 1000, Clamp(10.0, 1_000_000.0), Restart, "";
+        /// Packets of a client's that may wait for its map at once. One
+        /// more is not read from the client until the map has taken one:
+        /// a map that falls behind holds its clients back, rather than
+        /// queueing without end (a heartbeat waiting with nothing behind it
+        /// is replaced by the client's next, and takes no more room).
+        max_queued_packets: usize = 64, Clamp(8.0, 65_536.0), Restart, "";
         /// Pings a client may send in a row each less than 27 seconds after
         /// the last (the client pings every 30) before it is disconnected;
         /// 0 never disconnects.

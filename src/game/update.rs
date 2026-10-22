@@ -552,39 +552,158 @@ impl Batch {
     /// has a transport, as mangos's `SendInitTransports` and Thistle Tea's
     /// header do.
     pub fn finish(self) -> Vec<Arc<[u8]>> {
+        self.packets()
+            .into_iter()
+            .map(|p| frame_update(&p.payload))
+            .collect()
+    }
+
+    /// [`Batch::finish`], each packet framed (and compressed) once for
+    /// every observer whose packet is the same this update: `shared` has
+    /// the frames built so far, by their packets' content. A crowd told of
+    /// a newcomer gets one frame; newcomers to a crowd share the packets
+    /// of it they get alike.
+    pub fn finish_shared(self, shared: &mut SharedFrames) -> Vec<Arc<[u8]>> {
+        self.packets()
+            .into_iter()
+            .map(|p| shared.frame(p))
+            .collect()
+    }
+
+    /// The packets' payloads. Past [`CUT_FROM`] bytes a packet may end
+    /// after a block whose hash says so (one in [`CUT_ONE_IN`]), and does
+    /// at [`PACKET_LIMIT`]: where a packet ends depends on its own blocks,
+    /// so two batches with a run of blocks alike cut it alike, and share
+    /// those packets, wherever the run starts.
+    fn packets(self) -> Vec<Packet> {
         let mut packets = Vec::new();
-        let mut count = 0u32;
-        let mut transport = false;
-        let mut body = Vec::new();
-        let mut cut = |count: &mut u32, transport: &mut bool, body: &mut Vec<u8>| {
-            if *count == 0 {
+        let mut open = Packet::default();
+        let mut body: Vec<u8> = Vec::new();
+        let cut = |open: &mut Packet, body: &mut Vec<u8>, packets: &mut Vec<Packet>| {
+            if open.count == 0 {
                 return;
             }
             let mut payload = Vec::with_capacity(5 + body.len());
-            payload.extend_from_slice(&count.to_le_bytes());
-            payload.push(u8::from(*transport));
+            payload.extend_from_slice(&open.count.to_le_bytes());
+            payload.push(u8::from(open.transport));
             payload.extend_from_slice(body);
-            packets.push(frame_update(&payload));
             body.clear();
-            *count = 0;
-            *transport = false;
+            let mut done = std::mem::take(open);
+            done.payload = payload;
+            packets.push(done);
         };
         // At most 9 bytes a guid: a block that keeps under the limit.
         for guids in self.forget.chunks(PACKET_LIMIT / 9) {
-            body.extend_from_slice(&out_of_range_block(guids));
-            count += 1;
+            let block = out_of_range_block(guids);
+            open.add(&block, false);
+            body.extend_from_slice(&block);
         }
         for s in self.spans.iter().filter(|s| s.live) {
             let block = &self.body[s.start as usize..(s.start + s.len) as usize];
             if !body.is_empty() && body.len() + block.len() > PACKET_LIMIT {
-                cut(&mut count, &mut transport, &mut body);
+                cut(&mut open, &mut body, &mut packets);
             }
+            let h = open.add(block, s.transport);
             body.extend_from_slice(block);
-            count += 1;
-            transport |= s.transport;
+            // Not between a boat and what follows it (the player aboard).
+            if body.len() >= CUT_FROM && h % CUT_ONE_IN == 0 && !s.transport {
+                cut(&mut open, &mut body, &mut packets);
+            }
         }
-        cut(&mut count, &mut transport, &mut body);
+        cut(&mut open, &mut body, &mut packets);
         packets
+    }
+}
+
+/// Past this many bytes of blocks, a packet may end after any block
+/// ([`Batch::packets`]).
+/// Small next to a packet, so that two batches cut alike soon after
+/// where they differ.
+const CUT_FROM: usize = 2 * 1024;
+/// One block in this many ends a packet past [`CUT_FROM`]: about 10 kB
+/// of players' creates a packet, few reaching [`PACKET_LIMIT`].
+const CUT_ONE_IN: u64 = 16;
+
+/// The hasher of blocks and packets: the same for every map and run.
+fn hasher() -> ahash::AHasher {
+    use std::hash::BuildHasher;
+    ahash::RandomState::with_seeds(
+        0x243f_6a88_85a3_08d3,
+        0x1319_8a2e_0370_7344,
+        0xa409_3822_299f_31d0,
+        0x082e_fa98_ec4e_6c89,
+    )
+    .build_hasher()
+}
+
+/// One packet of a batch: its payload, once cut, and the hash of what it
+/// carries.
+#[derive(Debug, Default)]
+struct Packet {
+    count: u32,
+    transport: bool,
+    key: u64,
+    payload: Vec<u8>,
+}
+
+impl Packet {
+    /// A block into the packet: the block's own hash.
+    fn add(&mut self, block: &[u8], transport: bool) -> u64 {
+        use std::hash::Hasher;
+        let mut h = hasher();
+        h.write(block);
+        let block_hash = h.finish();
+        self.key = self.key.rotate_left(5).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ block_hash;
+        self.count += 1;
+        self.transport |= transport;
+        block_hash
+    }
+}
+
+/// The update's frames, by their packets' content ([`Batch::finish_shared`]):
+/// a packet sent to many observers is framed and compressed once.
+#[derive(Debug, Default)]
+pub struct SharedFrames {
+    by_key: ahash::AHashMap<u64, Vec<Shared>>,
+    bytes: usize,
+    /// Frames shared, and built, since the last [`SharedFrames::clear`].
+    pub hits: u64,
+    pub built: u64,
+}
+
+/// A packet's payload, and its frame.
+type Shared = (Vec<u8>, Arc<[u8]>);
+
+/// What [`SharedFrames`] keeps at most before it starts afresh.
+const SHARED_LIMIT: usize = 64 * 1024 * 1024;
+
+impl SharedFrames {
+    /// Forget every frame: the update's end.
+    pub fn clear(&mut self) {
+        self.by_key.clear();
+        self.bytes = 0;
+    }
+
+    fn frame(&mut self, p: Packet) -> Arc<[u8]> {
+        if let Some(same) = self
+            .by_key
+            .get(&p.key)
+            .and_then(|v| v.iter().find(|(payload, _)| *payload == p.payload))
+        {
+            self.hits += 1;
+            return same.1.clone();
+        }
+        self.built += 1;
+        let frame = frame_update(&p.payload);
+        if self.bytes + p.payload.len() > SHARED_LIMIT {
+            self.clear();
+        }
+        self.bytes += p.payload.len();
+        self.by_key
+            .entry(p.key)
+            .or_default()
+            .push((p.payload, frame.clone()));
+        frame
     }
 }
 
@@ -940,6 +1059,96 @@ mod tests {
         }
         assert_eq!(objects, 101);
         assert!(packets.iter().all(|p| p.len() < 0x7FFF));
+    }
+
+    /// Every object a batch's packets carry, in order, and the packets'
+    /// payload sizes.
+    fn objects_of(packets: &[Arc<[u8]>]) -> Vec<Guid> {
+        let mut out = Vec::new();
+        for p in packets {
+            let objects = match parse(p) {
+                ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(m) => m.objects,
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(m) => m.objects,
+                other => panic!("unexpected {other}"),
+            };
+            for o in objects {
+                match o.update_type {
+                    Object_UpdateType::CreateObject { guid3, .. }
+                    | Object_UpdateType::CreateObject2 { guid3, .. } => out.push(guid3),
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        }
+        out
+    }
+
+    /// A crowd's creates, as a batch: units `from..to`.
+    fn crowd(from: u32, to: u32) -> (Batch, Vec<Guid>) {
+        let mut batch = Batch::new();
+        let mut guids = Vec::new();
+        for i in from..to {
+            let g = guid::unit(299, i);
+            guids.push(g);
+            batch.push_for(g, &unit_create(g, &unit_fields(g)));
+        }
+        (batch, guids)
+    }
+
+    /// The same packet for many observers is one frame, framed and
+    /// compressed once, byte for byte what each would have had alone.
+    #[test]
+    fn a_packet_many_observers_get_alike_is_one_frame() {
+        let mut shared = SharedFrames::default();
+        let alone = crowd(0, 40).0.finish();
+        let first = crowd(0, 40).0.finish_shared(&mut shared);
+        let second = crowd(0, 40).0.finish_shared(&mut shared);
+        assert_eq!(first.len(), alone.len());
+        for ((a, b), c) in first.iter().zip(&second).zip(&alone) {
+            assert!(Arc::ptr_eq(a, b), "the second observer's is the first's");
+            assert_eq!(a[..], c[..], "as it would be alone");
+        }
+        assert_eq!(shared.built, first.len() as u64);
+        assert_eq!(shared.hits, first.len() as u64);
+        // Another batch is another frame.
+        let other = crowd(1, 40).0.finish_shared(&mut shared);
+        assert!(!Arc::ptr_eq(&other[0], &first[0]));
+        assert_eq!(objects_of(&other).len(), 39);
+    }
+
+    /// A newcomer's creates for a crowd: compressed packets, none over the
+    /// limit, every create in order; and a second newcomer, whose creates
+    /// are the same but for a few of its own ahead of them, shares most
+    /// of the first's packets (where a packet ends depends on its blocks,
+    /// not on where the batch began).
+    #[test]
+    fn newcomers_to_a_crowd_share_its_packets() {
+        let (one, guids) = crowd(0, 1000);
+        let mut shared = SharedFrames::default();
+        let first = one.finish_shared(&mut shared);
+        assert!(first.len() > 4, "{} packets", first.len());
+        assert!(first.iter().all(|p| p.len() <= MAX_FRAME_BODY));
+        // Each at least `CUT_FROM`, so compressed, but for the last.
+        assert!(
+            first[..first.len() - 1]
+                .iter()
+                .all(|p| u16::from_le_bytes([p[2], p[3]]) == SMSG_COMPRESSED_UPDATE_OBJECT)
+        );
+        assert_eq!(objects_of(&first), guids);
+        let built = shared.built;
+        // Three of its own first: another newcomer, and the crowd.
+        let (mut two, mut theirs) = crowd(5000, 5003);
+        for g in &guids {
+            two.push_for(*g, &unit_create(*g, &unit_fields(*g)));
+        }
+        theirs.extend(&guids);
+        let second = two.finish_shared(&mut shared);
+        assert_eq!(objects_of(&second), theirs);
+        let new = shared.built - built;
+        assert!(
+            new * 3 <= second.len() as u64,
+            "{new} of the second's {} packets built anew",
+            second.len()
+        );
     }
 
     #[test]

@@ -731,3 +731,42 @@ async fn the_intro_cinematic_shows_what_its_camera_passes() {
     assert!(view.is_none());
     let _: Guid = g;
 }
+
+/// A character that starts nowhere near its intro's path (`[spawn]` puts
+/// new characters elsewhere): the camera isn't followed, so its view stays
+/// with it and what stands by it is seen from the first, not forgotten
+/// for what the camera would fly past and sent again as the client ends
+/// the intro.
+#[tokio::test]
+async fn an_intro_far_from_the_character_isnt_followed() {
+    let mut d = data();
+    d.races.insert(
+        1,
+        RaceInfo {
+            cinematic: 81,
+            ..Default::default()
+        },
+    );
+    d.misc.cinematic_waypoints.insert(
+        81,
+        vec![
+            (0, START.0 + 3000.0, START.1, START.2),
+            (30_000, START.0 + 3000.0, START.1 + 100.0, START.2),
+        ],
+    );
+    let realm = harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let g = a.enter("Alice", Race::Human, Class::Warrior).await;
+    a.sees(guid::unit(WOLF, 20)).await;
+    let (camera, view) = on_map(&realm, move |m| {
+        let p = &m.players[&g];
+        (p.misc.camera.is_some(), p.misc.view)
+    })
+    .await;
+    assert!(!camera && view.is_none(), "no camera to follow");
+    a.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    harness::an_update(&realm.registry.online(g).expect("online").map()).await;
+    let wolf = guid::unit(WOLF, 20);
+    let kept = on_map(&realm, move |m| m.players[&g].known.contains(&wolf)).await;
+    assert!(kept, "the wolf by her still known");
+}

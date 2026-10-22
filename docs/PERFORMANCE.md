@@ -1186,3 +1186,69 @@ handler reads a size, inflates the rest, and hands each inner packet (a byte of 
 same dispatch as a packet from the socket, whose table has `MSG_MOVE_HEARTBEAT`'s handler: by the code, it would take
 players' movement. It isn't in the client check, and isn't sent: the batches already make one write of a client's
 packets, and compressing each client's share would cost the deflate a client, not once.
+## The mailbox and arrival (stage C)
+
+What the drill showed past the knee: Kalimdor's mailbox growing without end (825,000 events at 2,000 bots, broadcasts
+a minute late) and placement held to about 45 bots a second. The changes:
+
+- **A mover's heartbeats coalesced** (`Session::heartbeat`, `map::Heartbeat`). A heartbeat waits for its map in a
+  slot of its session's: while the map hasn't taken it and nothing else the client sent is queued behind it, the
+  client's next heartbeat takes its place, if it has the same movement flags (a run's; a fall's last heartbeat and
+  its landing, a swim's first, a jump's start are never folded). Every other packet keeps its place, and a heartbeat
+  never goes ahead of one: one sent after another packet goes behind it, as any packet. The map takes the newest, and
+  judges its speed from the last move it took and when (`move_guard`'s bank fills with time, so a longer step after a
+  longer wait is no faster). Counted in the stats file (`heartbeats_coalesced`).
+- **Each client's share of the mailbox bounded** (`[network] max_queued_packets`, 64). Every packet a session sends
+  its map holds a permit until the map has handled it (the event carries it, so it is given back however the event
+  ends: handled, dropped, handed on). With its share full the session waits, and reads no more of its client: the
+  reader's queue fills and the socket with it. Nothing is dropped or reordered; a client that floods is cut off by the
+  flood guard as before, as fast as its map takes its packets. The mailbox is at most the share times the clients
+  (192,000 for 3,000). Counted (`packets_held_back`).
+- **A burst of events runs at most 20 ms** (`EVENT_BURST`) before the map looks at its ticker again, not 512 events:
+  a crowd's arrivals, a few ms each, had held Kalimdor to two or three updates a second.
+- **Update packets framed once for everyone who gets them alike** (`update::SharedFrames`, `Batch::finish_shared`):
+  every packet of the update's batches (and of the batches let go after an event) is looked up by its content, and
+  one already built is shared, its frame and compression with it. A packet ends where its own blocks say (past 2 kB,
+  after a block whose hash is one in 16; at 24 kB at most), so batches with a run of blocks alike cut it alike
+  wherever it starts: a crowd told of a newcomer gets one frame (2,000 batches, two frames built), and newcomers to a
+  crowd share most of its packets. Big batches come in packets of about 10 kB rather than 24 kB.
+- **`.gear` looks through each slot's items** (`GameData::items_of_type`, built at its first use), not all 20,000
+  for each of its twenty slots: 2.37 ms of the map's thread a `.gear` to 0.39.
+- **An intro far from the character isn't followed** (`cinematic::begin`): with `[spawn]` a new human starts in
+  Tanaris and its intro's camera flies over Northshire; the view went there, every player around was forgotten, and
+  sent again as the client ended the intro (the crowd's creates, twice, for every newcomer).
+
+`benches/crowd.rs` (`cargo bench --features world-bench --bench crowd`, with `WVS_DATA` for the real world's items)
+puts a crowd on the drill's disc through the real sessions and map and measures both, on 8 cores of a 32-core box.
+The probe now counts what the map does after an event (`after_events`: the holds let go, a newcomer's refresh) as an
+event of its own.
+
+**Movement** (every player a heartbeat each 250 ms, 10 s):
+
+| Crowd | Mailbox after an update, p50 / max, before | after | Heartbeats the map handled a second, before / after |
+|---|---|---|---|
+| 880 | 0 / 888 | 0 / 883 | 3,534 / 3,460 |
+| 2,000 | 19,350 / 49,984 | 1,487 / 2,036 | 3,006 / 1,793 (the newest of each mover's) |
+| 3,000 | 20,355 / 99,755 | 2,807 / 3,058 | 1,488 / 872 |
+
+With every second packet a facing (which isn't coalesced), 3,000 for 20 s: a share of 256 let the mailbox reach
+194,083 and still grow; a share of 16 held it at 48,213 (3,000 times 16), 32,633 packets waiting in their sessions.
+Past 1,000 the update is still saturated by visibility (stage A's): what this buys is a map that is behind by one
+heartbeat a mover, not by a minute.
+
+**Arrival** (newcomers as the drill's bots come: created, logged in at the disc, `.character level 30`, `.gear`,
+`.god on`, `.gm off`, `.go`, the teleport acknowledged; placed a second):
+
+| Crowd | 200 at once, before / after | 400 asked at 400 a second, before / after | Updates a second meanwhile, before / after |
+|---|---|---|---|
+| 100 | 269 / 560 | | |
+| 880 | 111 / 264 | 101 / 261 | 2.0 / 15.0 |
+| 2,000 | 77 / 134 | 52 / 123 | 1.3 / 12.6 |
+| 3,000 | 36 / 75 | 46 / 67 | 0.7 / 11.8 |
+
+The 52 a second asked at 2,000 is the drill's 44. The update's `batches` step at 2,000 and 400 newcomers went from
+2,269 ms to 160 ms. What holds placement now is the refresh of each newcomer, both ways, at its login: about 4,000
+introductions at 2,000, 3.4 ms at the end of the login's event, and 1.1 ms more after its `.go`: two thirds of the
+map's time per newcomer, the visibility refresh's per-pair cost that stage A's quick path cuts. The drill at 200
+bots (the server and peon on 4 cores each, a 1 s ramp, ramp-bound at 165 placed a second) is unchanged: update p99 5.2 ms at
+random, every broadcast delivered within 3 ms p99; its arrival events took 172 µs on average, from 338.

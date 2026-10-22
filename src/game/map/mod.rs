@@ -159,11 +159,23 @@ pub enum MapEvent {
     Arrive(Box<Arrival>),
     /// A player's client's packet, by the session it came from: one from
     /// a session whose player another login has taken over since is
-    /// dropped, as a [`MapEvent::Disconnect`] is.
+    /// dropped, as a [`MapEvent::Disconnect`] is. It holds its room in the
+    /// session's share of the mailbox until it is handled.
     Packet(
         Guid,
         ClientOpcodeMessage,
         tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+        Room,
+    ),
+    /// A client's `MSG_MOVE_HEARTBEAT`, the newest it has sent: one it
+    /// sends while this waits, with nothing sent after this, takes its
+    /// place in the slot ([`Heartbeat`]). As a [`MapEvent::Packet`]
+    /// otherwise.
+    Heartbeat(
+        Guid,
+        Arc<Heartbeat>,
+        tokio::sync::mpsc::UnboundedSender<crate::game::session::Control>,
+        Room,
     ),
     /// A player's client has gone, by the session it went from: one whose
     /// player another login has taken over since leaves them be.
@@ -177,6 +189,60 @@ pub enum MapEvent {
     Shutdown(oneshot::Sender<()>),
     /// Stop: an empty copy that goes.
     Stop,
+}
+
+/// Room in a session's share of its map's mailbox (`[network]
+/// max_queued_packets`): what a client's packet sends holds it until the
+/// map has handled it, and the session reads no more of the client while
+/// its share is full. `None` for what no session sent.
+pub type Room = Option<tokio::sync::OwnedSemaphorePermit>;
+
+/// A mover's heartbeat waiting for its map: the session puts its client's
+/// newest in the slot while the map hasn't taken it, so a map that has
+/// fallen behind takes the mover's last heartbeat, not each of them. Only
+/// while nothing else the client sent waits behind it, and only one that
+/// says the same of the mover's state (its flags): every other packet
+/// keeps its place, and a heartbeat never goes ahead of one
+/// (`Session::heartbeat`).
+#[derive(Debug, Default)]
+pub struct Heartbeat(parking_lot::Mutex<Option<wow_world_messages::vanilla::MovementInfo>>);
+
+impl Heartbeat {
+    pub fn new(info: wow_world_messages::vanilla::MovementInfo) -> Self {
+        Self(parking_lot::Mutex::new(Some(info)))
+    }
+
+    /// `info` in the place of the heartbeat waiting in the slot, if one is
+    /// and it says the same of the mover's state (its movement flags: a
+    /// run, a fall, a swim, a jump, a deck): one that differs, a fall's
+    /// last or a swim's first, is the map's to see, and stays. `None` if
+    /// the slot is empty (the map took the last); else whether it took
+    /// the place.
+    pub fn coalesce(&self, info: wow_world_messages::vanilla::MovementInfo) -> Option<bool> {
+        let mut slot = self.0.lock();
+        let waiting = slot.as_mut()?;
+        if waiting.flags != info.flags {
+            return Some(false);
+        }
+        *waiting = info;
+        Some(true)
+    }
+
+    /// `info` in the slot, which the map has emptied: the session's, the
+    /// only one that fills it.
+    pub fn fill(&self, info: wow_world_messages::vanilla::MovementInfo) {
+        *self.0.lock() = Some(info);
+    }
+
+    /// Whether a heartbeat is waiting in the slot.
+    pub fn waiting(&self) -> bool {
+        self.0.lock().is_some()
+    }
+
+    /// The map takes the waiting heartbeat.
+    pub fn take(&self) -> Option<wow_world_messages::vanilla::MovementInfo> {
+        self.0.lock().take()
+    }
 }
 
 /// A player coming into a map.
@@ -334,6 +400,10 @@ pub const REPORT_EVERY: Duration = Duration::from_secs(60);
 
 /// The map update's period.
 pub const UPDATE_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The most a burst of events runs before the map looks at its ticker
+/// again (`run`): an update is due every [`UPDATE_INTERVAL`].
+pub const EVENT_BURST: Duration = Duration::from_millis(20);
 /// How long a client has to acknowledge a teleport before its movement is
 /// heeded again.
 const TELEPORT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -487,6 +557,10 @@ pub struct Map {
     /// Create blocks built this update, by object, for every observer that
     /// needs one.
     create_cache: AHashMap<Guid, Arc<[u8]>>,
+    /// The update's frames of `SMSG_UPDATE_OBJECT`, by their packets'
+    /// content: one sent alike to many (a crowd told of a newcomer, the
+    /// crowd's creates for newcomers) is framed and compressed once.
+    shared_frames: update::SharedFrames,
     pub stats: MapStats,
     pub started: Instant,
     pub now: Instant,
@@ -785,7 +859,7 @@ fn guarded<T>(map: &mut Map, what: &str, f: impl FnOnce(&mut Map) -> T) -> Optio
 /// packet that panics counts against them.
 fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
     let from = match &event {
-        MapEvent::Packet(g, ..) => Some(*g),
+        MapEvent::Packet(g, ..) | MapEvent::Heartbeat(g, ..) => Some(*g),
         _ => None,
     };
     #[cfg(all(feature = "world-bench", unix))]
@@ -795,7 +869,13 @@ fn handle_guarded(map: &mut Map, event: MapEvent) -> bool {
                 ArrivalKind::Login(_) => "a login",
                 ArrivalKind::Transfer(_) => "a transfer",
             },
-            MapEvent::Packet(_, m, _) => packet_name(m),
+            MapEvent::Packet(_, ClientOpcodeMessage::CMSG_MESSAGECHAT(c), ..)
+                if c.message.starts_with('.') =>
+            {
+                bench_probe::intern(c.message.split(' ').next().unwrap_or("."))
+            }
+            MapEvent::Packet(_, m, ..) => packet_name(m),
+            MapEvent::Heartbeat(..) => "MSG_MOVE_HEARTBEAT",
             MapEvent::Disconnect(..) => "a disconnect",
             MapEvent::Call(_) => "a call",
             MapEvent::Shutdown(_) | MapEvent::Stop => "the stop",
@@ -832,7 +912,25 @@ const MSG_MOVE_HEARTBEAT: u16 = 0xEE;
 /// to another task but through what uncorks first ([`Map::take_player`],
 /// [`MapHandle::send`], a session's control sent).
 fn corks(event: &MapEvent) -> bool {
-    matches!(event, MapEvent::Packet(_, m, _) if movement::is_movement(m))
+    matches!(event, MapEvent::Packet(_, m, _, _) if movement::is_movement(m))
+}
+
+/// [`Map::after_events`], under guard (and, for the world benchmark,
+/// counted as an event of its own).
+fn after_event(map: &mut Map) {
+    if map.holding.is_empty() {
+        return;
+    }
+    #[cfg(all(feature = "world-bench", unix))]
+    let _probe = bench_probe::enabled().then(|| {
+        EventProbe(
+            map.key,
+            bench_probe::event_start(),
+            Instant::now(),
+            "after events",
+        )
+    });
+    guarded(map, "after an event", Map::after_events);
 }
 
 /// Run a map's actor until it is told to stop.
@@ -866,6 +964,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
             event = rx.recv() => {
                 let Some(event) = event else { break };
                 map.now = Instant::now();
+                let burst = map.now;
                 let sampled = crate::game::stats::on().then_some(map.now);
                 // A run of movement packets is corked: what it sends each
                 // client goes in one push at the run's end. Any other event
@@ -879,12 +978,17 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                 }
                 // A client the event held goes as it ends, not at the
                 // burst's: what else it is sent waits no longer.
-                guarded(&mut map, "after an event", Map::after_events);
+                after_event(&mut map);
                 // Drain what else has arrived, a bounded amount, so the
-                // update isn't starved.
+                // update isn't starved: at most 512 events, and none begun
+                // past `EVENT_BURST` (a crowd's arrivals, a few ms each,
+                // held updates to two or three a second).
                 let mut stop = false;
                 let mut handled = 1;
                 for _ in 0..512 {
+                    if burst.elapsed() >= EVENT_BURST {
+                        break;
+                    }
                     match rx.try_recv() {
                         Ok(event) => {
                             handled += 1;
@@ -893,7 +997,7 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                                 stop = true;
                                 break;
                             }
-                            guarded(&mut map, "after an event", Map::after_events);
+                            after_event(&mut map);
                         }
                         Err(_) => break,
                     }
@@ -936,6 +1040,10 @@ async fn run(mut map: Map, mut rx: mpsc::UnboundedReceiver<MapEvent>) {
                     map.report(rx.len());
                 }
                 map.plot(rx.len());
+                #[cfg(all(feature = "world-bench", unix))]
+                if bench_probe::enabled() {
+                    bench_probe::mailbox(map.key, rx.len());
+                }
                 if crate::game::stats::on() {
                     sampler.update(&map, rx.len());
                 }
@@ -1196,6 +1304,7 @@ impl Map {
             forget: AHashMap::new(),
             batches: AHashMap::new(),
             create_cache: AHashMap::new(),
+            shared_frames: update::SharedFrames::default(),
             stats: MapStats::default(),
             started: now,
             now,
@@ -1280,7 +1389,7 @@ impl Map {
                 let _z = crate::zone!("arrival");
                 self.arrive(*a)
             }
-            MapEvent::Packet(guid, msg, from) => {
+            MapEvent::Packet(guid, msg, from, _room) => {
                 let _z = crate::tracy::on()
                     .then(|| crate::tracy::Zone::named("packet", packet_name(&msg)));
                 #[cfg(test)]
@@ -1289,6 +1398,26 @@ impl Map {
                 }
                 if self.from_their_session(guid, &from) {
                     self.handle_packet(guid, msg)
+                }
+            }
+            MapEvent::Heartbeat(guid, beat, from, _room) => {
+                let _z = crate::tracy::on()
+                    .then(|| crate::tracy::Zone::named("packet", "MSG_MOVE_HEARTBEAT"));
+                #[cfg(test)]
+                if self.faults.any() {
+                    self.faults.check(&format!("packets of {guid}"));
+                }
+                // Taken whoever it is from: the slot is free for the next.
+                let info = beat.take();
+                if let Some(info) = info
+                    && self.from_their_session(guid, &from)
+                {
+                    self.handle_packet(
+                        guid,
+                        ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(
+                            wow_world_messages::vanilla::MSG_MOVE_HEARTBEAT_Client { info },
+                        ),
+                    )
                 }
             }
             MapEvent::Disconnect(guid, from) => {
@@ -1904,6 +2033,7 @@ impl Map {
         self.step("values", Map::flush_values);
         self.step("batches", Map::flush_batches);
         self.create_cache.clear();
+        self.shared_frames.clear();
 
         let took = started.elapsed();
         self.stats.last_update = took;
@@ -2038,10 +2168,10 @@ impl Map {
         let held = Held(std::mem::take(&mut self.holding));
         for (g, out) in &held.0 {
             let first = if out.has_held() {
-                self.batches
-                    .remove(g)
-                    .map(update::Batch::finish)
-                    .unwrap_or_default()
+                match self.batches.remove(g) {
+                    Some(b) => b.finish_shared(&mut self.shared_frames),
+                    None => Vec::new(),
+                }
             } else {
                 Vec::new()
             };
@@ -2089,11 +2219,10 @@ impl Map {
             if let Some(guids) = self.forget.remove(&g) {
                 self.settle_forgets(g, &guids);
             }
-            let first = self
-                .batches
-                .remove(&g)
-                .map(update::Batch::finish)
-                .unwrap_or_default();
+            let first = match self.batches.remove(&g) {
+                Some(b) => b.finish_shared(&mut self.shared_frames),
+                None => Vec::new(),
+            };
             one.0[0].1.release(first);
         }
     }
@@ -2201,7 +2330,7 @@ impl Map {
             let Some(p) = self.players.get(&guid) else {
                 continue;
             };
-            for frame in batch.finish() {
+            for frame in batch.finish_shared(&mut self.shared_frames) {
                 p.outbound.send_frame(frame);
             }
         }

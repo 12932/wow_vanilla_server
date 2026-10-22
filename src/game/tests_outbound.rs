@@ -94,7 +94,9 @@ async fn moves_until_stop(cl: &mut Client, mover: Guid) -> Vec<u16> {
 }
 
 /// Alice runs: a start, six heartbeats, a jump among them, then a stop.
-async fn run(a: &Client, at: Vector3d) {
+/// Each heartbeat handled before the next is sent: one still waiting
+/// would be coalesced into its successor (the mailbox's newest-wins).
+async fn run(a: &mut Client, at: Vector3d) {
     let none = MovementInfo_MovementFlags::empty();
     a.send(MSG_MOVE_START_FORWARD_Client {
         info: info(at.x, at.y, at.z, none.set_forward()),
@@ -105,6 +107,7 @@ async fn run(a: &Client, at: Vector3d) {
             info: info(at.x, at.y + 0.1 * i as f32, at.z, none.set_forward()),
         })
         .await;
+        crate::game::tests_p3_player2_ammo::handled(a).await;
         if i == 2 {
             a.send(MSG_MOVE_JUMP_Client {
                 info: info(at.x, at.y + 0.25, at.z, none.set_forward()),
@@ -125,14 +128,14 @@ const RUN: [u16; 9] = [0xB5, 0xEE, 0xEE, 0xEE, 0xBB, 0xEE, 0xEE, 0xEE, 0xB7];
 #[tokio::test]
 async fn every_observer_gets_every_movement_packet_in_order_by_default() {
     let realm = realm(harness::test_config());
-    let ([a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
+    let ([mut a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
     let map = realm.registry.online(ga).unwrap().map();
     let at = on(&map, move |m| m.players[&ga].position()).await;
-    run(&a, at).await;
+    run(&mut a, at).await;
     assert_eq!(moves_until_stop(&mut b, ga).await, RUN);
     assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
     // What follows the corked run, uncorked, comes after it.
-    run(&a, at).await;
+    run(&mut a, at).await;
     a.say("after the run").await;
     stop_before_say(&mut b, ga).await;
 }
@@ -146,10 +149,10 @@ async fn distant_observers_get_one_in_n_heartbeats_and_every_other_move() {
         distant_move_every: 3,
         ..harness::test_config()
     });
-    let ([a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
+    let ([mut a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
     let map = realm.registry.online(ga).unwrap().map();
     let at = on(&map, move |m| m.players[&ga].position()).await;
-    run(&a, at).await;
+    run(&mut a, at).await;
     assert_eq!(moves_until_stop(&mut b, ga).await, RUN, "beside her");
     // Her third and sixth heartbeats.
     assert_eq!(
@@ -173,12 +176,12 @@ async fn a_broadcast_follows_comings_and_goings() {
     a.sees(gb).await;
     let map = realm.registry.online(ga).unwrap().map();
     let at = on(&map, move |m| m.players[&ga].position()).await;
-    run(&a, at).await;
+    run(&mut a, at).await;
     assert_eq!(moves_until_stop(&mut b, ga).await, RUN);
     let index = on(&map, move |m| m.clients.index_of(gb)).await;
     b.disconnect();
     harness::offline(&realm, gb).await;
-    run(&a, at).await;
+    run(&mut a, at).await;
     let mut c = Client::connect(&realm, "OUTC");
     let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
     // Told of her, then of her moves.
@@ -194,7 +197,7 @@ async fn a_broadcast_follows_comings_and_goings() {
     assert!(first, "a move before her create");
     c.sees(ga).await;
     c.clear();
-    run(&a, at).await;
+    run(&mut a, at).await;
     assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
     let carol = on(&map, move |m| m.clients.index_of(gc)).await;
     assert_eq!(carol, index, "Bob's index, Carol's now");
@@ -208,10 +211,10 @@ async fn a_batched_run_reaches_each_observer_in_order() {
         broadcast_batch: std::time::Duration::from_millis(20),
         ..harness::test_config()
     });
-    let ([a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
+    let ([mut a, mut b, mut c], [ga, ..]) = three(&realm, 60.0).await;
     let map = realm.registry.online(ga).unwrap().map();
     let at = on(&map, move |m| m.players[&ga].position()).await;
-    run(&a, at).await;
+    run(&mut a, at).await;
     a.say("after the run").await;
     assert_eq!(moves_until_stop(&mut c, ga).await, RUN);
     // Bob is near enough to hear it (Carol isn't), after the run.

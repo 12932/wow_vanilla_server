@@ -7,8 +7,9 @@ record and summarize a capture (below).
 ## The stats file (`WVS_STATS_FILE`)
 
 For a load test, without Tracy's tools: `WVS_STATS_FILE=stats.jsonl` has the server write a JSON line a second
-(`src/game/stats.rs`). Each line has the realm's players online, its packets in and out and bytes out, the clients
-disconnected for their byte budget, for flooding and for stalling, the process's CPU seconds and RSS (counters since
+(`src/game/stats.rs`). Each line has the realm's players online, its packets in and out and bytes out, the heartbeats
+coalesced and the packets held back in their sessions (`[network] max_queued_packets`), the clients disconnected for
+their byte budget, for flooding and for stalling, the process's CPU seconds and RSS (counters since
 start-up: take differences), and for each map its players, creatures awake, events waiting, every update's time that
 second (`updates_us`), the events it handled and their time, its biggest and total outbound queue, and the most
 objects an update left for the next to work out the visibility of (`visibility_waiting`: over `[visibility]

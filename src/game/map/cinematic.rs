@@ -62,8 +62,17 @@ pub fn view_point(p: &Player) -> Vector3d {
     p.misc.view.unwrap_or_else(|| p.position())
 }
 
+/// How far from where an intro's camera starts a player may be for the
+/// camera to be followed: the intros fly about their race's start, up to
+/// some 700 yards from it.
+const CAMERA_REACH: f32 = 1500.0;
+
 /// The intro starts: its camera is followed if the data has its path. One
-/// under way keeps its clock (Thistle Tea's `Cinematic.begin`).
+/// under way keeps its clock (Thistle Tea's `Cinematic.begin`). One whose
+/// path is nowhere near the player (a character started elsewhere, `[spawn]`)
+/// isn't: the client plays it, but what it flies past isn't about them, and
+/// the view would leave everything around them, to come back to it as the
+/// client ends it (a crowd's creates, twice, for every newcomer to it).
 pub fn begin(map: &Map, p: &mut Player, sequence: u32) {
     if p.misc.camera.is_some() {
         return;
@@ -71,6 +80,13 @@ pub fn begin(map: &Map, p: &mut Player, sequence: u32) {
     let Some(points) = map.realm.data.misc.cinematic_waypoints.get(&sequence) else {
         return;
     };
+    let at = p.position();
+    let near = points.first().is_some_and(|(_, x, y, _)| {
+        (x - at.x).powi(2) + (y - at.y).powi(2) <= CAMERA_REACH * CAMERA_REACH
+    });
+    if !near {
+        return;
+    }
     p.misc.camera = Some(Camera {
         started: map.now,
         start: p.position(),
