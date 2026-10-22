@@ -126,15 +126,20 @@ async fn the_first_to_tag_a_creature_has_its_credit_though_another_kills_it() {
             let brute = spawn(m, bob, BRUTE, 20, 2.0);
             let xp = |m: &Map, g: Guid| m.players[&g].fields.get_u32(PLAYER_XP);
             let before = (xp(m, alice), xp(m, bob));
+            // A miss deals nothing and tags no one (mangos taps in
+            // `DealDamage`, past its no-damage return); a hit does.
             forced_swing(m, bob, brute, Outcome::Miss);
+            let missed = m.creature(brute).unwrap().tapped_by;
+            combat::deal_damage(m, bob, brute, 1);
             let tapped = m.creature(brute).unwrap().tapped_by;
             combat::deal_damage(m, alice, brute, 10_000_000);
-            (tapped, before, (xp(m, alice), xp(m, bob)))
+            (missed, tapped, before, (xp(m, alice), xp(m, bob)))
         })
         .await
         .unwrap();
-    let (tapped, before, after) = r;
-    assert_eq!(tapped, Some(bob), "a miss tags it too");
+    let (missed, tapped, before, after) = r;
+    assert_eq!(missed, None, "a miss tags no one");
+    assert_eq!(tapped, Some(bob), "a hit tags it");
     assert_eq!(after.0, before.0, "Alice's blow, no credit");
     assert!(after.1 > before.1, "Bob's credit: {before:?} {after:?}");
 }

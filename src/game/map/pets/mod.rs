@@ -1000,14 +1000,10 @@ pub fn on_attacked(map: &mut Map, creature: Guid, attacker: Guid) -> bool {
     // Not a master who can't join it (mangos's `CanJoinInAttacking`), nor
     // one a summon keeps out of its fights ([`drawn_in`]).
     if let Some(master) = drawn_in(map, attacker) {
-        let realm = map.realm.clone();
-        if let Some(c) = map.creature_mut(creature) {
-            if c.tapped_by.is_none() {
-                crate::game::map::tap::take(&realm, c, master);
-            }
-            if c.threat.iter().all(|(g, _)| *g != master) {
-                c.threat.push((master, 0.0));
-            }
+        if let Some(c) = map.creature_mut(creature)
+            && c.threat.iter().all(|(g, _)| *g != master)
+        {
+            c.threat.push((master, 0.0));
         }
         // The master is in the fight too.
         if let Some(p) = map.players.get_mut(&master) {

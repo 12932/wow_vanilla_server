@@ -75,7 +75,8 @@ async fn a_units_blow_is_its_controllers_and_not_its_creators() {
             let tap = |m: &mut Map, by: Guid| {
                 put(m, by, off(-2.0, 0.0, 0.0));
                 let b = creature_at(m, gh, BRUTE, off(-3.0, 0.0, 0.0));
-                p3::forced_swing(m, by, b, combat::Outcome::Miss);
+                // A blow that hurts: only damage taps.
+                combat::deal_damage(m, by, b, 1);
                 let t = m.creature(b).unwrap().tapped_by;
                 m.remove_creature(b);
                 for u in [gh, by] {

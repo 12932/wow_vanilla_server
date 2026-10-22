@@ -100,6 +100,7 @@ async fn a_corpse_is_looted_by_the_rules_of_the_group_it_was_tapped_for() {
         let second = spawn(m, ga, BRUTE, 20, 3.0);
         for k in [first, second] {
             ai::attacked(m, k, ga);
+            crate::game::map::combat::deal_damage(m, ga, k, 1);
         }
         (first, second)
     })

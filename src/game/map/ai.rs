@@ -151,15 +151,10 @@ fn engage(map: &mut Map, creature: Guid, attacker: Guid, call: bool) {
     {
         combat::enter(map, master, false);
     }
-    let realm = map.realm.clone();
+    // A fight taps no one: the first damage does ([`tap::damaged`]).
     let Some(c) = map.creature_mut(creature) else {
         return;
     };
-    // The tap is the player whose side it is: a possessed player's
-    // controller's (mangos's `GetBeneficiaryPlayer`).
-    if c.tapped_by.is_none() && guid::is_player(master) {
-        crate::game::map::tap::take(&realm, c, master);
-    }
     let new = c.threat.iter().all(|(g, _)| *g != attacker);
     if new {
         c.threat.push((attacker, 0.0));

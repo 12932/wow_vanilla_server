@@ -1364,7 +1364,9 @@ async fn a_tapped_creature_is_grey_to_all_but_its_tappers() {
         x.clear();
     }
     let tapped = on(&map, move |m| {
+        // Its first damage taps it (mangos's `DealDamage`).
         crate::game::map::ai::attacked(m, raptor, ga);
+        crate::game::map::combat::deal_damage(m, ga, raptor, 1);
         m.creature(raptor).and_then(|c| c.tapped_by)
     })
     .await;

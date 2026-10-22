@@ -532,10 +532,11 @@ async fn a_missile_reads_its_casters_stealth_as_it_lands_an_instant_as_it_leaves
 }
 
 /// A proc's instant 20 fire hurts a creature but starts no fight: the
-/// creature isn't in combat, attacks no one and is no one's tap, and the
-/// player isn't in combat (Thistle Tea's "instant proc damage lands
-/// without starting combat for either owner"; mangos-classic's
-/// `DealDamage` puts both in combat for direct damage).
+/// creature isn't in combat and attacks no one, and the player isn't in
+/// combat (Thistle Tea's "instant proc damage lands without starting
+/// combat for either owner"; mangos-classic's `DealDamage` puts both in
+/// combat for direct damage). It is the player's tap, as any damage
+/// (mangos's `DealDamage`, not Thistle Tea's tap on combat entry).
 #[tokio::test]
 async fn a_procs_damage_hurts_without_a_fight_for_either() {
     let realm = fast_realm(data);
@@ -558,7 +559,7 @@ async fn a_procs_damage_hurts_without_a_fight_for_either() {
         })
         .await
         .unwrap();
-    assert_eq!(out, (20, false, false, None, false));
+    assert_eq!(out, (20, false, false, Some(a), false));
 }
 
 /// A channel of no initial threat, cast at a creature, puts no one in
@@ -566,7 +567,8 @@ async fn a_procs_damage_hurts_without_a_fight_for_either() {
 /// its caster the kill (Thistle Tea's "a channeled first damage tick
 /// enters combat and preserves lethal-tick credit", its lethal half;
 /// `kill_once`'s tapper). A first tick that doesn't kill puts no one in
-/// the fight in wvs, nor taps the creature, so that half is left out.
+/// the fight in wvs (it taps the creature, as any damage), so that half
+/// is left out.
 #[tokio::test]
 async fn a_channels_killing_tick_gives_its_caster_the_kill() {
     let realm = fast_realm(data);

@@ -47,6 +47,10 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **A guild charter** is sold by any petitioner; Thistle Tea also wants the tabard designer's flag.
 - **Blink's forward form** stops at the farthest point in sight; Thistle Tea walks the navmesh.
 - **The tapped flag** follows the tapper's current group; Thistle Tea keeps the group as it was at the tap.
+- **Only damage taps a creature,** as mangos-classic's `Unit::DealDamage` sets the loot recipient: the first damage
+  that gets through (a blow, a spell, a tick; not a miss or one absorbed whole) from a player, their pet or guardian
+  taps it for them and their group. Thistle Tea taps it on combat entry (`combat_entered` → `maybe_tap`), so a
+  creature that aggroed a passer-by, or was taunted or drawn by a heal's threat, was theirs before anyone hit it.
 - **Update packets are compressed above 1,024 bytes** (Thistle Tea above 128, mangos above 100). The client reads
   either form at any size, so this only trades bandwidth against CPU.
 - **A pet's Stay from its master's bar** stops its attack, as mangos-classic's does; Thistle Tea and vmangos keep the

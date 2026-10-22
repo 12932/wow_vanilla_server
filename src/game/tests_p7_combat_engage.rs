@@ -36,8 +36,12 @@ async fn a_pull_sets_the_fight_and_stopping_the_attack_keeps_the_rest() {
                 c.fields.get_guid(UNIT_FIELD_TARGET) == ga,
                 c.combat.attacking && c.combat.victim == ga,
                 c.engagement.last_hostile == Some(now),
-                c.tapped_by == Some(ga),
+                // A pull taps no one: only damage does (mangos's
+                // `DealDamage`, not Thistle Tea's tap on combat entry).
+                c.tapped_by.is_none(),
             );
+            let realm = m.realm.clone();
+            crate::game::map::tap::take(&realm, m.creature_mut(brute).unwrap(), ga);
             let swing_at = now + Duration::from_millis(1234);
             {
                 let c = m.creature_mut(brute).unwrap();
@@ -79,7 +83,7 @@ async fn a_pull_sets_the_fight_and_stopping_the_attack_keeps_the_rest() {
     assert_eq!(
         r.0,
         (true, true, true, true, true, true),
-        "(flag, list, target, swing, last act, tap)"
+        "(flag, list, target, swing, last act, no tap)"
     );
     assert_eq!(
         r.1,
