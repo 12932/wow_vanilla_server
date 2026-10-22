@@ -87,3 +87,49 @@ async fn a_long_outbid_list_is_answered_at_once() {
     assert_eq!(bids, vec![7]);
     assert!(took < Duration::from_millis(500), "{took:?}");
 }
+
+/// Packets before this are handled: the name query is answered after them.
+async fn handled(a: &mut Client) {
+    a.send(CMSG_NAME_QUERY { guid: a.guid }).await;
+    a.wait_for("SMSG_NAME_QUERY_RESPONSE", |m| match m {
+        ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(_) => Some(()),
+        _ => None,
+    })
+    .await;
+}
+
+/// A built-in channel's name with any zone after it ("General - 1",
+/// "General - 2") made a channel that was never taken out, empty: one for
+/// every packet, for good, each scanned at every zone change and logout.
+/// An empty built-in channel goes as a custom one does, and the next join
+/// makes it again.
+#[tokio::test]
+async fn an_empty_built_in_channel_goes() {
+    let realm = harness::realm();
+    let mut a = Client::connect(&realm, "A");
+    a.enter("Alice", Race::Human, Class::Warrior).await;
+    handled(&mut a).await;
+    let before = realm.social.channels.lock().count();
+    for i in 0..20 {
+        let name = format!("General - {i}");
+        a.send(CMSG_JOIN_CHANNEL {
+            channel_name: name.clone(),
+            channel_password: String::new(),
+        })
+        .await;
+        a.send(CMSG_LEAVE_CHANNEL { channel_name: name }).await;
+    }
+    a.send(CMSG_JOIN_CHANNEL {
+        channel_name: "Trade - Nowhere".into(),
+        channel_password: String::new(),
+    })
+    .await;
+    handled(&mut a).await;
+    assert_eq!(realm.social.channels.lock().count(), before + 1);
+    a.send(CMSG_LEAVE_CHANNEL {
+        channel_name: "Trade - Nowhere".into(),
+    })
+    .await;
+    handled(&mut a).await;
+    assert_eq!(realm.social.channels.lock().count(), before);
+}

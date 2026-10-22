@@ -170,10 +170,14 @@ impl Channel {
         self.id != 0
     }
 
-    /// Its last member gone, and not a built-in one: it goes, its password
-    /// and bans with it (`Channels::run`).
+    /// Its last member gone: it goes, its password and bans with it
+    /// (`Channels::run`). A built-in one too, unlike mangos's
+    /// `LeftChannel`: its name takes any zone after the prefix ("General -
+    /// 1", "General - 2"), so kept, a client could make one for good with
+    /// every join. It has no owner to have set anything worth keeping, and
+    /// the next join makes it again.
     fn gone(&self) -> bool {
-        self.members.is_empty() && !self.constant()
+        self.members.is_empty()
     }
 
     fn member(&self, g: Guid) -> Option<&Member> {
@@ -330,8 +334,7 @@ impl Channels {
         }
     }
 
-    /// `f` on `c`, `k`'s channel, under `guard`. Left empty, and not a
-    /// built-in one, it goes, its password and bans with it (mangos's
+    /// `f` on `c`, `k`'s channel, under `guard`. Left empty, it goes, its password and bans with it (mangos's
     /// `ChannelMgr::LeftChannel`, Thistle Tea's `Channels.put`): kept, an
     /// empty channel locked by a password nobody remembers would stay for
     /// good, one for every name a client cares to lock.
