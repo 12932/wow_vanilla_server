@@ -529,9 +529,12 @@ pub fn animation_position(
     })
 }
 
-/// Every route, from the game data.
-pub fn routes(realm: &Realm) -> Vec<Route> {
-    routes_in(&realm.data)
+/// Every route, from the game data: built once, as they never change.
+pub fn routes(realm: &Realm) -> &[Route] {
+    realm
+        .data
+        .transport_routes
+        .get_or_init(|| routes_in(&realm.data))
 }
 
 /// Every route in `data`.
@@ -557,8 +560,8 @@ pub fn routes_in(data: &crate::game::data::GameData) -> Vec<Route> {
 }
 
 /// The route of transport `entry`.
-pub fn route_of(realm: &Realm, entry: u32) -> Option<Route> {
-    routes(realm).into_iter().find(|r| r.entry == entry)
+pub fn route_of(realm: &Realm, entry: u32) -> Option<&Route> {
+    routes(realm).iter().find(|r| r.entry == entry)
 }
 
 /// A transport's entry from its GUID: a boat's or zeppelin's is its
@@ -650,7 +653,7 @@ fn place(realm: &Arc<Realm>, route: &Route, map: u32, pos: Vector3d) {
 /// Start the boats and zeppelins: each on its map, and a clock that moves
 /// them from map to map with those aboard.
 pub fn start(realm: &Arc<Realm>) {
-    let mut routes = routes(realm);
+    let mut routes = routes(realm).to_vec();
     if routes.is_empty() || tokio::runtime::Handle::try_current().is_err() {
         return;
     }
@@ -711,7 +714,7 @@ pub fn restore(map: &mut crate::game::map::Map) {
         let Some(template) = realm.data.gameobject_templates.get(&r.entry) else {
             continue;
         };
-        map.add_gameobject(object(template, &r, on, pos));
+        map.add_gameobject(object(template, r, on, pos));
         map.globals.push(r.guid);
     }
 }

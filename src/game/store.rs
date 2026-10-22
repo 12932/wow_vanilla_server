@@ -468,6 +468,8 @@ enum Request {
     Load(u32, oneshot::Sender<Option<CharacterRow>>),
     Create(Box<CharacterRow>, oneshot::Sender<Result<(), CreateError>>),
     Delete(String, u32, oneshot::Sender<bool>),
+    /// A character's new name and login flags, written at once.
+    Rename(u32, String, u32, oneshot::Sender<Result<(), CreateError>>),
     Save(Box<CharacterRow>),
     AccountData(String, oneshot::Sender<Vec<(u8, u32, Vec<u8>)>>),
     SetAccountData(String, u8, u32, Vec<u8>),
@@ -641,6 +643,16 @@ impl Store {
         let (tx, rx) = oneshot::channel();
         self.send(Request::Delete(account.to_owned(), guid, tx));
         rx.await.unwrap_or(false)
+    }
+
+    /// A character's new name, and its login flags (the rename's taken
+    /// off), written before this returns: `NameInUse` if another character
+    /// has the name by then. (A save naming it would fail instead, but
+    /// unheard.)
+    pub async fn rename(&self, guid: u32, name: &str, at_login: u32) -> Result<(), CreateError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Request::Rename(guid, name.to_owned(), at_login, tx));
+        rx.await.unwrap_or(Err(CreateError::Failed))
     }
 
     /// Save a character, items, spells and actions included, replacing what
@@ -1554,29 +1566,80 @@ fn serve(conn: &Connection, kept: &mut Kept, req: Request) {
             let _ = reply.send(result);
         }
         Request::Delete(account, guid, reply) => {
+            // All or none: a failure part way left the character gone and
+            // its items behind.
             let deleted = (|| -> rusqlite::Result<bool> {
-                let n = conn.execute(
+                let tx = conn.unchecked_transaction()?;
+                let n = tx.execute(
                     "DELETE FROM characters WHERE guid = ?1 AND account = ?2",
                     params![guid, account],
                 )?;
                 if n > 0 {
-                    conn.execute(
-                        "DELETE FROM character_items WHERE owner = ?1",
-                        params![guid],
-                    )?;
-                    conn.execute(
-                        "DELETE FROM character_spells WHERE owner = ?1",
-                        params![guid],
-                    )?;
-                    conn.execute(
-                        "DELETE FROM character_actions WHERE owner = ?1",
-                        params![guid],
+                    for table in ["character_items", "character_spells", "character_actions"] {
+                        tx.execute(
+                            &format!("DELETE FROM {table} WHERE owner = ?1"),
+                            params![guid],
+                        )?;
+                    }
+                    // Its own caches (`account_data::key`'s).
+                    tx.execute(
+                        "DELETE FROM account_data WHERE account = ?1",
+                        params![format!("{account}#{guid}")],
                     )?;
                 }
+                tx.commit()?;
                 Ok(n > 0)
             })()
-            .unwrap_or(false);
+            .unwrap_or_else(|e| {
+                warn!("deleting character {guid}: {e}");
+                false
+            });
+            if deleted {
+                // A save of it kept from before isn't written after, to
+                // bring it back.
+                kept.pending.retain_mut(|s| match s {
+                    Request::Save(row) => row.guid != guid,
+                    Request::Together(rows, _) => {
+                        rows.retain(|r| r.guid != guid);
+                        true
+                    }
+                    _ => true,
+                });
+            }
             let _ = reply.send(deleted);
+        }
+        Request::Rename(guid, name, at_login, reply) => {
+            let result = match conn.execute(
+                "UPDATE characters SET name = ?2, at_login = ?3 WHERE guid = ?1",
+                params![guid, name, at_login],
+            ) {
+                Ok(0) => Err(CreateError::Failed),
+                Ok(_) => {
+                    // A save of it kept from before writes the new name too.
+                    for s in &mut kept.pending {
+                        let rows: &mut [CharacterRow] = match s {
+                            Request::Save(row) => std::slice::from_mut(&mut **row),
+                            Request::Together(rows, _) => rows,
+                            _ => continue,
+                        };
+                        for row in rows.iter_mut().filter(|r| r.guid == guid) {
+                            row.name = name.clone();
+                            row.at_login = at_login;
+                        }
+                    }
+                    Ok(())
+                }
+                Err(e)
+                    if e.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) =>
+                {
+                    Err(CreateError::NameInUse)
+                }
+                Err(e) => {
+                    warn!("renaming character {guid} to {name}: {e}");
+                    Err(CreateError::Failed)
+                }
+            };
+            let _ = reply.send(result);
         }
         Request::AccountData(account, reply) => {
             let rows = (|| -> rusqlite::Result<Vec<(u8, u32, Vec<u8>)>> {
@@ -1805,14 +1868,28 @@ fn load_row(conn: &Connection, guid: u32) -> rusqlite::Result<Option<CharacterRo
     Ok(Some(row))
 }
 
+/// A save's upsert, on the GUID alone: every other column from the row it
+/// would have inserted. (`INSERT OR REPLACE` would delete another
+/// character whose name it takes, the name being unique; this fails.)
+static SAVE_CHARACTER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let set: Vec<String> = CHARACTER_COLUMNS
+        .split(", ")
+        .filter(|c| *c != "guid")
+        .map(|c| format!("{c} = excluded.{c}"))
+        .collect();
+    let values: Vec<String> = (1..=CHARACTER_COLUMNS.split(", ").count())
+        .map(|i| format!("?{i}"))
+        .collect();
+    format!(
+        "INSERT INTO characters ({CHARACTER_COLUMNS}) VALUES ({}) ON CONFLICT(guid) DO UPDATE SET {}",
+        values.join(", "),
+        set.join(", ")
+    )
+});
+
 fn save_row(conn: &Connection, row: &CharacterRow) -> rusqlite::Result<()> {
     let state = serde_json::to_string(&row.state).unwrap_or_else(|_| "{}".to_owned());
-    conn.prepare_cached(&format!(
-        "INSERT OR REPLACE INTO characters ({CHARACTER_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, \
-         ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, \
-         ?25)"
-    ))?
-    .execute(params![
+    conn.prepare_cached(&SAVE_CHARACTER)?.execute(params![
         row.guid,
         row.account,
         row.name,
@@ -1956,6 +2033,41 @@ mod tests {
         assert!(store.load(1).await.is_none());
         drop(store);
         let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A character deleted takes its own caches with it (the account's
+    /// stay), and its items, spells and actions, in one transaction.
+    #[tokio::test]
+    async fn a_deleted_character_takes_its_caches() {
+        let (store, _) = Store::open(":memory:").unwrap();
+        store.create(row(1, "Alice")).await.unwrap();
+        store.set_account_data("ACC#1", 4, 1, b"macros".to_vec());
+        store.set_account_data("ACC", 0, 1, b"config".to_vec());
+        assert!(store.delete("ACC", 1).await);
+        assert!(store.account_data("ACC#1").await.is_empty());
+        assert_eq!(store.account_data("ACC").await.len(), 1);
+        assert!(store.load(1).await.is_none());
+    }
+
+    /// A save or a rename that takes another character's name deletes no
+    /// one: it fails, and the other keeps the name. (`INSERT OR REPLACE`
+    /// deleted the character that had it, the name being unique: two
+    /// renames at once, or a rename and a character made.)
+    #[tokio::test]
+    async fn taking_another_characters_name_deletes_no_one() {
+        let (store, _) = Store::open(":memory:").unwrap();
+        store.create(row(1, "Alice")).await.unwrap();
+        store.create(row(2, "Bob")).await.unwrap();
+        store.save(row(1, "Bob"));
+        store.flush().await;
+        let bob = store.load(2).await.expect("Bob is still there");
+        assert_eq!((bob.name.as_str(), bob.items.len()), ("Bob", 1));
+        assert_eq!(store.load(1).await.unwrap().name, "Alice");
+        assert_eq!(store.rename(1, "bob", 0).await, Err(CreateError::NameInUse));
+        assert!(store.load(2).await.is_some());
+        assert_eq!(store.rename(1, "Carol", 0).await, Ok(()));
+        assert_eq!(store.load(1).await.unwrap().name, "Carol");
+        assert_eq!(store.rename(9, "Dave", 0).await, Err(CreateError::Failed));
     }
 
     /// A store of version 2 (no charges) migrates: its items load with no

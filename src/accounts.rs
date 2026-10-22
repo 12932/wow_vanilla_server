@@ -138,7 +138,18 @@ impl Accounts {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The account, `None` if there is none. A failed read is `None` too,
+    /// logged: callers that must tell the two apart use [`Self::read`].
     pub fn find(&self, name: &str) -> Option<Account> {
+        self.read(name).unwrap_or_else(|e| {
+            warn!("reading account {name}: {e}");
+            None
+        })
+    }
+
+    /// The account, or why it couldn't be read (busy, I/O, a column that
+    /// won't convert, as a hand-made `gm_level` over 255).
+    pub fn read(&self, name: &str) -> rusqlite::Result<Option<Account>> {
         let conn = self.lock();
         conn.query_row(
             "SELECT name, salt, verifier, gm_level, banned_until, ban_reason FROM accounts WHERE name = ?1",
@@ -157,8 +168,6 @@ impl Accounts {
             },
         )
         .optional()
-        .ok()
-        .flatten()
     }
 
     /// Make an account, or set its password.
@@ -179,6 +188,28 @@ impl Accounts {
             ],
         )
         .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Make an account whose password is its name, for `auto`; one there
+    /// already is left as it is.
+    fn create(&self, name: &str) -> Result<(), String> {
+        let Some(n) = normalized(name) else {
+            return Err("names are letters and digits".into());
+        };
+        let v = SrpVerifier::from_username_and_password(n.clone(), n);
+        self.lock()
+            .execute(
+                "INSERT INTO accounts (name, salt, verifier, created) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(name) DO NOTHING",
+                params![
+                    name.to_uppercase(),
+                    v.salt().to_vec(),
+                    v.password_verifier().to_vec(),
+                    now()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -233,16 +264,22 @@ impl Accounts {
     /// allows.
     pub fn login(&self, name: &str) -> Result<SrpVerifier, Refused> {
         let n = normalized(name).ok_or(Refused::BadName)?;
-        let account = match self.find(name) {
-            Some(a) => a,
-            None if self.creation == Creation::Auto => {
-                if let Err(e) = self.set_password(name, name) {
+        let account = match self.read(name) {
+            Ok(Some(a)) => a,
+            Ok(None) if self.creation == Creation::Auto => {
+                if let Err(e) = self.create(name) {
                     warn!("making account {name}: {e}");
                     return Err(Refused::BadName);
                 }
                 self.find(name).ok_or(Refused::Unknown)?
             }
-            None => return Err(Refused::Unknown),
+            Ok(None) => return Err(Refused::Unknown),
+            // Not "no such account": under `auto` that would make it again,
+            // its password its name.
+            Err(e) => {
+                warn!("reading account {name} at a login: {e}; refused");
+                return Err(Refused::Unknown);
+            }
         };
         if account.banned(now()) {
             return Err(Refused::Banned);
@@ -265,7 +302,15 @@ impl Accounts {
     }
 
     pub fn banned(&self, name: &str) -> bool {
-        self.find(name).is_some_and(|a| a.banned(now()))
+        // An account that can't be read is taken for banned: a ban fails
+        // closed.
+        match self.read(name) {
+            Ok(a) => a.is_some_and(|a| a.banned(now())),
+            Err(e) => {
+                warn!("reading account {name} for a ban: {e}; taken as banned");
+                true
+            }
+        }
     }
 }
 
@@ -282,6 +327,33 @@ mod tests {
         assert_eq!(strict.login("STRANGER").err(), Some(Refused::Unknown));
         strict.set_password("KNOWN", "SECRET").unwrap();
         assert!(strict.login("KNOWN").is_ok());
+    }
+
+    /// An account that can't be read (here a hand-made `gm_level` over
+    /// 255) isn't taken for a new one: under `auto`, the login is refused,
+    /// not the account made again with its name for its password; and it
+    /// counts as banned.
+    #[test]
+    fn an_account_that_cant_be_read_isnt_made_again() {
+        let a = Accounts::in_memory(Creation::Auto, false);
+        a.set_password("ADMIN", "SECRET").unwrap();
+        let set_level = |level: i64| {
+            a.lock()
+                .execute(
+                    "UPDATE accounts SET gm_level = ?1 WHERE name = 'ADMIN'",
+                    params![level],
+                )
+                .unwrap()
+        };
+        set_level(300);
+        assert!(a.read("ADMIN").is_err());
+        assert_eq!(a.login("ADMIN").err(), Some(Refused::Unknown));
+        assert!(a.banned("ADMIN"), "a ban fails closed");
+        set_level(3);
+        assert!(a.check_password("ADMIN", "SECRET"), "the password stands");
+        assert!(!a.check_password("ADMIN", "ADMIN"));
+        assert!(!a.banned("ADMIN"));
+        assert!(a.login("ADMIN").is_ok());
     }
 
     #[test]

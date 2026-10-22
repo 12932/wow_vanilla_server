@@ -350,6 +350,10 @@ async fn a_new_character_starts_at_the_configs_level_and_money() {
         .await
         .flatten();
     assert_eq!(got, Some((10, 12_345)));
+    // So does its name entry, what `/who`, the guild roster and insignia
+    // read (it said 1 until a level-up or a restart).
+    let entry = realm.registry.name(ga).unwrap();
+    assert_eq!(entry.level.load(std::sync::atomic::Ordering::Relaxed), 10);
 }
 
 /// The keys the constants became: a reload puts in the live ones, at the
@@ -439,4 +443,20 @@ async fn the_invasions_follow_the_config() {
     crate::game::invasion::disable(&realm);
     crate::game::invasion::sweep(&realm);
     assert!(!realm.social.invasion.lock().enabled, "the GM's word holds");
+}
+
+/// A GM's connection is marked so, and a player's isn't: its reader
+/// spares a GM the ping rule, as mangos's `HandlePing` spares all but
+/// `SEC_PLAYER`.
+#[tokio::test]
+async fn a_gms_connection_is_spared_the_ping_rule() {
+    for gm in [false, true] {
+        let mut cfg = harness::test_config();
+        cfg.everyone_gm = gm;
+        let realm = realm_with(cfg);
+        let mut a = Client::connect(&realm, "A");
+        let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+        let online = realm.registry.online(ga).expect("online");
+        assert_eq!(online.outbound.is_gm(), gm);
+    }
 }

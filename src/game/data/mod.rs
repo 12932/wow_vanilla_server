@@ -544,6 +544,10 @@ pub struct GameData {
     pub bg_routes: AHashMap<u32, Vec<(f32, f32, f32)>>,
     /// `transports`: boats and zeppelins, with their cycles in milliseconds.
     pub transports: Vec<TransportRoute>,
+    /// Their routes, splines and all, built from `transports` when first
+    /// asked (`transports::routes`).
+    #[cfg_attr(test, serde(skip))]
+    pub transport_routes: std::sync::OnceLock<Vec<crate::game::transports::Route>>,
     /// `game_event`: seasonal events, by id.
     pub events: AHashMap<u32, GameEvent>,
     /// Creature and object spawns tied to an event: during it (a positive

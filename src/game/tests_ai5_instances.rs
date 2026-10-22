@@ -956,3 +956,34 @@ async fn the_real_instances() {
         .flatten();
     assert_eq!(statue, Some(NOT_SELECTABLE));
 }
+
+/// A battleground's copy keeps no save: what dies or goes in a match isn't
+/// written to the store (it was, at every death, and kept past the match).
+#[tokio::test]
+async fn a_battlegrounds_deaths_are_not_saved() {
+    let realm = harness::realm_with(GameData::empty());
+    let id = realm.social.instances.lock().new_id();
+    let key = MapKey {
+        map: 489,
+        instance: id,
+    };
+    instances::spawn_died(&realm, key, 1, None);
+    instances::object_gone(&realm, key, 2, Duration::from_secs(60));
+    instances::data_changed(&realm, key, &[(1, 2)].into_iter().collect());
+    assert!(instances::save_of(&realm, id).is_none());
+    realm.store.flush().await;
+    assert!(
+        realm
+            .store
+            .record(instances::KIND_INSTANCE, u64::from(id))
+            .await
+            .is_none()
+    );
+    // A dungeon's copy still keeps one.
+    let dungeon = MapKey {
+        map: DUNGEON,
+        instance: id + 1,
+    };
+    instances::spawn_died(&realm, dungeon, 1, None);
+    assert!(instances::save_of(&realm, id + 1).is_some());
+}
