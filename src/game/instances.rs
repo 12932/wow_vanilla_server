@@ -1134,13 +1134,20 @@ pub fn sweep(realm: &Realm) {
     // inside: none is let in between.
     let stale: Vec<u32> = {
         let mut inst = realm.social.instances.lock();
-        let online = realm.registry.all_online();
+        // The copies someone is in, worked out once: asked of every online
+        // player for each save, it was saves times players map locks.
+        let occupied: ahash::AHashSet<u32> = realm
+            .registry
+            .all_online()
+            .iter()
+            .map(|o| o.map().key.instance)
+            .collect();
         let stale: Vec<u32> = inst
             .saves
             .values()
             .filter(|s| !inst.raids.contains_key(&s.id))
             .filter(|s| s.touched_at + unload < now)
-            .filter(|s| !online.iter().any(|o| o.map().key.instance == s.id))
+            .filter(|s| !occupied.contains(&s.id))
             .filter(|s| {
                 !inst.anyone_coming(
                     MapKey {

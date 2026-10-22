@@ -502,3 +502,50 @@ async fn a_seller_with_many_auctions_is_sent_what_fits() {
     assert_eq!(total, 1000);
     assert_eq!(rest, (901..=1000).collect::<Vec<_>>());
 }
+
+/// The instance sweep asked, for each save, whether any of the online
+/// players was in it, under the copies' lock: saves times players lock
+/// and clone operations every five seconds, 3 million at 1,000 saves and
+/// 3,000 online. The copies in use are worked out once a sweep.
+#[tokio::test]
+async fn the_instance_sweep_looks_at_the_online_list_once() {
+    use crate::game::conn::Outbound;
+    use crate::game::instances::{self, InstanceSave};
+    use crate::game::registry::{NameEntry, Online};
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    for i in 0..3000u32 {
+        let g = guid::player(50_000 + i);
+        let name = realm.registry.add_name(NameEntry {
+            guid: g,
+            account: format!("ACC{i}").into(),
+            name: format!("Bot{i}").into(),
+            race: 1,
+            class: 1,
+            gender: 0,
+            level: 1.into(),
+        });
+        let (session, _) = tokio::sync::mpsc::unbounded_channel();
+        let o = Online::new(&name, 0, Outbound::detached().0, session, map.clone());
+        realm.registry.go_online(Arc::new(o)).unwrap();
+    }
+    {
+        let mut inst = realm.social.instances.lock();
+        for id in 1..=1000 {
+            inst.saves.insert(
+                id,
+                InstanceSave {
+                    id,
+                    map: 36,
+                    touched_at: 0,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    let started = Instant::now();
+    instances::sweep(&realm);
+    let took = started.elapsed();
+    assert!(realm.social.instances.lock().saves.is_empty(), "all stale");
+    assert!(took < Duration::from_millis(50), "{took:?}");
+}
