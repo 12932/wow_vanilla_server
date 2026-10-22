@@ -91,11 +91,21 @@ Between updates, the map handles what it is sent, a zone each:
 
 - a packet from a client, named by its opcode (`MSG_MOVE_HEARTBEAT`, `CMSG_CAST_SPELL`, ...), so a costly handler
   stands out in the statistics;
+  - inside a movement packet, its steps: `move: checks` (the gates, the root and the speed check), `move: taken`
+    (the guard, the fall, a cast or shot it breaks), `move: visibility` (the grid, visibility's mark),
+    `move: encode` (the relay), `move: broadcast` (with `observers: clients` and `cork: broadcast` in it), and
+    `move: after` (the stand, the auras it ends, the safe place);
+  - with `[world] parallel_moves`, a burst's movement: `moves: stepped` (across the threads) and `moves: told`
+    (what it tells the map), a packet handled alone by its opcode as above;
+- `cork: push`: a cork's chunk published to the map's feed, and what it kept for clients of no feed pushed;
 - `arrival` (a player logging in or coming from another map), `disconnect`, and `call` (another map or service
   changing something this map owns).
 
 Elsewhere:
 
+- the writers: `writer: burst`, a client's frames copied and their headers encrypted for one write, its value
+  how many; the feed's waker: `feed: wake`, a feed's new chunks charged to its clients and their writers woken
+  (`conn::Feed`);
 - the store's thread: `store transaction`, a zone per transaction written, its value how many saves it held; and
   `store request` for each read (a character list, a login's load).
 - start-up: `load: the character store`, then `load` (the world's data) with a zone each stage (`load: dbc`,

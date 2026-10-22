@@ -1252,3 +1252,141 @@ introductions at 2,000, 3.4 ms at the end of the login's event, and 1.1 ms more 
 map's time per newcomer, the visibility refresh's per-pair cost that stage A's quick path cuts. The drill at 200
 bots (the server and peon on 4 cores each, a 1 s ramp, ramp-bound at 165 placed a second) is unchanged: update p99 5.2 ms at
 random, every broadcast delivered within 3 ms p99; its arrival events took 172 µs on average, from 338.
+
+## The 2,000 drill, round two (2026-10-22)
+
+peon's drill (above) on a 32-core box shared with other work: the server pinned to 4 of its cores, peon to 12
+others, never past 45% of them. The goal: 880 under 20 ms p99 in every phase, 2,000 under 50 ms p99 with every
+broadcast delivered within 100 ms p99, then 3,000. Where it stood (0.1.97): at 2,000, Kalimdor's thread 99% busy,
+two thirds of the broadcasts delivered (the rest coalesced in the mailbox), a second late.
+
+### Where a movement packet's time went
+
+A Tracy capture of the 2,000 drill (`WOW_TRACY=1`, Tracy 0.14.1's `capture` and `csvexport`), with a zone for each
+step of a move (`move: checks`, `taken`, `visibility`, `encode`, `broadcast`, `after`), the cork's broadcast and
+push, and the writer's bursts ([PROFILING.md](PROFILING.md)). The mean of each, over the run's 785,000 movement
+packets:
+
+| Step | Mean |
+|---|---|
+| the gates, the root and the speed check (`move: checks`) | 1.1 µs |
+| the move taken: the guard, the fall, a cast or a shot it breaks (`taken`) | 2.2 µs |
+| the grid and visibility's mark (`visibility`) | 0.3 µs |
+| the relay encoded (`encode`) | 0.5 µs |
+| the broadcast to those who see the mover (`broadcast`) | **90 µs** |
+| the stand, the auras it ends, the safe place (`after`) | 0.4 µs |
+
+The whole of a heartbeat's event: 136 µs. Of the broadcast's 90 µs, 32 were the cork's: the first time in a batch
+it reaches each of 2,000 clients it looks the client up and gives it a slot (44 µs a broadcast that reached anyone
+new, in a zone of the capture's). The rest was a bug: a heartbeat that came through its session's slot (`MapEvent::Heartbeat`,
+stage C's coalescing, most of them) wasn't corked (`map::corks` knew only `MapEvent::Packet`), so each went to every
+observer's queue on its own, a push and a writer's wake each: 131,000 of the 299,000 broadcasts of a shorter capture,
+2,000 hand-offs apiece. Besides the events: 1,000 cork pushes a second at 26 µs to 200 µs (each a hand-off to every
+client reached), and, on the runtime's other threads, 25 million writer bursts at 2.3 µs.
+
+After the fix (a heartbeat corked as any movement packet is): a heartbeat 9.3 µs, its broadcast 4.4 µs (the
+first-reach 3.9 of it), 1,000 pushes a second at 26 µs. After the feed (below): a heartbeat 6.0 µs, its broadcast
+0.7 µs, 60 publications a second at 46 µs, and the feed's waker 11,000 turns at 0.9 ms on its own thread.
+
+Also: an object's observers keep their clients' bits as the set changes (`Observers::add`, `take`), not built again
+at the next broadcast after any change (a crowd at the edge of sight changes its sets every few packets).
+
+### The fan-out off the map's thread: a feed (`conn::Feed`)
+
+Each map publishes its broadcasts in chunks that its clients' writers read themselves: a cork's run of movement
+and its update are one chunk, published with one store and a word to the feed's waker, whatever the number of
+clients. What the cork kept for one client alone goes in the chunk too, in its place among the broadcasts (by the
+client's index: `Directs`); what anyone sends a client uncorked is stamped with the last chunk its feed had
+published, and written after it. A client becomes a feed's reader the first time a broadcast reaches it (a `Sub` in
+its queue, with the chunk it reads after) and stops when its index is let go (an `Unsub` with the last chunk it
+reads): an index given out again is read by the new client only from where it got it. A held client's broadcasts
+go into its hold, as before, the feed knowing who is held. The waker (a thread of its own) charges each client its
+share of each chunk (the bytes of the broadcasts to it) and wakes those that have one: a client whose share and
+queue pass its budget is disconnected, as before; the writer counts what it takes, so a reader that falls behind
+by more than its budget is cut off, and a chunk is let go once every reader has passed it.
+
+What a client is sent, and in what order, is as before: the tests in `conn.rs` (a direct send in its place among a
+chunk's broadcasts; one from another thread after the chunks published before it; an index let go and given
+again; a client moved to another map's feed; a writer woken by the waker), the fast suite, the extended suite and
+the client check pass.
+
+### Movement across the threads (`map::moves`, `[world] parallel_moves`)
+
+A burst's movement packets kept until something else comes or the burst ends, then each mover's packets stepped in
+order on its own player across the visibility's threads (the gates, the root and speed checks, the fall, the move,
+the relay encoded), and what they tell the map (the grid, visibility's mark, the broadcast, the safe place) done on
+its thread in the order the packets came. A packet that does more than move its own player (put back or pulled
+back, a cast or a shot it breaks, an aura it ends, a stand, a hurting fall, a liquid left, the void) and every one
+after it in the burst is handled one by one, and what any mover did past it is undone: before it, nothing that a
+mover's check reads has changed but by its own packets, so the outcome is the same as one by one.
+`tests_moves::a_burst_across_the_threads_comes_out_as_one_by_one` runs 40 bursts of 120 to 280 packets on two
+crowds of 150 alike (runs, stops, turns, jumps and landings, long falls that hurt, leaps that are pulled back;
+between bursts roots, stands, an aura that moving ends, deaths, game masters), and after each finds every player's
+state, every client's packets and visibility's marks the same, with both ways taken. The fast and the extended
+suites pass with it on.
+
+It doesn't pay here, and is off by default. A crowd of 2,000's bursts of 400 steps, on 4 cores: 2.78 µs a packet one
+by one, 2.83 across with one thread and 2.95 with four; most of a packet's time is what it tells the map, which stays
+on its thread. In the drill (on the 4 cores the runtime's workers and the waker share) the step took 2.7 ms a
+burst, 17 µs a packet, against 6 µs one by one: the threads' hand-off costs more than the checks it moves.
+
+### A memory guard (`[network] memory_guard_fraction`)
+
+Past that share of the machine's memory (0.8; the cgroup's limit if less), the sessions stop reading their clients
+until the server is a twentieth under: what each has sent waits in its reader's queue and its socket, nothing is
+dropped, and what the maps have drains. Logged as it engages and lets go; in the stats file (`memory_guard`). A test
+holds a client back with it on and sees what it sent handled, in order, once it lets go. No drill reached it (3.4 GB
+resident at 2,000, on a box of 128 GB).
+
+### Niceness (`[server] nice`)
+
+Set at start-up on every thread (Linux's niceness is a thread's); refused, it is logged with how to grant it. This
+box has `sched_autogroup` on, which weighs a niceness only against the other processes of its session: here the
+server's and peon's (one session), against other sessions' not at all. The 2,000 drill three times, random phase:
+
+| | Update p50 / p99 ms | Broadcast latency p50 / p99 ms | Delivered | Thread busy |
+|---|---|---|---|---|
+| nice 0 | 14.3 / 63.5 | 17 / 85 | 100.7% | 41% |
+| nice 0, the server under `sudo` | 13.8 / 54.4 | 17 / 75 | 100.7% | 40% |
+| nice -10, the server under `sudo` | 14.1 / 54.0 | 17 / 75 | 100.7% | 41% |
+
+No difference past the runs' own spread, in any phase (the out phase's latency p99: 178, 141, 211 ms): the server
+and peon have cores of their own, and the server isn't short of CPU (2.8 of its 4 cores, its map's thread 40% busy);
+what it shares its cores with runs in other sessions, which a niceness doesn't reach.
+
+### Measured
+
+The drill, the server on 4 cores (peon's binary changed under these runs, its drill the same):
+
+| 2,000 bots, random | Before (0.1.97) | Heartbeats corked | The feed | All |
+|---|---|---|---|---|
+| Kalimdor update p50 / p99 ms | 12.6 / 30.5 | 15.4 / 54.7 | 15.7 / 57.7 | 14.3 / 63.5 |
+| broadcasts delivered | 67.0% | 100.8% | 100.8% | 100.7% |
+| broadcast latency p50 / p99 ms | 1,040 / 1,163 | 21 / 83 | 20 / 87 | 17 / 85 |
+| events a second, mean µs | 5,493, 135 | 8,330, 15.3 | 8,339, 6.0 | 8,297, 6.0 |
+| Kalimdor's thread busy | 99% | 52% | 45% | 41% |
+| mailbox (most) | 6,545 | 912 | 824 | 972 |
+| wvs CPU | 3.74 cores | 2.64 | 2.77 | 2.78 |
+
+The runs together (out and back) at 2,000: update p99 31 and 37 ms to 28 and 32, every broadcast delivered (50%
+before), latency p99 307 and 533 ms to 178 and 69. Before, the update's p99 was low because the map was behind by a
+second: it now handles every packet as it comes, and its update is the whole of what is left.
+
+| 3,000 bots | Before | After |
+|---|---|---|
+| random: update p50 / p99 ms | 26.0 / 130 | 34.9 / 104 |
+| random: delivered, latency p50 / p99 ms | 88.2%, 7,143 / 9,044 | 100.7%, 83 / 244 |
+| random: mailbox (most), thread busy | 104,892, 98% | 2,783, 77% |
+| out: delivered, latency p99 ms | 12.3%, 504 | 101.1%, 381 |
+| wvs CPU | 3.61 cores | 3.44 |
+
+880 bots: update p99 15 ms out and back, 21 ms at random; latency p99 27, 26 and 48 ms.
+
+### What is left
+
+The update. At 2,000 at random its dearest steps are `values` (5.5 ms) and `batches` (3.2 ms): about fifty players'
+public fields change an update (health and power at their ticks, auras, targets), and each one's values block goes
+into each of 2,000 observers' batches, and each observer's batch is framed: the square of the crowd again, now in
+the update. At 3,000: `values` 11.4, `visibility` 8.4, `batches` 7.6 ms, and the server at 3.4 of its 4 cores. A
+values block shared through the feed (one chunk for a crowd's dirty players, as the broadcasts are) would take it
+off the map's thread the same way.
