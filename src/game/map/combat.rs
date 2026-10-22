@@ -39,6 +39,7 @@ pub const HITINFO_RESIST: u32 = 0x40;
 pub const HITINFO_CRITICALHIT: u32 = 0x80;
 pub const HITINFO_GLANCING: u32 = 0x4000;
 pub const HITINFO_CRUSHING: u32 = 0x8000;
+pub const HITINFO_SWINGNOHITSOUND: u32 = 0x8_0000;
 
 /// What the victim did.
 pub const VICTIMSTATE_UNAFFECTED: u32 = 0;
@@ -46,6 +47,7 @@ pub const VICTIMSTATE_NORMAL: u32 = 1;
 pub const VICTIMSTATE_DODGE: u32 = 2;
 pub const VICTIMSTATE_PARRY: u32 = 3;
 pub const VICTIMSTATE_BLOCKS: u32 = 5;
+pub const VICTIMSTATE_EVADES: u32 = 6;
 pub const VICTIMSTATE_IS_IMMUNE: u32 = 7;
 
 /// A creature's `flags_extra`: it never parries, never blocks, or always
@@ -777,7 +779,20 @@ pub fn can_attack_dead(map: &Map, a: Guid, b: Guid) -> bool {
     can_attack_alive_or_not(map, a, b, true)
 }
 
+/// Whether `a` may aim an attack at `b`, a swing or a spell: as
+/// [`can_attack`], but a creature on its way home may be aimed at, and what
+/// lands on it evades (mangos-classic's `CanAttack`, which doesn't ask its
+/// evade, and its `VICTIMSTATE_EVADES` and `SPELL_MISS_EVADE`). Not
+/// "Invalid target".
+pub fn can_aim_at(map: &Map, a: Guid, b: Guid) -> bool {
+    can_attack_of(map, a, b, false, true)
+}
+
 fn can_attack_alive_or_not(map: &Map, a: Guid, b: Guid, dead_ok: bool) -> bool {
+    can_attack_of(map, a, b, dead_ok, false)
+}
+
+fn can_attack_of(map: &Map, a: Guid, b: Guid, dead_ok: bool, evading_ok: bool) -> bool {
     if a == b {
         return false;
     }
@@ -793,7 +808,7 @@ fn can_attack_alive_or_not(map: &Map, a: Guid, b: Guid, dead_ok: bool) -> bool {
     if map
         .unit_fields(b)
         .is_some_and(|f| f.get_u32(UNIT_FIELD_FLAGS) & UNIT_FLAGS_NOT_ATTACKABLE != 0)
-        || map.creature(b).is_some_and(|c| c.evading)
+        || (!evading_ok && map.creature(b).is_some_and(|c| c.evading))
     {
         return false;
     }
@@ -1771,7 +1786,7 @@ pub fn start_attack(map: &mut Map, attacker: Guid, victim: Guid) {
         send_to(map, attacker, encode(&SMSG_ATTACKSWING_DEADTARGET {}));
         return;
     }
-    if !va.alive || !can_attack(map, attacker, victim) {
+    if !va.alive || !can_aim_at(map, attacker, victim) {
         send_to(map, attacker, encode(&SMSG_ATTACKSWING_CANT_ATTACK {}));
         return;
     }
@@ -1889,11 +1904,10 @@ pub fn try_swing(map: &mut Map, attacker: Guid) {
         stop_attack(map, attacker);
         return;
     }
-    // A creature on its way home is no one's to strike, nor to fight by a
-    // blow (mangos's `VICTIMSTATE_EVADES`, no combat from it; Thistle Tea's
-    // evade, no contact): the attack stops, as its evade stops those on its
-    // list.
-    if map.creature(victim).is_some_and(|c| c.evading) {
+    // A pet or a creature lets go of a victim on its way home (mangos's
+    // `PetAI`: "do not continue attacking if victim is moving home"); a
+    // player swings on, and the blows evade (in `swing`).
+    if !va.is_player && map.creature(victim).is_some_and(|c| c.evading) {
         stop_attack(map, attacker);
         return;
     }
@@ -2090,9 +2104,32 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
             ..Default::default()
         };
         if crate::game::map::spells::cast_now(map, attacker, spell, targets) {
-            engage(map, attacker, victim);
+            if !map.creature(victim).is_some_and(|c| c.evading) {
+                engage(map, attacker, victim);
+            }
             return;
         }
+    }
+    // A creature on its way home evades the blow: a miss of no sound, and
+    // no fight from it, no damage, no proc (mangos-classic's
+    // `MELEE_HIT_EVADE`, `VICTIMSTATE_EVADES`, and `DealMeleeDamage`
+    // skipping a unit in evade).
+    if map.creature(victim).is_some_and(|c| c.evading) {
+        let hand_info = if hand == Hand::Off {
+            HITINFO_NORMALSWING2 | HITINFO_LEFTSWING
+        } else {
+            HITINFO_NORMALSWING2
+        };
+        let frame = attacker_state(
+            attacker,
+            victim,
+            hand_info | HITINFO_MISS | HITINFO_SWINGNOHITSOUND,
+            0,
+            VICTIMSTATE_EVADES,
+            0,
+        );
+        map.send_to_observers(attacker, &frame, true);
+        return;
     }
     let Some(roll) = roll_for(map, attacker, victim, hand) else {
         return;

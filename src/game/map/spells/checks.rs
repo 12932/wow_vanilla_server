@@ -840,7 +840,9 @@ pub fn at_finish(
         .any(|e| matches!(targets::implicit(e.target_a), Implicit::Enemy) || e.target_a == 53);
     let harmful = requires_enemy
         || map.players.contains_key(&caster) && !auras::positive(s) && !resurrects(s);
-    if harmful && !combat::can_attack(map, caster, target) && !s.has_effect(95) {
+    // A creature on its way home is still one to aim at: what lands
+    // evades.
+    if harmful && !combat::can_aim_at(map, caster, target) && !s.has_effect(95) {
         return Some(fail::TARGET_FRIENDLY);
     }
     // Still in range: past both reaches, with the launch's leeway, a
@@ -1210,8 +1212,10 @@ fn check_target(
                 Implicit::Ally | Implicit::ChainHeal | Implicit::PartyMember
             )
         });
+        // One on its way home is aimed at, and evades (mangos's
+        // `SPELL_MISS_EVADE`), not BAD_TARGETS.
         let attackable = if u.alive {
-            combat::can_attack(map, caster, target)
+            combat::can_aim_at(map, caster, target)
         } else {
             combat::can_attack_dead(map, caster, target)
         };
@@ -1235,7 +1239,7 @@ fn check_target(
         {
             return Some(fail::BAD_TARGETS);
         }
-        if requires_friend && combat::can_attack(map, caster, target) {
+        if requires_friend && combat::can_aim_at(map, caster, target) {
             return Some(fail::TARGET_ENEMY);
         }
         if requires_friend && !combat::can_assist(map, caster, target) {

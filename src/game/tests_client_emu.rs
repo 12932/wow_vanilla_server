@@ -146,6 +146,19 @@ async fn the_packets_wvs_sends_pass_the_client() {
         ] {
             send_miss(m, ga, bat, 133, hit);
         }
+        // Her blows at one on its way home, either hand: they evade.
+        use crate::game::map::combat::*;
+        for hand in [0, HITINFO_LEFTSWING] {
+            let frame = attacker_state(
+                ga,
+                bat,
+                HITINFO_NORMALSWING2 | hand | HITINFO_MISS | HITINFO_SWINGNOHITSOUND,
+                0,
+                VICTIMSTATE_EVADES,
+                0,
+            );
+            m.players[&ga].outbound.send_frame(frame);
+        }
     })
     .await
     .unwrap();
@@ -200,6 +213,10 @@ async fn the_packets_wvs_sends_pass_the_client() {
         counts.get(&0x24B).copied().unwrap_or(0),
         9,
         "every spell miss was captured"
+    );
+    assert!(
+        counts.get(&0x14A).copied().unwrap_or(0) >= 2,
+        "the evaded blows were captured"
     );
     run_checker(&check_py, &wow_exe, &capture);
 }
