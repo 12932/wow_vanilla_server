@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::map::Map;
-use crate::game::map::nav::tile_of;
+use crate::game::map::nav::{ADT_SIZE, tile_of};
 
 /// Threads reading tiles. The reads are mostly the disk's, and a few at
 /// once keep it busy.
@@ -88,25 +88,31 @@ pub fn read_into<K, V>(
     });
 }
 
-/// The ADT tiles (`nav::tile_of`) within `r` yards of `(x, y)`, as eight
-/// points on the circle and its centre find them: one to four.
+/// The ADT tiles (`nav::tile_of`) within `r` yards of `(x, y)`: every one
+/// whose square the disc touches (up to nine, for a disc wider than a
+/// tile), the one it is centred in first.
 pub fn tiles_around(x: f32, y: f32, r: f32) -> SmallVec<[(i32, i32); 4]> {
-    let d = r * std::f32::consts::FRAC_1_SQRT_2;
     let mut tiles = SmallVec::new();
-    for (dx, dy) in [
-        (0.0, 0.0),
-        (r, 0.0),
-        (-r, 0.0),
-        (0.0, r),
-        (0.0, -r),
-        (d, d),
-        (d, -d),
-        (-d, d),
-        (-d, -d),
-    ] {
-        let t = tile_of(x + dx, y + dy);
-        if !tiles.contains(&t) {
-            tiles.push(t);
+    let centre = tile_of(x, y);
+    tiles.push(centre);
+    // `tile_of` runs against the axes: the box's high corner has the low
+    // tiles.
+    let (tx0, ty0) = tile_of(x + r, y + r);
+    let (tx1, ty1) = tile_of(x - r, y - r);
+    for tx in tx0..=tx1 {
+        for ty in ty0..=ty1 {
+            if (tx, ty) == centre {
+                continue;
+            }
+            // Tile `(tx, ty)` covers y in `(31 - tx) * S ..= (32 - tx) * S`,
+            // and x likewise by `ty`.
+            let ylo = (31 - tx) as f32 * ADT_SIZE;
+            let xlo = (31 - ty) as f32 * ADT_SIZE;
+            let nx = x.clamp(xlo, xlo + ADT_SIZE);
+            let ny = y.clamp(ylo, ylo + ADT_SIZE);
+            if (nx - x).powi(2) + (ny - y).powi(2) <= r * r {
+                tiles.push((tx, ty));
+            }
         }
     }
     tiles
@@ -156,12 +162,12 @@ pub fn update(map: &mut Map) {
 /// about nothing, and an awake creature far from every player keeps its
 /// own by asking about it.
 fn keep_near_players(map: &mut Map) {
-    let reach = map.cfg.visibility_yards + AHEAD_OF_PLAYERS;
     let near: Vec<(i32, i32)> = map
         .players
         .values()
         .flat_map(|p| {
             let at = p.position();
+            let reach = crate::game::map::visibility::sight(map, p) + AHEAD_OF_PLAYERS;
             tiles_around(at.x, at.y, reach)
         })
         .collect();
@@ -182,12 +188,13 @@ fn keep_near_players(map: &mut Map) {
 /// out again (`visibility::refresh`). The creatures a player wakes are
 /// within what they see, and wander, chase and go home about as far, so
 /// this is ahead of the awake creatures too; one further off asks for its
-/// own tile as it goes.
-pub fn ahead(map: &mut Map, at: Vector3d) {
+/// own tile as it goes. `sees` is how far the player sees
+/// (`visibility::sight`: an instance's, a battleground's, a flight's).
+pub fn ahead(map: &mut Map, at: Vector3d, sees: f32) {
     if map.nav.is_none() && map.terrain.is_none() {
         return;
     }
-    let reach = map.cfg.visibility_yards + AHEAD_OF_PLAYERS;
+    let reach = sees + AHEAD_OF_PLAYERS;
     let tiles = tiles_around(at.x, at.y, reach);
     if let Some(nav) = map.nav.as_mut() {
         for &t in &tiles {
@@ -204,6 +211,27 @@ pub fn ahead(map: &mut Map, at: Vector3d) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug hunt's map core: nine points on and in the circle missed a
+    /// diagonal tile whose corner was within reach. A centre 100 yards
+    /// west and 10 south of a tile corner, with 101 yards' reach, has the
+    /// corner's diagonal tile; and a disc wider than a tile has all nine.
+    #[test]
+    fn the_tiles_around_are_every_one_the_disc_touches() {
+        let corner = (-ADT_SIZE, -ADT_SIZE);
+        let (x, y) = (corner.0 - 10.0, corner.1 - 100.0);
+        let tiles = tiles_around(x, y, 101.0);
+        let diagonal = tile_of(corner.0 + 1.0, corner.1 + 1.0);
+        assert!(tiles.contains(&diagonal), "{tiles:?}");
+        assert_eq!(tiles.len(), 4, "{tiles:?}");
+        assert_eq!(tiles[0], tile_of(x, y));
+        // Not past its reach.
+        assert_eq!(tiles_around(x, y, 99.0).len(), 2);
+        let mid = -ADT_SIZE / 2.0;
+        assert_eq!(tiles_around(mid, mid, 200.0).len(), 1);
+        assert_eq!(tiles_around(mid, mid, 300.0).len(), 5);
+        assert_eq!(tiles_around(mid, mid, 420.0).len(), 9);
+    }
 
     /// rev5-data 8: a tile whose read panics is answered as missing, so its
     /// map doesn't wait on it, loading, for good.

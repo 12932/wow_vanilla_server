@@ -15,6 +15,30 @@ const ACTION_BUTTON_MACRO: u8 = 0x40;
 const ACTION_BUTTON_CLICK_MACRO: u8 = 0x41;
 const ACTION_BUTTON_ITEM: u8 = 0x80;
 
+/// What a client still loading a map may send: the acknowledgement, and
+/// what names nothing on the map (mangos-classic handles a
+/// `STATUS_LOGGEDIN` opcode only for a player in the world, which one not
+/// yet arrived from a worldport isn't). Anything else, a cast, a swing or a
+/// loot from a client that held its acknowledgement back, unseen by
+/// everyone, is dropped.
+fn in_transfer(msg: &ClientOpcodeMessage) -> bool {
+    matches!(
+        msg,
+        ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK
+            | ClientOpcodeMessage::CMSG_NAME_QUERY(_)
+            | ClientOpcodeMessage::CMSG_GUILD_QUERY(_)
+            | ClientOpcodeMessage::CMSG_ITEM_QUERY_SINGLE(_)
+            | ClientOpcodeMessage::CMSG_QUERY_TIME
+            | ClientOpcodeMessage::CMSG_CANCEL_TRADE
+            | ClientOpcodeMessage::CMSG_UPDATE_ACCOUNT_DATA(_)
+            | ClientOpcodeMessage::CMSG_REQUEST_ACCOUNT_DATA(_)
+            | ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(_)
+            | ClientOpcodeMessage::CMSG_LOGOUT_REQUEST
+            | ClientOpcodeMessage::CMSG_LOGOUT_CANCEL
+            | ClientOpcodeMessage::CMSG_PLAYER_LOGOUT
+    )
+}
+
 impl Map {
     pub fn handle_packet(&mut self, guid: Guid, msg: ClientOpcodeMessage) {
         let Some(p) = self.players.get(&guid) else {
@@ -52,6 +76,15 @@ impl Map {
         let Some(msg) = crate::game::map::acks::handle(self, guid, msg) else {
             return;
         };
+        if self
+            .players
+            .get(&guid)
+            .is_some_and(|p| p.awaiting_worldport)
+            && !in_transfer(&msg)
+        {
+            trace!("{guid} hasn't acknowledged its worldport: {msg} dropped");
+            return;
+        }
         let Some(msg) = crate::game::map::misc::handle_all(self, guid, msg) else {
             return;
         };
@@ -308,6 +341,24 @@ impl Map {
             ClientOpcodeMessage::CMSG_LOGOUT_CANCEL => login::cancel_logout(self, guid),
             ClientOpcodeMessage::CMSG_PLAYER_LOGOUT => login::complete_logout(self, guid),
             ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
+                // The server's zone where it knows one (mangos's
+                // `HandleZoneUpdateOpcode` only asks for an update, which
+                // reads the zone from where the player is): a client
+                // naming another zone picks no graveyard, rest or channel.
+                let at = self.players.get(&guid).map(|p| p.position());
+                if let Some(at) = at
+                    && let Some((zone, _)) = crate::game::map::world::zone_and_area(self, at)
+                    && zone != 0
+                {
+                    if zone != m.area.as_int() {
+                        tracing::debug!("{guid} sent zone {}, but is in {zone}", m.area.as_int());
+                    }
+                    crate::game::map::world::update_zone(self, guid);
+                    if let Some(p) = self.players.get(&guid) {
+                        crate::game::weather::tell(&self.realm, &p.online, p.zone);
+                    }
+                    return;
+                }
                 let mut changed = false;
                 if let Some(p) = self.players.get_mut(&guid) {
                     changed = p.zone != m.area.as_int();
@@ -335,37 +386,9 @@ impl Map {
                 }
             }
             ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(m) => self.set_action_button(guid, m),
-            ClientOpcodeMessage::CMSG_TUTORIAL_FLAG(m) => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    let word = (m.tutorial_flag / 32) as usize;
-                    if let Some(w) = p.row.state.tutorials.get_mut(word) {
-                        *w |= 1 << (m.tutorial_flag % 32);
-                    }
-                }
-            }
-            ClientOpcodeMessage::CMSG_TUTORIAL_CLEAR => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    p.row.state.tutorials = [u32::MAX; 8];
-                }
-            }
-            ClientOpcodeMessage::CMSG_TUTORIAL_RESET => {
-                if let Some(p) = self.players.get_mut(&guid) {
-                    p.row.state.tutorials = [0; 8];
-                }
-            }
-            ClientOpcodeMessage::CMSG_UPDATE_ACCOUNT_DATA(m) => {
-                let account = self.players.get(&guid).map(|p| p.account.clone());
-                if let Some(account) = account {
-                    let kind = m.data_type.as_int();
-                    let now = u32::try_from(chrono::Utc::now().timestamp()).unwrap_or(0);
-                    self.realm
-                        .store
-                        .set_account_data(&account, kind, now, m.compressed_data);
-                }
-            }
-            ClientOpcodeMessage::CMSG_REQUEST_ACCOUNT_DATA(_)
-            | ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC
-            | ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
+            // The tutorials, the account data and the cinematic's end are
+            // `misc::handle_all`'s (`account_data`, `cinematic`), above.
+            ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
             | ClientOpcodeMessage::CMSG_BUG(_)
             | ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO
             | ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET

@@ -572,8 +572,12 @@ async fn a_possessed_units_speed_ack_settles_only_for_its_mover_and_value() {
     let slow = on(&map, |m| m.realm.data.spells.get(SLOW).cloned().unwrap()).await;
     b.clear();
     on(&map, move |m| {
-        // Bob's client moves it.
+        // Bob's client moves it: his charm.
         m.players.get_mut(&gb).unwrap().owned.mover = Some(held);
+        if let Some(c) = m.creature_mut(held) {
+            c.fields
+                .set_guid(crate::game::fields::UNIT_FIELD_CHARMEDBY, gb);
+        }
         auras::apply(m, ga, held, &slow, 0, -50);
         auras::recalc(m, held);
     })

@@ -1453,8 +1453,12 @@ async fn a_slowed_creature_goes_on_slower_and_a_possessed_one_is_told_as_a_playe
             let before = speed(m);
             aura_on(m, gb, k, CURSE, -50);
             let after = speed(m);
-            // Bob's client moves the other.
+            // Bob's client moves the other: his charm.
             m.players.get_mut(&gb).unwrap().owned.mover = Some(held);
+            if let Some(c) = m.creature_mut(held) {
+                c.fields
+                    .set_guid(crate::game::fields::UNIT_FIELD_CHARMEDBY, gb);
+            }
             aura_on(m, ga, held, CURSE, -50);
             (before, after, m.creature(held).unwrap().speeds.run)
         })

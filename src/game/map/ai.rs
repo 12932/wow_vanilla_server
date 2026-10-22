@@ -634,7 +634,8 @@ pub fn update_dead(map: &mut Map) {
 }
 
 /// Take a creature out of every client's view and out of the grid; it
-/// stays in the map until it respawns.
+/// stays in the map until it respawns. A refresh it was marked for goes
+/// too: out of the grid, it would be taken whole and introduced again.
 fn despawn_from_view(map: &mut Map, g: Guid) {
     let Some(c) = map.creature_mut(g) else {
         return;
@@ -642,6 +643,7 @@ fn despawn_from_view(map: &mut Map, g: Guid) {
     let (cell, entry) = (c.cell, c.entry);
     let observers: Vec<Guid> = c.observers.drain().collect();
     map.grid.remove(g, cell);
+    map.visibility_dirty.remove(&g);
     crate::game::omen::left(map, g, entry);
     for o in observers {
         if let Some(p) = map.players.get_mut(&o) {

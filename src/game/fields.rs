@@ -662,8 +662,11 @@ fn player_group_mask() -> &'static Mask {
     })
 }
 
-/// The fields of a player other players see (mangos's `updateVisualBits`,
-/// its `UF_FLAG_PUBLIC`): not the quest log's, which are the group's.
+/// The fields of a player other players see (mangos-classic's
+/// `UF_FLAG_PUBLIC`, over mangos-zero's `updateVisualBits`, which left out
+/// the aura state, the spell that made them, the NPC flags and the emote
+/// state: a dancer stood still to everyone else): not the quest log's,
+/// which are the group's.
 fn player_public_mask() -> &'static Mask {
     static MASK: std::sync::OnceLock<Mask> = std::sync::OnceLock::new();
     MASK.get_or_init(|| {
@@ -678,11 +681,11 @@ fn player_public_mask() -> &'static Mask {
         set_range(OBJECT_FIELD_SCALE_X, OBJECT_FIELD_SCALE_X + 1);
         set_range(UNIT_FIELD_CHARM, UNIT_FIELD_HEALTH);
         set_range(UNIT_FIELD_HEALTH, UNIT_FIELD_BYTES_0 + 1);
-        set_range(UNIT_FIELD_FLAGS, UNIT_FIELD_AURASTATE);
+        set_range(UNIT_FIELD_FLAGS, UNIT_FIELD_AURASTATE + 1);
         set_range(UNIT_FIELD_BASEATTACKTIME, UNIT_FIELD_BASEATTACKTIME + 2);
         set_range(UNIT_FIELD_BOUNDINGRADIUS, UNIT_FIELD_MOUNTDISPLAYID + 1);
         set_range(UNIT_FIELD_BYTES_1, UNIT_FIELD_PET_NAME_TIMESTAMP + 1);
-        set_range(UNIT_DYNAMIC_FLAGS, UNIT_MOD_CAST_SPEED + 1);
+        set_range(UNIT_DYNAMIC_FLAGS, UNIT_NPC_EMOTESTATE + 1);
         set_range(UNIT_FIELD_BYTES_2, UNIT_FIELD_BYTES_2 + 1);
         set_range(PLAYER_DUEL_ARBITER, PLAYER_GUILD_TIMESTAMP + 1);
         for slot in 0..19 {

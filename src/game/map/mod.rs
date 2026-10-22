@@ -2193,22 +2193,18 @@ impl Map {
         let Some(p) = self.players.get(&observer) else {
             return;
         };
-        let batch = self.batches.entry(observer).or_default();
-        let mut seen: Vec<Guid> = Vec::with_capacity(guids.len());
+        // Each forget took it from `known`, each create put it there.
+        let mut counts: ahash::AHashMap<Guid, usize> = ahash::AHashMap::with_capacity(guids.len());
+        let mut forgets: Vec<(Guid, u32)> = Vec::with_capacity(guids.len());
         for &g in guids {
-            if seen.contains(&g) {
-                continue;
-            }
-            seen.push(g);
-            // Each forget took it from `known`, each create put it there.
-            let forgets = guids.iter().filter(|x| **x == g).count() as i64;
-            let creates = batch.creates_of(g) as i64;
-            let now = i64::from(p.known.contains(&g));
-            if now + forgets - creates > 0 {
-                batch.forget(g);
-            }
-            batch.drop_for(g, now == 1);
+            let i = *counts.entry(g).or_insert_with(|| {
+                forgets.push((g, 0));
+                forgets.len() - 1
+            });
+            forgets[i].1 += 1;
         }
+        let batch = self.batches.entry(observer).or_default();
+        batch.settle_forgets(&forgets, |g| p.known.contains(&g));
     }
 
     /// From now until its creates go, what is sent to `observer`'s client
@@ -2680,6 +2676,9 @@ impl Map {
         if let Some(n) = Self::own_counter_of(guid) {
             self.own_counters.insert((true, n));
         }
+        if g.kind == objects::GO_TRAP {
+            self.objects.trap_objects.insert(guid);
+        }
         let key = self.gameobjects.insert(g);
         self.touched_objects.push(key);
         self.gameobject_by_guid.insert(guid, key);
@@ -2699,6 +2698,7 @@ impl Map {
         if let Some(n) = Self::own_counter_of(guid) {
             self.own_counters.remove(&(true, n));
         }
+        self.objects.trap_objects.remove(&guid);
         let mut g = self.gameobjects.try_remove(key)?;
         // A script's lock goes with it: one back again starts as its
         // template has it.
@@ -2876,15 +2876,20 @@ impl Map {
         let at = p.position();
         let far = yards * yards;
         let p = &self.players[&mover];
+        let near: Vec<Guid> = p
+            .observers
+            .iter()
+            .filter(|g| {
+                self.players.get(g).is_some_and(|o| {
+                    let d = o.position();
+                    (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= far
+                })
+            })
+            .copied()
+            .collect();
+        // Their indices under one take of the table's lock, not one each.
         let mut to = crate::game::conn::Clients::default();
-        for g in &p.observers {
-            if let Some(o) = self.players.get(g) {
-                let d = o.position();
-                if (d.x - at.x).powi(2) + (d.y - at.y).powi(2) + (d.z - at.z).powi(2) <= far {
-                    to.insert(self.clients.index_of(*g));
-                }
-            }
-        }
+        self.clients.insert_all(&mut to, &near);
         self.broadcast(frame, &Arc::new(to));
     }
 

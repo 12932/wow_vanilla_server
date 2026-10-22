@@ -1300,8 +1300,10 @@ fn speed(map: &mut Map, g: Guid) {
         // A unit a player's client moves (Mind Control, Eyes of the
         // Beast) hears it as a player does, and those who see it once that
         // client has it; the rest by the spline's speed, as mangos-classic
-        // tells them (Thistle Tea tells only the possessed).
-        match map.players.values().find(|p| p.owned.mover == Some(g)) {
+        // tells them (Thistle Tea tells only the possessed). Its
+        // controller is its charmer, summoner, creator or owner, not any
+        // player on the map.
+        match crate::game::map::movement::controller(map, g) {
             Some(p) => {
                 p.outbound.send(&SMSG_FORCE_RUN_SPEED_CHANGE {
                     guid: g,

@@ -93,6 +93,9 @@ pub struct Objects {
     /// object, spell, user).
     pub pending_spells: Vec<(Instant, Guid, u32, Guid)>,
     pub next_trap_look: Option<Instant>,
+    /// The map's traps (`GO_TRAP`), as they are added and removed: what
+    /// the trap look goes over, not every object on the map.
+    pub trap_objects: ahash::AHashSet<Guid>,
     /// A script's lock on an object, over its template's: unlocked
     /// (`false`, vmangos's object actions 6 and 9) or locked (`true`, 7 and
     /// 18), as Thistle Tea's `lock_override`.
@@ -1813,10 +1816,10 @@ pub fn update(map: &mut Map) {
     map.objects.next_trap_look = Some(now + TRAP_TICK);
     let data = map.realm.data.clone();
     let traps: Vec<(Guid, u32)> = map
-        .gameobjects
+        .objects
+        .trap_objects
         .iter()
-        .filter(|(_, o)| o.kind == GO_TRAP)
-        .map(|(_, o)| (o.guid, o.entry))
+        .filter_map(|&g| map.gameobject(g).map(|o| (g, o.entry)))
         .collect();
     for (g, entry) in traps {
         if !map.objects.traps.contains_key(&g)
