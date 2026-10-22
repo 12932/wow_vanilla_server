@@ -308,6 +308,27 @@ impl Map {
             ClientOpcodeMessage::CMSG_LOGOUT_CANCEL => login::cancel_logout(self, guid),
             ClientOpcodeMessage::CMSG_PLAYER_LOGOUT => login::complete_logout(self, guid),
             ClientOpcodeMessage::CMSG_ZONEUPDATE(m) => {
+                // The server's zone where it knows one (mangos's
+                // `HandleZoneUpdateOpcode` only asks for an update, which
+                // reads the zone from where the player is): a client
+                // naming another zone picks no graveyard, rest or channel.
+                let at = self.players.get(&guid).map(|p| p.position());
+                if let Some(at) = at
+                    && let Some((zone, _)) = crate::game::map::world::zone_and_area(self, at)
+                    && zone != 0
+                {
+                    if zone != m.area.as_int() {
+                        tracing::debug!(
+                            "{guid} sent zone {}, but is in {zone}",
+                            m.area.as_int()
+                        );
+                    }
+                    crate::game::map::world::update_zone(self, guid);
+                    if let Some(p) = self.players.get(&guid) {
+                        crate::game::weather::tell(&self.realm, &p.online, p.zone);
+                    }
+                    return;
+                }
                 let mut changed = false;
                 if let Some(p) = self.players.get_mut(&guid) {
                     changed = p.zone != m.area.as_int();
