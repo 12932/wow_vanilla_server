@@ -1611,7 +1611,9 @@ fn serve(conn: &Connection, kept: &mut Kept, req: Request) {
                     }
                     Ok(())
                 }
-                Err(e) if e.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) => {
+                Err(e)
+                    if e.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) =>
+                {
                     Err(CreateError::NameInUse)
                 }
                 Err(e) => {
@@ -1869,8 +1871,7 @@ static SAVE_CHARACTER: std::sync::LazyLock<String> = std::sync::LazyLock::new(||
 
 fn save_row(conn: &Connection, row: &CharacterRow) -> rusqlite::Result<()> {
     let state = serde_json::to_string(&row.state).unwrap_or_else(|_| "{}".to_owned());
-    conn.prepare_cached(&SAVE_CHARACTER)?
-    .execute(params![
+    conn.prepare_cached(&SAVE_CHARACTER)?.execute(params![
         row.guid,
         row.account,
         row.name,
@@ -2030,10 +2031,7 @@ mod tests {
         let bob = store.load(2).await.expect("Bob is still there");
         assert_eq!((bob.name.as_str(), bob.items.len()), ("Bob", 1));
         assert_eq!(store.load(1).await.unwrap().name, "Alice");
-        assert_eq!(
-            store.rename(1, "bob", 0).await,
-            Err(CreateError::NameInUse)
-        );
+        assert_eq!(store.rename(1, "bob", 0).await, Err(CreateError::NameInUse));
         assert!(store.load(2).await.is_some());
         assert_eq!(store.rename(1, "Carol", 0).await, Ok(()));
         assert_eq!(store.load(1).await.unwrap().name, "Carol");
