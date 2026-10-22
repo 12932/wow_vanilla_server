@@ -2189,22 +2189,18 @@ impl Map {
         let Some(p) = self.players.get(&observer) else {
             return;
         };
-        let batch = self.batches.entry(observer).or_default();
-        let mut seen: Vec<Guid> = Vec::with_capacity(guids.len());
+        // Each forget took it from `known`, each create put it there.
+        let mut counts: ahash::AHashMap<Guid, usize> = ahash::AHashMap::with_capacity(guids.len());
+        let mut forgets: Vec<(Guid, u32)> = Vec::with_capacity(guids.len());
         for &g in guids {
-            if seen.contains(&g) {
-                continue;
-            }
-            seen.push(g);
-            // Each forget took it from `known`, each create put it there.
-            let forgets = guids.iter().filter(|x| **x == g).count() as i64;
-            let creates = batch.creates_of(g) as i64;
-            let now = i64::from(p.known.contains(&g));
-            if now + forgets - creates > 0 {
-                batch.forget(g);
-            }
-            batch.drop_for(g, now == 1);
+            let i = *counts.entry(g).or_insert_with(|| {
+                forgets.push((g, 0));
+                forgets.len() - 1
+            });
+            forgets[i].1 += 1;
         }
+        let batch = self.batches.entry(observer).or_default();
+        batch.settle_forgets(&forgets, |g| p.known.contains(&g));
     }
 
     /// From now until its creates go, what is sent to `observer`'s client

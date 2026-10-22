@@ -529,6 +529,48 @@ impl Batch {
         }
     }
 
+    /// The forgets of an update settled at once, for each object in
+    /// `forgets` (each with how many times it was forgotten, in the order
+    /// first forgotten): forgotten first of all if the client had it at the
+    /// update's start (`known`, now, plus its forgets, less its creates, is
+    /// above nothing), and what the batch says of it dropped, all but its
+    /// last create if the client is to have it at the end ([`Batch::forget`]
+    /// and [`Batch::drop_for`] for each, in one pass over the blocks rather
+    /// than three an object: a hearth within a continent forgets and
+    /// creates a thousand or more).
+    pub fn settle_forgets(&mut self, forgets: &[(Guid, u32)], known: impl Fn(Guid) -> bool) {
+        let wanted: ahash::AHashSet<Guid> = forgets.iter().map(|(g, _)| *g).collect();
+        let mut spans: ahash::AHashMap<Guid, smallvec::SmallVec<[usize; 2]>> =
+            ahash::AHashMap::with_capacity(forgets.len());
+        for (i, s) in self.spans.iter().enumerate() {
+            if let Some(o) = s.object
+                && wanted.contains(&o)
+            {
+                spans.entry(o).or_default().push(i);
+            }
+        }
+        let mut queued: ahash::AHashSet<Guid> = self.forget.iter().copied().collect();
+        for &(g, n) in forgets {
+            let of = spans.get(&g).map_or(&[][..], |v| v.as_slice());
+            let is_create = |i: usize| self.spans[i].live && self.spans[i].create;
+            let creates = of.iter().filter(|&&i| is_create(i)).count() as i64;
+            let now = i64::from(known(g));
+            if now + i64::from(n) - creates > 0 && queued.insert(g) {
+                self.forget.push(g);
+            }
+            let last = if now == 1 {
+                of.iter().rev().copied().find(|&i| is_create(i))
+            } else {
+                None
+            };
+            for &i in of {
+                if last.is_none_or(|l| i < l) {
+                    self.spans[i].live = false;
+                }
+            }
+        }
+    }
+
     /// What the batch says about `object`, all of it (`keep_last_create`:
     /// but its last create and what follows it).
     pub fn drop_for(&mut self, object: Guid, keep_last_create: bool) {
@@ -1279,6 +1321,29 @@ mod tests {
         assert_eq!(
             kinds(&batch.finish()),
             [("forget", vec![x]), ("create", vec![x])]
+        );
+    }
+
+    /// An update's forgets settled at once, as each was one by one: one
+    /// known and lost is forgotten; one lost and made anew, forgotten, then
+    /// made once (its last create); one learned of and lost, nothing.
+    #[test]
+    fn forgets_settle_at_once_as_they_did_one_by_one() {
+        let [lost, remade, passing, other] = [1, 2, 3, 4].map(|i| guid::unit(299, i));
+        let mut batch = Batch::new();
+        for g in [remade, passing, remade, other] {
+            batch.push_for(g, &unit_create(g, &unit_fields(g)));
+        }
+        let forgets = [(lost, 1), (remade, 2), (passing, 1)];
+        // Known now: what the client has at the update's end.
+        batch.settle_forgets(&forgets, |g| g == remade || g == other);
+        assert_eq!(
+            kinds(&batch.finish()),
+            [
+                ("forget", vec![lost, remade]),
+                ("create", vec![remade]),
+                ("create", vec![other]),
+            ]
         );
     }
 }
