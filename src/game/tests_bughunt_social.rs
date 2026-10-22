@@ -586,3 +586,28 @@ async fn a_members_stats_are_for_their_group() {
     assert_eq!(member_status(&realm, &mut b, ga).await & 0x01, 0x01, "Bob's to see");
     assert_eq!(member_status(&realm, &mut c, ga).await, 0, "not Carol's");
 }
+
+/// `bg_joined` left a player's own group for the raid before it saw the
+/// raid had no room: in no raid, they were away from their own group, and
+/// heard nothing of it after. A full raid leaves them in their group.
+#[tokio::test]
+async fn a_full_raid_leaves_a_player_in_their_group() {
+    use crate::game::social::groups;
+    let realm = harness::realm();
+    let mut b = Client::connect(&realm, "B");
+    b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut a = Client::connect(&realm, "A");
+    let ga = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut c = Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Warrior).await;
+    group(&mut b, &mut a, "Alice").await;
+    // A side's raid, full.
+    for i in 0..40 {
+        groups::bg_joined(&realm, guid::player(70_000 + i), "Bot".into(), 1, 0);
+    }
+    groups::bg_joined(&realm, ga, "Alice".into(), 1, 0);
+    assert!(!realm.social.groups.lock().in_bg_raid(ga), "no room");
+    a.clear();
+    group(&mut b, &mut c, "Carol").await;
+    assert!(sent_roster_with(&mut a, gc).await, "Alice hears of Carol");
+}

@@ -1738,6 +1738,16 @@ pub fn bg_joined(realm: &Realm, g: Guid, name: Arc<str>, instance: u32, side: u8
             bg_left(realm, g);
             groups = realm.social.groups.lock();
         }
+        // The raid there, with room, before they leave their own group for
+        // it: else they'd be away from it, in no raid, and hear nothing of
+        // it until they next joined one.
+        if groups
+            .groups
+            .get(&id)
+            .is_none_or(|gr| !gr.is_member(g) && gr.full())
+        {
+            return;
+        }
         if let Some(own) = groups.of.get(&g).copied() {
             groups.original.insert(g, own);
             if let Some(o) = groups.groups.get_mut(&own) {
