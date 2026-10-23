@@ -241,6 +241,26 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - Blood Fury for melee and hunters only, not below 50% (it halves healing taken);
   - no racial tried while controlled, but Will of the Forsaken;
   - each racial's thresholds are `[racials]` knobs.
+- **Alterac Valley, round two** (tactics and the tuner; full list in peon's BOT_AI):
+  - **Fidelity, against vmangos's own C++:**
+    - Drek'Thar's and the Warmasters' numbers match it;
+    - a whirlwinding Warmaster now stands its 4 s, Drek'Thar his 2 s, and casts nothing else meanwhile (decision 93);
+    - two differences are kept for now and taken up in round three: a Warmaster looks for a Charge every tick
+      (vmangos waits 5–10 s), and linked guards go at the general's victim (vmangos's copy his threat list).
+  - **Tactics:**
+    - loose adds go to free off-tanks, and every tank but the main is an off-tank;
+    - off-tanks pull their own guard as the tanks go in, and drag splashers away;
+    - one healer per off-tank, by seat;
+    - Salvation on all but tanks;
+    - melee shun splashers;
+    - no area taunt steals another tank's target.
+  - **Weapons drawn:** bots unsheathe before swinging, as the client does; sheathed tanks blocked nothing.
+  - **The tuner:** a cross-entropy search over 24 tactics and heal knobs. A kill scores 500 plus its speed; else the
+    share of his health taken and time alive. Persisted per boss, raid size and parts.
+  - **Result:** Drek'Thar killed with default gear and skill at 40 bots, 4 of 144 tuned attempts; not yet reliable,
+    so the raid hasn't been shrunk.
+  - **Your call:** mana potions. 1.12 raids carried them, and the bots don't. The healers' mana is what ends the
+    near-kills, so potions would help, but they make the bots stronger, not smarter, so I haven't added them.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
