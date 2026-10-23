@@ -64,6 +64,11 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   warmaster's (and an Elite Guard's) double Whirlwind roots it 4 s, Drek'Thar's 2 s, and nothing else is cast in
   it; what fell due goes after. Not taken: the 1 s global cooldown between their other spells, and vmangos's 5 to
   10 s wait for a Charge with no one in range.
+- **A reset leaves nothing of the last pull** (decision 94, your bug): `.ready load` loses what the player and their
+  pet, charmed unit, totems and guardians have on its way (an imp's Firebolt), interrupts their casts and channels,
+  takes their ground areas, traps and harmful auras on others, unsummons their totems and guardians, and stands the
+  pet down (it keeps the stance saved); a creature respawned or despawned takes with it what was on its way to or
+  from it, so a respawned one (the same GUID) is never hit by a bolt cast at its old life.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick
