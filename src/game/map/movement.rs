@@ -598,6 +598,7 @@ pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientatio
     p.cell = new_cell;
     map.grid.relocate(guid, old_cell, new_cell);
     map.visibility_dirty.insert(guid);
+    map.uncache_create(guid);
     // Where they land, what names what is there waits for its create.
     map.hold(guid);
     map.fresh.push(guid);
