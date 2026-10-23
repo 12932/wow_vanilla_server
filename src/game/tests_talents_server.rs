@@ -532,3 +532,85 @@ async fn improved_drain_mana_deals_a_share_of_the_mana_drained() {
         "30% of the drained: {out:?}"
     );
 }
+
+/// `.character spells` on `g`, and whether they then know each of `spells`.
+fn knows_after_character_spells(m: &mut Map, g: Guid, spells: &[u32]) -> Vec<(u32, bool)> {
+    crate::game::map::gm_dev::command(m, g, "character", &["spells"]);
+    spells
+        .iter()
+        .map(|s| (*s, m.players[&g].spells.contains(s)))
+        .collect()
+}
+
+/// `.character spells` teaches the class spells quests and books teach
+/// and no trainer does, by race and level, and the trainers' later ranks
+/// of them: each priest race's two racial spells at their top ranks at 60
+/// (Desperate Prayer and Feedback, Fear Ward, Starshards and Elune's
+/// Grace, Touch of Weakness and Devouring Plague, Hex of Weakness and
+/// Shadowguard), Prayer of Fortitude's second rank from its codex; a
+/// hunter's Tranquilizing Shot from its book; a paladin's Redemption, its
+/// first rank a quest's, to its fifth; a warrior's Intercept; and nothing
+/// above a character's level (a priest of 10, no Feedback).
+#[tokio::test]
+#[ignore = "extended"]
+async fn character_spells_teaches_the_quests_and_books_class_spells() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let cases: [(Race, Class, u8, &[u32], &[u32]); 9] = [
+        (
+            Race::Human,
+            Class::Priest,
+            60,
+            &[19_243, 19_275, 21_564],
+            &[6346, 19_305],
+        ),
+        (Race::Dwarf, Class::Priest, 60, &[19_243, 6346], &[19_275]),
+        (
+            Race::NightElf,
+            Class::Priest,
+            60,
+            &[19_305, 19_293],
+            &[19_243],
+        ),
+        (Race::Undead, Class::Priest, 60, &[19_266, 19_280], &[]),
+        (Race::Troll, Class::Priest, 60, &[19_285, 19_312], &[]),
+        (
+            Race::Human,
+            Class::Priest,
+            10,
+            &[13_908],
+            &[13_896, 19_275, 21_562],
+        ),
+        (Race::Dwarf, Class::Hunter, 60, &[19_801], &[]),
+        (Race::Human, Class::Paladin, 60, &[7328, 20_773], &[]),
+        (Race::Orc, Class::Warrior, 30, &[20_252, 2458], &[]),
+    ];
+    let mut wrong = Vec::new();
+    for (i, (race, class, level, known, unknown)) in cases.into_iter().enumerate() {
+        let (_c, g, map) = enter(
+            &realm,
+            &format!("TSRVCS{i}"),
+            &format!("Learna{}", (b'a' + i as u8) as char),
+            race,
+            class,
+        )
+        .await;
+        let spells: Vec<u32> = known.iter().chain(unknown).copied().collect();
+        let got = on(&map, move |m| {
+            ready(m, g, level, &[]);
+            knows_after_character_spells(m, g, &spells)
+        })
+        .await;
+        for (spell, has) in got {
+            if has != known.contains(&spell) {
+                wrong.push((race, class, level, spell, has));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "(race, class, level, spell, known): {wrong:?}"
+    );
+}
