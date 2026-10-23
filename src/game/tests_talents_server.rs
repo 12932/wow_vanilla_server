@@ -9,7 +9,9 @@ use wow_world_messages::vanilla::*;
 
 use crate::game::Realm;
 use crate::game::fields::*;
+use crate::game::guid;
 use crate::game::harness::{self, Client};
+use crate::game::map::creature::Creature;
 use crate::game::map::player::UNIT_FLAG_IN_COMBAT;
 use crate::game::map::spells;
 use crate::game::map::{Map, MapHandle, MapKey, auras};
@@ -65,9 +67,50 @@ fn ready(m: &mut Map, g: Guid, level: u8, learn: &[u32]) {
     }
 }
 
+/// A creature of `entry` at `level`, `yards` in front of `g` and facing
+/// it, hardy.
+fn dummy(m: &mut Map, g: Guid, entry: u32, level: u8, yards: f32) -> Guid {
+    let data = m.realm.data.clone();
+    let template = data
+        .creature_template(entry)
+        .cloned()
+        .expect("the template");
+    let p = &m.players[&g];
+    let (pos, o) = (p.position(), p.movement.orientation);
+    let at = Vector3d {
+        x: pos.x + yards * o.cos(),
+        y: pos.y + yards * o.sin(),
+        z: pos.z,
+    };
+    let counter = m.next_creature_counter;
+    m.next_creature_counter += 1;
+    let mut c = Creature::new(
+        guid::unit(entry, counter | 0x80_0000),
+        &template,
+        level,
+        at,
+        o + std::f32::consts::PI,
+    );
+    c.fields.set_u32(UNIT_FIELD_MAXHEALTH, 1_000_000);
+    c.fields.set_u32(UNIT_FIELD_HEALTH, 1_000_000);
+    let c = c.with_base();
+    m.add_creature(c)
+}
+
+fn health(m: &Map, g: Guid) -> u32 {
+    m.unit_fields(g).map_or(0, |f| f.get_u32(UNIT_FIELD_HEALTH))
+}
+
 fn power(m: &Map, g: Guid, power: u16) -> u32 {
     m.unit_fields(g)
         .map_or(0, |f| f.get_u32(UNIT_FIELD_POWER1 + power))
+}
+
+/// What `g` has on `c`'s threat list.
+fn threat(m: &Map, c: Guid, g: Guid) -> f32 {
+    m.creature(c)
+        .and_then(|c| c.threat.iter().find(|(t, _)| *t == g).map(|(_, v)| *v))
+        .unwrap_or(0.0)
 }
 
 /// The map's clock `by` on, and its auras' ticks to then.
@@ -75,6 +118,8 @@ fn later(m: &mut Map, by: Duration) {
     m.now += by;
     auras::update(m);
 }
+
+const KOBOLD_VERMIN: u32 = 6;
 
 const ANGER_MANAGEMENT: u32 = 12_296;
 
@@ -112,5 +157,45 @@ async fn anger_management_gives_rage_every_three_seconds_in_combat() {
         rage,
         (9, 9, 18, 0),
         "rage at 3, 4.5 and 6 s, then out of combat"
+    );
+}
+
+const THUNDER_CLAP: [u32; 6] = [6343, 8198, 8204, 8205, 11_580, 11_581];
+
+const BATTLE_STANCE: u32 = 2457;
+
+/// Every rank of Thunder Clap has its first's 2.5 times the threat of its
+/// damage: `spell_threat` names rank 1 alone, and mangos-classic's
+/// `FillHigherRanks` gives the rest its row, down the skill line's chain.
+#[tokio::test]
+#[ignore = "extended"]
+async fn every_rank_of_thunder_clap_has_its_first_ranks_threat() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let rows: Vec<Option<(i32, f32)>> = THUNDER_CLAP
+        .iter()
+        .map(|id| realm.data.spells.threat.get(id).copied())
+        .collect();
+    assert!(
+        rows.iter().all(|r| *r == Some((0, 2.5))),
+        "each rank's row: {rows:?}"
+    );
+    let (_w, w, map) = enter(&realm, "TSRVTC1", "Clappa", Race::Human, Class::Warrior).await;
+    let ratio = on(&map, move |m| {
+        ready(m, w, 60, &[]);
+        auras::remove_spell(m, w, BATTLE_STANCE, None);
+        let kobold = dummy(m, w, KOBOLD_VERMIN, 60, 2.0);
+        let before = health(m, kobold);
+        spells::cast_triggered(m, w, THUNDER_CLAP[5], Some(w));
+        let dealt = (before - health(m, kobold)) as f32;
+        (dealt, threat(m, kobold, w) / dealt.max(1.0))
+    })
+    .await;
+    assert!(ratio.0 > 0.0, "Thunder Clap hit: {ratio:?}");
+    assert!(
+        (ratio.1 - 2.5).abs() < 0.05,
+        "rank 6's threat is 2.5 times its damage: {ratio:?}"
     );
 }

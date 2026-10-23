@@ -479,6 +479,55 @@ impl SpellData {
         }
     }
 
+    /// A higher rank with no `spell_threat` row of its own takes its first
+    /// rank's, down the chain: `spell_chain`'s, a talent's ranks and the
+    /// skill line's `superseded_by` (mangos-classic's `LoadSpellThreats`,
+    /// `SpellRankHelper::FillHigherRanks` over chains it builds from
+    /// `SkillLineAbility`). Thunder Clap's ranks 2 to 6 have rank 1's 2.5
+    /// times. A row of a higher rank's own stays, as mangos keeps it.
+    pub fn inherit_threat(&mut self) {
+        let mut next: AHashMap<u32, Vec<u32>> = AHashMap::new();
+        let mut has_prev: ahash::AHashSet<u32> = ahash::AHashSet::new();
+        let mut link = |a: u32, b: u32| {
+            if a != 0 && b != 0 && a != b {
+                next.entry(a).or_default().push(b);
+                has_prev.insert(b);
+            }
+        };
+        for (id, r) in &self.ranks {
+            link(r.prev, *id);
+        }
+        for t in self.talents.values() {
+            for w in t.ranks.windows(2) {
+                link(w[0], w[1]);
+            }
+        }
+        for (id, abilities) in &self.skill_abilities {
+            for a in abilities {
+                link(*id, a.superseded_by);
+            }
+        }
+        let firsts: Vec<(u32, (i32, f32))> = self
+            .threat
+            .iter()
+            .filter(|(id, _)| !has_prev.contains(id))
+            .map(|(id, t)| (*id, *t))
+            .collect();
+        for (first, entry) in firsts {
+            let mut seen = ahash::AHashSet::new();
+            let mut todo = vec![first];
+            while let Some(at) = todo.pop() {
+                if !seen.insert(at) {
+                    continue;
+                }
+                for n in next.get(&at).into_iter().flatten() {
+                    self.threat.entry(*n).or_insert(entry);
+                    todo.push(*n);
+                }
+            }
+        }
+    }
+
     /// Index each talent's ranks, and the ranks a trainer teaches after
     /// them, by talent (Thistle Tea's `Talent.by_spell` through the chain;
     /// what mangos's `resetTalents` takes with the talent), and each such

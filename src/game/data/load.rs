@@ -1856,6 +1856,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     let Some(dbc) = dbc else {
         s.inherit_proc_events();
         s.inherit_groups();
+        s.inherit_threat();
         return;
     };
     for (id, base) in rows(dbc, "SELECT * FROM SpellCastTimes", |c| {
@@ -1939,6 +1940,7 @@ fn load_spells(db: &Connection, dbc: Option<&Connection>, data: &mut GameData) {
     }
     s.inherit_proc_events();
     s.inherit_groups();
+    s.inherit_threat();
     s.index_talent_lines();
 }
 
