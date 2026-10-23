@@ -401,3 +401,43 @@ async fn improved_scorpid_sting_takes_stamina_with_the_sting() {
     assert_eq!(stamina, Some(strength * 30 / 100), "30% of {strength}");
     assert_eq!(after, None, "gone with the sting");
 }
+
+const BEAR_FORM: u32 = 5487;
+
+const BEAR_FORM_THREAT: u32 = 21_178;
+
+const FERAL_INSTINCT_5: u32 = 16_951;
+
+/// Feral Instinct's rank 5 raises Bear Form's threat passive (21178) by 15,
+/// 30 to 45 (its modifier of all effects, mangos's
+/// `CalculateSpellEffectValue`): taken into the form; and learned or lost
+/// in it, the passive is put on again (mangos's
+/// `ReapplyAffectedPassiveAuras`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn feral_instinct_raises_bear_forms_threat() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_d, d, map) = enter(&realm, "TSRVFI1", "Bruina", Race::NightElf, Class::Druid).await;
+    let out = on(&map, move |m| {
+        ready(m, d, 60, &[BEAR_FORM]);
+        spells::cast_triggered(m, d, BEAR_FORM, None);
+        let plain = amount(m, d, BEAR_FORM_THREAT);
+        spells::learn(m, d, FERAL_INSTINCT_5);
+        let learned_in_form = amount(m, d, BEAR_FORM_THREAT);
+        auras::remove_spell(m, d, BEAR_FORM, None);
+        spells::cast_triggered(m, d, BEAR_FORM, None);
+        let taken_into_it = amount(m, d, BEAR_FORM_THREAT);
+        auras::remove_spell(m, d, FERAL_INSTINCT_5, None);
+        let lost = amount(m, d, BEAR_FORM_THREAT);
+        (plain, learned_in_form, taken_into_it, lost)
+    })
+    .await;
+    assert_eq!(
+        out,
+        (Some(30), Some(45), Some(45), Some(30)),
+        "the form's threat: plain, the talent learned in it, the form taken with it, the talent gone"
+    );
+}
