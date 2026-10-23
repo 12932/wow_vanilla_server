@@ -259,8 +259,8 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     share of his health taken and time alive. Persisted per boss, raid size and parts.
   - **Result:** Drek'Thar killed with default gear and skill at 40 bots, 4 of 144 tuned attempts; not yet reliable,
     so the raid hasn't been shrunk.
-  - **Your call:** mana potions. 1.12 raids carried them, and the bots don't. The healers' mana is what ends the
-    near-kills, so potions would help, but they make the bots stronger, not smarter, so I haven't added them.
+  - **Mana potions: yes (your call, 2026-10-23).** Mana users carry level-appropriate mana potions and drink one in a
+    fight below a tunable mark, healers first; druids' Innervate goes on the raid's healers.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
