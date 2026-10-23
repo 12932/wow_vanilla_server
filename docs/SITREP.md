@@ -9,34 +9,11 @@ question and decision in full; this page is the index.
 What was decided without you since round 11, or left for you. Each has a recommendation; say which to change.
 Answered ones move to DECISIONS.
 
-**Left for you (nothing done until you say):**
-1. **When a creature is tapped.** wvs, as Thistle Tea, taps it for whoever it aggroes; mangos-classic taps only
-   on damage, so a creature that runs at a passer-by isn't theirs until they hit it. *Recommend mangos's*: a
-   creature that aggroes a bystander no longer locks the kill from the player fighting it.
-2. **Overkill in a kill's damage shares** (who gets the reputation and XP split between players and NPCs). Both
-   references count the overkill. *Recommend keeping it* as both do.
-3. **A possessed player's spellbook.** The Mind Controller may cast any spell the victim knows (mangos checks the
-   spellbook; the client's possess bar can't send most). *Recommend keeping mangos's.*
-4. **Group loot money with a member on another map.** mangos pays them their share anyway; wvs counts them in the
-   split but pays nothing. *Recommend splitting among those present* (simple, and what the looters see).
-5. **A second rogue picking pockets someone has open.** mangos shows them the same loot; wvs keeps pockets per rogue.
-   *Recommend refusing the second until the first is done.*
-6. **Mail money past the gold cap.** Take what fits and leave the rest in the mail, or refuse (1.12 has no
-   gold-cap error to show). *Recommend taking what fits.*
-7. **Groups whose members are all gone for good.** Kept and swept for ever today. *Recommend expiring them after
-   30 days with no member online.*
-8. **Group commands from a battleground.** In a battleground raid, should kick, loot rules and the like act on the
-   player's own group? *Recommend yes, as mangos.*
-9. **Town guards.** No cap on the guards one town calls at once (mangos has none; decision 65). *Recommend a cap of
-   12 a town*, as a `[guards]` setting.
-10. **The memory guard's timings** (hold 30 s at most, then rest 1 minute doubling to 10). *Recommend settings*,
-    under `[network]`.
-11. **Old login protocols.** wvs answers two other client builds' login (a leftover TBC realm list among them);
-    mangos refuses every build but 5875. *Recommend refusing them.*
-12. **A knockback's flight** ends when the client says it landed (up to 10 s, as mangos). *Recommend ending it at
-    its ballistic time*, stricter than mangos: a launch can't be stretched into a flight.
-13. **A client that never acknowledges a far teleport** can now only ask, acknowledge and log out. Kick it after
-    a while? mangos doesn't. *Recommend a 60 s kick.*
+**Answered (2026-10-23), the 13 calls of review 6:** decision 79 in [DECISIONS.md](DECISIONS.md). Only damage
+taps; overkill, a possessed player's spellbook, town guards uncapped and other builds' logins kept; gold split among
+those present; a second rogue refused at open pockets; mail money past the cap left on the mail; a group with no one
+online for 24 hours deleted; a battleground raid's commands as mangos's (only invite reaches one's own group); the
+memory guard's timings settings; a knockback's flight ends at its arc; an unacknowledged far teleport kicked at 60 s.
 
 **Made without you (each followed mangos where it had an answer; say if you'd rather otherwise):**
 - **Round 12's own calls** (decision 73): a disconnect lingers 60 s; the speed allowance is a 2 s bank; an empty copy
