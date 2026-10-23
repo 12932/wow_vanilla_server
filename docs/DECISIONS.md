@@ -1250,4 +1250,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     `.debug durability` says it can't. On wears as usual again and mends nothing. The flag is the character's
     (`no_wear` in its extra state, false by default), kept across a relog. peon's bots turn it off with their gear.
 
+79. **`.gear green|blue`, for peon's arena** (2026-10-23): `.gear`'s random pick of the uncommon and rare items of the
+    character's level (the ten levels up to theirs) narrowed to one quality, a fresh level's greens or a dungeon's
+    blues, so a load test's crowd can be dressed as a real server's is; a slot with none of that quality is filled
+    from both, as `.gear` fills it. A GM's (level 2), not 1.12's; `.gear` and `.gear raid` are unchanged.
+
 ## Left for later, and why
