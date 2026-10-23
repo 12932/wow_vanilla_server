@@ -179,6 +179,30 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - Barkskin only in caster form, as 1.12 forbids it in forms.
   
   Feral druids are still made healers by the party scenario's role draw, which is outside the druid's files.
+- **Priests (phase 3):**
+  - the Holy build takes Spirit of Redemption (Holy Specialization 2 for Holy Reach, Spiritual Guidance 4), and the
+    spirit heals, standing still;
+  - a cooldown the server sends wins over a rule's fixed one (Improved Mind Blast's 5.5 s);
+  - Shadow Word: Pain at 24 s;
+  - Mind Control and Lightwell are left out: the brain can't steer a charmed player, and bots don't click wells.
+- **Hunters (phase 3):**
+  - Tranquilizing Shot by guid turns;
+  - traps before a pull or after Feign Death;
+  - Revive Pet only when nothing's on the hunter;
+  - aspects held 8 s;
+  - Improved Scorpid Sting and Improved Arcane Shot traded for Improved Hunter's Mark.
+- **Warlocks (phase 3):**
+  - Fear in a group only at a foe in melee on it below 50%;
+  - Demonic Sacrifice at the pull;
+  - wand at 5% mana (15% alone against a crowd);
+  - curses split by seat;
+  - the demon by spec, as `[warlock]` knobs;
+  - healthstones aren't handed out: peon has no trading.
+- **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
+  spec that holds one, by its talents.
+- **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
+  peon on this machine, and the server itself runs 4–5× over its update budget at that size; that's server work for
+  later. About 30 bots fit a 1-vCPU worker at 800 a side, so 64 tasks of 25.
 - **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
   goes in at the next quiet moment.
 
