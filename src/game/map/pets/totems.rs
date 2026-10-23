@@ -228,15 +228,21 @@ pub fn summon_totem(
         c.speeds.walk = 0.0;
         c.base.run_speed = 0.0;
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
-        // A totem has the few points of health its summon spell gives.
+        // A totem has the few points of health its summon spell gives,
+        // with its shaman's modifiers to them (mangos's `EffectSummonTotem`
+        // takes the effect's `damage`, all effects' modifiers in it:
+        // Earth's Grasp's Stoneclaw).
         let health = (s
             .effects
             .iter()
-            .find(|e| {
+            .position(|e| {
                 (EFFECT_SUMMON_TOTEM_SLOT1..=EFFECT_SUMMON_TOTEM_SLOT4).contains(&e.effect)
                     || e.effect == EFFECT_SUMMON_TOTEM
             })
-            .map_or(5, |e| e.base_points + e.base_dice))
+            .map_or(5, |i| {
+                let e = &s.effects[i];
+                mods.points(s, i, e.base_points + e.base_dice)
+            }))
         .max(1) as u32;
         c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
         c.fields.set_u32(UNIT_FIELD_HEALTH, health);

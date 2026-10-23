@@ -12,6 +12,7 @@ use wow_world_messages::vanilla::*;
 
 use super::tests_p3_spells_kit::{self as kit, cast_fresh};
 use crate::game::Realm;
+use crate::game::fields::*;
 use crate::game::map::spells::Targets;
 use crate::game::map::{Map, MapHandle};
 use crate::game::social::groups;
@@ -22,9 +23,12 @@ const STONESKIN_6: u32 = 10408;
 const STONESKIN_AURA_6: u32 = 10405;
 const MANA_SPRING_4: u32 = 10497;
 const MANA_SPRING_AURA_4: u32 = 10494;
+const STONECLAW_6: u32 = 10428;
+const STONECLAW_TOTEM: u32 = 7399;
 const ENHANCING_TOTEMS_2: u32 = 16295;
 const GUARDIAN_TOTEMS_2: u32 = 16293;
 const RESTORATIVE_TOTEMS_5: u32 = 16208;
+const EARTHS_GRASP_2: u32 = 16130;
 /// The four totems a shaman carries.
 const TOTEMS: [u32; 4] = [5175, 5176, 5177, 5178];
 
@@ -130,4 +134,30 @@ async fn totem_auras_take_their_shamans_talents() {
     assert_eq!(keen[0], plain[0] * 115 / 100, "Strength of Earth: {out:?}");
     assert_eq!(keen[1], plain[1] * 120 / 100, "Stoneskin: {out:?}");
     assert_eq!(keen[2], plain[2] * 125 / 100, "Mana Spring: {out:?}");
+}
+
+/// Earth's Grasp raises Stoneclaw Totem's health by half at two ranks
+/// (mangos's `EffectSummonTotem`: the effect's points, all effects'
+/// modifiers in them).
+#[tokio::test]
+#[ignore = "extended"]
+async fn earths_grasp_raises_stoneclaws_health() {
+    let Some(realm) = realm() else { return };
+    let (_a, plain, map) = kit::player(&realm, "TPSEG1", "Totemf", Race::Orc, Class::Shaman).await;
+    let (_b, keen, _) = kit::player(&realm, "TPSEG2", "Totemg", Race::Orc, Class::Shaman).await;
+    let out = on(&map, move |m| {
+        shaman(m, plain, &[]);
+        shaman(m, keen, &[EARTHS_GRASP_2]);
+        [plain, keen].map(|g| {
+            assert!(cast_fresh(m, g, STONECLAW_6, Targets::default()));
+            m.creatures
+                .iter()
+                .map(|(_, c)| c)
+                .find(|c| c.owner == Some(g) && c.entry == STONECLAW_TOTEM)
+                .map_or(0, |c| c.fields.get_u32(UNIT_FIELD_MAXHEALTH))
+        })
+    })
+    .await;
+    assert!(out[0] > 0, "{out:?}");
+    assert_eq!(out[1], out[0] * 150 / 100, "Stoneclaw's health: {out:?}");
 }
