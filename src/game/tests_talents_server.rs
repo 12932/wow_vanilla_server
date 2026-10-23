@@ -291,3 +291,63 @@ async fn bloodthirst_heals_on_each_of_the_next_five_hits() {
     assert_eq!(out.1, vec![20, 20, 20, 20, 20, 0], "a heal a hit, five");
     assert!(!out.2, "the buff gone after five");
 }
+
+const SUMMON_IMP: u32 = 688;
+
+const MASTER_DEMONOLOGIST_5: u32 = 23_825;
+
+const MASTER_DEMONOLOGIST_5_IMP: u32 = 23_829;
+
+const SPIRIT_BOND_2: u32 = 20_895;
+
+const SPIRIT_BOND_2_AURA: u32 = 24_529;
+
+/// `g`'s pet, if out.
+fn pet_of(m: &Map, g: Guid) -> Option<Guid> {
+    m.players.get(&g).and_then(|p| p.owned.pet)
+}
+
+/// Whether `g` has `spell`'s aura from `caster`.
+fn has_from(m: &Map, g: Guid, spell: u32, caster: Guid) -> bool {
+    auras::auras(m, g).is_some_and(|a| {
+        a.holders
+            .iter()
+            .any(|h| h.spell == spell && h.caster == caster)
+    })
+}
+
+/// A `spell_pet_auras` aura that is the pet's area aura is cast by the
+/// pet, and so reaches its master too (mangos's `Pet::CastPetAura`):
+/// Master Demonologist's imp half on the warlock as on the imp, Spirit
+/// Bond's regeneration on the hunter as on the beast.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_pet_area_aura_of_a_masters_talent_reaches_the_master() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_w, w, map) = enter(&realm, "TSRVMD1", "Demona", Race::Human, Class::Warlock).await;
+    let (_h, h, _) = enter(&realm, "TSRVSB1", "Bonda", Race::Dwarf, Class::Hunter).await;
+    let out = on(&map, move |m| {
+        ready(m, w, 60, &[SUMMON_IMP, MASTER_DEMONOLOGIST_5]);
+        spells::cast_triggered(m, w, SUMMON_IMP, None);
+        ready(m, h, 60, &[SPIRIT_BOND_2]);
+        crate::game::map::gm_dev::command(m, h, "pet", &[]);
+        crate::game::map::pets::refresh_area_auras(m);
+        let imp = pet_of(m, w).expect("the imp");
+        let beast = pet_of(m, h).expect("the beast");
+        (
+            has_from(m, imp, MASTER_DEMONOLOGIST_5_IMP, imp),
+            has_from(m, w, MASTER_DEMONOLOGIST_5_IMP, imp),
+            has_from(m, beast, SPIRIT_BOND_2_AURA, beast),
+            has_from(m, h, SPIRIT_BOND_2_AURA, beast),
+        )
+    })
+    .await;
+    assert_eq!(
+        out,
+        (true, true, true, true),
+        "the imp's and warlock's Master Demonologist, the beast's and hunter's Spirit Bond"
+    );
+}
