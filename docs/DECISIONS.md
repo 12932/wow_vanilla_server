@@ -1559,7 +1559,31 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       victim in its 8 to 25 yards: vmangos's waits 5 to 10 s before looking again; wvs's looks each tick, as Thistle
       Tea's and mangos's EventAI range event do (decision 88).
 
-94. **A warmaster's Charge and the linked guards, as vmangos's C++** (2026-10-23; `fix/av-fidelity-2`, round three of
+94. **A reset leaves nothing of the last pull** (2026-10-23; `fix/reset-inflight`, your bug: "in-flight abilities
+    like imp Firebolts can still aggro after .reset"). A spell on its way (`InFlight`, an Auto Shot's arrow) was
+    kept through `.ready load` and through a respawn: `.ready load` stopped only the cast under way, and only the
+    player's and a saved pet's; and a respawned creature keeps its spawn's GUID, so a bolt cast at the old life
+    landed on the new one and pulled it. mangos-classic has no such reset; it is put together from what its pieces
+    do:
+    - **`.ready load`**, for the player and all that fights for them (pet, charmed unit, totems, guardians), saved
+      with a pet or not: their totems and guardians unsummoned (a Searing Totem or an Infernal would pull the next
+      creature it saw), and their traps; every cast and channel stopped (`InterruptNonMeleeSpells`), the auto-repeat
+      shot too; what they cast that is on its way lost, and what is on its way to them (`Spell` events killed);
+      their ground areas and dynamic objects gone (`RemoveAllDynObjects`: Blizzard, Rain of Fire, Consecration);
+      every harmful aura of theirs on another unit gone (a damage over time ticking on a creature would bring it
+      back); out of combat and forgotten. The pet stands down as mangos's `AttackStop(true, true)` and a Follow:
+      no victim, no target, no Attack order or opener, its chase stopped, on its way back. `.ready save` now keeps
+      the pet's stance (passive, defensive, aggressive), and `.ready load` puts it back; a state saved before keeps
+      the stance the pet has.
+    - **A creature leaving the world or coming back as new** (respawned by `.respawn`, its timer or a script,
+      its corpse gone, despawned, removed for good): what it cast that is on its way, and what is on its way to it,
+      is lost, and its ground areas go (mangos's `RemoveFromWorld`). A spell or a shot that lands also checks the
+      creature's spawn time against its own cast: one at, or from, a creature come back as new since is lost.
+    - **Not taken:** a player's other summoned objects (a portal, a campfire) stay; a quest object's spell landing
+      on its user, Alterac Valley's scripted timers (`av_scripts`), and helpful auras on others are left alone;
+      `.respawn` takes no player's ground area there (each bot's `.ready load` does).
+
+95. **A warmaster's Charge and the linked guards, as vmangos's C++** (2026-10-23; `fix/av-fidelity-2`, round three of
     the AV all-in, taking up what decision 93 left; amends decision 85's guards). vmangos's
     `battleground_alterac.cpp` is the reference, followed:
     - **The Charge** (`npc_WarMasterAI`): due from the fight's start, its timer runs out and, with no global cooldown,
@@ -1585,7 +1609,7 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       across the hall but short of taking it from Alice, is charged) and the marshals'
       `a_warmasters_charge_waits_past_the_spells_least_range_and_goes_at_once_beyond`, updated.
 
-95. **Two warlocks' soulstones on one friend, as vmangos** (2026-10-23; `fix/av-fidelity-2`, the user's question for the
+96. **Two warlocks' soulstones on one friend, as vmangos** (2026-10-23; `fix/av-fidelity-2`, the user's question for the
     AV all-in). Soulstone Resurrection (20707, 20762 to 20765) is a dummy aura of no class (family 0), all five ranks
     of one icon (92) and visual (99). vmangos (`Unit::AddSpellAuraHolder`, `RemoveNoStackAurasDueToAuraHolder`,
     `SpellMgr::IsNoStackSpellDueToSpell`): the same rank from two casters stands together (a dummy from another caster
@@ -1596,7 +1620,7 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     still stands together. Test: `another_warlocks_soulstone_of_another_rank_takes_the_first_ones_place`. peon's
     warlocks keep to one stone a friend anyway (none on one with a stone from anyone).
 
-96. **`.ready load` ends a spirit of redemption** (2026-10-23; `fix/av-fidelity-2`, found by the AV all-in's
+97. **`.ready load` ends a spirit of redemption** (2026-10-23; `fix/av-fidelity-2`, found by the AV all-in's
     telemetry: priests "killed by nothing" 1 to 12 s into an attempt, 9 deaths in 5 of 66 attempts). A priest who
     died into a spirit near an attempt's end came back from `.ready load` whole but still with the spirit's state
     auras: 27792 and 27795 are passive, and the load clears all but the passive and the gear's; 27795's end killed
