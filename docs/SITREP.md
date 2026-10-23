@@ -261,6 +261,23 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     so the raid hasn't been shrunk.
   - **Mana potions: yes (your call, 2026-10-23).** Mana users carry level-appropriate mana potions and drink one in a
     fight below a tunable mark, healers first; druids' Innervate goes on the raid's healers.
+- **The talent plan, phase 4 (verified):**
+  - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
+    never fires;
+  - 88 of the 362 important spells never fired; 20 have no rule yet (for example Slam), and the rest need a situation
+    the runs never produced (undead, diseases, enrages);
+  - Grounding Totem is suspected, not traced.
+  
+  Fixed along the way:
+  - parties were of mixed factions (healers couldn't heal the other side), so a party is now one faction, and the
+    default party has a rogue instead of a paladin;
+  - a Feral druid tanks a party with no warrior;
+  - followers regroup between rounds;
+  - a bot joins its group's fight beyond 40 yards, and goes for the nearest foe it sees;
+  - a mage no longer flees its own sheep.
+  
+  Retribution's damage drop wasn't reproduced; it was single-run noise. Watch: the nearest-foe fallback also reaches
+  AV tanks when the tactics give them no target.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
