@@ -46,13 +46,15 @@ mod tests_aoe_leeway;
 #[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
-mod tests_av_world;
-#[cfg(test)]
 mod tests_arrow_travel;
+#[cfg(test)]
+mod tests_av_world;
 #[cfg(test)]
 mod tests_bg5;
 #[cfg(test)]
 mod tests_bg6;
+#[cfg(test)]
+mod tests_blessings;
 #[cfg(test)]
 mod tests_body;
 #[cfg(test)]
@@ -131,8 +133,6 @@ mod tests_gear_quality;
 mod tests_gear_unique;
 #[cfg(test)]
 mod tests_ghost;
-#[cfg(test)]
-mod tests_blessings;
 #[cfg(test)]
 mod tests_gifts;
 #[cfg(test)]
@@ -1311,6 +1311,8 @@ mod tests_pvp4;
 mod tests_pvp5;
 #[cfg(test)]
 mod tests_ready;
+#[cfg(test)]
+mod tests_ready_inflight;
 #[cfg(test)]
 mod tests_review2;
 #[cfg(test)]
