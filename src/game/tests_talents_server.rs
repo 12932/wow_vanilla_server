@@ -695,3 +695,133 @@ async fn command_gives_an_orcs_pet_five_percent_damage() {
         out.3
     );
 }
+
+/// The item class and subclass of what is held in the main and off hands.
+type Held = (Option<(u32, u32)>, Option<(u32, u32)>);
+
+/// What `g` holds in their main and off hands.
+fn hands_held(m: &Map, g: Guid) -> Held {
+    use crate::game::map::inventory::{SLOT_MAIN_HAND, SLOT_OFF_HAND};
+    let p = &m.players[&g];
+    let of = |slot: u8| {
+        p.item_at(crate::game::store::BAG_PLAYER, slot)
+            .and_then(|i| m.realm.data.item(p.items[i].entry))
+            .map(|t| (t.class, t.subclass))
+    };
+    (of(SLOT_MAIN_HAND), of(SLOT_OFF_HAND))
+}
+
+/// `.gear` with `args` on `g`, `times` times: what they held each time,
+/// and its last reply.
+fn geared(m: &mut Map, g: Guid, args: &[&str], times: usize) -> (Vec<Held>, String) {
+    let mut held = Vec::new();
+    let mut reply = String::new();
+    for _ in 0..times {
+        reply = crate::game::map::gm_dev::command(m, g, "gear", args)
+            .flatten()
+            .unwrap_or_default();
+        held.push(hands_held(m, g));
+    }
+    (held, reply)
+}
+
+const WEAPON: u32 = 2;
+
+const ARMOR: u32 = 4;
+
+const SHIELD: u32 = 6;
+
+const PROTECTION_TALENTS: [u32; 2] = [12_753, 12_727];
+
+const RESTORATION_TALENTS: [u32; 2] = [16_229, 16_217];
+
+const ARMS_TALENT: u32 = 16_466;
+
+/// `.gear`'s hands: `tank` gives a warrior a one-hander and a shield,
+/// `healer` and `caster` a paladin and a shaman, `shield` anyone who may
+/// carry one, `raid tank` too; with no word, a warrior or a shaman with
+/// most of their talents in Protection or Restoration carries a shield,
+/// and an Arms warrior none; `dps` never a shield; `sword` and `dagger`
+/// arm a rogue with swords in both hands or a dagger in the main; and a
+/// word it doesn't know, or two of a kind, is its usage.
+#[tokio::test]
+#[ignore = "extended"]
+async fn gear_holds_what_its_role_spec_or_weapon_wants() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_w, w, map) = enter(&realm, "TSRVGR1", "Geara", Race::Human, Class::Warrior).await;
+    let (_p, p, _) = enter(&realm, "TSRVGR2", "Gearb", Race::Human, Class::Paladin).await;
+    let (_r, r, _) = enter(&realm, "TSRVGR3", "Gearc", Race::Human, Class::Rogue).await;
+    let (_s, s, hmap) = enter(&realm, "TSRVGR4", "Geard", Race::Orc, Class::Shaman).await;
+    let (_a, a, _) = enter(&realm, "TSRVGR5", "Geare", Race::Orc, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        for g in [w, p, r] {
+            ready(m, g, 60, &[]);
+        }
+        let shielded = |held: &[Held]| {
+            held.iter().all(|(main, off)| {
+                main.is_some_and(|(c, _)| c == WEAPON) && *off == Some((ARMOR, SHIELD))
+            })
+        };
+        let unshielded = |held: &[Held]| held.iter().all(|(_, off)| *off != Some((ARMOR, SHIELD)));
+        let tank = shielded(&geared(m, w, &["tank"], 5).0);
+        let raid_tank = shielded(&geared(m, w, &["raid", "tank"], 2).0);
+        let dps = unshielded(&geared(m, w, &["dps"], 5).0);
+        let healer = shielded(&geared(m, p, &["healer"], 5).0);
+        let shield = shielded(&geared(m, p, &["blue", "shield"], 3).0);
+        let swords = geared(m, r, &["sword"], 5)
+            .0
+            .iter()
+            .all(|h| *h == (Some((WEAPON, 7)), Some((WEAPON, 7))));
+        let dagger = geared(m, r, &["green", "dagger"], 5)
+            .0
+            .iter()
+            .all(|(main, _)| *main == Some((WEAPON, 15)));
+        for s in PROTECTION_TALENTS {
+            spells::learn(m, w, s);
+        }
+        let protection = shielded(&geared(m, w, &[], 5).0);
+        let usage = [&["sword", "dagger"][..], &["shield", "2h"], &["juggle"]]
+            .iter()
+            .map(|args| geared(m, w, args, 1).1)
+            .all(|reply| reply.starts_with("Usage"));
+        (
+            tank, raid_tank, dps, healer, shield, swords, dagger, protection, usage,
+        )
+    })
+    .await;
+    assert_eq!(
+        out,
+        (true, true, true, true, true, true, true, true, true),
+        "(tank, raid tank, dps, paladin healer, paladin shield, rogue swords, rogue dagger, \
+         a Protection warrior's plain .gear, usage)"
+    );
+    let out = on(&hmap, move |m| {
+        ready(m, s, 60, &[]);
+        ready(m, a, 60, &[ARMS_TALENT]);
+        let caster = geared(m, s, &["caster"], 5)
+            .0
+            .iter()
+            .all(|(_, off)| *off == Some((ARMOR, SHIELD)));
+        for t in RESTORATION_TALENTS {
+            spells::learn(m, s, t);
+        }
+        let restoration = geared(m, s, &[], 5)
+            .0
+            .iter()
+            .all(|(_, off)| *off == Some((ARMOR, SHIELD)));
+        let arms = geared(m, a, &[], 5)
+            .0
+            .iter()
+            .all(|(_, off)| *off != Some((ARMOR, SHIELD)));
+        (caster, restoration, arms)
+    })
+    .await;
+    assert_eq!(
+        out,
+        (true, true, true),
+        "(shaman caster, a Restoration shaman's plain .gear, an Arms warrior's plain .gear)"
+    );
+}
