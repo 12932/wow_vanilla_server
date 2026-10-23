@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear [raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [green|blue|raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -425,22 +425,36 @@ fn weapon_for(data: &crate::game::data::GameData, subclass: u32, class: u8) -> b
 }
 
 /// How `.gear` chooses: at random among the uncommon and rare items of
-/// about the character's level (`.gear`), or the best they may wear, a
-/// raider's (`.gear raid`): at 60 a tier set, 1 or 2 (at random, or as
-/// asked), and the rest of the best quality there is (epic, else rare, else
-/// uncommon), the highest item level first.
+/// about the character's level (`.gear`), or only the uncommon (`.gear
+/// green`, a fresh character's) or only the rare (`.gear blue`, a
+/// dungeon's), a slot with none of that quality filled from both; or the
+/// best they may wear, a raider's (`.gear raid`): at 60 a tier set, 1 or 2
+/// (at random, or as asked), and the rest of the best quality there is
+/// (epic, else rare, else uncommon), the highest item level first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pick {
-    Random,
+    Random { quality: Option<u32> },
     Raid { tier: Option<u8> },
 }
 
-const GEAR_USAGE: &str = "Usage: .gear [raid [1|2]] | .gear enchant <slot> <enchantment>";
+/// Items' qualities: uncommon (green) and rare (blue).
+const UNCOMMON: u32 = 2;
+const RARE: u32 = 3;
 
-/// `.gear`'s arguments: none, `raid`, or `raid 1` or `raid 2`.
+const GEAR_USAGE: &str =
+    "Usage: .gear [green|blue|raid [1|2]] | .gear enchant <slot> <enchantment>";
+
+/// `.gear`'s arguments: none, `green`, `blue`, `raid`, or `raid 1` or `raid
+/// 2`.
 fn gear_args(args: &[&str]) -> Result<Pick, &'static str> {
     match args {
-        [] => Ok(Pick::Random),
+        [] => Ok(Pick::Random { quality: None }),
+        [q] if q.eq_ignore_ascii_case("green") => Ok(Pick::Random {
+            quality: Some(UNCOMMON),
+        }),
+        [q] if q.eq_ignore_ascii_case("blue") => Ok(Pick::Random {
+            quality: Some(RARE),
+        }),
         [raid] if raid.eq_ignore_ascii_case("raid") => Ok(Pick::Raid { tier: None }),
         [raid, tier] if raid.eq_ignore_ascii_case("raid") => match *tier {
             "1" => Ok(Pick::Raid { tier: Some(1) }),
@@ -552,10 +566,28 @@ fn favours(class: u8, t: &crate::game::data::ItemTemplate) -> bool {
 /// item level.
 fn gear_pool(
     data: &crate::game::data::GameData,
-    (class, race, level): (u8, u8, u8),
+    who: (u8, u8, u8),
     pick: Pick,
     types: &[u32],
     fits: impl Fn(&crate::game::data::ItemTemplate) -> bool,
+) -> Vec<u32> {
+    let pool = gear_pool_of(data, who, pick, types, &fits);
+    match pick {
+        // None of the quality asked for in this slot: of both.
+        Pick::Random { quality: Some(_) } if pool.is_empty() => {
+            gear_pool_of(data, who, Pick::Random { quality: None }, types, &fits)
+        }
+        _ => pool,
+    }
+}
+
+/// [`gear_pool`], of `pick`'s quality alone.
+fn gear_pool_of(
+    data: &crate::game::data::GameData,
+    (class, race, level): (u8, u8, u8),
+    pick: Pick,
+    types: &[u32],
+    fits: &impl Fn(&crate::game::data::ItemTemplate) -> bool,
 ) -> Vec<u32> {
     use rand::seq::SliceRandom;
     let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
@@ -567,8 +599,8 @@ fn gear_pool(
         .iter()
         .flat_map(|t| data.items_of_type(*t))
         .filter(|t| match pick {
-            Pick::Random => {
-                (2..=3).contains(&t.quality)
+            Pick::Random { quality } => {
+                quality.map_or((UNCOMMON..=RARE).contains(&t.quality), |q| t.quality == q)
                     && t.required_level <= level
                     && t.required_level + 10 >= level
             }
@@ -588,7 +620,7 @@ fn gear_pool(
         .collect();
     out.sort_unstable_by_key(|t| t.entry);
     match pick {
-        Pick::Random => out.shuffle(&mut rand::rng()),
+        Pick::Random { .. } => out.shuffle(&mut rand::rng()),
         Pick::Raid { .. } => out.sort_by_key(|t| {
             std::cmp::Reverse((t.quality, favours(class, t), t.item_level, t.required_level))
         }),
@@ -636,6 +668,10 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 /// weapon skills the items need are taught, the skills at their caps, and
 /// Auto Shot and Shoot with a ranged weapon or a wand. One alive is left
 /// at full health and mana, as the reply says.
+///
+/// `.gear green` and `.gear blue` take only the uncommon, or only the
+/// rare, where a slot has any of them (see [`Pick`]): a fresh level's
+/// gear, or a dungeon's.
 ///
 /// `.gear raid` is a raider's gear instead (see [`Pick`]): at 60 their
 /// class's tier set, 1 or 2, where it goes, and everywhere else the best
@@ -1882,8 +1918,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gear_takes_raid_and_a_tier() {
-        assert_eq!(gear_args(&[]), Ok(Pick::Random));
+    fn gear_takes_a_quality_or_raid_and_a_tier() {
+        assert_eq!(gear_args(&[]), Ok(Pick::Random { quality: None }));
+        assert_eq!(
+            gear_args(&["green"]),
+            Ok(Pick::Random {
+                quality: Some(UNCOMMON)
+            })
+        );
+        assert_eq!(
+            gear_args(&["Blue"]),
+            Ok(Pick::Random {
+                quality: Some(RARE)
+            })
+        );
+        assert_eq!(gear_args(&["purple"]), Err(GEAR_USAGE));
         assert_eq!(gear_args(&["raid"]), Ok(Pick::Raid { tier: None }));
         assert_eq!(gear_args(&["RAID", "2"]), Ok(Pick::Raid { tier: Some(2) }));
         assert_eq!(gear_args(&["raid", "3"]), Err(GEAR_USAGE));

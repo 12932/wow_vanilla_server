@@ -361,3 +361,52 @@ fn pet_random_draws_many_families_of_the_hunters_level() {
     }
     assert!(families.len() >= 8, "families: {families:?}");
 }
+
+/// `.gear green` and `.gear blue` at 60, over the real items: a warrior
+/// and a priest in uncommon items, and in rare ones, in every body slot,
+/// all of it usable and of level 50 to 60; few slots short of the quality
+/// (filled from both).
+#[tokio::test]
+#[ignore = "extended"]
+async fn gear_green_and_blue_dress_a_level_60_in_one_quality() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    for (k, (race, class)) in [(Race::Undead, Class::Warrior), (Race::Human, Class::Priest)]
+        .into_iter()
+        .enumerate()
+    {
+        for (q, command) in [(2, ".gear green"), (3, ".gear blue")] {
+            let account = format!("QUAL{k}{q}");
+            let name = format!("Qual{}{}", ["a", "b"][k], ["x", "y", "z", "w"][q as usize]);
+            let (worn, ..) = geared_with(&realm, (&account, &name), race, class, 60, command).await;
+            for slot in BODY.into_iter().chain([15]) {
+                assert!(
+                    worn.iter().any(|(s, _, _)| *s == slot),
+                    "{command}: slot {slot} is filled: {worn:?}"
+                );
+            }
+            let mut other = 0;
+            for (slot, entry, usable) in &worn {
+                if matches!(slot, 3 | 18) {
+                    continue;
+                }
+                assert!(
+                    usable,
+                    "{command}: the item {entry} in slot {slot} may be used"
+                );
+                let t = realm.data.item(*entry).unwrap();
+                assert!(
+                    (2..=3).contains(&t.quality) && (50..=60).contains(&t.required_level),
+                    "{command}: the item {entry} in slot {slot}"
+                );
+                other += u32::from(t.quality != q);
+            }
+            assert!(
+                other <= 2,
+                "{command}: {other} slots of the other quality: {worn:?}"
+            );
+        }
+    }
+}

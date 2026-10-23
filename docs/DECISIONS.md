@@ -1303,4 +1303,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       victim on the move, any victim (Thistle Tea's, at a player), so those following a walking creature keep their
       sides; and a step's end is on the ground there, not at its victim's height.
 
+81. **`.gear green|blue`, for peon's arena** (2026-10-23): `.gear`'s random pick of the uncommon and rare items of the
+    character's level (the ten levels up to theirs) narrowed to one quality, a fresh level's greens or a dungeon's
+    blues, so a load test's crowd can be dressed as a real server's is; a slot with none of that quality is filled
+    from both, as `.gear` fills it. A GM's (level 2), not 1.12's; `.gear` and `.gear raid` are unchanged.
+
 ## Left for later, and why
