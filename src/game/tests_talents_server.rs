@@ -199,3 +199,44 @@ async fn every_rank_of_thunder_clap_has_its_first_ranks_threat() {
         "rank 6's threat is 2.5 times its damage: {ratio:?}"
     );
 }
+
+const AUTO_SHOT: u32 = 75;
+
+const MORTAL_SHOTS_5: u32 = 19_490;
+
+/// Mortal Shots raises an Auto Shot's crit bonus, 30% at rank 5: twice
+/// the shot without it, 2.3 times with it (mangos's `GetCritMultiplier`).
+#[tokio::test]
+#[ignore = "extended"]
+async fn mortal_shots_raises_an_auto_shots_crit() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_h, h, map) = enter(&realm, "TSRVMS1", "Shota", Race::Dwarf, Class::Hunter).await;
+    let dealt = on(&map, move |m| {
+        ready(m, h, 60, &[]);
+        let mut out = Vec::new();
+        for (talent, crit) in [(false, false), (false, true), (true, true)] {
+            if talent {
+                spells::learn(m, h, MORTAL_SHOTS_5);
+            }
+            let kobold = dummy(m, h, KOBOLD_VERMIN, 60, 10.0);
+            let before = health(m, kobold);
+            crate::game::map::ranged::land_for_test(m, h, kobold, AUTO_SHOT, 1_000, crit);
+            out.push(before - health(m, kobold));
+        }
+        out
+    })
+    .await;
+    let (hit, crit, mortal) = (dealt[0] as f32, dealt[1] as f32, dealt[2] as f32);
+    assert!(hit > 0.0, "{dealt:?}");
+    assert!(
+        (crit / hit - 2.0).abs() < 0.01,
+        "a crit is twice a hit: {dealt:?}"
+    );
+    assert!(
+        (mortal / hit - 2.3).abs() < 0.01,
+        "with Mortal Shots, 2.3 times: {dealt:?}"
+    );
+}
