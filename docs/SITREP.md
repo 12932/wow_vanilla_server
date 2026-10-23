@@ -52,6 +52,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   `STATE_SUPPRESSED`): one immune to their blows' school is held below the rest, their threat kept, and stays held
   after the immunity until their threat moves; alone, the immune one is still fought. Departing from mangos, one
   already immune when first on a list is held there too; the confused, feared and stunned mangos also holds are not.
+- **`.ready save|load` and `.respawn <radius>`** (decision 87, your goal): a ready state's buffs come back at
+  their full time from their casters if here, else the player's own; load clears every aura but passives and gear's,
+  all cooldowns, and combat; respawn around resets every spawned creature in the radius, its summons gone, and
+  Alterac Valley's leaders' sweep; an instance's encounter data isn't reset.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick

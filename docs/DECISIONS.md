@@ -1442,4 +1442,40 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       (`IsSuppressedTarget`); wvs holds only the immune, your rule. Nor mangos's slip in `ATTACKING_TARGET_BOTTOMAGGRO`
       (it walks from the bottom but returns the top): the last on the list is the last, a held one if there is one.
 
+87. **`.ready save|load` and `.respawn <radius>`, a raid attempt's reset** (2026-10-23; `feat/gm-ready`, your goal:
+    "reduce the time it takes to get the raid ready... new GM commands or perhaps have some 'ready' state where the
+    players are all buffed and full HP that they can be quickly reset back to"). mangos-classic has neither; both are
+    game masters' (level 2), as `.durability`.
+    - **`.ready save`** keeps the GM's own ready state on the character (`CharacterState::ready`, in the store's
+      JSON, so it survives a relog and a restart): the map, the place and the facing; each helpful aura a cast put on
+      (the player's own or another's: Fortitude, Mark of the Wild, a blessing, a warlock's armor, a form or a stance,
+      a mount), with its caster, amounts, stacks and charges as they stand, and its full time; and whether a pet is
+      out. Not kept: passives, gear's, another's lasting aura of an area (it comes back by itself), an aura another
+      aura put on, a channel's, and any harmful aura. A dead GM can't save.
+    - **`.ready load`** puts the selected player (or the GM) back in their own saved state. On another map, it sends
+      them there and does nothing else: load again there. Else, in order: risen if dead or a ghost (no sickness); the
+      cast stopped; out of combat, and every creature forgets them (its threat gone, turning to the next or going
+      home); at the saved place; every aura off but passives, gear's and another's lasting area aura (debuffs, and
+      buffs had since, a potion's or a trinket's); every cooldown cleared, the client told: spells', items'
+      (potions, healthstones), categories', the global ones, those waiting for an aura's end, an interrupt's
+      lockouts; each saved buff put on again at its **full** time, not what was left, with its saved amounts, stacks
+      and charges, from its saved caster if that player (or creature) is on the map, else from the player
+      themselves, so a blessing or a stack stays its caster's; health, mana, energy (and a pet's focus) full, rage
+      none, no combo points; the pet, if one was out, revived (a hunter's or a demon's record) at full health, out of
+      combat, forgotten, its harmful auras gone and its cooldowns clear. A buff's amounts are the caster's when saved,
+      so every attempt starts identical.
+    - **`.respawn`** alone keeps what it did: the selected creature dead or alive comes back at its spawn as new at
+      the next update. **`.respawn <radius>`** (0 to 500 yards) does it now for every spawned creature within the
+      radius of the GM, by where it is or where it spawned (one drawn off is caught), not a player's pet, totem or
+      charmed unit: the dead back, the living taken out and spawned again (home, whole, out of combat, its EventAI
+      and script state new, its tap gone; a pool picks again). Their summons, and the summons' summons, go first
+      (`scripts::remove_for_good`), so the new summoners hear nothing of them. On Alterac Valley (its world copy or a
+      match) the leaders' sweep forgets the fights of those respawned (Drek'Thar raises no wolves for a fight ended
+      so) and looks again at the next update. Objects within the radius in use (a door, a button, a goober waiting
+      to go back) go back as they rest now, and objects gone (used, or a looted chest or node) come back at the next
+      update. Not reset: an instance script's encounter data, nor creatures summoned by no one there (a GM's
+      `.spawn`).
+    - **For peon**, between attempts: one GM `.respawn <radius>` by the keep, then each bot `.ready load`; no wait
+      is needed between them, and none after but the next update (50 ms) for the respawned creatures' creates.
+
 ## Left for later, and why

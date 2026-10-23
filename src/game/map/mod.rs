@@ -84,6 +84,7 @@ pub mod query;
 pub mod quests;
 pub mod questshare;
 pub mod ranged;
+pub mod ready;
 pub mod reputation;
 pub mod rest;
 pub mod scripts;
