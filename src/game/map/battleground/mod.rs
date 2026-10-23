@@ -46,6 +46,8 @@ pub const NO_WINNER: usize = 2;
 pub const BG_AV: u32 = 1;
 pub const BG_WSG: u32 = 2;
 pub const BG_AB: u32 = 3;
+/// Alterac Valley's map.
+pub const AV_MAP: u32 = 30;
 
 /// The events every battleground has: its ghost gates and its doors.
 pub const EVENT_GHOST_GATES: u8 = 253;
@@ -249,20 +251,31 @@ pub fn for_map(key: MapKey, now: Instant) -> Option<Match> {
 }
 
 /// Whether a spawn belongs in the match as its events stand: one with no
-/// events always does; one with events while any of them is on.
+/// events always does; one with events while any of them is on. A
+/// battleground's world copy (outside any match: a GM's `.go` there) holds
+/// what a match holds at its start, its events as they begin: before, it
+/// held every event's spawns at once, each of Alterac Valley's guards in
+/// all four of its upgrades on its spot, both sides' graveyard defenders on
+/// theirs, and all eight of each general's marshals or warmasters.
 pub fn spawn_allowed(map: &Map, creature: bool, spawn: u32) -> bool {
-    let Some(m) = map.battleground.as_ref() else {
-        return true;
-    };
     let data = &map.realm.data;
     let bindings = if creature {
         data.bg_creature_events.get(&spawn)
     } else {
         data.bg_object_events.get(&spawn)
     };
-    match bindings {
-        None => true,
-        Some(b) => b.iter().any(|(e, s)| m.events.get(e) == Some(&Some(*s))),
+    let Some(b) = bindings else {
+        return true;
+    };
+    match map.battleground.as_ref() {
+        Some(m) => b.iter().any(|(e, s)| m.events.get(e) == Some(&Some(*s))),
+        None => match battlegrounds::bg_of_map(map.key.map) {
+            Some(bg) => {
+                let events = initial_events(bg);
+                b.iter().any(|(e, s)| events.get(e) == Some(&Some(*s)))
+            }
+            None => true,
+        },
     }
 }
 
@@ -610,6 +623,7 @@ pub fn departing(map: &mut Map, g: Guid) {
 pub fn update(map: &mut Map) {
     let now = map.now;
     let Some(m) = map.battleground.as_ref() else {
+        av_scripts::world_update(map);
         return;
     };
     if matches!(m.phase, Phase::Waiting | Phase::Starting { .. }) {

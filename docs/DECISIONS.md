@@ -1396,4 +1396,30 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     teleport to its own client). mangos-classic has no speed check here (its anticheat is a stub); a real client
     follows the server's `SMSG_MONSTER_MOVE` for its own guid, which wvs sends it, so it never meets this.
 
+85. **Alterac Valley's world copy, and Drek'Thar's leash** (2026-10-23; `feat/alterac-allin`, for peon's `run av`,
+    40 of a side going all in at a general from outside his keep, on map 30 outside any match):
+    - **The world copy holds a match's start.** A battleground's map at instance 0 (a GM's `.go` there) spawned
+      every event's spawns at once: each of the valley's guards in all four of its upgrades on its spot, both
+      sides' graveyard defenders on theirs, all eight of each general's marshals or warmasters, every banner state.
+      Now a spawn bound to events comes as at a match's start (`battleground::initial_events`): Drek'Thar with the
+      four warmasters of the Horde's towers, Vanndar with the four marshals of the Alliance's bunkers, one guard a
+      spot. Warsong Gulch's and Arathi Basin's world copies the same. Nothing else of a match runs there: no
+      towers, graveyards, reinforcements, routes, riders or rituals.
+    - **The leaders hold their keeps there too.** Their once-a-second sweep (drawn too far, home; fighting, their
+      guards called; Drek'Thar's wolves raised after a fight) ran only in a match; it runs on the world copy now,
+      its state on the map (`Map::valley`).
+    - **Drek'Thar's leash is a line** (your memory of retail: "he will de-aggro if he is pulled any further east than
+      x -1358.81, y -254.89, z 99.37 and run back into the keep"; his warmasters can be pulled beyond it). East is
+      -y. The point is in the mouth of the one way out of his hall, a corridor 13 yards wide there (x -1364 to
+      -1351) running east to the stairs down to the gate; the hall's other walls are closed. So the line is
+      y = -254.89 across the corridor, and he goes home once east of it, his spawn 35 yards west. It replaces
+      vmangos's 33 yards about his spawn (`npc_DrekThar`'s `GetDistance2d`), which reached the corridor's mouth
+      at y -250, five yards short; his whole hall is within 33 yards of his spawn. His warmasters and wolves have
+      no leash of his: the wolves are neither his summons nor linked to him (no `creature_linking` or group in
+      vmangos's data), so they keep the creatures' own. mangos-classic scripts neither general (their EventAI is
+      the world database's, with no such check), so Vanndar keeps vmangos's 35 yards, as do Balinda and Galvangar
+      their 45. The extended `drek_thars_line_is_across_the_one_way_out_of_his_hall_on_the_real_navmesh` checks the
+      line on the bake: the way from his spawn to the gate crosses it once, his hall's corners are reached
+      without crossing it.
+
 ## Left for later, and why
