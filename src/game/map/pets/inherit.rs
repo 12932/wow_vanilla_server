@@ -27,6 +27,10 @@ pub const EVERY: Duration = Duration::from_secs(1);
 /// `spell_pet_auras`'s) rather than its master.
 type Inherited = (u32, Vec<(usize, i32)>, bool);
 
+/// One of the pet's inherited holders: its spell, caster and effects'
+/// amounts.
+type Had = (u32, Guid, Vec<(u8, i32)>);
+
 /// What the pet should have of its master's.
 fn wanted(map: &Map, pet: Guid, owner: Guid) -> Vec<Inherited> {
     let data = &map.realm.data;
@@ -97,7 +101,7 @@ pub fn sync(map: &mut Map, pet: Guid) {
     let inherited = |h: &crate::game::map::auras::Holder| {
         (h.caster == owner || h.caster == pet) && h.item == Some(owner)
     };
-    let have: Vec<(u32, Guid, Vec<(u8, i32)>)> = crate::game::map::auras::auras(map, pet)
+    let have: Vec<Had> = crate::game::map::auras::auras(map, pet)
         .map(|a| {
             a.holders
                 .iter()

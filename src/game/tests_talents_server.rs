@@ -533,6 +533,10 @@ async fn improved_drain_mana_deals_a_share_of_the_mana_drained() {
     );
 }
 
+/// A race, class and level, the spells they should know and those they
+/// shouldn't.
+type Case = (Race, Class, u8, &'static [u32], &'static [u32]);
+
 /// `.character spells` on `g`, and whether they then know each of `spells`.
 fn knows_after_character_spells(m: &mut Map, g: Guid, spells: &[u32]) -> Vec<(u32, bool)> {
     crate::game::map::gm_dev::command(m, g, "character", &["spells"]);
@@ -558,7 +562,7 @@ async fn character_spells_teaches_the_quests_and_books_class_spells() {
         return;
     }
     let realm = realm();
-    let cases: [(Race, Class, u8, &[u32], &[u32]); 9] = [
+    let cases: [Case; 9] = [
         (
             Race::Human,
             Class::Priest,
