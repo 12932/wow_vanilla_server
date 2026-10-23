@@ -220,6 +220,15 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - one Fire scorcher by seat at elites;
   - players count as humanoid for Polymorph;
   - no item used mid-cast.
+- **Paladins (phase 3):**
+  - a refused Judgement keeps its seal, and judging is paced by mana floors (`[paladin]`);
+  - a group's paladins keep Wisdom's and Light's judgements up;
+  - Salvation on non-tanks, Sanctuary or Light on tanks, Greater Blessings with Symbols of Kings;
+  - resistance auras against foe casters;
+  - a Holy paladin heals a party with no other healer.
+  
+  Open: Retribution's damage is 5–17% lower than before, and as a party's only healer the paladin idles between
+  Holy Lights. Both are for phase 4's check.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
