@@ -1240,9 +1240,24 @@ pub fn preserves_periodic_timer(s: &SpellTemplate) -> bool {
         || PRESERVED_PERIODIC.contains(&s.id)
 }
 
+/// Improved Seal of Righteousness's ranks, and the seal's own flag beside
+/// its Judgement's (mangos's `spell_affect` 0x8000400).
+const IMPROVED_SEAL_OF_RIGHTEOUSNESS: [u32; 5] = [20224, 20225, 20330, 20331, 20332];
+const SEAL_OF_RIGHTEOUSNESS_FLAG: u64 = 0x800_0000;
+
 /// What the scripts add to the spells' data: Shadowmeld's stealth from
-/// its passive, as a spare effect.
+/// its passive, as a spare effect; the seal Improved Seal of
+/// Righteousness touches, as mangos's `spell_affect` had it.
 pub fn patch(data: &mut SpellData) {
+    for id in IMPROVED_SEAL_OF_RIGHTEOUSNESS {
+        if let Some(s) = data.spells.get_mut(&id) {
+            for e in s.effects.iter_mut().filter(|e| {
+                e.aura == auras::AURA_ADD_FLAT_MODIFIER || e.aura == auras::AURA_ADD_PCT_MODIFIER
+            }) {
+                e.item_type |= SEAL_OF_RIGHTEOUSNESS_FLAG;
+            }
+        }
+    }
     let stealth = data
         .spells
         .get(&SHADOWMELD_PASSIVE)

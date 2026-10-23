@@ -11,13 +11,15 @@ use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
 use super::tests_p3_combat::equip;
-use super::tests_p3_spells_kit::{self as kit, cast_fresh, health};
+use super::tests_p3_spells_kit::{self as kit, at, cast_fresh, health};
 use crate::game::Realm;
 use crate::game::fields::*;
 use crate::game::map::spells::{self, Targets};
 use crate::game::map::{Map, MapHandle};
 use crate::game::social::groups;
 
+const SEAL_OF_RIGHTEOUSNESS: u32 = 20154;
+const IMPROVED_SOR_5: u32 = 20332;
 const STRENGTH_OF_EARTH_5: u32 = 25361;
 const STRENGTH_OF_EARTH_AURA_5: u32 = 25362;
 const STONESKIN_6: u32 = 10408;
@@ -211,4 +213,29 @@ async fn elemental_weapons_raises_rockbiter_and_flametongue() {
     assert!(ap > 0 && fire > 0, "{out:?}");
     assert_eq!(keen_ap, ap * 120 / 100, "Rockbiter's attack power: {out:?}");
     assert_eq!(keen_fire, fire * 115 / 100, "Flametongue's strike: {out:?}");
+}
+
+/// Improved Seal of Righteousness raises the seal itself, whose amount
+/// makes its strikes, not only its Judgement (1.12's tooltip; mangos's
+/// `spell_affect` 0x8000400): 15% more at five ranks.
+#[tokio::test]
+#[ignore = "extended"]
+async fn improved_seal_of_righteousness_raises_the_seal() {
+    let Some(realm) = realm() else { return };
+    let (_a, plain, map) =
+        kit::player(&realm, "TPSSR1", "Sealera", Race::Human, Class::Paladin).await;
+    let (_b, keen, _) = kit::player(&realm, "TPSSR2", "Sealerb", Race::Human, Class::Paladin).await;
+    let out = on(&map, move |m| {
+        kit::ready(m, plain, 60, &[SEAL_OF_RIGHTEOUSNESS]);
+        kit::ready(m, keen, 60, &[SEAL_OF_RIGHTEOUSNESS, IMPROVED_SOR_5]);
+        let mut got = Vec::new();
+        for g in [plain, keen] {
+            assert!(cast_fresh(m, g, SEAL_OF_RIGHTEOUSNESS, at(g)));
+            got.push(amount(m, g, SEAL_OF_RIGHTEOUSNESS).unwrap_or(0));
+        }
+        got
+    })
+    .await;
+    assert!(out[0] > 0, "{out:?}");
+    assert_eq!(out[1], out[0] * 115 / 100, "{out:?}");
 }
