@@ -229,6 +229,14 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   
   Open: Retribution's damage is 5–17% lower than before, and as a party's only healer the paladin idles between
   Holy Lights. Both are for phase 4's check.
+- **Racials (phase 3):**
+  - a race's rules go before its class's table;
+  - Stoneform at a poison, disease or bleed with 3 s left, or below 40% with a foe on it;
+  - Will of the Forsaken out of fear, charm or sleep, not Polymorph or stuns;
+  - Escape Artist only when the root matters;
+  - Blood Fury for melee and hunters only, not below 50% (it halves healing taken);
+  - no racial tried while controlled, but Will of the Forsaken;
+  - each racial's thresholds are `[racials]` knobs.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
