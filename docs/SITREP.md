@@ -48,6 +48,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   general with his four), its leaders keep their leash and call their guards there; Drek'Thar's leash is your line
   (y -254.89, across the one corridor out of his hall) in place of vmangos's 33 yards; his warmasters and wolves have
   none of his; Vanndar keeps vmangos's 35 yards (mangos-classic has no line of his).
+- **Creatures leave the immune be while anyone else is on their list** (decision 86, your rule, as mangos-classic's
+  `STATE_SUPPRESSED`): one immune to their blows' school is held below the rest, their threat kept, and stays held
+  after the immunity until their threat moves; alone, the immune one is still fought. Departing from mangos, one
+  already immune when first on a list is held there too; the confused, feared and stunned mangos also holds are not.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick

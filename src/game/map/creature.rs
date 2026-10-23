@@ -310,6 +310,10 @@ pub struct Creature {
     pub caster: crate::game::map::spells::Caster,
     /// Threat, by unit.
     pub threat: Vec<(Guid, f32)>,
+    /// Those on the threat list held below everyone else on it: immune to
+    /// its blows, or since they were and their threat hasn't changed
+    /// (mangos-classic's `STATE_SUPPRESSED`, `ai::suppressed`).
+    pub suppressed: Vec<Guid>,
     /// The player whose kill this is.
     pub tapped_by: Option<Guid>,
     /// The group the tapper was in as they tapped it, whose kill it is
@@ -465,6 +469,7 @@ impl Creature {
             caster: Default::default(),
             combat_start: None,
             threat: Vec::new(),
+            suppressed: Vec::new(),
             tapped_by: None,
             tap_group: None,
             tap_told: None,
