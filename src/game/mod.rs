@@ -142,6 +142,8 @@ mod tests_guards;
 #[cfg(test)]
 mod tests_hyperspawn;
 #[cfg(test)]
+mod tests_immune_target;
+#[cfg(test)]
 mod tests_items3;
 #[cfg(test)]
 mod tests_kill_visual;

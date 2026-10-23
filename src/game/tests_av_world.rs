@@ -10,6 +10,7 @@ use wow_world_messages::vanilla::*;
 
 use super::tests_p8_scripts_av::{AV, all_of, spawn_at};
 use super::tests_pvp2::{creature, npc, valley};
+use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::battleground::av_scripts::{self, DREK_THAR_LEASH, Leash};
 use crate::game::map::{Map, MapHandle, MapKey, ai, event_ai};
@@ -367,4 +368,68 @@ async fn the_real_valleys_world_copy_has_drek_thar_his_warmasters_and_his_line()
         .unwrap();
     assert!(fought, "Drek'Thar fights Alice");
     assert!(went_home, "past the line, Drek'Thar goes home");
+}
+
+/// Your rule, on the real valley: Alice (a paladin) tops Drek'Thar's list
+/// with Bob below her; her Divine Shield (642, the real spell) turns him to
+/// Bob at his next look, her threat kept; alone on his list, shielded, she
+/// stays his victim and he doesn't go home.
+#[tokio::test]
+#[ignore = "extended"]
+async fn drek_thar_turns_from_a_paladins_divine_shield_to_another_and_stays_on_her_alone() {
+    let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Paladin).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let near = at(DREK_HOME.0 + 3.0, DREK_HOME.1, DREK_HOME.2);
+    let map = into_the_world_copy(&realm, &mut a, near).await;
+    into_the_world_copy(&realm, &mut b, near).await;
+    let (before, turned, kept, alone, home) = map
+        .query(move |m| {
+            let drek = all_of(m, DREK_THAR)[0];
+            hold_at(m, drek, at(DREK_HOME.0, DREK_HOME.1, DREK_HOME.2));
+            // His blows and his guards' next to nothing: at level 1 they
+            // stand a few.
+            let keep: Vec<Guid> = m.creatures.iter().map(|(_, c)| c.guid).collect();
+            for g in keep {
+                let f = m.unit_fields_mut(g).unwrap();
+                f.set_f32(UNIT_FIELD_MINDAMAGE, 1.0);
+                f.set_f32(UNIT_FIELD_MAXDAMAGE, 1.0);
+            }
+            ai::attacked(m, drek, alice);
+            ai::add_threat(m, drek, alice, 1000.0);
+            ai::add_threat(m, drek, bob, 100.0);
+            ai::update_creatures(m);
+            let victim = |m: &Map| m.creature(drek).map(|c| c.combat.victim);
+            let before = victim(m);
+            crate::game::map::spells::cast_triggered(m, alice, 642, Some(alice));
+            ai::update_creatures(m);
+            let turned = victim(m);
+            let kept = m
+                .creature(drek)
+                .and_then(|c| c.threat.iter().find(|(t, _)| *t == alice).map(|(_, v)| *v));
+            // Bob gone from his list: Alice, shielded, alone on it.
+            if let Some(c) = m.creature_mut(drek) {
+                c.threat.retain(|(t, _)| *t != bob);
+            }
+            ai::update_creatures(m);
+            let c = m.creature(drek).unwrap();
+            (before, turned, kept, Some(c.combat.victim), c.evading)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        before,
+        Some(alice),
+        "Drek'Thar fights Alice, top of his list"
+    );
+    assert_eq!(turned, Some(bob), "her shield up, he turns to Bob");
+    assert!(kept.is_some_and(|t| t >= 1000.0), "her threat is kept");
+    assert_eq!(
+        alone,
+        Some(alice),
+        "alone on his list, she stays his victim"
+    );
+    assert!(!home, "and he doesn't go home");
 }

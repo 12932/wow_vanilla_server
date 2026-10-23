@@ -1422,4 +1422,24 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       line on the bake: the way from his spawn to the gate crosses it once, his hall's corners are reached
       without crossing it.
 
+86. **A creature leaves the immune be while it has anyone else to fight** (2026-10-23; `fix/skip-immune-target`,
+    your rule: "Drek'thar (or any other mob for that matter) should never attack players who are immune to attacks,
+    like paladin bubble, IF they have other players in their aggro table"). mangos-classic's rule, followed: one on a
+    creature's threat list immune to the school of its blows (Divine Shield, Ice Block, Blessing of Protection against
+    a physical creature, not one whose blows are magic) is held below everyone else on the list, their threat kept
+    (`STATE_SUPPRESSED`, sorted after the rest in `ThreatContainer::update`). A creature whose victim is held turns at
+    its next look to the top of the rest at once, with no tenths to pass; among the rest, and among the held when no
+    one else is left, the tenth near and three tenths far decide as before; a taunt holds over it. Alone on its list,
+    the immune one stays its victim: it swings into the immunity and doesn't go home. Once the immunity ends they stay
+    held until their threat on it changes (a heal, a blow) or another on the list is newly held
+    (`m_suppresabilityToggle`, `ClearSuppressed`). A script's or EventAI's pick walks the list as sorted: the second on
+    it is the second of those it may hurt; one at random may be anyone, as mangos's. Pets keep their own choice
+    (mangos's pets have no threat list and its `PetAI` no such test).
+    - **Where it departs from mangos:** mangos holds a target as their immunity goes on, for the creatures that have
+      them on their lists then; one that puts them on its list afterwards (a bubbled paladin's heal pulling a new pack)
+      treats them as anyone. wvs looks before each choice of victim, so they are held there too, as your rule has it.
+    - **Not taken:** mangos also holds the confused, the feared and those in a stun that damage breaks
+      (`IsSuppressedTarget`); wvs holds only the immune, your rule. Nor mangos's slip in `ATTACKING_TARGET_BOTTOMAGGRO`
+      (it walks from the bottom but returns the top): the last on the list is the last, a held one if there is one.
+
 ## Left for later, and why

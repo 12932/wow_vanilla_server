@@ -347,19 +347,23 @@ fn surface_distance_2d(map: &Map, a: Guid, b: Guid) -> Option<f32> {
     Some(((dx * dx + dy * dy).sqrt() - radius(a) - radius(b)).max(0.0))
 }
 
-/// The threat list of a creature, highest first.
+/// The threat list of a creature, highest first, those immune to its
+/// blows after the rest (mangos's sorted `ThreatContainer`, which its
+/// `SelectAttackingTarget` walks: the second on it is the second of those
+/// it may hurt; one at random may be any).
 fn threat_list(map: &Map, g: Guid) -> Vec<Guid> {
     let Some(c) = map.creature(g) else {
         return Vec::new();
     };
-    let mut t: Vec<(Guid, f32)> = c
+    let mut t: Vec<(Guid, f32, bool)> = c
         .threat
         .iter()
         .copied()
         .filter(|(u, _)| alive(map, *u))
+        .map(|(u, v)| (u, v, crate::game::map::ai::suppressed(map, g, u)))
         .collect();
-    t.sort_by(|a, b| b.1.total_cmp(&a.1));
-    t.into_iter().map(|(u, _)| u).collect()
+    t.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.total_cmp(&a.1)));
+    t.into_iter().map(|(u, _, _)| u).collect()
 }
 
 /// The creature of spawn `spawn` on this map.
