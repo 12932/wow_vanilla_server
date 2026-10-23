@@ -303,14 +303,10 @@ pub fn destroy_all(map: &mut Map, owner: Guid) {
 /// The party around a totem: its shaman and their group, in the map and
 /// within `radius`.
 fn party_near(map: &Map, owner: Guid, at: Vector3d, radius: f32) -> Vec<Guid> {
-    let members: Vec<Guid> = {
-        let groups = map.realm.social.groups.lock();
-        match groups.group_of(owner) {
-            Some(g) => g.members.iter().map(|m| m.guid).collect(),
-            None => vec![owner],
-        }
-    };
-    members
+    // The owner's subgroup in a raid, not all of it (mangos's
+    // `AreaAura::Update` for `AREA_AURA_PARTY`: `GetGroup` members
+    // `SameSubGroup` as the owner).
+    crate::game::map::spells::targets::members(map, owner, false)
         .into_iter()
         .filter(|g| {
             map.players.get(g).is_some_and(|p| {
