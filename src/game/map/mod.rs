@@ -592,6 +592,9 @@ pub struct Map {
     pub stopping: bool,
     /// The match, on a battleground's copy.
     pub battleground: Option<battleground::Match>,
+    /// Alterac Valley's world copy (map 30 outside any match): its
+    /// leaders' scripts' state ([`battleground::av_scripts::world_update`]).
+    pub valley: Option<battleground::av_scripts::State>,
     /// Objects every player in the map knows: the boats and zeppelins.
     pub globals: Vec<Guid>,
     /// Rolls under way and gathered nodes to bring back.
@@ -1398,6 +1401,7 @@ impl Map {
             empty_since: None,
             stopping: false,
             battleground: battleground::for_map(key, Instant::now()),
+            valley: (key == MapKey::world(battleground::AV_MAP)).then(Default::default),
             globals: Vec::new(),
             loot_state: Default::default(),
             outdoor,

@@ -40,6 +40,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
 
 - **Game events on the server's local clock** (decision 83), as vmangos's; the Booty Run every three hours from
   local midnight (`[events] booty_run_*`); Short John kneels 3 s at the chest; raid resets left on UTC.
+- **Alterac Valley outside a match** (decision 85): its world copy holds a match's start (one guard a spot, each
+  general with his four), its leaders keep their leash and call their guards there; Drek'Thar's leash is your line
+  (y -254.89, across the one corridor out of his hall) in place of vmangos's 33 yards; his warmasters and wolves have
+  none of his; Vanndar keeps vmangos's 35 yards (mangos-classic has no line of his).
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick

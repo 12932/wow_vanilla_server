@@ -46,6 +46,8 @@ mod tests_aoe_leeway;
 #[cfg(test)]
 mod tests_arena;
 #[cfg(test)]
+mod tests_av_world;
+#[cfg(test)]
 mod tests_arrow_travel;
 #[cfg(test)]
 mod tests_bg5;

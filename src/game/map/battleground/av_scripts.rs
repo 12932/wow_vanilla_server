@@ -190,12 +190,62 @@ const GROUND: [Ground; 2] = [
     },
 ];
 
+/// How far a leader will be drawn from home before he gives up the fight
+/// and goes back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Leash {
+    /// Past this many yards of home (vmangos's `GetDistance2d` checks in
+    /// `npc_Vanndar`, `npc_Balinda` and `npc_Galvangar`).
+    Yards(f32),
+    /// Past a line: through `through`, across the way out of his room,
+    /// `out` its unit normal, pointing out. He stays on his home's side of
+    /// it (`out` points away from home), and goes home once past it,
+    /// however near home that is.
+    Line {
+        through: (f32, f32),
+        out: (f32, f32),
+    },
+}
+
+impl Leash {
+    /// Whether a leader whose home is `home` is drawn too far at `at`.
+    pub fn past(self, home: Vector3d, at: Vector3d) -> bool {
+        match self {
+            Leash::Yards(r) => dist(at, home) > r,
+            Leash::Line { through, out } => {
+                (at.x - through.0) * out.0 + (at.y - through.1) * out.1 > 0.0
+            }
+        }
+    }
+}
+
+/// Drek'Thar's leash, as the user remembers retail: he "will de-aggro if he
+/// is pulled any further east than x -1358.81, y -254.89, z 99.37 and run
+/// back into the keep"; his warmasters can be pulled beyond it. East is -y.
+/// The point is in the mouth of the one way out of his hall, a corridor 13
+/// yd wide there (x -1364 to -1351) running east to the stairs down to the
+/// keep's gate; the hall's other walls are closed. So the line is the
+/// corridor's width through the point, y = -254.89, and he goes home once
+/// east of it. His spawn (-1370.9, -219.8) is 35 yd west of it: anywhere
+/// in his hall (all within 33 yd of his spawn) and the corridor's first
+/// yards he may be drawn. In place of vmangos's 33 yd about his spawn
+/// (`npc_DrekThar`'s `GetDistance2d(-1370.90, -219.793) > 33`), which
+/// sent him home in the corridor's mouth at y -250, five yards short of
+/// the user's point.
+/// mangos-classic scripts neither general (their EventAI is the world
+/// database's, with no such check), so Vanndar has no line of his: he
+/// keeps vmangos's 35 yd.
+pub const DREK_THAR_LEASH: Leash = Leash::Line {
+    through: (-1358.81, -254.89),
+    out: (0.0, -1.0),
+};
+
 /// The leaders who hold their keeps: entry, home, how far they'll be
 /// drawn, and who comes when they call.
 struct Leader {
     entry: u32,
     home: (f32, f32, f32),
-    leash: f32,
+    leash: Leash,
     linked: &'static [u32],
     general: bool,
 }
@@ -210,7 +260,7 @@ const LEADERS: [Leader; 4] = [
     Leader {
         entry: VANNDAR,
         home: (722.4, -11.0, 50.7),
-        leash: 35.0,
+        leash: Leash::Yards(35.0),
         linked: &[
             13333, 14762, 14763, 14764, 14765, 14766, 14767, 14768, 14769,
         ],
@@ -219,7 +269,7 @@ const LEADERS: [Leader; 4] = [
     Leader {
         entry: DREK_THAR,
         home: (-1370.9, -219.8, 98.5),
-        leash: 33.0,
+        leash: DREK_THAR_LEASH,
         linked: &[
             12121, 12122, 14770, 14771, 14772, 14773, 14774, 14775, 14776, 14777,
         ],
@@ -228,14 +278,14 @@ const LEADERS: [Leader; 4] = [
     Leader {
         entry: BALINDA,
         home: (-57.7, -286.6, 15.6),
-        leash: 45.0,
+        leash: Leash::Yards(45.0),
         linked: &[],
         general: false,
     },
     Leader {
         entry: GALVANGAR,
         home: (-545.2, -165.3, 57.8),
-        leash: 45.0,
+        leash: Leash::Yards(45.0),
         linked: &[],
         general: false,
     },
@@ -289,8 +339,31 @@ pub struct State {
     next_sweep: Option<Instant>,
 }
 
+/// The scripts' state: the match's, or on the valley's world copy (no
+/// match: [`Map::valley`]) its own, for its leaders.
 fn state_mut(map: &mut Map) -> Option<&mut State> {
-    extras_mut(map).map(|x| &mut x.scripts)
+    if map.battleground.is_some() {
+        return extras_mut(map).map(|x| &mut x.scripts);
+    }
+    map.valley.as_mut()
+}
+
+fn state(map: &Map) -> Option<&State> {
+    if map.battleground.is_some() {
+        return extras(map).map(|x| &x.scripts);
+    }
+    map.valley.as_ref()
+}
+
+/// The valley's world copy (map 30 outside any match: a GM's `.go`, or a
+/// player teleported there) each update: its leaders hold their keeps as
+/// in a match, drawn too far they go home, fighting they call their guards,
+/// Drek'Thar raises his wolves after a fight. Nothing else of the match
+/// runs there (no towers, graveyards, reinforcements, routes or riders).
+pub fn world_update(map: &mut Map) {
+    if map.valley.is_some() {
+        sweep(map);
+    }
 }
 
 // What they do.
@@ -1230,7 +1303,7 @@ fn run_later(map: &mut Map) {
 /// range), and the cavalry and quartermasters back from the dead.
 fn sweep(map: &mut Map) {
     let now = map.now;
-    if extras(map).is_some_and(|x| x.scripts.next_sweep.is_some_and(|t| t > now)) {
+    if state(map).is_some_and(|s| s.next_sweep.is_some_and(|t| t > now)) {
         return;
     }
     if let Some(st) = state_mut(map) {
@@ -1244,7 +1317,7 @@ fn sweep(map: &mut Map) {
             continue;
         };
         let (fighting, at, victim) = (c.combat.attacking, c.position, c.combat.victim);
-        let was = extras(map).is_some_and(|x| x.scripts.fighting.contains(&g));
+        let was = state(map).is_some_and(|s| s.fighting.contains(&g));
         if let Some(st) = state_mut(map) {
             if fighting {
                 st.fighting.insert(g);
@@ -1276,7 +1349,7 @@ fn sweep(map: &mut Map) {
             y: l.home.1,
             z: l.home.2,
         };
-        if dist(at, home) > l.leash {
+        if l.leash.past(home, at) {
             if l.general {
                 set_phase(map, g, LEASHED);
             }
@@ -1307,7 +1380,9 @@ fn sweep(map: &mut Map) {
             }
         }
     }
-    av_quests::back_from_the_dead(map);
+    if map.battleground.is_some() {
+        av_quests::back_from_the_dead(map);
+    }
 }
 
 /// Every route walked, and every wait over, now: as far as the
