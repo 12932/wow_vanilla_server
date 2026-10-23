@@ -60,6 +60,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   as vmangos's; no source has them pick a caster, so a healer is charged once their healing tops the list. A refused
   Charge (too close) no longer spends its 12 to 18 s; EventAI's range event measures past the bounding radii, as
   mangos's.
+- **A warmaster and Drek'Thar stand while they whirl** (decision 89, vmangos's C++ over Thistle Tea's port): a
+  warmaster's (and an Elite Guard's) double Whirlwind roots it 4 s, Drek'Thar's 2 s, and nothing else is cast in
+  it; what fell due goes after. Not taken: the 1 s global cooldown between their other spells, and vmangos's 5 to
+  10 s wait for a Charge with no one in range.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick
