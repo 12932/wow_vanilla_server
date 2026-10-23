@@ -260,8 +260,7 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
     let info = crate::game::map::move_guard::stripped(p, info, walks_on_water);
     // Faster than the player can go: pulled back to where they were.
     if let Some((last, at)) = p.move_check
-        && check.speed_check
-        && !p.gm
+        && crate::game::map::move_guard::speed_checked(p, &p.misc.move_guard, check)
         && info.flags.get_on_transport().is_none()
         && crate::game::map::move_guard::too_fast(p, last, at, &info, now, check)
     {

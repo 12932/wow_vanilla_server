@@ -293,7 +293,7 @@ fn finish(map: &mut Map, g: Guid, arrived: bool) {
         Some(p) => {
             let charge = p.charge.take();
             let at = p.position();
-            p.move_check = Some((at, now));
+            crate::game::map::move_guard::regained(p, at, now, &map.cfg.anticheat);
             // Another selected on the way, or none: no swing at the one
             // charged.
             let selected = p.fields.get_guid(crate::game::fields::UNIT_FIELD_TARGET);

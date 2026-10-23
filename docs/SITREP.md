@@ -31,6 +31,9 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   refused while it's off.
 - **A moderator or above logs out at once** anywhere (mangos's `InstantLogout`).
 - **Zul'Farrak's pyramid waves face the altar** (every reference has them face north; none has them dance).
+- **A client given its control back is checked from there, a GM too** (decision 83): after a fear, a
+  confusion, a charm, a possession or a charge, its first move may go only 3 yards past its speed from where the
+  server left it; a GM's first move is checked too.
 - **Pets fan out at any victim** (decision 80): mangos fans out only those on a player, and its pets stack on a
   creature; and the spread, creatures' too, now steps to a place clear of every attacker, counts a big victim's
   size, and turns no one aside at a victim on the move.

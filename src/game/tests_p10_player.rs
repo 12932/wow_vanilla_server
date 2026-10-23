@@ -68,6 +68,29 @@ async fn a_charge_swings_on_arriving_only_at_what_is_still_selected() {
     let (_realm, mut a, ga, map) = motion::enter(charge_world()).await;
     let g = motion::wolf();
     a.sees(g).await;
+    // The client's last word of where it is, taken before the charges: one
+    // that came after a charge would be from before it, and pulled back to
+    // the charge's end (the server gave the client control back there).
+    let at = motion::at(0.0, 0.0);
+    a.send(MSG_MOVE_HEARTBEAT_Client {
+        info: MovementInfo {
+            flags: MovementInfo_MovementFlags::empty(),
+            timestamp: 0,
+            position: at,
+            orientation: 0.25,
+            fall_time: 0,
+        },
+    })
+    .await;
+    let mut taken = false;
+    for _ in 0..200 {
+        taken = on(&map, move |m| m.players[&ga].movement.orientation == 0.25).await;
+        if taken {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(taken, "the heartbeat is taken");
     type Change = fn(&mut Map, Guid, Guid);
     let changes: [(&str, Option<Change>); 5] = [
         ("kept", None),

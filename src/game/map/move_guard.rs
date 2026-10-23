@@ -29,6 +29,10 @@ pub struct MoveGuard {
     /// A knockback taken and not yet landed (mangos's `IsLaunched`,
     /// `Movement::KnockBack`).
     launch: Option<Launch>,
+    /// The server moved the player and has given its client control back
+    /// (a fear's end, a charm's, a charge's): until a move is taken, the
+    /// client's are checked from where the server left it, a GM's too.
+    regained: bool,
 }
 
 /// A knockback's flight: where and when it began, and its speeds.
@@ -82,6 +86,12 @@ impl MoveGuard {
     /// The bank refilled: the unit was put somewhere by the server.
     pub fn refill(&mut self) {
         self.bank = None;
+    }
+
+    /// Whether the client's next move is checked from where the server gave
+    /// it control back (see [`regained`]).
+    pub fn regained(&self) -> bool {
+        self.regained
     }
 }
 
@@ -361,6 +371,26 @@ pub fn refill(p: &mut Player) {
     p.misc.move_guard.bank = None;
 }
 
+/// The server has moved `p` (a fear, a confusion, a charm, a possession, a
+/// charge) and gives its client control back at `at`: the client's next
+/// move is checked from there, with no more ahead of its speed than
+/// `distance_allowance_yards`, for a GM too. A client that never followed
+/// the server's run, sending from where it was before, is pulled back to
+/// where the server left it rather than seen to run back across the ground.
+pub fn regained(p: &mut Player, at: Vector3d, now: Instant, check: &AnticheatConfig) {
+    p.move_check = Some((at, now));
+    let guard = &mut p.misc.move_guard;
+    guard.bank = Some(check.distance_allowance_yards);
+    guard.launch = None;
+    guard.regained = true;
+}
+
+/// Whether the speed check looks at `p`'s client's moves: on, and not a
+/// GM's, but for the first after the server gave control back.
+pub fn speed_checked(p: &Player, guard: &MoveGuard, check: &AnticheatConfig) -> bool {
+    check.speed_check && (!p.gm || guard.regained)
+}
+
 /// A knockback the client took, from `from`, with the jump `j` it was
 /// sent: until it lands (or its arc ends), it goes at the launch's speed.
 pub fn launched(
@@ -397,6 +427,7 @@ pub fn taken(p: &mut Player, info: &MovementInfo) {
 
 /// [`taken`], with the guard `guard`.
 pub fn taken_with(guard: &mut MoveGuard, info: &MovementInfo) {
+    guard.regained = false;
     let f = &info.flags;
     let aloft = f.get_jumping().is_some() || f.get_fallingfar();
     if !aloft || f.get_swimming().is_some() {

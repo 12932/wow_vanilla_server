@@ -282,9 +282,10 @@ pub fn control(map: &mut Map, g: Guid) {
         }
         None => {
             p.driven = None;
-            // Where the server left it is where its client starts again.
+            // Where the server left it is where its client starts again,
+            // checked from there.
             let at = p.position();
-            p.move_check = Some((at, now));
+            crate::game::map::move_guard::regained(p, at, now, &map.cfg.anticheat);
             if !possessed {
                 p.outbound.send(&SMSG_CLIENT_CONTROL_UPDATE {
                     guid: g,

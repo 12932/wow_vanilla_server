@@ -177,6 +177,9 @@ pub fn release(map: &mut Map, victim: Guid) {
         p.fields
             .set_flag(UNIT_FIELD_FLAGS, UNIT_FLAG_POSSESSED, false);
         if !driven {
+            // Where its possessor left it is where its client starts again.
+            let at = p.position();
+            crate::game::map::move_guard::regained(p, at, map.now, &map.cfg.anticheat);
             p.outbound.send(&SMSG_CLIENT_CONTROL_UPDATE {
                 guid: victim,
                 allow_movement: true,
