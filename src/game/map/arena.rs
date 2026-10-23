@@ -1,10 +1,23 @@
 //! Gurubashi Arena: the pit's free-for-all, the Booty Run's chest every
 //! three hours, and the last man standing.
 //!
-//! **The Booty Run** (vmangos's event 16): when it begins, Short John
-//! Mithril calls from the stands and the Arena Treasure Chest drops on the
-//! pit's floor; whoever opens it first has its loot. It goes when the event
-//! ends.
+//! **The Booty Run** (vmangos's event 16, every three hours from midnight
+//! on the server's clock, [`crate::game::events::booty_run_on`]): when it
+//! begins, Short John Mithril yells from the stands, puts away his gossip
+//! and quests, and walks his entry's path (vmangos's
+//! `creature_movement_template` for 14508, mangos-classic's `MoveWaypoint`
+//! on `GAME_EVENT_GURUBASHI_ARENA`) down the stands' stairs to the pit's
+//! floor. There (its point 14) he kneels and sets the Arena Treasure Chest
+//! down, and the point's script (`creature_movement_scripts` 1450816) sets
+//! him running, has him yell "Let the Bloodletting Begin!" and puts the
+//! chest out; he runs back up to his place, where 1450833 sets him walking
+//! and gives him back his gossip and quests. Whoever opens the chest first
+//! has its loot; it goes when the event ends.
+//!
+//! He is kept awake on the way, seen or not. If he can't put the chest
+//! down (dead, gone, with no path), it appears at its place when he would
+//! have: the event's start plus his walk. A map that comes up during the
+//! run (a restart) has him at home and the chest out at once.
 //!
 //! **Last man standing**, started by a GM (`.arena start`) or on a schedule:
 //! - everyone alive on the pit's floor is a fighter; a countdown, then the
@@ -59,6 +72,18 @@ pub const BOOTY_RUN_EVENT: u32 = 16;
 pub const BOOTY_CHEST_SPAWN: u32 = 12029;
 /// "Arrr, Me Hearties! I be havin' some extra Treasure..."
 const BOOTY_RUN_TEXT: u32 = 9730;
+/// The point of his path on the pit's floor, by the chest's place, whose
+/// script sets the chest down.
+pub const CHEST_POINT: u32 = 14;
+/// `EMOTE_ONESHOT_KNEEL`: setting the chest down.
+pub const EMOTE_KNEEL: u32 = 16;
+/// How long he stays down at the chest's place: past the point's script's
+/// two seconds to the chest (its own wait is one).
+pub const KNEEL_HOLD: Duration = Duration::from_secs(3);
+/// What he puts away for the run: gossip and quests.
+const NPC_FLAGS_AWAY: u32 = 0x1 | 0x2;
+/// Time given him past his walk before the chest is put out without him.
+const CHEST_SLACK: Duration = Duration::from_secs(10);
 /// The ring's visible burn.
 pub const SPELL_RING_BURN: u32 = 20019;
 const TICK: Duration = Duration::from_secs(1);
@@ -85,9 +110,20 @@ pub struct Arena {
     pub battle: Option<Battle>,
     tick_at: Option<Instant>,
     next_scheduled: Option<Instant>,
-    booty_run: bool,
+    pub booty: BootyRun,
     /// The fallen may be raised: the battle is ending.
     raising: bool,
+}
+
+/// The Booty Run's state on the map.
+#[derive(Debug, Default)]
+pub struct BootyRun {
+    /// The event as last seen; `None` before the map's first look.
+    on: Option<bool>,
+    /// When the chest is put out if he hasn't put it down by then.
+    pub chest_due: Option<Instant>,
+    /// Short John on his run, kept awake.
+    pub runner: Option<Guid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -363,10 +399,16 @@ pub fn command(map: &mut Map, g: Guid, args: &[&str]) -> String {
             end_battle(map, None);
             "The battle is called off.".into()
         }
-        "start" | "stop" => "Only a GM may start or stop a battle.".into(),
+        // The Booty Run now, as `.event start 16`.
+        "booty" if gm => match crate::game::events::force(&map.realm, BOOTY_RUN_EVENT, true) {
+            None => "There is no Booty Run in the world's data.".into(),
+            Some(false) => "The Booty Run is already on.".into(),
+            Some(true) => "The Booty Run begins: Short John Mithril is on his way.".into(),
+        },
+        "start" | "stop" | "booty" => "Only a GM may start or stop a battle or the Booty Run.".into(),
         "status" => status(map),
         "history" => history(map),
-        _ => "Use: .arena start [countdown s] [max minutes], .arena stop, .arena status, .arena history".into(),
+        _ => "Use: .arena start [countdown s] [max minutes], .arena stop, .arena booty, .arena status, .arena history".into(),
     }
 }
 
@@ -565,35 +607,199 @@ pub fn update(map: &mut Map) {
     }
 }
 
-/// The Booty Run's chest comes and goes with its event.
+/// The Booty Run: Short John's walk as it begins, the chest, and the
+/// chest gone as it ends.
 fn booty_run(map: &mut Map) {
     let on = crate::game::events::current(&map.realm).contains(&BOOTY_RUN_EVENT);
-    if on == map.arena.booty_run {
+    match (map.arena.booty.on.replace(on), on) {
+        // The map came up during the run: he is at home, the chest out.
+        (None, true) => put_chest(map),
+        (Some(false), true) => begin_run(map),
+        (Some(true), false) => end_run(map),
+        _ => {}
+    }
+    let now = map.now;
+    if let Some(due) = map.arena.booty.chest_due {
+        if !on || chest(map).is_some() {
+            map.arena.booty.chest_due = None;
+        } else if now >= due {
+            map.arena.booty.chest_due = None;
+            put_chest(map);
+        }
+    }
+    if let Some(g) = map.arena.booty.runner {
+        run_step(map, g);
+    }
+}
+
+fn chest(map: &Map) -> Option<Guid> {
+    crate::game::map::scripts::object_of_spawn(map, BOOTY_CHEST_SPAWN)
+}
+
+/// The chest at its place on the floor, if it isn't out.
+fn put_chest(map: &mut Map) {
+    if chest(map).is_some() {
         return;
     }
-    map.arena.booty_run = on;
     let data = map.realm.data.clone();
-    let out = map
-        .gameobjects
+    if let Some(s) = data
+        .gameobject_spawns
+        .get(&MAP)
+        .and_then(|v| v.iter().find(|s| s.guid == BOOTY_CHEST_SPAWN))
+        && let Some(t) = data.gameobject_templates.get(&s.entry)
+    {
+        map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, s));
+    }
+}
+
+/// Short John, if he is here and alive.
+pub fn short_john(map: &Map) -> Option<Guid> {
+    crate::game::map::scripts::creature_of_spawn(map, ANNOUNCER_SPAWN)
+        .filter(|g| map.creature(*g).is_some_and(|c| c.alive()))
+}
+
+/// The Booty Run begins: his yell, and his walk down to the floor.
+fn begin_run(map: &mut Map) {
+    let data = map.realm.data.clone();
+    if let Some(text) = data.npc.broadcast_line(BOOTY_RUN_TEXT, false) {
+        yell(map, text);
+    }
+    let path = data
+        .waypoints_by_entry
+        .get(&ANNOUNCER_ENTRY)
+        .filter(|p| p.iter().any(|w| w.point == CHEST_POINT))
+        .cloned();
+    let (Some(g), Some(path)) = (short_john(map), path) else {
+        put_chest(map);
+        return;
+    };
+    let now = map.now;
+    let Some(c) = map.creature_mut(g) else {
+        return;
+    };
+    // His walk to the chest's place, point by point, at his walking pace.
+    let mut at = c.position;
+    let mut length = 0.0;
+    for w in path
         .iter()
-        .find(|(_, g)| g.spawn_guid == Some(BOOTY_CHEST_SPAWN))
-        .map(|(_, g)| g.guid);
-    if on {
-        if let Some(text) = data.npc.broadcast_line(BOOTY_RUN_TEXT, false) {
-            yell(map, text);
-        }
-        if out.is_none()
-            && let Some(s) = data
-                .gameobject_spawns
-                .get(&MAP)
-                .and_then(|v| v.iter().find(|s| s.guid == BOOTY_CHEST_SPAWN))
-            && let Some(t) = data.gameobject_templates.get(&s.entry)
-        {
-            map.add_gameobject(crate::game::map::gameobject::GameObject::from_spawn(t, s));
-        }
-    } else if let Some(g) = out {
+        .take_while(|w| w.point != CHEST_POINT)
+        .chain(path.iter().find(|w| w.point == CHEST_POINT))
+    {
+        let to = Vector3d {
+            x: w.x,
+            y: w.y,
+            z: w.z,
+        };
+        length += crate::game::map::combat::dist(at, to);
+        at = to;
+    }
+    let walk =
+        Duration::try_from_secs_f32(length / c.speeds.walk.max(0.1)).unwrap_or(Duration::ZERO);
+    let flags = c.fields.get_u32(UNIT_NPC_FLAGS);
+    c.fields.set_u32(UNIT_NPC_FLAGS, flags & !NPC_FLAGS_AWAY);
+    c.movement_type = crate::game::map::creature::MOVEMENT_WAYPOINT;
+    c.waypoint = 0;
+    c.last_waypoint = None;
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
+        s.route = Some(crate::game::map::event_ai::Route {
+            points: std::sync::Arc::new(path),
+            repeat: false,
+            pathfind: true,
+        });
+        s.run = false;
+        s.follow = None;
+    }
+    crate::game::map::ai::rest(map, g, Some(now));
+    map.keep_awake(g, true);
+    map.arena.booty.runner = Some(g);
+    map.arena.booty.chest_due = Some(later(now, walk + KNEEL_HOLD + CHEST_SLACK));
+}
+
+/// He reached a point of his path (from the creatures' walk): at the
+/// chest's he kneels and stays down while its script puts the chest out.
+pub fn reached(map: &mut Map, g: Guid, point: u32) {
+    if map.arena.booty.runner != Some(g) || point != CHEST_POINT {
+        return;
+    }
+    crate::game::map::scripts::emote(map, g, EMOTE_KNEEL);
+    let until = later(map.now, KNEEL_HOLD);
+    if let Some(c) = map.creature_mut(g)
+        && matches!(c.motion, crate::game::map::creature::Motion::Idle { .. })
+    {
+        c.motion = crate::game::map::creature::Motion::Idle { until: Some(until) };
+    }
+}
+
+/// His run, checked: dead or gone, it is over; back home and off his
+/// path, he is as he was.
+fn run_step(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g).filter(|c| c.alive()) else {
+        map.keep_awake(g, false);
+        map.arena.booty.runner = None;
+        return;
+    };
+    let walking = matches!(c.motion, crate::game::map::creature::Motion::Moving(_));
+    if walking || c.movement_type == crate::game::map::creature::MOVEMENT_WAYPOINT {
+        return;
+    }
+    let home_o = c.home_orientation;
+    let npc_flags = map
+        .realm
+        .data
+        .creature_template(ANNOUNCER_ENTRY)
+        .map_or(NPC_FLAGS_AWAY, |t| t.npc_flags & NPC_FLAGS_AWAY);
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
+        s.route = None;
+        s.run = false;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        let flags = c.fields.get_u32(UNIT_NPC_FLAGS);
+        c.fields.set_u32(UNIT_NPC_FLAGS, flags | npc_flags);
+        c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+        c.orientation = home_o;
+    }
+    map.visibility_dirty.insert(g);
+    map.keep_awake(g, false);
+    map.arena.booty.runner = None;
+}
+
+/// The Booty Run ends: the chest goes, and he, if still on his way, runs
+/// home.
+fn end_run(map: &mut Map) {
+    if let Some(g) = chest(map) {
         map.remove_gameobject(g);
     }
+    map.arena.booty.chest_due = None;
+    let Some(g) = map
+        .arena
+        .booty
+        .runner
+        .filter(|g| map.creature(*g).is_some_and(|c| c.alive()))
+    else {
+        return;
+    };
+    if let Some(s) = crate::game::map::event_ai::scripted_mut(map, g) {
+        s.route = None;
+    }
+    if let Some(c) = map.creature_mut(g) {
+        c.movement_type = crate::game::map::creature::MOVEMENT_IDLE;
+    }
+    let (home, o) = map
+        .creature(g)
+        .map(|c| (c.home, c.home_orientation))
+        .unwrap_or((CENTRE, 0.0));
+    crate::game::map::ai::rest(map, g, None);
+    crate::game::map::scripts::move_with(
+        map,
+        g,
+        home,
+        crate::game::map::scripts::Move {
+            run: true,
+            pathfind: true,
+            face: Some(o),
+            ..Default::default()
+        },
+    );
 }
 
 /// A scheduled battle, when it's due and the pit has its fighters.

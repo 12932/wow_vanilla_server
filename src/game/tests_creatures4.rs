@@ -70,7 +70,7 @@ fn the_war_effort_is_over() {
             },
         );
     }
-    let now = chrono::Utc::now().timestamp();
+    let now = crate::game::events::wall_clock(chrono::Utc::now().timestamp());
     let on = crate::game::events::active(&d, now);
     assert!(on.contains(&86), "the post-war watch");
     assert!(!on.contains(&84) && !on.contains(&85), "no war, no gong");

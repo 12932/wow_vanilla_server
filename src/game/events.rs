@@ -9,6 +9,17 @@
 //! calendar, the fireworks of the holidays' nights, events always on in
 //! this patch, and events the world drives (the invasions, Omen's minions)
 //! through [`drive`].
+//!
+//! **The clock** is the server's local one, as vmangos's `GameEventMgr`
+//! has it (its `game_event` times are read with `mktime`, local time) and
+//! as game time and the weather here are: a schedule is worked out on the
+//! wall clock ([`wall_clock`]), the local date and time taken as if they
+//! had no zone, so an event keeps its local hour through a change of
+//! summer time (vmangos's, counted in Unix seconds from its start, moves
+//! by the hour). The Booty Run is the exception: vmangos's row starts it
+//! at 23:00, midnight on the UTC+1 server its data was written on, so here
+//! it starts on `[events] booty_run_first_hour` (0) every
+//! `booty_run_every_minutes` (180) instead ([`booty_run_on`]).
 
 use ahash::{AHashMap, AHashSet};
 use chrono::{Datelike, Timelike};
@@ -20,9 +31,47 @@ use crate::game::map::Map;
 use crate::game::map::creature::Creature;
 use crate::game::map::gameobject::GameObject;
 
-/// The events on at `now` (Unix seconds), with none driven.
-pub fn active(data: &GameData, now: i64) -> AHashSet<u32> {
-    active_with(data, now, &AHashMap::new())
+/// The server's wall clock at `unix` (Unix seconds): its local date and
+/// time, in seconds as if they were UTC's. What every event's schedule is
+/// worked out on.
+pub fn wall_clock(unix: i64) -> i64 {
+    wall_clock_in(unix, &chrono::Local)
+}
+
+/// [`wall_clock`] in the zone `tz`.
+pub fn wall_clock_in<Tz: chrono::TimeZone>(unix: i64, tz: &Tz) -> i64 {
+    chrono::DateTime::from_timestamp(unix, 0)
+        .map(|t| t.with_timezone(tz).naive_local().and_utc().timestamp())
+        .unwrap_or(unix)
+}
+
+/// The events on at `wall` (the [`wall_clock`]'s seconds), with none
+/// driven and the Booty Run on its default hours.
+pub fn active(data: &GameData, wall: i64) -> AHashSet<u32> {
+    active_with(
+        data,
+        wall,
+        &AHashMap::new(),
+        &crate::config::EventsConfig::default(),
+    )
+}
+
+/// Whether the Booty Run is on at `wall`: within its row's dates, from
+/// `first_hour` each day every `every_minutes`, for its row's length.
+pub fn booty_run_on(
+    e: &crate::game::data::GameEvent,
+    wall: i64,
+    cfg: &crate::config::EventsConfig,
+) -> bool {
+    if wall < e.start || wall >= e.end || e.length <= 0 {
+        return false;
+    }
+    let every = i64::try_from(cfg.booty_run_every_minutes)
+        .unwrap_or(1)
+        .max(1);
+    let minute = wall.rem_euclid(86_400) / 60;
+    let since = (minute - i64::from(cfg.booty_run_first_hour) * 60).rem_euclid(1440);
+    since % every < e.length
 }
 
 /// The events on at `now`: those their recurrence has on, the hardcoded
@@ -30,14 +79,25 @@ pub fn active(data: &GameData, now: i64) -> AHashSet<u32> {
 /// drives off is off whatever its recurrence says, through its turns
 /// (Thistle Tea's `GameEvent.drive`, where a driven event holds its state
 /// across the schedule's transitions).
-pub fn active_with(data: &GameData, now: i64, driven: &AHashMap<u32, bool>) -> AHashSet<u32> {
+pub fn active_with(
+    data: &GameData,
+    wall: i64,
+    driven: &AHashMap<u32, bool>,
+    cfg: &crate::config::EventsConfig,
+) -> AHashSet<u32> {
     let mut on: AHashSet<u32> = data
         .events
         .values()
-        .filter(|e| e.active(now))
+        .filter(|e| {
+            if e.id == BOOTY_RUN && !e.hardcoded {
+                booty_run_on(e, wall, cfg)
+            } else {
+                e.active(wall)
+            }
+        })
         .map(|e| e.id)
         .collect();
-    for id in rules(now, &on) {
+    for id in rules(wall, &on) {
         if data.events.get(&id).is_some_and(|e| e.hardcoded) {
             on.insert(id);
         }
@@ -62,6 +122,8 @@ pub const FIREWORKS: u32 = 6;
 pub const TOASTING_GOBLETS: u32 = 39;
 pub const DRAGONS_OF_NIGHTMARE: u32 = 66;
 pub const WAR_EFFORT_POST_WAR: u32 = 86;
+/// Gurubashi Arena's Booty Run.
+pub const BOOTY_RUN: u32 = crate::game::map::arena::BOOTY_RUN_EVENT;
 
 /// The Darkmoon Faire on a day: it opens the first Monday of the month for
 /// a week, in Elwynn in even months and Mulgore in odd ones, after three
@@ -91,9 +153,11 @@ pub fn darkmoon(date: chrono::NaiveDate) -> Option<u32> {
     }
 }
 
-/// The hardcoded events' rules at `now`, given the events scheduled then.
-pub fn rules(now: i64, scheduled: &AHashSet<u32>) -> Vec<u32> {
-    let Some(t) = chrono::DateTime::from_timestamp(now, 0) else {
+/// The hardcoded events' rules at `wall` (the [`wall_clock`]'s seconds:
+/// the Faire's local date, the fireworks' local night), given the events
+/// scheduled then.
+pub fn rules(wall: i64, scheduled: &AHashSet<u32>) -> Vec<u32> {
+    let Some(t) = chrono::DateTime::from_timestamp(wall, 0) else {
         return Vec::new();
     };
     let mut on = vec![DRAGONS_OF_NIGHTMARE, WAR_EFFORT_POST_WAR];
@@ -201,9 +265,10 @@ pub fn current(realm: &Realm) -> AHashSet<u32> {
 /// sweep finding nothing changed (review 5's social 10).
 pub fn sweep(realm: &Realm) {
     let now = crate::game::social::mail::now();
+    let cfg = realm.config();
     let mut events = realm.social.events.lock();
     let driven = realm.social.driven_events.lock().clone();
-    let mut on = active_with(&realm.data, now, &driven);
+    let mut on = active_with(&realm.data, wall_clock(now), &driven, &cfg.events);
     overridden(realm, now, &mut on);
     if *events == on {
         return;

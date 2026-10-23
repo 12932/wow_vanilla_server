@@ -400,6 +400,8 @@ World events the server runs of itself.
 |---|---|---|---|---|---|
 | `elemental_invasion` | The Elemental Invasion: rifts in Un'Goro, Silithus, Azshara and Winterspring, their stages and lords, then days of rest. Off, it stops where it is. | `true` |  | live |  |
 | `scourge_invasion` | The Scourge Invasion's necropolises over the zones it attacks, as `.invasion on` (Thistle Tea's `scourge_invasion`, off). A GM's `.invasion on` or `off` holds until this changes. | `false` |  | live |  |
+| `booty_run_first_hour` | The hour of the day, on the server's clock, of Gurubashi Arena's first Booty Run (vmangos's event 16): Short John Mithril leaves his chest on the pit's floor then and every `booty_run_every_minutes` after, for the event's two hours. vmangos's row has 23:00, midnight on its UTC+1 server. | `0` | 0 to 23, clamped | live |  |
+| `booty_run_every_minutes` | Minutes from one Booty Run's start to the next, counted from `booty_run_first_hour` each day. | `180` | 1 to 1440, clamped | live |  |
 
 ### `[anticheat]`
 
