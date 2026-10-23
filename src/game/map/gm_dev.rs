@@ -2049,15 +2049,23 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
             let Some(have) = crate::game::map::skills::value(p, id) else {
                 return Some(format!("No skill {id}."));
             };
-            // From 1 to its cap, as mangos's `.setskill` takes it; its
-            // stats follow (Defense's dodge and parry).
+            // From 1 to its cap; past the cap it goes to the cap, and says
+            // so (mangos's `.setskill` refuses, with a reply that read as
+            // done); its stats follow (Defense's dodge and parry).
             let max = crate::game::map::skills::max_value(p, id).unwrap_or(have);
-            if value == 0 || value > max {
+            if value == 0 {
                 return Some(format!("Skill {id} goes from 1 to {max}."));
             }
-            crate::game::map::skills::set_value(p, id, value);
+            let at = value.min(max);
+            crate::game::map::skills::set_value(p, id, at);
             p.apply_stats(&data);
-            Some(format!("Skill {id} at {value}."))
+            Some(if at < value {
+                format!(
+                    "Skill {id} at {at}, its cap: {value} is past it (learn the skill's next rank to raise the cap)."
+                )
+            } else {
+                format!("Skill {id} at {at}.")
+            })
         }
         ["spells"] => {
             let to = player_target(map, g);
