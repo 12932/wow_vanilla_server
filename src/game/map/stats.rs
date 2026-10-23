@@ -83,7 +83,15 @@ pub fn regen(map: &mut Map) {
         if p.regen_at > now {
             continue;
         }
-        p.regen_at = now + REGEN_INTERVAL;
+        // The next on the tick's own cadence, as mangos's `m_regenTimer`
+        // keeps what is left past each interval: an update late for one
+        // doesn't put off every tick after it (a drinker who times its
+        // stand to the tick, 1.12's way, sees it every two seconds). One
+        // missed outright (a stall) starts again from now.
+        p.regen_at += REGEN_INTERVAL;
+        if p.regen_at <= now {
+            p.regen_at = now + REGEN_INTERVAL;
+        }
         if p.death != Death::Alive {
             continue;
         }
