@@ -883,3 +883,49 @@ async fn a_create_after_a_teleport_shows_where_one_landed() {
     a.sees(bob).await;
     assert_eq!(heard_of(&mut a).get(&bob).copied().flatten(), Some(landed));
 }
+
+/// The final blow crowns the champion, and its victim rises in the stands
+/// with the rest: before, the battle ended (and the fallen were raised)
+/// while the blow was being counted, before its victim was dead, so they
+/// were passed over as standing and then lay dead on the floor, to be
+/// sent to a graveyard on release.
+#[tokio::test]
+async fn the_last_to_fall_rises_in_the_stands_with_the_rest() {
+    let realm = harness::realm_with(data());
+    let (mut a, alice) = fighter(&realm, "Alice", 0.0).await;
+    let (mut b, bob) = fighter(&realm, "Bob", 3.0).await;
+    let (c, cora) = fighter(&realm, "Cora", -3.0).await;
+    let map = arena_map(&realm);
+    a.say(".arena start 0").await;
+    hears(&mut a, "FIGHT").await;
+    map.query(move |m| crate::game::map::combat::kill(m, alice, bob))
+        .await;
+    b.send(CMSG_REPOP_REQUEST {}).await;
+    hears(&mut b, "Watch the rest from the stands").await;
+    map.query(move |m| crate::game::map::combat::kill(m, alice, cora))
+        .await;
+    hears(&mut a, "Champion of Gurubashi Arena").await;
+    // Her release, as a client's would follow, finds her risen.
+    c.send(CMSG_REPOP_REQUEST {}).await;
+    harness::an_update(&map).await;
+    let (death, from_centre, ghostly) = map
+        .query(move |m| {
+            let p = &m.players[&cora];
+            let at = p.position();
+            (
+                p.death,
+                ((at.x - CENTRE.x).powi(2) + (at.y - CENTRE.y).powi(2)).sqrt(),
+                death::is_ghost(m, cora),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(death, Death::Alive, "the last to fall is raised");
+    assert!(!ghostly);
+    assert!(
+        from_centre > arena::PIT_RADIUS && from_centre < 80.0,
+        "in the stands, {from_centre} yards out"
+    );
+    let history = realm.social.arena.lock().results.clone();
+    assert_eq!(history[0].champion.as_deref(), Some("Alice"));
+}

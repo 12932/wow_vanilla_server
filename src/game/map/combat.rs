@@ -3555,6 +3555,7 @@ fn kill_once(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
         crate::game::map::arena::died(map, victim, by);
         death::kill(map, victim);
         death_wear(map, victim, by, spell);
+        crate::game::map::arena::after_kill(map);
     } else {
         // A creature a player charmed or possessed is worth nothing to
         // anyone, though its death lets it go first (Thistle Tea's

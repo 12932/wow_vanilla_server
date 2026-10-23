@@ -113,6 +113,12 @@ pub struct Arena {
     pub booty: BootyRun,
     /// The fallen may be raised: the battle is ending.
     raising: bool,
+    /// The fighter whose death is being counted, before it is dealt
+    /// ([`died`] comes before `death::kill`).
+    dying: Option<Guid>,
+    /// The battle their death ends, the champion with it: ended once they
+    /// are dead ([`after_kill`]), so that they rise with the rest.
+    ending: Option<Option<Guid>>,
 }
 
 /// The Booty Run's state on the map.
@@ -578,6 +584,8 @@ pub fn update(map: &mut Map) {
         return;
     }
     map.arena.tick_at = Some(now + TICK);
+    // A battle a kill was to end, should it have been left (a safeguard).
+    after_kill(map);
     booty_run(map);
     schedule(map);
     if map.arena.battle.is_none() {
@@ -1112,7 +1120,9 @@ pub fn died(map: &mut Map, victim: Guid, killer: Guid) {
     } else {
         (None, Fall::Fell)
     };
+    map.arena.dying = Some(victim);
     fall(map, victim, by, how);
+    map.arena.dying = None;
     if let Some(f) = map
         .arena
         .battle
@@ -1247,6 +1257,21 @@ fn fall(map: &mut Map, g: Guid, by: Option<Guid>, how: Fall) {
             .battle
             .as_ref()
             .and_then(|b| b.fighters.iter().find(|f| f.alive).map(|f| f.guid));
+        // A death ends it once dealt: raised before, the last to fall
+        // would be raised while still standing, and lie dead after.
+        if map.arena.dying == Some(g) {
+            map.arena.ending = Some(champion);
+        } else {
+            end_battle(map, Some(champion));
+        }
+    }
+}
+
+/// After a player's death is dealt (`combat::kill`): the battle it ended,
+/// if it did, ends now, its last to fall raised in the stands with the
+/// rest.
+pub fn after_kill(map: &mut Map) {
+    if let Some(champion) = map.arena.ending.take() {
         end_battle(map, Some(champion));
     }
 }
