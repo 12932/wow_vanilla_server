@@ -558,8 +558,8 @@ fn spawn(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
     Some(format!("Spawned {} ({g}).", template.name))
 }
 
-/// `.tele <place>`: a place from vmangos's `game_tele`, by name, the
-/// start of one, or a part of one.
+/// `.tele <place>`: a place from vmangos's `game_tele` or wvs's own
+/// (`data::tele`), by name, the start of one, or a part of one.
 fn tele(map: &mut Map, guid: Guid, args: &[&str]) -> Option<String> {
     let wanted = args.join(" ").to_lowercase();
     if wanted.is_empty() {

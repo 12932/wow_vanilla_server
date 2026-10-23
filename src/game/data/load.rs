@@ -338,6 +338,8 @@ pub fn load(dir: &Path) -> GameData {
             super::scripts_load::link_templates(&mut data);
         }
     }
+    // wvs's own `.tele` places, after the table's (with it or without).
+    super::tele::add_extras(&mut data.tele);
     let spawns: usize = data.creature_spawns.values().map(Vec::len).sum();
     let objects: usize = data.gameobject_spawns.values().map(Vec::len).sum();
     info!(
