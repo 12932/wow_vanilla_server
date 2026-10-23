@@ -417,6 +417,7 @@ fn repeat_params(e: &AiEvent) -> Option<(i32, i32)> {
         | EVENT_TARGET_HP
         | EVENT_TARGET_MANA
         | EVENT_RANGE
+        | EVENT_THREAT_IN_RANGE
         | EVENT_OOC_LOS
         | EVENT_FRIENDLY_HP
         | EVENT_FRIENDLY_IS_CC
@@ -440,6 +441,7 @@ fn timed(kind: u32) -> bool {
             | EVENT_HP
             | EVENT_MANA
             | EVENT_RANGE
+            | EVENT_THREAT_IN_RANGE
             | EVENT_OOC_LOS
             | EVENT_TARGET_HP
             | EVENT_FRIENDLY_HP
@@ -520,6 +522,32 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
             };
             let d = dist(a, b) - radius(g) - radius(v);
             ok(d >= e.params[0] as f32 && d < e.params[1] as f32)
+        }
+        // The first of its threat list, the most threat first, from the
+        // least yards to the most past both bounding radii (vmangos's
+        // `GetVictimInRange` and `IsInRange`: from the least, up to the
+        // most), whom it may attack.
+        EVENT_THREAT_IN_RANGE => {
+            victim(map, g)?;
+            let c = map.creature(g)?;
+            let a = c.position;
+            let radius = |u: Guid| {
+                map.unit_fields(u)
+                    .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+            };
+            let mut list = c.threat.clone();
+            list.sort_by(|x, y| y.1.total_cmp(&x.1));
+            list.into_iter()
+                .map(|(u, _)| u)
+                .find(|&u| {
+                    map.position_of(u).is_some_and(|b| {
+                        let d = dist(a, b) - radius(g) - radius(u);
+                        d >= e.params[0] as f32
+                            && d <= e.params[1] as f32
+                            && crate::game::map::combat::can_attack(map, g, u)
+                    })
+                })
+                .map(Some)
         }
         // Its own look about, with line of sight: `ooc_los`.
         EVENT_OOC_LOS => None,
@@ -756,6 +784,14 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
             satisfy(map, g, e, invoker)
         };
         let Some(target) = target else {
+            // Due, with a victim, and nothing to do: it waits before it
+            // looks again (`AiEvent::miss_repeat`), else at its next tick.
+            if let Some((lo, hi)) = e.miss_repeat
+                && victim(map, g).is_some()
+                && let Some(s) = scripted_mut(map, g)
+            {
+                s.timers[i] = Some(now + Duration::from_millis(roll(lo, hi)));
+            }
             continue;
         };
         if e.kind != EVENT_OOC_LOS

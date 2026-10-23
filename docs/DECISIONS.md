@@ -1559,4 +1559,30 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       victim in its 8 to 25 yards: vmangos's waits 5 to 10 s before looking again; wvs's looks each tick, as Thistle
       Tea's and mangos's EventAI range event do (decision 88).
 
+94. **A warmaster's Charge and the linked guards, as vmangos's C++** (2026-10-23; `fix/av-fidelity-2`, round three of
+    the AV all-in, taking up what decision 93 left; amends decision 85's guards). vmangos's
+    `battleground_alterac.cpp` is the reference, followed:
+    - **The Charge** (`npc_WarMasterAI`): due from the fight's start, its timer runs out and, with no global cooldown,
+      it looks for `GetVictimInRange(8, 25)`: the first of its threat list, the most threat first, from 8 to 25
+      yards between bounding radii (`IsInRange`, 3D), its victim or not. A cast that goes starts its timer over 12 to
+      18 s on; one refused (in range, short of the spell's least past both combat reaches) leaves it due, looked at
+      again at its next tick; with none in range it waits 5 to 10 s. wvs had mangos's EventAI range event at its
+      victim alone, looked at each tick (Thistle Tea's). Now an event of wvs's own (`EVENT_THREAT_IN_RANGE`, 1000:
+      the first of the threat list in range, fired at that one) and a wait of its own when its test fails with a
+      victim (`AiEvent::miss_repeat`, set only by `av_scripts`; no database has it). The marshals and the four
+      warmasters by Drek'Thar alike (they share the script); the Elite Guards keep their own pick (`ChargeAt::Picked`).
+      So a warmaster on a tank with a healer high on its list 8 to 25 yards off charges the healer.
+    - **The linked guards** (`npc_alterac_bossHelper::AggroLinkedMobsIfNeeded`): each of the general's linked
+      guards within 100 yards, alive and out of a fight, gets `AttackStart` at every unit on his threat list, the
+      most threat first; each adds its target to its own list with no threat (`AddThreat` of 0) and switches its
+      victim, so it ends on the last, the least of his list, and the first who does it harm or heals against it takes
+      it (anything past none). wvs's went at his victim alone (Thistle Tea's choice, in 85). Now they take on his
+      whole list, none with threat of its own, fighting its last; with an empty list, his victim. The world copy and
+      a match alike.
+    - Tests: `drek_thars_warmaster_takes_on_his_whole_threat_list_and_fights_its_last`,
+      `a_warmaster_with_no_one_to_charge_looks_again_five_to_ten_seconds_on`, and the real valley's
+      `a_real_warmaster_charges_the_one_it_fights_across_the_hall_not_the_one_beside_it` (Bob, top of its list
+      across the hall but short of taking it from Alice, is charged) and the marshals'
+      `a_warmasters_charge_waits_past_the_spells_least_range_and_goes_at_once_beyond`, updated.
+
 ## Left for later, and why

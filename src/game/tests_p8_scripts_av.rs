@@ -516,7 +516,8 @@ async fn a_marshal_fighting_grom() -> (Client, Guid, Client, Guid, MapHandle, Gu
 
 /// The user's rule for a warmaster's Charge, as the spell has it (8 to 25
 /// yards, past both combat reaches, mangos's `GetMinMaxRange`): with its
-/// victim beside it, it doesn't charge; 9.5 yards from its centre (past
+/// victim beside it (none of its list in range), it doesn't charge, and
+/// looks again 5 to 10 s on (vmangos's `npc_WarMasterAI`); 9.5 yards from its centre (past
 /// the event's 8, short of the spell's least) its cast is refused, too
 /// close, and it looks again at its next tick rather than 12 to 18 s on
 /// (vmangos's timer, started over only by a cast that goes); 15 yards off,
@@ -544,17 +545,19 @@ async fn a_warmasters_charge_waits_past_the_spells_least_range_and_goes_at_once_
             casts.contains(&(av_scripts::CHARGE, grom)),
             charging,
             left.is_some_and(|l| l.is_zero()),
+            left.is_some_and(|l| (Duration::from_secs(4)..=Duration::from_secs(10)).contains(&l)),
             left.is_some_and(|l| l >= Duration::from_secs(11)),
         ));
     }
     assert_eq!(
         seen,
         vec![
-            (false, false, true, false),
-            (false, false, true, false),
-            (true, true, false, true),
+            (false, false, false, true, false),
+            (false, false, true, false, false),
+            (true, true, false, false, true),
         ],
-        "(charged, charging, due again at once, 12 to 18 s on): beside, too close, across"
+        "(charged, charging, due again at once, 5 to 10 s on, 12 to 18 s on): beside, too \
+         close, across"
     );
 }
 

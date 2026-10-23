@@ -229,6 +229,7 @@ impl Import<'_> {
                 int(v.get("param4")) as i32,
             ],
             actions,
+            miss_repeat: None,
         })
     }
 

@@ -212,6 +212,94 @@ async fn drek_thar_goes_home_once_drawn_east_of_his_hall_and_his_warmaster_does_
     );
 }
 
+/// vmangos's `AggroLinkedMobsIfNeeded`: an idle warmaster takes on
+/// Drek'Thar's whole threat list, none of it with threat of its own, and
+/// fights the last of it (Bob, the least of his); whoever then does it
+/// harm takes it over. Before, it went at his victim alone (Thistle Tea's).
+#[tokio::test]
+async fn drek_thars_warmaster_takes_on_his_whole_threat_list_and_fights_its_last() {
+    let (_a, alice, map, drek, warmaster) = the_hall().await;
+    let realm = map.query(|m| m.realm.clone()).await.unwrap();
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Priest).await;
+    into_the_world_copy(
+        &realm,
+        &mut b,
+        at(DREK_HOME.0 - 12.0, DREK_HOME.1, DREK_HOME.2),
+    )
+    .await;
+    map.query(move |m| {
+        ai::attacked(m, drek, alice);
+        ai::add_threat(m, drek, alice, 500.0);
+        ai::attacked(m, drek, bob);
+        ai::add_threat(m, drek, bob, 100.0);
+        av_scripts::sweep_soon(m);
+    })
+    .await;
+    until(&map, "his warmaster in the fight", move |m| {
+        m.creature(warmaster).is_some_and(|c| c.combat.attacking)
+    })
+    .await;
+    let (victim, list) = map
+        .query(move |m| {
+            let c = m.creature(warmaster).unwrap();
+            let mut list = c.threat.clone();
+            list.sort_by_key(|(g, _)| g.guid());
+            (c.combat.victim, list)
+        })
+        .await
+        .unwrap();
+    let mut both = vec![(alice, 0.0), (bob, 0.0)];
+    both.sort_by_key(|(g, _)| g.guid());
+    assert_eq!(list, both, "both on its list, with none of their own");
+    assert_eq!(victim, bob, "the last of his list");
+    let turned = map
+        .query(move |m| {
+            ai::add_threat(m, warmaster, alice, 10.0);
+            ai::overtake(m, warmaster, bob)
+        })
+        .await
+        .unwrap();
+    assert_eq!(turned, alice, "the first to do it harm takes it");
+}
+
+/// vmangos's `npc_WarMasterAI`'s Charge: with none of its threat list from
+/// 8 to 25 yards it waits 5 to 10 s before it looks again (wvs looked each
+/// tick, as Thistle Tea's range event).
+#[tokio::test]
+async fn a_warmaster_with_no_one_to_charge_looks_again_five_to_ten_seconds_on() {
+    let (_a, alice, map, _drek, warmaster) = the_hall().await;
+    let w = warmaster;
+    let wait = map
+        .query(move |m| {
+            hold_at(m, w, at(DREK_HOME.0 + 7.0, DREK_HOME.1, DREK_HOME.2));
+            ai::attacked(m, w, alice);
+            let id = charge_event(m);
+            let i = super::tests_p3_scripts::index(m, w, id);
+            let now = m.now;
+            if let Some(s) = event_ai::scripted_mut(m, w) {
+                s.timers[i] = Some(now);
+                s.next_tick = None;
+            }
+            event_ai::tick(m, w);
+            let c = m.creature(w).unwrap();
+            assert!(
+                c.engagement.charge.is_none(),
+                "no charge at Alice beside it"
+            );
+            event_ai::scripted(m, w)
+                .and_then(|s| s.timers[i])
+                .map(|t| t.saturating_duration_since(now))
+        })
+        .await
+        .unwrap();
+    let wait = wait.expect("its Charge timed");
+    assert!(
+        (Duration::from_secs(5)..=Duration::from_secs(10)).contains(&wait),
+        "{wait:?}"
+    );
+}
+
 /// The world copy holds a match's start, not every event's spawns at once:
 /// Iceblood Tower's banner as the Horde holds it, not as the Alliance
 /// assaults it nor burnt; and the generals (theirs at the start too). Before,
@@ -515,11 +603,7 @@ async fn respawn_around_resets_drek_thars_keep_his_warmasters_back() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        back,
-        all,
-        "his warmasters and wolves all back"
-    );
+    assert_eq!(back, all, "his warmasters and wolves all back");
     assert_eq!(
         drek_now,
         (true, true, false, true),
@@ -531,11 +615,13 @@ async fn respawn_around_resets_drek_thars_keep_his_warmasters_back() {
 
 /// The user's question, on the real valley: the Iceblood Warmaster charges
 /// (22911: 8 to 25 yards past both combat reaches, its blow and a 2 s
-/// stun) whom it fights, as vmangos's `npc_WarMaster` does; never one
-/// beside it. Alice (a warrior) beside it, its victim: no charge, and its
-/// Charge still due. Bob (a priest) 15 yards off across Drek'Thar's hall
-/// takes the top of its list, as a healer's threat does: it charges him at
-/// once, not Alice, and he is stunned. (The hall's others gone, and the
+/// stun) the first of its threat list in that range, as vmangos's
+/// `npc_WarMasterAI` does; never one beside it. Alice (a warrior) beside
+/// it, its victim: no charge, and it looks again 5 to 10 s on; too close,
+/// refused, its Charge still due. Bob (a priest) 15 yards off across
+/// Drek'Thar's hall takes the top of its list, as a healer's threat does,
+/// short of taking it from Alice: it charges him at once, not Alice, and he
+/// is stunned. (The hall's others gone, and the
 /// warmaster friendly until both are in, so that only the test fights.)
 #[tokio::test]
 #[ignore = "extended"]
@@ -619,6 +705,7 @@ async fn a_real_warmaster_charges_the_one_it_fights_across_the_hall_not_the_one_
             // (11 between their centres). Refused, too close; due still.
             hold_at(m, w, at(SPOT.0 - 7.5, SPOT.1, SPOT.2));
             if let Some(s) = event_ai::scripted_mut(m, w) {
+                s.timers[i] = Some(now);
                 s.next_tick = None;
             }
             event_ai::tick(m, w);
@@ -629,18 +716,23 @@ async fn a_real_warmaster_charges_the_one_it_fights_across_the_hall_not_the_one_
     assert_eq!(range, (8.0, 25.0), "Charge's range, 95");
     assert_eq!(
         beside,
-        [(alice, false, true); 2],
-        "Alice beside it, then too close, its victim: no charge, its Charge still due"
+        [(alice, false, false), (alice, false, true)],
+        "Alice beside it, its victim: no charge, and its Charge waits (none in range); \
+         too close: no charge, its Charge still due (refused)"
     );
-    // Bob tops its list, across the hall.
+    // Bob tops its list, across the hall, but not by three tenths: Alice
+    // stays its victim, and it charges him (the first of its list in range).
     b.clear();
     let (victim, charging) = map
         .query(move |m| {
             hold_at(m, w, at(SPOT.0, SPOT.1, SPOT.2));
-            ai::add_threat(m, w, bob, 1000.0);
+            ai::add_threat(m, w, bob, 120.0);
             ai::update_creatures(m);
             hold_at(m, w, at(SPOT.0, SPOT.1, SPOT.2));
+            let i = super::tests_p3_scripts::index(m, w, charge_event(m));
+            let now = m.now;
             if let Some(s) = event_ai::scripted_mut(m, w) {
+                s.timers[i] = Some(now);
                 s.next_tick = None;
             }
             event_ai::tick(m, w);
@@ -650,8 +742,12 @@ async fn a_real_warmaster_charges_the_one_it_fights_across_the_hall_not_the_one_
         })
         .await
         .unwrap();
-    assert_eq!(victim, bob, "Bob tops its list");
-    assert_eq!(charging, Some(Some(bob)), "it charges Bob at once");
+    assert_eq!(victim, alice, "Alice its victim still");
+    assert_eq!(
+        charging,
+        Some(Some(bob)),
+        "it charges Bob, the first of its list in range"
+    );
     let casts = super::tests_p3_scripts::casts_by(&mut b, w, Duration::from_secs(1)).await;
     assert!(casts.contains(&(CHARGE, bob)), "{casts:?}");
     assert!(!casts.contains(&(CHARGE, alice)), "{casts:?}");

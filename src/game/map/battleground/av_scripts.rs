@@ -1379,13 +1379,36 @@ fn sweep(map: &mut Map) {
             continue;
         }
         if !victim.is_zero() {
+            // His idle guards take on his whole threat list (vmangos's
+            // `AggroLinkedMobsIfNeeded`: `AttackStart` at each of it, the
+            // most threat first, none of it with threat of their own): each
+            // ends on the last, and turns to whoever first does it harm or
+            // heals against it.
+            let mut list = map
+                .creature(g)
+                .map(|c| c.threat.clone())
+                .unwrap_or_default();
+            list.sort_by(|x, y| y.1.total_cmp(&x.1));
             for &entry in l.linked {
                 for m in near(map, g, entry, LINKED_RADIUS) {
                     let idle = map
                         .creature(m)
                         .is_some_and(|c| c.alive() && !c.combat.attacking && !c.evading);
-                    if idle && crate::game::map::combat::can_attack(map, m, victim) {
-                        crate::game::map::ai::attacked(map, m, victim);
+                    if !idle {
+                        continue;
+                    }
+                    let mut foes: Vec<Guid> = list
+                        .iter()
+                        .map(|(u, _)| *u)
+                        .filter(|&u| crate::game::map::combat::can_attack(map, m, u))
+                        .collect();
+                    if foes.is_empty() && crate::game::map::combat::can_attack(map, m, victim) {
+                        foes.push(victim);
+                    }
+                    // The last first: it is the one it fights, the rest on
+                    // its list beside it.
+                    for &u in foes.iter().rev().take(1).chain(foes.iter()) {
+                        crate::game::map::ai::attacked(map, m, u);
                     }
                 }
             }
@@ -1614,7 +1637,21 @@ impl<'a> Builder<'a> {
             flags,
             params,
             actions: ids,
+            miss_repeat: None,
         });
+    }
+
+    /// The last event made waits `miss` (ms) as it finds nothing to do
+    /// (`AiEvent::miss_repeat`).
+    fn missing_waits(&mut self, entry: u32, miss: (i32, i32)) {
+        if let Some(e) = self
+            .data
+            .ai_events
+            .get_mut(&entry)
+            .and_then(|e| e.last_mut())
+        {
+            e.miss_repeat = Some(miss);
+        }
     }
 
     fn on(&mut self, entry: u32, kind: u32, phases: u32, steps: Vec<ScriptStep>) {
@@ -1906,7 +1943,7 @@ fn leaders(b: &mut Builder) {
     b.on(GALVANGAR, EVENT_EVADE, 0, vec![say(&[10378])]);
     // The marshals and warmasters.
     for entry in 14762..=14777 {
-        warmaster(b, entry, ChargeAt::Victim, Some(120_000));
+        warmaster(b, entry, ChargeAt::InRange, Some(120_000));
     }
 }
 
@@ -1919,14 +1956,16 @@ pub(crate) const ENRAGE: u32 = 8599;
 
 /// Whom a warmaster charges.
 pub(crate) enum ChargeAt {
-    /// Its victim, from 8 to 25 yards, every 12 to 18 s (vmangos's): its
-    /// timer starts over only once the Charge goes (vmangos's
-    /// `DoCastSpellIfCan(..) == CAST_OK`). The spell's own least is past
-    /// both combat reaches (11 yards between a warmaster's centre and a
+    /// The first of its threat list from 8 to 25 yards, the most threat
+    /// first (vmangos's `npc_WarMasterAI`: `GetVictimInRange(8, 25)`), its
+    /// victim or not; from the fight's start, then every 12 to 18 s once a
+    /// Charge goes (`DoCastSpellIfCan(..) == CAST_OK`). With none in range
+    /// it looks again 5 to 10 s on. The spell's own least is past both
+    /// combat reaches (11 yards between a warmaster's centre and a
     /// player's), the event's past their bounding radii (under 9): in
     /// between the cast is refused (too close), and the warmaster looks
-    /// again at its next tick, not 12 to 18 s on.
-    Victim,
+    /// again at its next tick, its timer not started over, as vmangos's.
+    InRange,
     /// Whom a script target type picks: looked for when its 12 to 18 s
     /// are up, and each second until it finds one (a failed cast, or no
     /// one, tries again).
@@ -1946,17 +1985,20 @@ pub(crate) enum ChargeAt {
 pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_every: Option<i32>) {
     let spells = b.count(entry);
     match charge {
-        ChargeAt::Victim => b.event(
-            entry,
-            EVENT_RANGE,
-            [8, 25, 12000, 18000],
-            EF_REPEATABLE | EF_CHECK_RESULT,
-            0,
-            vec![vec![ScriptStep {
-                data_flags: SF_ABORT_ON_FAILURE,
-                ..cast(CHARGE)
-            }]],
-        ),
+        ChargeAt::InRange => {
+            b.event(
+                entry,
+                EVENT_THREAT_IN_RANGE,
+                [8, 25, 12000, 18000],
+                EF_REPEATABLE | EF_CHECK_RESULT,
+                0,
+                vec![vec![ScriptStep {
+                    data_flags: SF_ABORT_ON_FAILURE,
+                    ..cast_at(CHARGE, T_PROVIDED)
+                }]],
+            );
+            b.missing_waits(entry, (5000, 10000));
+        }
         ChargeAt::Picked(target_type) => b.event(
             entry,
             EVENT_TIMER_IN_COMBAT,

@@ -98,6 +98,13 @@ pub struct AiEvent {
     pub params: [i32; 4],
     /// `creature_ai_scripts` ids.
     pub actions: [u32; 3],
+    /// wvs's own (none in a database's): a timed event whose own test
+    /// fails as it falls due, with a victim, waits this long (ms, least and
+    /// most) before it looks again, as a vmangos C++ timer that starts over
+    /// when it finds no target (`npc_WarMasterAI`'s Charge: 5 to 10 s).
+    /// Without it, it looks again at its next tick.
+    #[cfg_attr(test, serde(default))]
+    pub miss_repeat: Option<(i32, i32)>,
 }
 
 /// `event_flags`.
@@ -143,11 +150,16 @@ pub const EVENT_SCRIPT_EVENT: u32 = 31;
 pub const EVENT_GROUP_MEMBER_DIED: u32 = 32;
 pub const EVENT_VICTIM_ROOTED: u32 = 33;
 pub const EVENT_SPELL_HIT_TARGET: u32 = 36;
+/// wvs's own: one of its threat list from `params[0]` to `params[1]` yards
+/// (past both bounding radii), the most threat first (vmangos's
+/// `Creature::GetVictimInRange`), its repeat `params[2..4]`; it fires at
+/// that one.
+pub const EVENT_THREAT_IN_RANGE: u32 = 1000;
 
 /// The event types the engine runs (all but 13, 19, 20, 34 and 35, as
-/// Thistle Tea).
+/// Thistle Tea), and wvs's own.
 pub fn event_supported(kind: u32) -> bool {
-    matches!(kind, 0..=12 | 14..=18 | 21..=33 | 36)
+    matches!(kind, 0..=12 | 14..=18 | 21..=33 | 36 | EVENT_THREAT_IN_RANGE)
 }
 
 /// A condition (`conditions`).
