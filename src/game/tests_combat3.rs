@@ -346,6 +346,93 @@ async fn fear_takes_a_players_control_and_runs_them() {
     assert!(!driven);
 }
 
+/// A player feared and run 18 yards from where it stood (within the speed
+/// check's whole allowance, 20 yards), as `gm` or not, then let go: where
+/// the server has it, and its control back.
+async fn feared_and_let_go(gm: bool) -> (Client, Guid, MapHandle, Vector3d) {
+    let (realm, mut a, ga, map) = setup().await;
+    // The client has stood a while: the speed check has its allowance.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let dummy = unit(DUMMY);
+    let end = Vector3d {
+        x: START.0 + 18.0,
+        ..start()
+    };
+    map.query(move |m| {
+        m.players.get_mut(&ga).unwrap().gm = gm;
+        apply(m, dummy, ga, SCARE, 0);
+        // Its run, done: the server has it there.
+        let p = m.players.get_mut(&ga).unwrap();
+        if let Some(d) = p.driven.as_mut() {
+            d.walk = None;
+            d.next_move_at = m.now + Duration::from_secs(60);
+        }
+        p.movement.position = end;
+    })
+    .await;
+    assert!(!a.wait_for("control taken", |m| control(m, ga)).await);
+    map.query(move |m| auras::remove_spell(m, ga, SCARE, None))
+        .await;
+    assert!(a.wait_for("control back", |m| control(m, ga)).await);
+    drop(realm);
+    (a, ga, map, end)
+}
+
+/// A client given its control back after a fear, that never followed the
+/// server's run, sends its movement from where it stood before: it is
+/// pulled back to where the fear left it (a teleport to its own client),
+/// not taken, as a GM too (every player of a GM realm, a load test's). Its
+/// watchers would see it zip back across the ground.
+#[tokio::test]
+async fn a_move_from_before_a_fear_is_pulled_back_to_its_end() {
+    for gm in [false, true] {
+        let (mut a, ga, map, end) = feared_and_let_go(gm).await;
+        a.heartbeat(START.0, START.1, START.2).await;
+        let back = a
+            .wait_for("pulled back", |m| match m {
+                ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) if t.guid == ga => {
+                    Some(t.info.position)
+                }
+                _ => None,
+            })
+            .await;
+        assert!(
+            dist(back, end) < 0.5,
+            "gm {gm}: back to the fear's end: {back:?}"
+        );
+        let at = map.query(move |m| m.players[&ga].position()).await.unwrap();
+        assert!(dist(at, end) < 0.5, "gm {gm}: not taken: {at:?}");
+    }
+}
+
+/// A client that followed the run goes on from its end, unchecked as a GM
+/// after its first move.
+#[tokio::test]
+async fn a_move_from_a_fears_end_is_taken() {
+    for gm in [false, true] {
+        let (a, ga, map, end) = feared_and_let_go(gm).await;
+        let on = Vector3d {
+            x: end.x + 1.0,
+            ..end
+        };
+        a.heartbeat(on.x, on.y, on.z).await;
+        let mut at = end;
+        for _ in 0..100 {
+            at = map.query(move |m| m.players[&ga].position()).await.unwrap();
+            if dist(at, on) < 0.1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(dist(at, on) < 0.1, "gm {gm}: taken: {at:?}");
+        let regained = map
+            .query(move |m| m.players[&ga].misc.move_guard.regained())
+            .await
+            .unwrap();
+        assert!(!regained, "gm {gm}: checked no more");
+    }
+}
+
 #[tokio::test]
 async fn a_feared_players_runs_go_further_the_nearer_the_frightener() {
     let mut rng = rand::rng();

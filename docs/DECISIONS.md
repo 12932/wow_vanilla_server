@@ -1362,4 +1362,15 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **Raid resets are left on UTC** (`[instances] reset_hour`, 04:00 UTC): their times go to clients as absolute
       times, and a change of clock would move every saved lockout.
 
+84. **A client given its control back is checked from where the server left it** (2026-10-23;
+    `fix/fear-position`): at a fear's, a confusion's or a creature's charm's end, a possession's release and a
+    charge's end, the speed check's last place is where the server has the player, and its bank holds only
+    `distance_allowance_yards` (3) ahead of its speed, not the whole 2 s allowance (about 20 yards) it had
+    before the fear. Until a move is taken this holds a GM too, though a GM's moves are otherwise unchecked:
+    every player of a GM realm is one (peon's arena runs with `everyone_gm`), and a client that never followed
+    the server's run (peon's bots, before their fix) sent its movement from where it stood before, which was taken,
+    so everyone watching saw it slide back across the arena. Now that move is pulled back to the fear's end (a
+    teleport to its own client). mangos-classic has no speed check here (its anticheat is a stub); a real client
+    follows the server's `SMSG_MONSTER_MOVE` for its own guid, which wvs sends it, so it never meets this.
+
 ## Left for later, and why

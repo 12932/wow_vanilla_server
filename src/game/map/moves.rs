@@ -333,8 +333,7 @@ fn step(
     }
     let info = move_guard::stripped(p, info, walks_on_water);
     if let Some((last, at)) = p.move_check
-        && check.speed_check
-        && !p.gm
+        && move_guard::speed_checked(p, &guard, check)
         && info.flags.get_on_transport().is_none()
         && move_guard::too_fast_with(p, &mut guard, last, at, &info, now, check)
     {
