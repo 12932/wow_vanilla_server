@@ -1,6 +1,6 @@
 [package]
 name = "wow_vanilla_server"
-version = "0.1.116"
+version = "0.1.117"
 edition = "2024"
 default-run = "wow_vanilla_server"
 
@@ -43,10 +43,10 @@ rayon = "1.12.0"
 
 # The navmesh (rustigator's pathfinding, under its `raw` API): its tiles
 # decoded off the map's thread and handed in (`load_nav_file`).
-rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "e9fd832dc850db5350a25f102673f860508653e4" }
+rustigator-pathfind = { git = "https://github.com/12932/rustigator", rev = "ba150fe0d1284a32e21b1853e604ca96003c1c49" }
 glam = "0.34.1"
 # The navmesh and terrain builds, for the data setup.
-rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "e9fd832dc850db5350a25f102673f860508653e4" }
+rustigator-mapbuild = { git = "https://github.com/12932/rustigator", rev = "ba150fe0d1284a32e21b1853e604ca96003c1c49" }
 tracing = "0.1.44"
 # The log's filter is `Targets` (RUST_LOG's `target=level` lists), not
 # `env-filter`, which would bring regex in.
