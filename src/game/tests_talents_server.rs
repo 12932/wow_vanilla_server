@@ -240,3 +240,54 @@ async fn mortal_shots_raises_an_auto_shots_crit() {
         "with Mortal Shots, 2.3 times: {dealt:?}"
     );
 }
+
+/// The unit `a` swings at `b` once, a plain hit.
+fn swing_at(m: &mut Map, a: Guid, b: Guid) {
+    use crate::game::map::combat;
+    let now = m.now;
+    if let Some(c) = m.combat_mut(a) {
+        c.next_swing = Some(now);
+    }
+    combat::FORCED_OUTCOME.with(|f| f.set(Some(combat::Outcome::Hit)));
+    combat::start_attack(m, a, b);
+    combat::FORCED_OUTCOME.with(|f| f.set(None));
+    combat::stop_attack(m, a);
+}
+
+const BLOODTHIRST_4: u32 = 23_894;
+
+const BLOODTHIRST_4_BUFF: u32 = 23_888;
+
+/// Bloodthirst's rank 4 leaves its buff on the warrior (vmangos's
+/// `spell_effect_mod`, mangos's `EffectSchoolDMG`), and each of the next
+/// five hits heals them 20 (23891), the buff gone after.
+#[tokio::test]
+#[ignore = "extended"]
+async fn bloodthirst_heals_on_each_of_the_next_five_hits() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_w, w, map) = enter(&realm, "TSRVBT1", "Thirsta", Race::Orc, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        ready(m, w, 60, &[BLOODTHIRST_4]);
+        let kobold = dummy(m, w, KOBOLD_VERMIN, 60, 2.0);
+        spells::cast_triggered(m, w, BLOODTHIRST_4, Some(kobold));
+        let buffed = auras::auras(m, w).is_some_and(|a| a.has_spell(BLOODTHIRST_4_BUFF));
+        let max = m.unit_fields(w).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
+        let mut gains = Vec::new();
+        for _ in 0..6 {
+            m.unit_fields_mut(w)
+                .unwrap()
+                .set_u32(UNIT_FIELD_HEALTH, max / 2);
+            swing_at(m, w, kobold);
+            gains.push(health(m, w) - max / 2);
+        }
+        let left = auras::auras(m, w).is_some_and(|a| a.has_spell(BLOODTHIRST_4_BUFF));
+        (buffed, gains, left)
+    })
+    .await;
+    assert!(out.0, "Bloodthirst's buff on the warrior");
+    assert_eq!(out.1, vec![20, 20, 20, 20, 20, 0], "a heal a hit, five");
+    assert!(!out.2, "the buff gone after five");
+}
