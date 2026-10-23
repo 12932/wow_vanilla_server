@@ -1596,4 +1596,11 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     still stands together. Test: `another_warlocks_soulstone_of_another_rank_takes_the_first_ones_place`. peon's
     warlocks keep to one stone a friend anyway (none on one with a stone from anyone).
 
+96. **`.ready load` ends a spirit of redemption** (2026-10-23; `fix/av-fidelity-2`, found by the AV all-in's
+    telemetry: priests "killed by nothing" 1 to 12 s into an attempt, 9 deaths in 5 of 66 attempts). A priest who
+    died into a spirit near an attempt's end came back from `.ready load` whole but still with the spirit's state
+    auras: 27792 and 27795 are passive, and the load clears all but the passive and the gear's; 27795's end killed
+    him (`redemption::aura_gone`). Now the load ends a spirit first (`redemption::end_without_death`, as leaving a
+    battleground does), the talent kept. Test: `ready_load_ends_a_spirit_of_redemption`.
+
 ## Left for later, and why

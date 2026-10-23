@@ -181,6 +181,12 @@ fn load(map: &mut Map, target: Guid) -> String {
     {
         crate::game::map::death::resurrect(map, target, 1.0);
     }
+    // A spirit of redemption is a priest again, alive: its state's auras are
+    // passive (27792, 27795), which the clearing below keeps, and the second
+    // running out killed the priest seconds into the next attempt.
+    if crate::game::map::spells::redemption::spirit(map, target) {
+        crate::game::map::spells::redemption::end_without_death(map, target);
+    }
     crate::game::map::spells::interrupt(map, target);
     crate::game::map::combat::leave_combat(map, target);
     crate::game::map::ai::forget(map, target);

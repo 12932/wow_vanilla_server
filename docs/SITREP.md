@@ -253,7 +253,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - the general's idle linked guards take on his whole threat list with no threat of their own, fighting its last
     (vmangos's `AggroLinkedMobsIfNeeded`), not his victim alone (Thistle Tea's, in decision 85);
   - two warlocks' soulstones: one rank from both stands together, another rank takes the first's place, as vmangos
-    (decision 95; wvs had let two ranks stand).
+    (decision 95; wvs had let two ranks stand);
+  - `.ready load` ends a spirit of redemption (decision 96): its passive state auras outlived the load and killed
+    the priest seconds into the next attempt.
   - **Tactics:**
     - loose adds go to free off-tanks, and every tank but the main is an off-tank;
     - off-tanks pull their own guard as the tanks go in, and drag splashers away;

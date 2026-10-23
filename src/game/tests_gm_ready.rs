@@ -390,3 +390,50 @@ async fn respawn_around_brings_back_and_resets_whats_near_and_leaves_whats_far()
         say(&mut a, bad, "Usage: .respawn").await;
     }
 }
+
+/// A priest who died into a spirit of redemption is a priest again at
+/// `.ready load`, whole, with none of the spirit's auras left: its state's
+/// two are passive (27792, 27795), which the load's clearing keeps, and the
+/// second's end killed the priest seconds into the next attempt (the
+/// all-in's healers "killed by nothing" at 1 to 12 s).
+#[tokio::test]
+async fn ready_load_ends_a_spirit_of_redemption() {
+    use crate::game::map::spells::redemption;
+    let mut d = world();
+    for id in redemption::STATE {
+        let mut s = spell(id, &[aura_effect(AURA_MOD_STAT, 10, 0, 1)]);
+        s.attributes[0] |= crate::game::data::spells::ATTR_PASSIVE;
+        d.spells.spells.insert(id, s);
+    }
+    d.spells.spells.insert(
+        redemption::FORM,
+        spell(redemption::FORM, &[aura_effect(AURA_MOD_STAT, 10, 1, 1)]),
+    );
+    let realm = crate::game::harness::realm_with(d);
+    let mut a = Client::connect(&realm, "A");
+    let _ga = a.enter("Alice", Race::Human, Class::Mage).await;
+    a.heartbeat(START.0, START.1, START.2).await;
+    let mut b = Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Priest).await;
+    b.heartbeat(START.0, START.1 + 2.0, START.2).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    say(&mut b, ".ready save", "Ready state saved").await;
+    let spirit = on(&map, move |m| {
+        m.players.get_mut(&gb).unwrap().spells.push(redemption::TALENT);
+        let (hp, _) = health(m, gb);
+        combat::deal_damage(m, guid::unit(BRUTE, HURT_ONE), gb, hp + 100);
+        redemption::spirit(m, gb)
+    })
+    .await;
+    assert!(spirit, "a spirit, not dead");
+    a.send(CMSG_SET_SELECTION { target: gb }).await;
+    say(&mut a, ".ready load", "Bob is ready").await;
+    let (spirit, state, death) = on(&map, move |m| {
+        let state = auras::auras(m, gb)
+            .is_some_and(|x| redemption::STATE.iter().any(|s| x.has_spell(*s)));
+        (redemption::spirit(m, gb), state, m.players[&gb].death)
+    })
+    .await;
+    assert!(!spirit && !state, "the spirit's auras gone");
+    assert_eq!(death, Death::Alive);
+}
