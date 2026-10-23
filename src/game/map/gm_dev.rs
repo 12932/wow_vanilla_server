@@ -16,7 +16,7 @@ use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
 .character level <n>, .character spells, .gear [green|blue|raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
-.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], \
+.modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], .infinitemana [on|off] (.thereisnospoon), \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
 events [start|stop <id>]|explore|position [guid]|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
@@ -31,7 +31,7 @@ pub fn needed_level(name: &str) -> Option<u8> {
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
         | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "god"
         | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
-        | "event" | "durability" => GAME_MASTER,
+        | "event" | "durability" | "infinitemana" | "thereisnospoon" => GAME_MASTER,
         _ => return None,
     })
 }
@@ -66,6 +66,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "tgm" => tgm(map, g, args),
         "god" => god(map, g, args),
         "durability" => durability(map, g, args),
+        "infinitemana" | "thereisnospoon" => infinite_mana(map, g, args),
         "weather" => weather(map, g, args),
         "instance" => instance(map, g, args),
         "bg" | "battleground" => battleground(map, g, args),
@@ -1632,6 +1633,36 @@ fn durability(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     Some(format!(
         "Durability off: your gear doesn't wear ({mended} items mended)."
     ))
+}
+
+/// `.infinitemana [on|off]` (`.thereisnospoon`): a GM's spells cost no
+/// mana, and on fills it (mangos-classic has none; later cores'
+/// `.cheat power`). Kept on the character; no argument turns it over.
+fn infinite_mana(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
+    let p = map.players.get_mut(&g)?;
+    let on = match args {
+        [] => !p.row.state.infinite_mana,
+        [a] if a.eq_ignore_ascii_case("on") => true,
+        [a] if a.eq_ignore_ascii_case("off") => false,
+        _ => return Some("Usage: .infinitemana [on|off]".into()),
+    };
+    p.row.state.infinite_mana = on;
+    if on {
+        let max = p.fields.get_u32(UNIT_FIELD_MAXPOWER1);
+        p.fields.set_u32(UNIT_FIELD_POWER1, max);
+    }
+    Some(if on {
+        "Infinite mana on: there is no spoon.".into()
+    } else {
+        "Infinite mana off.".into()
+    })
+}
+
+/// Whether `g`'s spells take no mana of it (`.infinitemana`).
+pub fn infinite_mana_of(map: &Map, g: Guid) -> bool {
+    map.players
+        .get(&g)
+        .is_some_and(|p| p.row.state.infinite_mana)
 }
 
 /// Whether a player is undying (`.god`): hurt, never below 1 health.

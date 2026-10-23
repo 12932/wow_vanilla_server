@@ -221,6 +221,9 @@ pub struct CharacterState {
     /// blows, a spirit healer or a spell (false, the default, wears as
     /// usual).
     pub no_wear: bool,
+    /// A GM's `.infinitemana` (`.thereisnospoon`): their spells cost no
+    /// mana, and they can always pay it (false, the default, pays as usual).
+    pub infinite_mana: bool,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

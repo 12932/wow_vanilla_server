@@ -791,6 +791,9 @@ pub(crate) fn unpayable(map: &Map, caster: Guid, s: &SpellTemplate, cost: u32) -
     if cost == 0 || crate::game::map::gm_dev::invulnerable(map, caster) {
         return None;
     }
+    if power_index(s) == Some(0) && crate::game::map::gm_dev::infinite_mana_of(map, caster) {
+        return None;
+    }
     let f = map.unit_fields(caster)?;
     let Some(index) = power_index(s) else {
         return (f.get_u32(UNIT_FIELD_HEALTH) <= cost).then_some(fail::CASTER_AURASTATE);
@@ -812,6 +815,10 @@ fn pay(map: &mut Map, caster: Guid, s: &SpellTemplate, cost: u32) {
     let now = map.now;
     // A GM in god mode pays nothing (Thistle Tea's `Resources.spend_power`).
     if crate::game::map::gm_dev::invulnerable(map, caster) {
+        return;
+    }
+    // `.infinitemana`: no mana taken.
+    if power_index(s) == Some(0) && crate::game::map::gm_dev::infinite_mana_of(map, caster) {
         return;
     }
     let Some(index) = power_index(s) else {

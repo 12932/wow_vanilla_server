@@ -256,3 +256,53 @@ async fn an_items_spell_costs_no_power() {
     assert_eq!(mana, 100, "nothing taken");
     assert_eq!(spent, None, "no five-second rule");
 }
+
+/// `.infinitemana` (and `.thereisnospoon`): on fills a GM's mana, a mana
+/// spell is allowed with none and takes none, a rage one still costs rage;
+/// off, mana is checked and taken again.
+#[tokio::test]
+async fn infinite_mana_takes_no_mana_until_turned_off() {
+    let realm = fast_realm(costs);
+    let (mut c, a, map) = human(&realm, "P5IM", "Spoonless", Class::Mage).await;
+    map.query(move |m| {
+        kit::ready(m, a, 60, &[]);
+        set_power(m, a, 0, 0);
+    })
+    .await
+    .unwrap();
+    c.say(".thereisnospoon").await;
+    c.system_message("Infinite mana on").await;
+    let out = map
+        .query(move |m| {
+            let filled = power(m, a, 0);
+            set_power(m, a, 0, 0);
+            set_power(m, a, 1, 0);
+            let mana = m.realm.data.spells.get(HEAL).cloned().unwrap();
+            let rage = m.realm.data.spells.get(HEAL + 1).cloned().unwrap();
+            let checked = (
+                checks::check(m, a, &mana, &self_at(a), None, false, &Mods::default()),
+                checks::check(m, a, &rage, &self_at(a), None, false, &Mods::default()),
+            );
+            let (began, healed) = through(m, a, HEAL);
+            (filled, checked, began, healed, power(m, a, 0))
+        })
+        .await
+        .unwrap();
+    let (filled, checked, began, healed, left) = out;
+    assert!(filled > 0, "on fills it");
+    assert_eq!(checked, (None, Some(fail::NO_POWER)), "mana free, rage not");
+    assert!(began && healed);
+    assert_eq!(left, 0, "nothing taken");
+    c.say(".infinitemana off").await;
+    c.system_message("Infinite mana off").await;
+    let checked = map
+        .query(move |m| {
+            set_power(m, a, 0, 0);
+            // Another mana spell: the heal's own cooldown is running.
+            let mana = m.realm.data.spells.get(DEAR).cloned().unwrap();
+            checks::check(m, a, &mana, &self_at(a), None, false, &Mods::default())
+        })
+        .await
+        .unwrap();
+    assert_eq!(checked, Some(fail::NO_POWER));
+}
