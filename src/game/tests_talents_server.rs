@@ -614,3 +614,80 @@ async fn character_spells_teaches_the_quests_and_books_class_spells() {
         "(race, class, level, spell, known): {wrong:?}"
     );
 }
+
+const COMMAND_HUNTER: u32 = 20_576;
+
+const COMMAND_WARLOCK: u32 = 20_575;
+
+const HUNTER_PET_PASSIVE: u32 = 8875;
+
+const DEMON_PASSIVES: [u32; 4] = [18_727, 18_728, 18_729, 18_730];
+
+const FEL_STAMINA_5: u32 = 18_752;
+
+const IMP_HEALTH_PASSIVE: u32 = 18_737;
+
+/// The amounts of `g`'s auras of `spells`.
+fn amounts_of(m: &Map, g: Guid, spells: &[u32]) -> Vec<(u32, i32)> {
+    auras::auras(m, g).map_or_else(Vec::new, |a| {
+        a.holders
+            .iter()
+            .filter(|h| spells.contains(&h.spell))
+            .flat_map(|h| h.effects.iter().map(move |x| (h.spell, x.amount)))
+            .collect()
+    })
+}
+
+/// The orcs' Command: its modifiers (5 to all effects of the pets' hidden
+/// passives) give an orc hunter's beast and an orc warlock's imp 5% more
+/// damage (8875's and the demon passive's damage done, 0 without it): a
+/// demon has its family's passives too (mangos's `LearnPetPassives`), and
+/// so Fel Stamina's 15% more health at rank 5 on the imp's (18737).
+#[tokio::test]
+#[ignore = "extended"]
+async fn command_gives_an_orcs_pet_five_percent_damage() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_h, h, map) = enter(&realm, "TSRVCM1", "Comma", Race::Orc, Class::Hunter).await;
+    let (_w, w, _) = enter(&realm, "TSRVCM2", "Commb", Race::Orc, Class::Warlock).await;
+    let (_t, t, _) = enter(&realm, "TSRVCM3", "Commc", Race::Troll, Class::Hunter).await;
+    let (_f, f, hmap) = enter(&realm, "TSRVCM4", "Commd", Race::Human, Class::Warlock).await;
+    let stamina = on(&hmap, move |m| {
+        ready(m, f, 60, &[SUMMON_IMP, FEL_STAMINA_5]);
+        spells::cast_triggered(m, f, SUMMON_IMP, None);
+        amounts_of(m, pet_of(m, f).unwrap(), &[IMP_HEALTH_PASSIVE])
+    })
+    .await;
+    assert_eq!(
+        stamina,
+        vec![(IMP_HEALTH_PASSIVE, 15)],
+        "Fel Stamina on the imp"
+    );
+    let out = on(&map, move |m| {
+        ready(m, h, 60, &[]);
+        ready(m, t, 60, &[]);
+        ready(m, w, 60, &[SUMMON_IMP]);
+        let racial = (
+            m.players[&h].spells.contains(&COMMAND_HUNTER),
+            m.players[&w].spells.contains(&COMMAND_WARLOCK),
+        );
+        crate::game::map::gm_dev::command(m, h, "pet", &[]);
+        crate::game::map::gm_dev::command(m, t, "pet", &[]);
+        spells::cast_triggered(m, w, SUMMON_IMP, None);
+        let beast = amounts_of(m, pet_of(m, h).unwrap(), &[HUNTER_PET_PASSIVE]);
+        let trolls = amounts_of(m, pet_of(m, t).unwrap(), &[HUNTER_PET_PASSIVE]);
+        let imp = amounts_of(m, pet_of(m, w).unwrap(), &DEMON_PASSIVES);
+        (racial, beast, trolls, imp)
+    })
+    .await;
+    assert_eq!(out.0, (true, true), "the orcs know Command");
+    assert_eq!(out.1, vec![(HUNTER_PET_PASSIVE, 5)], "an orc's beast");
+    assert_eq!(out.2, vec![(HUNTER_PET_PASSIVE, 0)], "a troll's beast");
+    assert!(
+        !out.3.is_empty() && out.3.iter().all(|(_, a)| *a == 5),
+        "an orc's imp: {:?}",
+        out.3
+    );
+}
