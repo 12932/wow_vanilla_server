@@ -3,8 +3,9 @@
 //! (`cities.rs`: Stormwind's Royal Guard, an Ironforge Guard, a Darnassus
 //! Sentinel, a Kor'kron Elite, a Deathguard Elite, a Bluffwatcher), of
 //! level 62 and elite, with the Tower Point Warmaster's (14776) toughness
-//! and damage and its fight (vmangos's `npc_WarMaster`, as Thistle Tea
-//! ports it for Alterac Valley), but for its Charge, which goes for a
+//! and damage and its fight (vmangos's `npc_WarMaster`, as
+//! `av_scripts::warmaster` builds it for Alterac Valley, standing through
+//! its Whirlwinds), but for its Charge, which goes for a
 //! healer; and weapons of its own, a weapon in each hand swung as a
 //! creature with one in its off hand swings (`combat::dual_wields`). They
 //! are defined here and added to the world's data after it loads

@@ -786,3 +786,309 @@ async fn a_ritual_raises_its_lord_only_through_her_waiting_summoner() {
     assert_eq!(channel, 0, "Alice let go");
     assert!(circle_left, "the circle stays");
 }
+
+/// `g` at `at`, standing, free to move as its fight takes it.
+fn place(m: &mut Map, g: Guid, at: Vector3d) {
+    if let Some(c) = m.creature_mut(g) {
+        c.position = at;
+        c.motion = crate::game::map::creature::Motion::Idle { until: None };
+    }
+}
+
+fn no_gcd(m: &mut Map, g: Guid) {
+    if let Some(c) = m.caster_mut(g) {
+        c.gcd_until = None;
+    }
+}
+
+/// Where `g` stands, after `n` of the map's updates.
+async fn after_updates(map: &MapHandle, g: Guid, n: u32) -> Vector3d {
+    for _ in 0..n {
+        harness::an_update(map).await;
+    }
+    map.query(move |m| m.position_of(g))
+        .await
+        .flatten()
+        .unwrap()
+}
+
+/// Waits until `g` has moved off `from`.
+async fn moves_off(map: &MapHandle, g: Guid, from: Vector3d) -> bool {
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    while tokio::time::Instant::now() < deadline {
+        let at = map.query(move |m| m.position_of(g)).await.flatten();
+        if at.is_some_and(|p| crate::game::map::combat::dist(p, from) > 0.5) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
+}
+
+/// A marshal in reach of Grom, fighting him, with its Whirlwind, Cleave
+/// and Charge events.
+async fn a_marshal_beside_grom() -> (Client, Client, Guid, MapHandle, Guid, [u32; 3]) {
+    const MARSHAL: u32 = 14762;
+    let mut d = valley();
+    npc(&mut d, MARSHAL, "Dun Baldar North Marshal", 35);
+    spawn_at(&mut d, 170601, MARSHAL, (100.0, 50.0, 0.0));
+    instants(
+        &mut d,
+        &[av_scripts::CHARGE, av_scripts::CLEAVE],
+        &[av_scripts::WHIRLWIND, av_scripts::DEMORALIZING_SHOUT],
+    );
+    av_scripts::install(&mut d);
+    let realm = harness::realm_with(d);
+    let (a, _, mut b, grom, map) = pair(&realm).await;
+    put(&map, &mut b, 115.0, 50.0, 0.0).await;
+    let marshal = map.query(|m| creature(m, MARSHAL)).await.flatten().unwrap();
+    b.sees_on(&map, marshal).await;
+    let events = map
+        .query(move |m| {
+            ai::attacked(m, marshal, grom);
+            place(
+                m,
+                marshal,
+                Vector3d {
+                    x: 113.0,
+                    y: 50.0,
+                    z: 0.0,
+                },
+            );
+            [
+                av_scripts::WHIRLWIND,
+                av_scripts::CLEAVE,
+                av_scripts::CHARGE,
+            ]
+            .map(|s| casting(m, MARSHAL, s))
+        })
+        .await
+        .unwrap();
+    (a, b, grom, map, marshal, events)
+}
+
+/// vmangos's `npc_WarMaster`: for the four seconds of its two Whirlwinds a
+/// warmaster stands (`UNIT_STATE_ROOT`) and casts nothing else (its global
+/// cooldown): its victim walking off, it neither follows nor charges, and
+/// a Cleave due meanwhile waits; at the end it goes after them, charging
+/// and cleaving at its next look.
+#[tokio::test]
+async fn a_whirlwinding_warmaster_stands_and_holds_its_other_spells_until_it_ends() {
+    let (_a, mut b, grom, map, marshal, [whirlwind, cleave, charge]) =
+        a_marshal_beside_grom().await;
+    b.clear();
+    let at = map
+        .query(move |m| {
+            due_now(m, marshal, whirlwind);
+            m.position_of(marshal).unwrap()
+        })
+        .await
+        .unwrap();
+    // Grom walks off, past Charge's least; a Cleave falls due.
+    put(&map, &mut b, 130.0, 50.0, 0.0).await;
+    map.query(move |m| {
+        no_gcd(m, marshal);
+        due(m, marshal, cleave);
+        due(m, marshal, charge);
+    })
+    .await;
+    let first = casts_by(&mut b, marshal, Duration::from_millis(800)).await;
+    let held = after_updates(&map, marshal, 4).await;
+    map.query(move |m| {
+        no_gcd(m, marshal);
+        hurry_runs(m, Some(marshal), Duration::from_millis(2_000));
+    })
+    .await;
+    let second = casts_by(&mut b, marshal, Duration::from_millis(800)).await;
+    let (still, state) = {
+        let p = after_updates(&map, marshal, 4).await;
+        let state = map
+            .query(move |m| {
+                (
+                    event_ai::phase(m, marshal),
+                    event_ai::combat_movement(m, marshal),
+                    m.creature(marshal).map(|c| c.combat.victim),
+                )
+            })
+            .await
+            .unwrap();
+        (p, state)
+    };
+    assert_eq!(
+        (spells_of(&first), spells_of(&second)),
+        (vec![av_scripts::WHIRLWIND], vec![av_scripts::WHIRLWIND]),
+        "nothing but its Whirlwinds"
+    );
+    assert_eq!((held, still), (at, at), "it stands where it whirls");
+    assert_eq!(
+        state,
+        (av_scripts::WHIRLING, false, Some(grom)),
+        "whirling, rooted, on Grom"
+    );
+    // The four seconds are up: it moves, and its Cleave and Charge go.
+    map.query(move |m| {
+        no_gcd(m, marshal);
+        hurry_runs(m, Some(marshal), Duration::from_millis(2_000));
+    })
+    .await;
+    assert!(moves_off(&map, marshal, at).await, "it goes after Grom");
+    let after = casts_by(&mut b, marshal, Duration::from_millis(1_500)).await;
+    let after = spells_of(&after);
+    assert!(
+        after.contains(&av_scripts::CLEAVE) && after.contains(&av_scripts::CHARGE),
+        "{after:?}"
+    );
+}
+
+/// A warmaster out of its fight mid-whirl (its scripts stopped, the end of
+/// the whirl among them) moves again in its next.
+#[tokio::test]
+async fn a_warmaster_that_evades_mid_whirl_moves_in_its_next_fight() {
+    let (_a, mut b, grom, map, marshal, [whirlwind, ..]) = a_marshal_beside_grom().await;
+    map.query(move |m| due_now(m, marshal, whirlwind)).await;
+    let whirling = map
+        .query(move |m| event_ai::phase(m, marshal))
+        .await
+        .unwrap();
+    assert_eq!(whirling, av_scripts::WHIRLING);
+    map.query(move |m| ai::enter_evade(m, marshal)).await;
+    let state = map
+        .query(move |m| {
+            (
+                event_ai::phase(m, marshal),
+                event_ai::combat_movement(m, marshal),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(state, (0, true), "out of the whirl as it evades");
+    // Home again, it takes Grom on from across the room and goes to him.
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    loop {
+        let home = map
+            .query(move |m| m.creature(marshal).is_some_and(|c| !c.evading))
+            .await
+            .unwrap();
+        if home {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "it gets home");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    put(&map, &mut b, 130.0, 50.0, 0.0).await;
+    let at = map
+        .query(move |m| {
+            ai::attacked(m, marshal, grom);
+            m.position_of(marshal).unwrap()
+        })
+        .await
+        .unwrap();
+    assert!(moves_off(&map, marshal, at).await, "it goes after Grom");
+}
+
+/// vmangos's `npc_DrekThar`: his Whirlwind holds him two seconds
+/// (`m_uiIsInWhirlwind_Timer`), and a Knockdown due meanwhile waits for
+/// its end (his global cooldown); then he goes after his victim. Out of
+/// his fight mid-whirl, he moves again.
+#[tokio::test]
+async fn drek_thars_whirlwind_holds_him_two_seconds_and_his_knockdown_waits() {
+    let mut d = valley();
+    if let Some(s) = d
+        .creature_spawns
+        .get_mut(&AV)
+        .and_then(|s| s.iter_mut().find(|s| s.entries == [DREK_THAR]))
+    {
+        (s.x, s.y, s.z) = DREK_HOME;
+    }
+    instants(&mut d, &[19128], &[av_scripts::WHIRLWIND, 28747]);
+    av_scripts::install(&mut d);
+    let realm = harness::realm_with(d);
+    let (_a, _, mut b, grom, map) = pair(&realm).await;
+    put(&map, &mut b, DREK_HOME.0 + 2.0, DREK_HOME.1, DREK_HOME.2).await;
+    let drek = map
+        .query(|m| creature(m, DREK_THAR))
+        .await
+        .flatten()
+        .unwrap();
+    b.sees_on(&map, drek).await;
+    let home = Vector3d {
+        x: DREK_HOME.0,
+        y: DREK_HOME.1,
+        z: DREK_HOME.2,
+    };
+    let (whirlwind, knockdown) = map
+        .query(move |m| {
+            ai::attacked(m, drek, grom);
+            place(m, drek, home);
+            (
+                casting(m, DREK_THAR, av_scripts::WHIRLWIND),
+                casting(m, DREK_THAR, 19128),
+            )
+        })
+        .await
+        .unwrap();
+    b.clear();
+    map.query(move |m| due_now(m, drek, whirlwind)).await;
+    put(&map, &mut b, DREK_HOME.0 + 12.0, DREK_HOME.1, DREK_HOME.2).await;
+    map.query(move |m| {
+        no_gcd(m, drek);
+        due(m, drek, knockdown);
+    })
+    .await;
+    let during = casts_by(&mut b, drek, Duration::from_millis(800)).await;
+    let held = after_updates(&map, drek, 4).await;
+    assert_eq!(
+        spells_of(&during),
+        vec![av_scripts::WHIRLWIND],
+        "no Knockdown"
+    );
+    assert_eq!(held, home, "he stands where he whirls");
+    map.query(move |m| {
+        no_gcd(m, drek);
+        hurry_runs(m, Some(drek), Duration::from_millis(2_000));
+    })
+    .await;
+    assert!(moves_off(&map, drek, home).await, "he goes after Grom");
+    let after = casts_by(&mut b, drek, Duration::from_millis(1_500)).await;
+    assert!(spells_of(&after).contains(&19128), "{after:?}");
+    // Out of a fight mid-whirl: he moves again, fighting as before.
+    let state = map
+        .query(move |m| {
+            no_gcd(m, drek);
+            due(m, drek, whirlwind);
+            let whirling = event_ai::phase(m, drek);
+            ai::enter_evade(m, drek);
+            (
+                whirling,
+                event_ai::phase(m, drek),
+                event_ai::combat_movement(m, drek),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(state, (av_scripts::WHIRLING, 0, true));
+}
+
+/// The real data's Whirlwind: 13736 a two-second aura whose period (2000
+/// ms) triggers 15589, a blow of the weapon's plus 300 and 6 a level from
+/// its spell level, 1 (vmangos's `CalculateSpellEffectValue`): 654 more at
+/// 60, a warmaster's, and 666 at 62, an Elite Guard's.
+#[test]
+#[ignore = "extended"]
+fn the_real_whirlwind_is_a_weapon_blow_and_654_at_sixty() {
+    let Some(d) = crate::game::data::load::real_data() else {
+        return;
+    };
+    let aura = d.spells.get(av_scripts::WHIRLWIND).expect("Whirlwind");
+    let e = aura.effects[0];
+    assert_eq!((e.aura, e.amplitude, e.trigger_spell), (23, 2000, 15589));
+    let blow = d.spells.get(15589).expect("Whirlwind's blow");
+    assert_eq!(
+        blow.effects[0].effect,
+        crate::game::map::spells::EFFECT_WEAPON_DAMAGE_NOSCHOOL
+    );
+    assert_eq!(
+        [60, 62].map(|l| crate::game::map::spells::points(blow, 0, l)),
+        [654, 666]
+    );
+}

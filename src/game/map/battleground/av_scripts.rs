@@ -293,6 +293,10 @@ const LEADERS: [Leader; 4] = [
 /// A general's phases: fighting, and drawn out.
 const FIGHTING: u32 = 0;
 const LEASHED: u32 = 1;
+/// Whirling: a warmaster's (and Drek'Thar's) Whirlwind roots it, and its
+/// other spells wait (vmangos's `m_uiIsInWhirlwind_Timer` and global
+/// cooldown). Clear of a general's phases.
+pub(crate) const WHIRLING: u32 = 2;
 const LINKED_RADIUS: f32 = 100.0;
 
 /// A summoning ritual at an altar: who of the side channel into it.
@@ -1561,6 +1565,22 @@ impl<'a> Builder<'a> {
         id
     }
 
+    /// How many events `entry` has so far.
+    fn count(&self, entry: u32) -> usize {
+        self.data.ai_events.get(&entry).map_or(0, Vec::len)
+    }
+
+    /// `entry`'s events from the `since`th on don't fire in `phase`: due,
+    /// they stay due until it ends (an event's phase is looked at before
+    /// its timer starts over).
+    fn skip_in(&mut self, entry: u32, since: usize, phase: u32) {
+        if let Some(events) = self.data.ai_events.get_mut(&entry) {
+            for e in events.iter_mut().skip(since) {
+                e.inverse_phase_mask |= 1 << phase;
+            }
+        }
+    }
+
     /// A generic script of `steps`, timed by their delays.
     fn generic(&mut self, steps: Vec<ScriptStep>) -> u32 {
         self.next += 1;
@@ -1790,16 +1810,51 @@ fn leaders(b: &mut Builder) {
         vec![self_cast(15588, 0)],
     );
     barks(b, VANNDAR, [8838, 8839, 8840, 8841, 8842, 8843]);
-    // Drek'Thar.
+    // Drek'Thar (vmangos's `npc_DrekThar`): his Whirlwind holds him where
+    // he stands two seconds, and his Knockdown and Frenzy wait it out.
     b.on(DREK_THAR, EVENT_AGGRO, 0, vec![say(&[10245])]);
+    let spells = b.count(DREK_THAR);
+    let unroot = b.generic(vec![
+        ScriptStep {
+            delay_ms: 2000,
+            ..combat_movement_step(true)
+        },
+        ScriptStep {
+            delay_ms: 2000,
+            ..phase_step(FIGHTING)
+        },
+    ]);
     b.every(
         DREK_THAR,
         (8000, 12000),
         (12000, 16000),
-        vec![self_cast(whirlwind, 0)],
+        vec![
+            self_cast(whirlwind, 0),
+            combat_movement_step(false),
+            phase_step(WHIRLING),
+            start_script(unroot),
+        ],
     );
     b.every(DREK_THAR, (18000, 18000), (16000, 24000), vec![cast(19128)]);
     b.below(DREK_THAR, 30, Some(120000), vec![self_cast(28747, 0)]);
+    b.skip_in(DREK_THAR, spells, WHIRLING);
+    // Out of the fight mid-whirl, he moves again, and says his say as
+    // one fighting (his leash sets its own phase first).
+    b.on(
+        DREK_THAR,
+        EVENT_EVADE,
+        0,
+        vec![
+            step(crate::game::map::scripts::C_STOP_SCRIPTS, [0; 4]),
+            combat_movement_step(true),
+        ],
+    );
+    b.on(
+        DREK_THAR,
+        EVENT_EVADE,
+        only_in(&[WHIRLING]),
+        vec![phase_step(FIGHTING)],
+    );
     barks(b, DREK_THAR, [8844, 8845, 8846, 8847, 8848, 8849]);
     // A general drawn out goes home and says so; one whose attackers fell
     // taunts them.
@@ -1878,13 +1933,18 @@ pub(crate) enum ChargeAt {
     Picked(u32),
 }
 
-/// A marshal's or warmaster's fight (vmangos's `npc_WarMaster`, as
-/// Thistle Tea ports it): Charge, Cleave every 8 to 10 s from 8 s,
-/// Demoralizing Shout every 14 to 20 s from 4 s, Whirlwind twice, two
-/// seconds apart, every 13 to 15 s from 12 s, and Enrage below 30% (once a
-/// fight, or again every `enrage_every` ms); its scripts stop as it
-/// evades.
+/// A marshal's or warmaster's fight (vmangos's `npc_WarMaster`): Charge,
+/// Cleave every 8 to 10 s from 8 s, Demoralizing Shout every 14 to 20 s
+/// from 4 s, Whirlwind twice, two seconds apart, every 13 to 15 s from
+/// 12 s, and Enrage below 30% (once a fight, or again every
+/// `enrage_every` ms). For the four seconds of its two Whirlwinds it
+/// stands where it is (it fights on in reach, but doesn't chase) and casts
+/// nothing else: what falls due meanwhile goes as they end (vmangos's
+/// `m_uiIsInWhirlwind_Timer` root and its global cooldown; Thistle Tea's
+/// port keeps it moving). Its scripts stop as it evades, and it moves
+/// again.
 pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_every: Option<i32>) {
+    let spells = b.count(entry);
     match charge {
         ChargeAt::Victim => b.event(
             entry,
@@ -1916,22 +1976,46 @@ pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_ev
         (14000, 20000),
         vec![self_cast(DEMORALIZING_SHOUT, 0)],
     );
+    // The second Whirlwind and the end of the whirl are scripts of their
+    // own: a cast that fails ends its script, and mustn't leave the
+    // warmaster rooted.
     let again = b.generic(vec![ScriptStep {
         delay_ms: 2000,
         ..self_cast(WHIRLWIND, 0)
     }]);
+    let unroot = b.generic(vec![
+        ScriptStep {
+            delay_ms: 4000,
+            ..combat_movement_step(true)
+        },
+        ScriptStep {
+            delay_ms: 4000,
+            ..phase_step(0)
+        },
+    ]);
     b.every(
         entry,
         (12000, 12000),
         (13000, 15000),
-        vec![self_cast(WHIRLWIND, 0), start_script(again)],
+        vec![
+            self_cast(WHIRLWIND, 0),
+            combat_movement_step(false),
+            phase_step(WHIRLING),
+            start_script(again),
+            start_script(unroot),
+        ],
     );
     b.below(entry, 30, enrage_every, vec![self_cast(ENRAGE, 0)]);
+    b.skip_in(entry, spells, WHIRLING);
     b.on(
         entry,
         EVENT_EVADE,
         0,
-        vec![step(crate::game::map::scripts::C_STOP_SCRIPTS, [0; 4])],
+        vec![
+            step(crate::game::map::scripts::C_STOP_SCRIPTS, [0; 4]),
+            combat_movement_step(true),
+            phase_step(0),
+        ],
     );
 }
 

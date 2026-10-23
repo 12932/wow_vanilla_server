@@ -1528,4 +1528,35 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     spends charges only on casts not triggered. Before, a Holy Shock crit for as long as Divine Favor stayed up,
     which was for good.
 
+93. **A warmaster and Drek'Thar stand while they whirl** (2026-10-23; `fix/av-fidelity`, a fidelity finding: wvs
+    followed Thistle Tea's port, whose moduledoc says "whirlwinding leaders keep moving"). vmangos's C++
+    (`battleground_alterac.cpp`) is the reference, followed:
+    - **The warmasters and marshals** (`npc_WarMaster`): its first Whirlwind (13736, from 12 s) sets
+      `m_uiIsInWhirlwind_Timer` to 4 s and the next Whirlwind 2 s on; the second sets it 11 to 13 s on. While the
+      timer runs it has `UNIT_STATE_ROOT`: it fights in reach but doesn't chase. Each cast sets a script global
+      cooldown (Whirlwind 2 s, Cleave, Shout and Enrage 1 s, Charge 250 ms) under which nothing else is cast and
+      the other timers stay due. So for the 4 s it neither moves nor Charges, Cleaves, Shouts or Enrages. wvs's
+      warmaster kept chasing, and could Charge into the ranged and whirl among them. Now its Whirlwind event turns
+      combat movement off and puts it in a phase of its own (`av_scripts::WHIRLING`, 2, clear of a general's 0 and
+      1), which its other events skip; EventAI looks at an event's phase before its timer starts over, so one due
+      meanwhile goes at the first look (a second at most) after. Two scripts of their own follow: the second
+      Whirlwind at 2 s, and at 4 s combat movement on and phase 0 (apart, so a refused second cast, a stun, can't
+      leave it rooted). Its evade, which stops its scripts, puts movement and phase back. The Elite Guards are the
+      same fight (`elites.rs`), and stand too.
+    - **Drek'Thar** (`npc_DrekThar`): his Whirlwind (8 to 12 s, then 12 to 16) roots him 2 s, under a 2 s global
+      cooldown, so no Knockdown (19128) or Frenzy (28747) in it: the same, at 2 s and one cast. His evade stops the
+      end of the whirl and moves him again; one mid-whirl takes his phase back to fighting before his lines, so a
+      wipe still says his wipe line, and a leash his (the leash sets its own phase first).
+    - Combat movement on, as the end of the whirl sets it, overrides a sessile template's standing
+      (`event_ai::combat_movement`); none of these creatures is sessile (vmangos's `static_flags1`, the Elite
+      Guards' looks' too), so it is what they had.
+    - **Whirlwind's blow, checked, right:** 13736 is a 2 s aura whose 2 s period triggers 15589, a weapon blow
+      (effect 17) of 300 and 6 a level from spell level 1, no most level: weapon damage and 654 at 60 (the
+      warmasters'), 666 at 62 (Drek'Thar's, the Elite Guards'), as vmangos's `CalculateSpellEffectValue`; wvs's
+      `spells::points` gives the same (the extended `the_real_whirlwind_is_a_weapon_blow_and_654_at_sixty`).
+    - **Not taken:** the global cooldown outside the whirl (Cleave's, Shout's and Enrage's 1 s, Charge's 250 ms
+      holding the others back); EventAI looks once a second, so two due together go together. And a Charge with no
+      victim in its 8 to 25 yards: vmangos's waits 5 to 10 s before looking again; wvs's looks each tick, as Thistle
+      Tea's and mangos's EventAI range event do (decision 88).
+
 ## Left for later, and why
