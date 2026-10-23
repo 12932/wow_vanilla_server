@@ -111,6 +111,16 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
 - **The mage's dive:** the top 12% of mages by skill, at 5 or more players, sparing their own side.
 - **Fan-out:** one ring at half the attackers' reach (mangos's spot is a little wider, about 3.8 yards on a player);
   a lone attacker stays where it is.
+- **Raid tactics** (peon's `brain::tactics`, its knobs in the tuning's `[tactics]`):
+  - they switch on only in a PvE raid of 6 or more with no enemy players;
+  - the kill order is boss-first (adds-first killed no warmaster and put a tenth of the damage on Drek'Thar);
+  - Fear isn't used as crowd control (`cc_fear` off: feared mobs run into other packs);
+  - damage dealers open 3 s after the tank and hold at 80% of its threat (90% at range);
+  - creatures not fighting the raid, or out of reach on foot, are ignored (the Frostwolf Bowmen);
+  - defensives fire at 1.5 s from death;
+  - a cost: party-60 deaths 1 to 4, every round still won.
+- **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
+  goes in at the next quiet moment.
 
 ## In short
 - **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an
