@@ -758,8 +758,8 @@ const START_V: Vector3d = Vector3d {
 };
 
 /// The warmaster's Whirlwind twice in a row, two seconds apart (the second
-/// a script timed by its delay, not at once with the first); and Enrage
-/// below 30%, once a fight.
+/// a script timed by its delay, not at once with the first), standing
+/// four; and Enrage below 30%, once a fight.
 #[tokio::test]
 async fn the_elite_guard_whirlwinds_twice_two_seconds_apart_and_enrages_below_thirty_percent() {
     let (_realm, mut a, ga, map) = setup_with(elite_world(), Class::Warrior).await;
@@ -786,7 +786,13 @@ async fn the_elite_guard_whirlwinds_twice_two_seconds_apart_and_enrages_below_th
             .collect::<Vec<_>>()
     })
     .await;
-    assert_eq!(pending, [(2000, WHIRLWIND)], "the second waits two seconds");
+    // The second waits two seconds; the end of the whirl (combat movement
+    // on again) four.
+    assert_eq!(
+        pending,
+        [(2000, WHIRLWIND), (4000, 1)],
+        "the second waits two seconds"
+    );
     a.wait_for("the first", |m| spell_go(m, WHIRLWIND, e).then_some(()))
         .await;
     let first = tokio::time::Instant::now();
@@ -795,6 +801,8 @@ async fn the_elite_guard_whirlwinds_twice_two_seconds_apart_and_enrages_below_th
     let apart = first.elapsed();
     assert!(apart >= Duration::from_millis(1800), "{apart:?} apart");
     let enraged = on(&map, move |m| {
+        // Its whirl over: what it holds back meanwhile goes after.
+        super::tests_p3_scripts::hurry_runs(m, Some(e), Duration::from_secs(4));
         let max = m.creature(e).unwrap().fields.get_u32(UNIT_FIELD_MAXHEALTH);
         let mut seen = Vec::new();
         for (pct, strip) in [(40, false), (25, true), (20, false)] {
