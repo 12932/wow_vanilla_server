@@ -333,8 +333,26 @@ const FAMILY_SHAMAN: u32 = 11;
 const DISPEL_POISON: u32 = 4;
 const DISPEL_CURSE: u32 = 2;
 
+/// The paladin's blessings one of each paladin's may be on a unit:
+/// mangos-classic's spell group 7 ("Blessing", `UNIQUE_PER_CASTER`), its
+/// 1.12 spells. Might, Wisdom, Kings, Salvation, Light and Sanctuary, their
+/// greater blessings, Protection and Sacrifice; not Freedom, which the
+/// group leaves out though its family flags are a blessing's, so it stands
+/// beside its paladin's Might (nor the creatures' Improved Blessing of
+/// Protection and Shield of Rajaxx).
+const BLESSINGS: [u32; 35] = [
+    1022, 5599, 10_278, // Protection
+    1038, 25_895, // Salvation
+    6940, 20_729, // Sacrifice
+    19_740, 19_834, 19_835, 19_836, 19_837, 19_838, 25_291, 25_782, 25_916, // Might
+    19_742, 19_850, 19_852, 19_853, 19_854, 25_290, 25_894, 25_918, // Wisdom
+    19_977, 19_978, 19_979, 25_890, // Light
+    20_217, 25_898, // Kings
+    20_911, 20_912, 20_913, 20_914, 25_899, // Sanctuary
+];
+
 /// The exclusive kind of a spell, as Thistle Tea's `exclusive_category`
-/// works it out.
+/// works it out (the blessings as mangos-classic groups them).
 pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
     if matches!(s.id, 28418..=28420) {
         return Some(Exclusive::GeneralsWarcry);
@@ -410,7 +428,7 @@ pub fn exclusive(s: &SpellTemplate, elixir: Option<u32>) -> Option<Exclusive> {
         if flags & 0x0A00_0200 != 0 {
             return Some(Exclusive::PaladinSeal);
         }
-        if flags & 0x1000_0100 != 0 {
+        if BLESSINGS.contains(&s.id) {
             return Some(Exclusive::PaladinBlessing);
         }
         if (flags & 0x2018_0400 != 0 && s.base_level != 0)
@@ -705,12 +723,38 @@ pub fn positive(s: &SpellTemplate) -> bool {
     !s.effects.iter().any(|e| harmful_effect(s, e))
 }
 
+/// Whether an implicit target is a friend's: mangos's `TARGET_HELPFUL`
+/// (the caster, its pet or master, a friend, friends about a place or in
+/// a cone, a chain heal's), `TARGET_PARTY` and `TARGET_GROUP` (a party or
+/// raid member, those about the caster or the target).
+pub fn friendly_target(t: u32) -> bool {
+    matches!(
+        t,
+        1 | 3 | 5 | 14 | 20 | 21 | 27 | 29..=31 | 33..=35 | 37 | 45 | 56..=59 | 61 | 62
+    )
+}
+
+/// Whether an implicit target is a foe's: mangos's `TARGET_HARMFUL`.
+pub fn hostile_target(t: u32) -> bool {
+    matches!(t, 2 | 6 | 13 | 15 | 16 | 24 | 28 | 36 | 54)
+}
+
 /// Whether effect `e` of `s` harms: damage, a harmful aura, a buff's
 /// aura turned against its target, a hostile target, an instant kill.
+///
+/// An aura is judged by its target first, as mangos's `IsPositiveEffect`
+/// does: one put on a friend (a friendly implicit target, and no hostile
+/// one) helps whatever it does, unless the spell says it is a debuff
+/// (`positive`'s vmangos negative and `SPELL_ATTR_AURA_IS_DEBUFF`).
+/// Blessing of Protection's pacify and Divine Shield's are a friend's
+/// shield, not an attack.
 pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEffect) -> bool {
+    let on_a_friend = (friendly_target(e.target_a) || friendly_target(e.target_b))
+        && !hostile_target(e.target_a)
+        && !hostile_target(e.target_b);
     {
         matches!(e.effect, 2 | 9 | 17 | 31 | 58 | 62 | 121)
-            || matches!(
+            || !on_a_friend && matches!(
                 e.aura,
                 AURA_PERIODIC_DAMAGE
                     | AURA_MOD_STUN
@@ -734,7 +778,7 @@ pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEff
                     | AURA_TRANSFORM
                     | AURA_MOD_DETECT_RANGE
             )
-            || (matches!(
+            || !on_a_friend && (matches!(
                 e.aura,
                 AURA_MOD_STAT
                     | AURA_MOD_RESISTANCE
@@ -755,7 +799,7 @@ pub fn harmful_effect(s: &SpellTemplate, e: &crate::game::data::spells::SpellEff
                     | AURA_MOD_PERCENT_STAT
                     | AURA_MOD_TOTAL_STAT_PERCENTAGE
             ) && e.base_points + e.base_dice < 0)
-            || (matches!(
+            || !on_a_friend && (matches!(
                 e.aura,
                 AURA_MOD_DAMAGE_TAKEN | AURA_MOD_DAMAGE_PERCENT_TAKEN | AURA_MOD_MELEE_DAMAGE_TAKEN
             ) && e.base_points + e.base_dice > 0)

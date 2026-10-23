@@ -55,10 +55,13 @@ pub fn applied(map: &mut Map, target: Guid, h: &Holder) {
         {
             return false;
         }
-        // A dispel immunity takes the helpful of its type too: Faerie
-        // Fire's, stealth and invisibility.
+        // A dispel immunity takes the helpful of its type too, and a state
+        // immunity every aura of its kind (mangos's
+        // `HandleAuraModStateImmunity`): Faerie Fire's, stealth and
+        // invisibility.
         if o.positive {
-            return dispels.contains(&o.dispel);
+            return dispels.contains(&o.dispel)
+                || o.effects.iter().any(|x| kinds.contains(&x.kind));
         }
         let mechanic = |m: u32| m > 0 && mechanics & (1 << (m - 1).min(63)) != 0;
         let mechanic_hit = mechanic(o.mechanic)

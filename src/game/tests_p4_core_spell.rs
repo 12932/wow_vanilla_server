@@ -63,6 +63,30 @@ fn debuffs_at_enemies_are_hostile_and_heals_and_buffs_at_allies_are_not() {
     assert!(positive(&one(6, AURA_MOD_STAT, 21, 0)));
 }
 
+/// An aura is judged by its target first, as mangos-classic's
+/// `IsPositiveEffect` does: a pacify (25) or a stun (12) at a raid member
+/// (57), a friend (21) or the caster (1) helps (Blessing of Protection,
+/// Divine Intervention, Ice Block), unless the spell is marked a debuff or
+/// vmangos's negative (Forbearance); at an enemy it harms, and so does
+/// damage at a friend.
+#[test]
+fn an_aura_at_a_friend_helps_unless_marked_harmful() {
+    for t in [1, 21, 57] {
+        assert!(positive(&one(6, 25, t, 0)), "pacify at {t}");
+        assert!(positive(&one(6, 12, t, 0)), "stun at {t}");
+    }
+    let mut debuff = one(6, 25, 21, 0);
+    debuff.attributes[0] |= crate::game::data::spells::ATTR_DEBUFF;
+    assert!(!positive(&debuff));
+    let mut negative = one(6, 12, 1, 0);
+    negative.custom_flags = CUSTOM_NEGATIVE;
+    assert!(!positive(&negative));
+    assert!(!positive(&one(6, 25, 6, 0)));
+    // A friend's target and an enemy's: harmful.
+    assert!(!positive(&one(6, 25, 21, 6)));
+    assert!(!positive(&one(2, 0, 21, 0)));
+}
+
 #[test]
 fn a_finishers_duration_climbs_a_fifth_a_point_to_its_most_at_five() {
     let d = |combo| spells::combo_duration(6_000, 16_000, combo);

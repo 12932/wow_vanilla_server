@@ -786,8 +786,8 @@ fn blessings(d: &mut GameData) {
 
 /// A ranked buff at a friend goes on no one more than ten levels below its
 /// spell level, 38 for one of 48; unranked, passive, at the caster, not an
-/// aura, of a harmful amount, at an enemy or marked harmful, it has no
-/// floor; a helpful aura effect beside a harmful one keeps it, and a
+/// aura, at an enemy or marked harmful, it has no floor (a harmful amount
+/// at a friend has one); a helpful aura effect beside a harmful one keeps it, and a
 /// party's aura has it though aimed at the caster (Thistle Tea's
 /// `AuraRank.select` and `minimum_level`; mangos's
 /// `SelectAuraRankForLevel`, by each effect).
@@ -807,13 +807,16 @@ fn a_ranked_buffs_floor_and_what_has_none() {
         with(&|s| s.attributes[0] |= crate::game::data::spells::ATTR_PASSIVE),
         with(&|s| s.effects[0].target_a = 1),
         with(&|s| s.effects[0].effect = 10),
-        with(&|s| s.effects[0].base_points = -11),
         with(&|s| s.effects[0].target_a = 6),
         with(&|s| s.custom_flags = crate::game::data::spells::CUSTOM_NEGATIVE),
     ];
     for (i, s) in exempt.iter().enumerate() {
         assert_eq!(minimum_level(&d, s), 0, "exempt {i}");
     }
+    // A harmful amount at a friend is a friend's aura still (mangos's
+    // `IsPositiveEffect` goes by the target).
+    let lowered = with(&|s| s.effects[0].base_points = -11);
+    assert_eq!(minimum_level(&d, &lowered), 38, "a lowering at a friend");
     let mixed = with(&|s| s.effects[1] = damage(10));
     assert_eq!(minimum_level(&d, &mixed), 38, "a buff beside a blow");
     let party = with(&|s| {
