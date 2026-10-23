@@ -128,6 +128,8 @@ mod tests_gear_unique;
 #[cfg(test)]
 mod tests_ghost;
 #[cfg(test)]
+mod tests_blessings;
+#[cfg(test)]
 mod tests_gifts;
 #[cfg(test)]
 mod tests_gm_durability;

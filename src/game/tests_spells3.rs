@@ -615,7 +615,9 @@ async fn vanish_and_blade_flurry() {
         .query(move |m| {
             ready(m, r, 60, &[1784, 1856, 13877]);
             // Vanish: the root goes, and the rogue is stealthed.
-            let root = plain_aura(990_302, auras::AURA_MOD_ROOT, 0);
+            // An enemy's root (at its caster, an aura helps).
+            let mut root = plain_aura(990_302, auras::AURA_MOD_ROOT, 0);
+            root.effects[0].target_a = 6;
             let kobold = dummy(m, r, 60, 3.0);
             let _ = auras::apply_spell(m, kobold, r, &root, &[(0, 1)], auras::Context::default());
             let rooted = has(m, r, 990_302);

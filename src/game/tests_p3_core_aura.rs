@@ -150,6 +150,16 @@ fn data() -> GameData {
     let mut passive = aura_spell(PASSIVE_ARMOR, ten_minutes, &[(AURA_MOD_RESISTANCE, 1)]);
     passive.attributes[0] |= sd::ATTR_PASSIVE;
     all.extend([stuck, passive]);
+    // The harmful ones are aimed at an enemy, as their spells are: an aura
+    // at its caster helps whatever it does (mangos's `IsPositiveEffect`).
+    for s in all
+        .iter_mut()
+        .filter(|s| [NOVA, CHILL, COLD_SNAP, CHILLED, POLYMORPH].contains(&s.id))
+    {
+        for e in s.effects.iter_mut().filter(|e| e.effect != 0) {
+            e.target_a = 6;
+        }
+    }
     all.extend([
         aura_spell(
             CAT_FORM,

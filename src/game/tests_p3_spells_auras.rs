@@ -234,12 +234,15 @@ async fn detect_magic_shows_a_units_auras_while_one_is_on_it() {
 /// Made-up debuffs, worth 3 to the aura bar (damage taken), and periodic
 /// damage worth 1, in the data so their worth can be looked up.
 fn bar_spells(d: &mut crate::game::data::GameData) {
+    // Debuffs, aimed at an enemy (at its caster, an aura helps).
     for i in 0..20 {
         let mut s = made_up(990_300 + i, 6, auras::AURA_MOD_DAMAGE_TAKEN, 127, 1);
         s.duration_index = 21;
+        s.effects[0].target_a = 6;
         d.spells.spells.insert(s.id, s);
         let mut s = made_up(990_400 + i, 6, auras::AURA_PERIODIC_DAMAGE, 0, 1);
         s.effects[0].amplitude = 1000;
+        s.effects[0].target_a = 6;
         s.school = 0;
         d.spells.spells.insert(s.id, s);
     }

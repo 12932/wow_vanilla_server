@@ -398,6 +398,8 @@ async fn the_smaller_spell_scripts() {
             // The druid's cleanse shakes off a root.
             let mut root = plain_aura(990_600, auras::AURA_MOD_ROOT, 0);
             root.mechanic = 7;
+            // An enemy's (at its caster, an aura helps).
+            root.effects[0].target_a = 6;
             let _ = auras::apply_spell(m, kobold, r, &root, &[(0, 1)], auras::Context::default());
             spells::cast_triggered(m, r, 9033, Some(r));
             let cleansed = !has(m, r, 990_600);

@@ -393,10 +393,12 @@ async fn addon_auras_custom_flags_and_single_targets() {
 }
 
 /// A root.
+/// A root, an enemy's (at its caster, an aura helps).
 fn plain_aura_root(id: u32) -> crate::game::data::spells::SpellTemplate {
     let mut s = plain_aura_done(id);
     s.effects[0].aura = auras::AURA_MOD_ROOT;
     s.effects[0].misc_value = 0;
+    s.effects[0].target_a = 6;
     s
 }
 
