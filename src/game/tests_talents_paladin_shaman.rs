@@ -14,10 +14,15 @@ use super::tests_p3_combat::equip;
 use super::tests_p3_spells_kit::{self as kit, at, cast_fresh, health};
 use crate::game::Realm;
 use crate::game::fields::*;
-use crate::game::map::spells::{self, Targets};
+use crate::game::map::spells::{self, Targets, mods};
 use crate::game::map::{Map, MapHandle};
 use crate::game::social::groups;
 
+const DIVINE_FAVOR: u32 = 20216;
+const HOLY_LIGHT: u32 = 635;
+const FLASH_OF_LIGHT_HEAL: u32 = 19993;
+const FLASH_OF_LIGHT: u32 = 19750;
+const HOLY_SHOCK: u32 = 20473;
 const SEAL_OF_RIGHTEOUSNESS: u32 = 20154;
 const IMPROVED_SOR_5: u32 = 20332;
 const STRENGTH_OF_EARTH_5: u32 = 25361;
@@ -238,4 +243,48 @@ async fn improved_seal_of_righteousness_raises_the_seal() {
     .await;
     assert!(out[0] > 0, "{out:?}");
     assert_eq!(out[1], out[0] * 115 / 100, "{out:?}");
+}
+
+/// Divine Favor's crit is Holy Light's (a direct heal by vmangos's
+/// `spell_effect_mod`, its flag 0x80000000 added to the mask as mangos's
+/// `spell_affect` 0xC0200000 had it) and Flash of Light's heal's (19993,
+/// 0x2000 in the DBC's mask), and its one charge goes with the heal that
+/// used it: a Holy Light's, a Holy Shock's.
+#[tokio::test]
+#[ignore = "extended"]
+async fn divine_favor_crits_holy_light_flash_and_shock_and_goes_with_the_first() {
+    let Some(realm) = realm() else { return };
+    let (_c, p, map) = kit::player(&realm, "TPSDF1", "Favora", Race::Human, Class::Paladin).await;
+    let out = on(&map, move |m| {
+        kit::ready(
+            m,
+            p,
+            60,
+            &[DIVINE_FAVOR, HOLY_LIGHT, FLASH_OF_LIGHT, HOLY_SHOCK],
+        );
+        let data = m.realm.data.clone();
+        let crit = |m: &Map, id: u32| {
+            mods::for_spell(m, p, data.spells.get(id).unwrap()).flat[mods::OP_CRITICAL_CHANCE]
+        };
+        assert!(cast_fresh(m, p, DIVINE_FAVOR, at(p)));
+        let crits = (crit(m, HOLY_LIGHT), crit(m, FLASH_OF_LIGHT_HEAL));
+        kit::set_health(m, p, 100);
+        assert!(cast_fresh(m, p, HOLY_LIGHT, at(p)));
+        kit::pass(m, 3_000);
+        let after_light = kit::has(m, p, DIVINE_FAVOR);
+        crate::game::map::auras::remove_spell(m, p, DIVINE_FAVOR, None);
+        assert!(cast_fresh(m, p, DIVINE_FAVOR, at(p)));
+        assert!(cast_fresh(m, p, HOLY_SHOCK, at(p)));
+        kit::pass(m, 100);
+        let after_shock = kit::has(m, p, DIVINE_FAVOR);
+        (crits, after_light, after_shock)
+    })
+    .await;
+    assert_eq!(
+        out.0,
+        (100, 100),
+        "Holy Light's and Flash of Light's heals' crit"
+    );
+    assert!(!out.1, "Divine Favor spent by a Holy Light");
+    assert!(!out.2, "Divine Favor spent by a Holy Shock");
 }

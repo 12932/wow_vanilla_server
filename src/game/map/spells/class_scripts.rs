@@ -1240,21 +1240,31 @@ pub fn preserves_periodic_timer(s: &SpellTemplate) -> bool {
         || PRESERVED_PERIODIC.contains(&s.id)
 }
 
+/// Divine Favor, and Holy Light's and Flash of Light's own flags: vmangos
+/// makes Holy Light a heal of its own (`spell_effect_mod`), not the
+/// script's 19968 the DBC's mask names (mangos's `spell_affect`
+/// 0xC0200000).
+const DIVINE_FAVOR: u32 = 20216;
+const HOLY_LIGHT_AND_FLASH: u64 = 0xC000_0000;
 /// Improved Seal of Righteousness's ranks, and the seal's own flag beside
 /// its Judgement's (mangos's `spell_affect` 0x8000400).
 const IMPROVED_SEAL_OF_RIGHTEOUSNESS: [u32; 5] = [20224, 20225, 20330, 20331, 20332];
 const SEAL_OF_RIGHTEOUSNESS_FLAG: u64 = 0x800_0000;
 
 /// What the scripts add to the spells' data: Shadowmeld's stealth from
-/// its passive, as a spare effect; the seal Improved Seal of
-/// Righteousness touches, as mangos's `spell_affect` had it.
+/// its passive, as a spare effect; the spells Divine Favor and Improved
+/// Seal of Righteousness touch, as mangos's `spell_affect` had them.
 pub fn patch(data: &mut SpellData) {
-    for id in IMPROVED_SEAL_OF_RIGHTEOUSNESS {
+    let touched = IMPROVED_SEAL_OF_RIGHTEOUSNESS
+        .iter()
+        .map(|id| (*id, SEAL_OF_RIGHTEOUSNESS_FLAG))
+        .chain(std::iter::once((DIVINE_FAVOR, HOLY_LIGHT_AND_FLASH)));
+    for (id, flag) in touched {
         if let Some(s) = data.spells.get_mut(&id) {
             for e in s.effects.iter_mut().filter(|e| {
                 e.aura == auras::AURA_ADD_FLAT_MODIFIER || e.aura == auras::AURA_ADD_PCT_MODIFIER
             }) {
-                e.item_type |= SEAL_OF_RIGHTEOUSNESS_FLAG;
+                e.item_type |= flag;
             }
         }
     }
