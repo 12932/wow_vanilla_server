@@ -1478,21 +1478,8 @@ fn fight_step(map: &mut Map, g: Guid) {
         // them). A step about its victim goes on to its end. A walk that
         // isn't a chase (a wander, its path) stops as the fight begins in
         // reach (`interrupt_idle_movement`).
-        let (moving, spreading, chasing) = map.creature(g).map_or((false, false, false), |c| {
-            let chasing = match (&c.motion, c.chase_target_at) {
-                (Motion::Moving(w), Some(aimed)) => {
-                    let ahead = dist(me.position, w.destination());
-                    aimed == them.position || ahead <= dist(me.position, them.position)
-                }
-                _ => false,
-            };
-            (
-                matches!(c.motion, Motion::Moving(_)),
-                c.engagement.spreading,
-                chasing,
-            )
-        });
-        let runs_on = chase && moving && (spreading || chasing);
+        let (moving, on) = runs_on(map, g, &me, &them);
+        let runs_on = chase && on;
         // Turning to its victim a little it sends nothing: the client
         // turns a creature to its target itself (mangos's `SetInFront` as
         // it fights, "client change orientation by self"). Only one that
@@ -1537,13 +1524,7 @@ fn fight_step(map: &mut Map, g: Guid) {
     let reach = combat::melee_range(&me, &them);
     let habitat = crate::game::map::creature_motion::habitat(map, g);
     let flies = habitat.fly;
-    let headed = match &c.motion {
-        Motion::Moving(w) if c.chase_target_at.is_some() => Some(w.destination()),
-        Motion::Moving(_) => None,
-        Motion::Idle { .. } => Some(me.position),
-    };
-    let stale = headed.is_none_or(|at| dist(at, them.position) > reach);
-    if !stale {
+    if !chase_stale(c, me.position, them.position, reach) {
         return;
     }
     let goal = match caster.filter(|_| sight) {
@@ -1570,17 +1551,7 @@ fn fight_step(map: &mut Map, g: Guid) {
                 from
             }
         }
-        None => {
-            // From the side it comes, turned aside by the others fighting
-            // its victim (Thistle Tea's `approach_angle_offset`).
-            let to = combat::chase_distance(reach);
-            let angle = side_of(me.position, them.position) + approach_offset(map, g, victim);
-            Vector3d {
-                x: them.position.x + to * angle.cos(),
-                y: them.position.y + to * angle.sin(),
-                z: them.position.z,
-            }
-        }
+        None => chase_goal(map, g, victim, me.position, them.position, reach),
     };
     // As its habitat lets it: through the air, the water, or only to the
     // edge of what it can't enter.
@@ -1644,11 +1615,13 @@ fn on_the_move(map: &Map, t: Guid) -> bool {
 }
 
 /// A chaser's turn aside as it comes at a victim others fight already, so
-/// they don't all stand in one place: none at a player on the move
-/// (Thistle Tea's `approach_angle_offset`).
+/// they don't all stand in one place: none at a victim on the move
+/// (Thistle Tea's `approach_angle_offset`, at a player on the move; at
+/// any here, so that those following a moving creature, a pack of pets
+/// on a walking boss, keep their sides rather than take a new one at
+/// every path).
 fn approach_offset(map: &Map, g: Guid, victim: Guid) -> f32 {
-    let moving_player = guid::is_player(victim) && on_the_move(map, victim);
-    let count = if moving_player {
+    let count = if on_the_move(map, victim) {
         0
     } else {
         attackers(map, victim).saturating_sub(1)
@@ -1662,11 +1635,110 @@ fn approach_offset(map: &Map, g: Guid, victim: Guid) -> f32 {
     spread * count as f32 / size * 0.3
 }
 
-/// Standing in reach, a creature every three seconds or so steps back off
-/// a victim it stands in, or (three times, until its victim moves) aside
-/// from another standing on it, at a walk and facing its victim (Thistle
-/// Tea's `maybe_spread`).
-fn spread(map: &mut Map, g: Guid, victim: Guid) {
+/// Where a melee chaser makes for: half its `reach` from its victim
+/// ([`combat::chase_distance`]), from its own side, turned aside by the
+/// others fighting it ([`approach_offset`]). A creature's chase and a
+/// player's pet's alike.
+pub(crate) fn chase_goal(
+    map: &Map,
+    g: Guid,
+    victim: Guid,
+    me: Vector3d,
+    them: Vector3d,
+    reach: f32,
+) -> Vector3d {
+    let to = combat::chase_distance(reach);
+    let angle = side_of(me, them) + approach_offset(map, g, victim);
+    Vector3d {
+        x: them.x + to * angle.cos(),
+        y: them.y + to * angle.sin(),
+        z: them.z,
+    }
+}
+
+/// Whether a chaser must path again: its victim at `them` is out of
+/// `reach` of where it is headed, or of where it stands (mangos-classic's
+/// `ChaseMovementGenerator::RequiresNewPosition`, the combined reach from
+/// the spline's end), or it is on a walk that isn't a chase.
+pub(crate) fn chase_stale(
+    c: &crate::game::map::creature::Creature,
+    me: Vector3d,
+    them: Vector3d,
+    reach: f32,
+) -> bool {
+    let headed = match &c.motion {
+        Motion::Moving(w) if c.chase_target_at.is_some() => Some(w.destination()),
+        Motion::Moving(_) => None,
+        Motion::Idle { .. } => Some(me),
+    };
+    headed.is_none_or(|at| dist(at, them) > reach)
+}
+
+/// Whether `g`, in reach of its victim, is on the move, and whether it
+/// runs on: a step about its victim goes on to its end, and a chaser on
+/// its way in runs on to where it aimed inside its reach, stopping short
+/// only once its victim, moved since, has come nearer it than where it is
+/// headed (mangos-classic's `ChaseMovementGenerator`, its destination past
+/// its target in reach: no running on behind them).
+pub(crate) fn runs_on(
+    map: &Map,
+    g: Guid,
+    me: &combat::UnitView,
+    them: &combat::UnitView,
+) -> (bool, bool) {
+    map.creature(g).map_or((false, false), |c| {
+        let chasing = match (&c.motion, c.chase_target_at) {
+            (Motion::Moving(w), Some(aimed)) => {
+                let ahead = dist(me.position, w.destination());
+                aimed == them.position || ahead <= dist(me.position, them.position)
+            }
+            _ => false,
+        };
+        let moving = matches!(c.motion, Motion::Moving(_));
+        (moving, moving && (c.engagement.spreading || chasing))
+    })
+}
+
+/// Where `g` stands, or, on its way, will: a creature's walk's end.
+fn spot_of(map: &Map, g: Guid) -> Option<Vector3d> {
+    match map.creature(g) {
+        Some(c) => Some(match &c.motion {
+            Motion::Moving(w) => w.destination(),
+            Motion::Idle { .. } => c.position,
+        }),
+        None => map.position_of(g),
+    }
+}
+
+/// How near two of radii `a` and `b` stand on each other: within their
+/// radii, and at least as near as Thistle Tea has two stacked.
+fn stacked(a: f32, b: f32) -> f32 {
+    (a.max(b).min(0.25) + 1.0).sqrt().max(a + b)
+}
+
+/// Whether `at` is clear, for `g` of radius `mine`, of every other
+/// fighting `victim`, creatures, pets and players alike, where they stand
+/// or are headed: one look at each of its attackers.
+fn clear(map: &Map, g: Guid, victim: Guid, at: Vector3d, mine: f32) -> bool {
+    map.combat(victim).is_none_or(|c| {
+        c.attackers.iter().all(|&a| {
+            a == g
+                || spot_of(map, a).is_none_or(|s| planar(s, at) >= stacked(mine, bounding(map, a)))
+        })
+    })
+}
+
+/// Places looked at for a step aside before it settles for the first.
+const SPREAD_CANDIDATES: usize = 8;
+
+/// Standing in reach, a creature (or a player's pet) every three seconds
+/// or so steps back off a victim it stands in, or (three times, until its
+/// victim moves) aside from another standing on it, at a walk and facing
+/// its victim (Thistle Tea's `maybe_spread`). Its step goes to a place
+/// clear of the others fighting its victim where there is one in reach,
+/// turned further round its victim, either way, at each place taken; and
+/// a bigger victim has its spots further out, round its size.
+pub(crate) fn spread(map: &mut Map, g: Guid, victim: Guid) {
     let now = map.now;
     let mut rng = rand::rng();
     let Some(c) = map.creature_mut(g) else {
@@ -1691,7 +1763,7 @@ fn spread(map: &mut Map, g: Guid, victim: Guid) {
     let (mine, theirs) = (bounding(map, g), bounding(map, victim));
     let apart = planar(me.position, them.position);
     // Back off one it stands in.
-    if apart < (0.5 * mine.min(theirs) + 1.0).sqrt() {
+    if apart < (0.5 * mine.min(theirs) + 1.0).sqrt().max(theirs) {
         let d = 1.0 + mine + theirs;
         if d < reach {
             let angle = side_of(me.position, them.position);
@@ -1703,16 +1775,16 @@ fn spread(map: &mut Map, g: Guid, victim: Guid) {
     if tries >= SPREAD_TRIES {
         return;
     }
-    // Aside from the nearest of its kind standing on it.
+    // Aside from the nearest of its kind standing on it, or headed there.
     let neighbour = map
         .grid
         .around(me.position.x, me.position.y, 2.0)
         .filter(|n| *n != g && *n != victim && guid::is_unit(*n))
         .filter_map(|n| {
-            let c = map.creature(n).filter(|c| c.alive())?;
-            let d = planar(c.position, me.position);
-            let stacked = (mine.max(bounding(map, n)).min(0.25) + 1.0).sqrt();
-            (d < stacked).then_some((c.position, d))
+            map.creature(n).filter(|c| c.alive())?;
+            let at = spot_of(map, n)?;
+            let d = planar(at, me.position);
+            (d < stacked(mine, bounding(map, n))).then_some((at, d))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1));
     let Some((at, _)) = neighbour else {
@@ -1720,20 +1792,43 @@ fn spread(map: &mut Map, g: Guid, victim: Guid) {
     };
     let mine_angle = side_of(me.position, them.position);
     let his = (at.y - them.position.y).atan2(at.x - them.position.x);
-    let delta = rng.random_range(0.4f32..1.0);
-    let turn = if (his - mine_angle).sin().atan2((his - mine_angle).cos()) > 0.0 {
-        -delta
+    let away = if (his - mine_angle).sin().atan2((his - mine_angle).cos()) > 0.0 {
+        -1.0
     } else {
-        delta
+        1.0
     };
-    let widest = if attackers(map, victim) > 5 { 4.0 } else { 2.0 };
-    let d = mine + rng.random_range(0.8f32..widest);
-    if d < reach {
-        step_about(map, g, victim, them.position, mine_angle + turn, d, true);
+    let widest: f32 = if attackers(map, victim) > 5 { 4.0 } else { 2.0 };
+    // Out past a victim bigger than a player, and inside its reach.
+    let out = mine + (theirs - DEFAULT_BOUNDING).max(0.0);
+    let widest = widest.min(reach - out - 0.1);
+    if widest <= 0.8 {
+        return;
+    }
+    let mut first = None;
+    for i in 0..SPREAD_CANDIDATES {
+        let side = if i % 2 == 0 { away } else { -away };
+        let turn = side * rng.random_range(0.4f32..1.0) * (1 + i / 2) as f32;
+        let d = out + rng.random_range(0.8f32..widest);
+        let angle = mine_angle + turn;
+        first.get_or_insert((angle, d));
+        let to = Vector3d {
+            x: them.position.x + d * angle.cos(),
+            y: them.position.y + d * angle.sin(),
+            z: them.position.z,
+        };
+        if clear(map, g, victim, to, mine)
+            && step_about(map, g, victim, them.position, angle, d, true)
+        {
+            return;
+        }
+    }
+    if let Some((angle, d)) = first {
+        step_about(map, g, victim, them.position, angle, d, true);
     }
 }
 
-/// `g` walks to `d` yards from its victim at `angle`, facing it.
+/// `g` walks to `d` yards from its victim at `angle`, facing it: whether
+/// it does (a walk reaches there).
 fn step_about(
     map: &mut Map,
     g: Guid,
@@ -1742,34 +1837,39 @@ fn step_about(
     angle: f32,
     d: f32,
     aside: bool,
-) {
+) -> bool {
     let now = map.now;
     let Some(from) = map.position_of(g) else {
-        return;
+        return false;
     };
-    let to = Vector3d {
+    let mut to = Vector3d {
         x: them.x + d * angle.cos(),
         y: them.y + d * angle.sin(),
         z: them.z,
     };
+    // On a slope, the ground there, not its victim's height.
+    if let Some(z) = map.nav.as_mut().and_then(|n| n.ground(to.x, to.y, to.z)) {
+        to.z = z;
+    }
     let (path, fly) = match crate::game::map::creature_motion::route(map, g, from, to) {
         Some((path, true, fly)) => (path, fly),
-        _ if map.nav.is_some() => return,
+        _ if map.nav.is_some() => return false,
         _ => (vec![from, to], false),
     };
     let spline_id = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(c) = map.creature_mut(g) else {
-        return;
+        return false;
     };
     let Some(frame) = c.walk_facing(path, false, fly, victim, now, spline_id) else {
-        return;
+        return false;
     };
     c.engagement.spreading = true;
     if aside {
         c.engagement.spread_tries += 1;
     }
     map.send_to_observers(g, &frame, false);
+    true
 }
 
 fn planar(a: Vector3d, b: Vector3d) -> f32 {
