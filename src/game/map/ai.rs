@@ -666,6 +666,9 @@ fn despawn_from_view(map: &mut Map, g: Guid) {
     map.grid.remove(g, cell);
     map.visibility_dirty.remove(&g);
     crate::game::omen::left(map, g, entry);
+    // What it cast that is on its way, and what is on its way to it, is
+    // lost with it.
+    crate::game::map::spells::unit_gone(map, g);
     for o in observers {
         if let Some(p) = map.players.get_mut(&o) {
             p.known.remove(&g);
@@ -704,6 +707,9 @@ fn respawn(map: &mut Map, g: Guid) {
         }
     }
     crate::game::map::scripts::stop_for(map, g);
+    // Its new life is another creature under the same GUID: nothing cast
+    // at its old one, or by it, lands on or from the new.
+    crate::game::map::spells::unit_gone(map, g);
     if let Some(c) = map
         .creature_by_guid
         .remove(&g)

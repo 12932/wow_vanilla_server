@@ -229,7 +229,7 @@ pub struct CharacterState {
 }
 
 /// A character's ready state (`.ready save`, `.ready load`): where it
-/// stood, its buffs, and whether its pet was out.
+/// stood, its buffs, and whether its pet was out, and in what stance.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReadyState {
@@ -240,6 +240,9 @@ pub struct ReadyState {
     /// for one that lasts): it comes back at that, not at what was left.
     pub auras: Vec<(crate::game::map::spells::cooldowns::SavedAura, Option<u32>)>,
     pub pet: bool,
+    /// The pet's stance (passive, defensive, aggressive) as saved, put
+    /// back at a load; `None` for a state saved without it.
+    pub pet_react: Option<u8>,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

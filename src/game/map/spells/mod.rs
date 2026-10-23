@@ -1738,6 +1738,7 @@ fn execute(
             }
             map.spells.in_flight.push(InFlight {
                 lands: now + Duration::from_millis(u64::from(delay)),
+                launched: now,
                 caster,
                 spell: Box::new(s.clone()),
                 target,
@@ -1937,6 +1938,8 @@ pub struct Launch {
 #[derive(Debug, Clone)]
 pub struct InFlight {
     pub lands: Instant,
+    /// When it was cast: a target come back as new since isn't hit.
+    pub launched: Instant,
     pub caster: Guid,
     pub spell: Box<SpellTemplate>,
     pub target: Guid,
@@ -2012,6 +2015,63 @@ pub(crate) fn flight_ms(map: &Map, caster: Guid, target: Guid, speed: f32) -> u3
     }
 }
 
+/// Whether `g` is a creature come into the world since `t`: a respawn
+/// keeps a spawn's GUID, and the new life is no target of what was cast
+/// at the old (mangos-classic's new `Creature` object at a respawn).
+pub(crate) fn new_since(map: &Map, g: Guid, t: Instant) -> bool {
+    guid::is_unit(g)
+        && map
+            .creature(g)
+            .and_then(|c| c.spawned_at)
+            .is_some_and(|s| s > t)
+}
+
+/// `g` left the world, or is to come back into it as new (a creature
+/// respawned, despawned or gone for good): what it cast that is on its
+/// way, and what is on its way to it, is lost, and its ground areas go,
+/// as mangos-classic's `Unit::RemoveFromWorld` ends a unit's spell events
+/// (`m_Events.KillAllEvents`) and takes its dynamic objects
+/// (`RemoveAllDynObjects`).
+pub fn unit_gone(map: &mut Map, g: Guid) {
+    lose_pending(map, &[g]);
+    remove_dynamic_of(map, g);
+}
+
+/// What `units` cast that is on its way, and what is on its way to them,
+/// lost: missiles and bolts, auto-repeat shots, combo points owed a
+/// landing finisher, and a channel's next payment.
+pub fn lose_pending(map: &mut Map, units: &[Guid]) {
+    let involved = |a: Guid, b: Guid| units.contains(&a) || units.contains(&b);
+    map.spells
+        .in_flight
+        .retain(|f| !involved(f.caster, f.target));
+    map.spells.shots.retain(|s| !involved(s.shooter, s.target));
+    for u in units {
+        map.spells.deferred_combo.remove(u);
+        map.spells.channel_costs.remove(u);
+    }
+}
+
+/// Take away `caster`'s ground areas (Blizzard, Rain of Fire,
+/// Consecration) and their dynamic objects, and its other dynamic objects
+/// (far sight's): mangos-classic's `Unit::RemoveAllDynObjects`.
+pub fn remove_dynamic_of(map: &mut Map, caster: Guid) {
+    map.spells.areas.retain(|a| a.caster != caster);
+    map.spells
+        .area_ticked
+        .retain(|(c, _, _, u), _| *c != caster && *u != caster);
+    let gone: Vec<Guid> = map
+        .spells
+        .dynamic
+        .values()
+        .filter(|d| d.caster == caster)
+        .map(|d| d.guid)
+        .collect();
+    for g in gone {
+        dynamic::remove(map, g);
+    }
+}
+
 /// The spells in flight that have got there land.
 fn land_arrivals(map: &mut Map) {
     let now = map.now;
@@ -2027,11 +2087,15 @@ fn land_arrivals(map: &mut Map) {
         // for the dead: Thistle Tea keeps only what works on a corpse. One
         // whose caster left the map (logged out, teleported) is lost, as
         // mangos ends a unit's spell events as it leaves the world (a
-        // caster's death doesn't stop it), and as a shot is.
+        // caster's death doesn't stop it), and as a shot is. A creature
+        // come back as new since (respawned under its GUID) is another
+        // life: neither hit nor hitting.
         if map
             .unit_view(f.target)
             .is_none_or(|u| !u.alive && !checks::for_the_dead(&f.spell))
             || map.unit_view(f.caster).is_none()
+            || new_since(map, f.target, f.launched)
+            || new_since(map, f.caster, f.launched)
         {
             continue;
         }
