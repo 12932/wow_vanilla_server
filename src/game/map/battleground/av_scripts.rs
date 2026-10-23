@@ -1846,7 +1846,13 @@ pub(crate) const ENRAGE: u32 = 8599;
 
 /// Whom a warmaster charges.
 pub(crate) enum ChargeAt {
-    /// Its victim, from 8 to 25 yards, every 12 to 18 s (vmangos's).
+    /// Its victim, from 8 to 25 yards, every 12 to 18 s (vmangos's): its
+    /// timer starts over only once the Charge goes (vmangos's
+    /// `DoCastSpellIfCan(..) == CAST_OK`). The spell's own least is past
+    /// both combat reaches (11 yards between a warmaster's centre and a
+    /// player's), the event's past their bounding radii (under 9): in
+    /// between the cast is refused (too close), and the warmaster looks
+    /// again at its next tick, not 12 to 18 s on.
     Victim,
     /// Whom a script target type picks: looked for when its 12 to 18 s
     /// are up, and each second until it finds one (a failed cast, or no
@@ -1862,7 +1868,17 @@ pub(crate) enum ChargeAt {
 /// evades.
 pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_every: Option<i32>) {
     match charge {
-        ChargeAt::Victim => b.within(entry, 8, 25, (12000, 18000), vec![cast(CHARGE)]),
+        ChargeAt::Victim => b.event(
+            entry,
+            EVENT_RANGE,
+            [8, 25, 12000, 18000],
+            EF_REPEATABLE | EF_CHECK_RESULT,
+            0,
+            vec![vec![ScriptStep {
+                data_flags: SF_ABORT_ON_FAILURE,
+                ..cast(CHARGE)
+            }]],
+        ),
         ChargeAt::Picked(target_type) => b.event(
             entry,
             EVENT_TIMER_IN_COMBAT,

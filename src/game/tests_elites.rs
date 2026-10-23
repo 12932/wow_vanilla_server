@@ -582,7 +582,9 @@ async fn jaina_dead_her_elite_guards_stay_as_guards() {
 
 /// The user's twist on the warmaster's Charge: an Elite Guard charges a
 /// healer (a priest or paladin here) in sight and between 8 and 25 yards
-/// over a nearer warrior and over its victim, one who healed in the last
+/// (past both combat reaches, as the cast measures them: a priest 9 yards
+/// from its centre is too close) over a nearer warrior and over its
+/// victim, one who healed in the last
 /// five seconds first; with no healer in sight or reach, its victim in
 /// reach, as the warmaster does; with none, no one. Its cast of a heal
 /// marks a healer. After its charge it fights the one it charged, though
@@ -590,10 +592,10 @@ async fn jaina_dead_her_elite_guards_stay_as_guards() {
 #[tokio::test]
 async fn an_elite_guards_charge_goes_to_a_healer_in_sight_over_a_nearer_warrior_else_its_victim() {
     let (realm, a, ga, map) = setup_with(elite_world(), Class::Warrior).await;
-    // Alice faces east; the Elite Guard will stand 10 yards east of her.
+    // Alice faces east; the Elite Guard will stand 12 yards east of her.
     a.heartbeat(START.0, START.1, START.2).await;
     let e_at = Vector3d {
-        x: START.0 + 10.0,
+        x: START.0 + 12.0,
         y: START.1,
         z: START.2,
     };
@@ -603,6 +605,7 @@ async fn an_elite_guards_charge_goes_to_a_healer_in_sight_over_a_nearer_warrior_
         ("Dana", Class::Paladin, 0.0, -15.0),
         ("Carl", Class::Warrior, 9.0, 0.0),
         ("Eve", Class::Priest, 0.0, 30.0),
+        ("Fay", Class::Priest, 0.0, 9.0),
     ] {
         let mut c = Client::connect(&realm, name);
         let g = c.enter(name, Race::Human, class).await;
@@ -618,7 +621,13 @@ async fn an_elite_guards_charge_goes_to_a_healer_in_sight_over_a_nearer_warrior_
         ));
     }
     let placed: Vec<(Guid, Vector3d)> = players.iter().map(|(_, g, p)| (*g, *p)).collect();
-    let [bob, dana, carl, eve] = [placed[0].0, placed[1].0, placed[2].0, placed[3].0];
+    let [bob, dana, carl, eve, fay] = [
+        placed[0].0,
+        placed[1].0,
+        placed[2].0,
+        placed[3].0,
+        placed[4].0,
+    ];
     until(&map, "everyone in place", move |m| {
         placed.iter().all(|(g, p)| {
             m.players
@@ -628,7 +637,7 @@ async fn an_elite_guards_charge_goes_to_a_healer_in_sight_over_a_nearer_warrior_
     })
     .await;
     let picks = on(&map, move |m| {
-        for g in [ga, bob, dana, carl, eve] {
+        for g in [ga, bob, dana, carl, eve, fay] {
             hardy(m, g);
         }
         // Bob's heal marks him.
@@ -644,7 +653,7 @@ async fn an_elite_guards_charge_goes_to_a_healer_in_sight_over_a_nearer_warrior_
         );
         let marked = m.players[&bob].misc.healed_at == Some(m.now);
         m.players.get_mut(&bob).unwrap().misc.healed_at = None;
-        let e = summon_elite(m, ga, START_V, 10.0);
+        let e = summon_elite(m, ga, START_V, 12.0);
         // Its victim Alice, with the most threat.
         ai::attacked(m, e, ga);
         ai::add_threat(m, e, ga, 1000.0);

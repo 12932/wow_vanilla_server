@@ -469,6 +469,143 @@ async fn a_warmaster_charges_from_range_and_whirlwinds_twice_in_a_row() {
     );
 }
 
+/// Charge as the data has it, for these tests: range 95, 8 to 25 yards,
+/// a charge at an enemy.
+fn real_shaped_charge(d: &mut GameData) {
+    d.spells.ranges.insert(95, (8.0, 25.0));
+    let mut s = SpellTemplate {
+        id: av_scripts::CHARGE,
+        name: "Charge".into(),
+        range_index: 95,
+        equipped_item_class: -1,
+        ..Default::default()
+    };
+    s.effects[0] = SpellEffect {
+        effect: 96,
+        target_a: 6,
+        ..Default::default()
+    };
+    d.spells.spells.insert(s.id, s);
+}
+
+/// The marshal of these tests, fighting Grom, held at `x` with Grom at
+/// 115 (Charge's 8 to 25 yards are past both combat reaches, three yards
+/// between them: 11 to 28 yards between their centres).
+async fn a_marshal_fighting_grom() -> (Client, Guid, Client, Guid, MapHandle, Guid, u32) {
+    const MARSHAL: u32 = 14762;
+    let mut d = valley();
+    npc(&mut d, MARSHAL, "Dun Baldar North Marshal", 35);
+    spawn_at(&mut d, 170601, MARSHAL, (100.0, 50.0, 0.0));
+    instants(&mut d, &[20684], &[13736, 23511]);
+    real_shaped_charge(&mut d);
+    av_scripts::install(&mut d);
+    let realm = harness::realm_with(d);
+    let (a, alice, mut b, grom, map) = pair(&realm).await;
+    put(&map, &mut b, 115.0, 50.0, 0.0).await;
+    let marshal = map.query(|m| creature(m, MARSHAL)).await.flatten().unwrap();
+    b.sees_on(&map, marshal).await;
+    let charge = map
+        .query(move |m| {
+            ai::attacked(m, marshal, grom);
+            casting(m, MARSHAL, av_scripts::CHARGE)
+        })
+        .await
+        .unwrap();
+    (a, alice, b, grom, map, marshal, charge)
+}
+
+/// The user's rule for a warmaster's Charge, as the spell has it (8 to 25
+/// yards, past both combat reaches, mangos's `GetMinMaxRange`): with its
+/// victim beside it, it doesn't charge; 9.5 yards from its centre (past
+/// the event's 8, short of the spell's least) its cast is refused, too
+/// close, and it looks again at its next tick rather than 12 to 18 s on
+/// (vmangos's timer, started over only by a cast that goes); 15 yards off,
+/// it charges at once, its timer started over.
+#[tokio::test]
+async fn a_warmasters_charge_waits_past_the_spells_least_range_and_goes_at_once_beyond() {
+    let (_a, _, mut b, grom, map, marshal, charge) = a_marshal_fighting_grom().await;
+    let mut seen = Vec::new();
+    for x in [112.0, 105.5, 100.0] {
+        b.clear();
+        let (left, charging) = map
+            .query(move |m| {
+                hold_at(m, marshal, Vector3d { x, y: 50.0, z: 0.0 });
+                due_now(m, marshal, charge);
+                let left = super::tests_p3_scripts::left(m, marshal, charge);
+                let charging = m
+                    .creature(marshal)
+                    .is_some_and(|c| c.engagement.charge.is_some());
+                (left, charging)
+            })
+            .await
+            .unwrap();
+        let casts = casts_by(&mut b, marshal, Duration::from_millis(300)).await;
+        seen.push((
+            casts.contains(&(av_scripts::CHARGE, grom)),
+            charging,
+            left.is_some_and(|l| l.is_zero()),
+            left.is_some_and(|l| l >= Duration::from_secs(11)),
+        ));
+    }
+    assert_eq!(
+        seen,
+        vec![
+            (false, false, true, false),
+            (false, false, true, false),
+            (true, true, false, true),
+        ],
+        "(charged, charging, due again at once, 12 to 18 s on): beside, too close, across"
+    );
+}
+
+/// A random pick for a cast (target types 4 and 5, vmangos's hostile at
+/// random and at random but the top) is one in the spell's range, from
+/// its least, past both combat reaches (mangos's `SelectAttackingTarget`
+/// with the spell's range): of Alice beside the marshal and Grom 15 yards
+/// off, its Charge's pick is always Grom; with Grom gone from its list,
+/// no one.
+#[tokio::test]
+async fn a_random_hostile_pick_for_a_charge_is_one_in_its_range() {
+    let (mut a, alice, _b, grom, map, marshal, _) = a_marshal_fighting_grom().await;
+    put(&map, &mut a, 100.0, 53.0, 0.0).await;
+    let picks = map
+        .query(move |m| {
+            hold_at(
+                m,
+                marshal,
+                Vector3d {
+                    x: 100.0,
+                    y: 50.0,
+                    z: 0.0,
+                },
+            );
+            ai::add_threat(m, marshal, alice, 1000.0);
+            ai::add_threat(m, marshal, grom, 10.0);
+            let pick = |m: &Map, target_type: u32| {
+                let step = ScriptStep {
+                    command: 15,
+                    datalong: [av_scripts::CHARGE, 0, 0, 0],
+                    target_type,
+                    ..Default::default()
+                };
+                crate::game::map::scripts::resolve_targets(m, &step, marshal, Guid::zero())
+                    .map(|(_, t)| t)
+            };
+            let random: Vec<Option<Guid>> = (0..40).map(|_| pick(m, 4)).collect();
+            let not_top: Vec<Option<Guid>> = (0..40).map(|_| pick(m, 5)).collect();
+            if let Some(c) = m.creature_mut(marshal) {
+                c.threat.retain(|(t, _)| *t != grom);
+            }
+            (random, not_top, pick(m, 4))
+        })
+        .await
+        .unwrap();
+    let (random, not_top, alone) = picks;
+    assert!(random.iter().all(|t| *t == Some(grom)), "{random:?}");
+    assert!(not_top.iter().all(|t| *t == Some(grom)), "{not_top:?}");
+    assert_eq!(alone, None, "Alice beside it is too close");
+}
+
 /// A war rider's Fireball, due from the fight's start, waits for its
 /// victim to come within thirty yards, and goes the moment they are
 /// (Thistle Tea's `within(30)` on the rider's three spells).

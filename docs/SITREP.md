@@ -52,6 +52,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   `STATE_SUPPRESSED`): one immune to their blows' school is held below the rest, their threat kept, and stays held
   after the immunity until their threat moves; alone, the immune one is still fought. Departing from mangos, one
   already immune when first on a list is held there too; the confused, feared and stunned mangos also holds are not.
+- **The warmasters' Charge** (decision 87, your question): at their victim only, 8 to 25 yards past both reaches,
+  as vmangos's; no source has them pick a caster, so a healer is charged once their healing tops the list. A refused
+  Charge (too close) no longer spends its 12 to 18 s; EventAI's range event measures past the bounding radii, as
+  mangos's.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick
