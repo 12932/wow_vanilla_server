@@ -1456,7 +1456,11 @@ pub fn complete_quest(map: &mut Map, player: Guid, giver: Guid, quest: u32) {
             auto_finish: false,
             required_money: (q.reward_money.min(0).unsigned_abs()).into(),
             required_items,
-            unknown1: 0,
+            // The four flags the client's Continue reads (mangos's
+            // `SendQuestGiverRequestItems`: 0x02, then 0x03 or 0, 0x04 and
+            // 0x08): it is lit only with all four set, so a 0 here greyed it
+            // out for every quest of items.
+            unknown1: 2,
             completable: if done {
                 QuestCompletable::Completeable
             } else {

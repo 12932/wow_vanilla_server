@@ -494,6 +494,16 @@ async fn handled(a: &mut Client) {
 }
 
 async fn request_items(a: &mut Client, quest_id: u32) -> Option<QuestCompletable> {
+    request_items_flags(a, quest_id).await.map(|(c, _)| c)
+}
+
+/// [`request_items`], and the four flags the client's Continue button
+/// reads: it is lit only when all four are set (mangos's 0x02, 0x03, 0x04,
+/// 0x08; the second 0 while it can't be completed).
+async fn request_items_flags(
+    a: &mut Client,
+    quest_id: u32,
+) -> Option<(QuestCompletable, [u32; 4])> {
     a.send(CMSG_QUESTGIVER_COMPLETE_QUEST {
         guid: giver(),
         quest_id,
@@ -501,9 +511,10 @@ async fn request_items(a: &mut Client, quest_id: u32) -> Option<QuestCompletable
     .await;
     handled(a).await;
     a.gets(Duration::from_millis(1), |m| match m {
-        ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(r) if r.quest_id == quest_id => {
-            Some(r.completable)
-        }
+        ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(r) if r.quest_id == quest_id => Some((
+            r.completable,
+            [r.unknown1, r.completable.as_int(), r.flags2, r.flags3],
+        )),
         _ => None,
     })
     .await
@@ -941,9 +952,10 @@ async fn an_auto_complete_quest_is_turned_in_without_the_log() {
     assert!(!offered(&mut a, 61).await);
     assert!(!rewarded(&mut a, 61).await);
     give(&realm, g, SCALE, 2).await;
+    // Its Continue lit: all four flags set, as the client reads them.
     assert_eq!(
-        request_items(&mut a, 61).await,
-        Some(QuestCompletable::Completeable)
+        request_items_flags(&mut a, 61).await,
+        Some((QuestCompletable::Completeable, [2, 3, 4, 8]))
     );
     assert!(offered(&mut a, 61).await);
     assert!(rewarded(&mut a, 61).await);
