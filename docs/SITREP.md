@@ -56,6 +56,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   their full time from their casters if here, else the player's own; load clears every aura but passives and gear's,
   all cooldowns, and combat; respawn around resets every spawned creature in the radius, its summons gone, and
   Alterac Valley's leaders' sweep; an instance's encounter data isn't reset.
+- **The warmasters' Charge** (decision 88, your question): at their victim only, 8 to 25 yards past both reaches,
+  as vmangos's; no source has them pick a caster, so a healer is charged once their healing tops the list. A refused
+  Charge (too close) no longer spends its 12 to 18 s; EventAI's range event measures past the bounding radii, as
+  mangos's.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick

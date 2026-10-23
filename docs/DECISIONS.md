@@ -1478,4 +1478,23 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **For peon**, between attempts: one GM `.respawn <radius>` by the keep, then each bot `.ready load`; no wait
       is needed between them, and none after but the next update (50 ms) for the respawned creatures' creates.
 
+88. **The warmasters' and marshals' Charge** (2026-10-23; `fix/av-warmasters`, your question: "the warmasters in the
+    room shouldn't be able to charge to targets beside them ... I'm used to them dashing across the room to knock down
+    healers when they are casting"). Charge (22911) is range 95, 8 to 25 yards, past both combat reaches as mangos's
+    `GetMinMaxRange` measures it (11 to 28 yards between a warmaster's centre and a player's); its blow is the weapon's
+    and 75, and it stuns 2 s. vmangos's `npc_WarMaster` (Thistle Tea's port) charges its victim only, from 8 to 25
+    yards; no source (vmangos's script, its unused EventAI rows, mangos-classic) charges a caster or a random target,
+    so none is invented: a healer who takes the top of its list by healing is charged across the room, as you
+    remember, and one beside it never is. What was wrong, fixed:
+    - **A refused Charge spent its timer.** The event fired from 8 yards between centres, the cast was refused below
+      11 (too close), and the warmaster then waited 12 to 18 s, past a victim who had stepped into the band. Now its
+      timer starts over only once the Charge goes (vmangos's `DoCastSpellIfCan(..) == CAST_OK`), and it looks again
+      at its next tick.
+    - **EventAI's range event** (`EVENT_T_RANGE`) measured between centres; it is mangos's `IsInRange(victim, min,
+      max, true, true)` now: past both bounding radii, from the least, short of the most.
+    - **The Elite Guards' healer pick** (your twist on this Charge) measured 8 to 25 yards between centres,
+      and could pick a healer the cast then refused, every second; it measures past both combat reaches now.
+    - Already right: the cast checks refuse a creature's cast inside a spell's least as a player's
+      (`SPELL_FAILED_TOO_CLOSE`), and a script's random pick for a cast is one in the spell's band.
+
 ## Left for later, and why
