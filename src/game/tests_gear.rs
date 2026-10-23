@@ -410,3 +410,38 @@ async fn gear_green_and_blue_dress_a_level_60_in_one_quality() {
         }
     }
 }
+
+/// `.gear` again tops a hunter's ammunition up to its four stacks, not four
+/// more each time (a load tester's bots say it at every reconnect).
+#[tokio::test]
+#[ignore = "extended"]
+async fn gear_again_tops_a_hunters_ammunition_up() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let mut c = Client::connect(&realm, "GEARA");
+    let g: Guid = c.enter("Gearammo", Race::Dwarf, Class::Hunter).await;
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    c.say(".character level 40").await;
+    c.system_message("Level 40").await;
+    let mut counts = Vec::new();
+    for _ in 0..3 {
+        c.say(".gear").await;
+        c.system_message("Equipped").await;
+        counts.push(
+            on(&map, move |m| {
+                let p = &m.players[&g];
+                let ammo = p.fields.get_u32(crate::game::fields::PLAYER_AMMO_ID);
+                let stack = m.realm.data.item(ammo).map_or(0, |t| t.stackable.max(1));
+                (ammo, p.carried_count_of(ammo), stack * 4)
+            })
+            .await,
+        );
+    }
+    let (ammo, _, four) = counts[0];
+    assert_ne!(ammo, 0, "ammunition chosen");
+    for (a, n, _) in &counts {
+        assert_eq!((*a, *n), (ammo, four), "four stacks each time: {counts:?}");
+    }
+}

@@ -933,7 +933,8 @@ fn wears_named(map: &Map, g: Guid, data: &crate::game::data::GameData, name: &st
 }
 
 /// Four stacks of the best ammunition of `ammo_type` (arrows, bullets) of
-/// `level` or below, and that chosen for the ranged weapon: its name and
+/// `level` or below, topped up to that (a `.gear` again adds none to four
+/// stacks carried), and that chosen for the ranged weapon: its name and
 /// count, if any went.
 fn give_ammo(map: &mut Map, g: Guid, ammo_type: u32, level: u8) -> Option<String> {
     let data = map.realm.data.clone();
@@ -945,9 +946,10 @@ fn give_ammo(map: &mut Map, g: Guid, ammo_type: u32, level: u8) -> Option<String
         .filter(|t| t.required_reputation_faction == 0 && t.required_skill == 0)
         .max_by_key(|t| (t.required_level, t.item_level, std::cmp::Reverse(t.entry)))?;
     let p = map.players.get(&g)?;
-    let want = ammo.stackable.max(1) * 4;
+    let want = (ammo.stackable.max(1) * 4).saturating_sub(p.carried_count_of(ammo.entry));
     let n = crate::game::map::inventory::fitting(p, &data, ammo.entry, want).ok()?;
     if n == 0 {
+        crate::game::map::ranged::set_ammo(map, g, ammo.entry);
         return None;
     }
     crate::game::map::inventory::add_item(map, g, ammo.entry, n, true).ok()?;
