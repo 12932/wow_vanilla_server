@@ -441,3 +441,48 @@ async fn feral_instinct_raises_bear_forms_threat() {
         "the form's threat: plain, the talent learned in it, the form taken with it, the talent gone"
     );
 }
+
+const IMPROVED_FIRESTONE_2: u32 = 18_768;
+
+const MAJOR_FIRESTONE: u32 = 13_701;
+
+const MAJOR_FIRESTONE_FIRE: u32 = 23_483;
+
+/// Improved Firestone's rank 2 raises a worn Firestone's fire damage, the
+/// Major's 21 to 27 (its 30% damage modifier on the item's aura); without
+/// it, or the talent gone, 21.
+#[tokio::test]
+#[ignore = "extended"]
+async fn improved_firestone_raises_a_worn_firestones_fire_damage() {
+    if !have_data() {
+        return;
+    }
+    use crate::game::map::inventory::{self, Destination, SLOT_OFF_HAND};
+    let realm = realm();
+    let (_w, w, map) = enter(&realm, "TSRVIF1", "Stona", Race::Human, Class::Warlock).await;
+    let out = on(&map, move |m| {
+        ready(m, w, 60, &[]);
+        let worn = |m: &mut Map| {
+            inventory::add_item_to(m, w, MAJOR_FIRESTONE, 1, Destination::Worn(SLOT_OFF_HAND))
+                .expect("the Firestone worn");
+            inventory::sync_gear(m, w);
+            amount(m, w, MAJOR_FIRESTONE_FIRE)
+        };
+        let plain = worn(m);
+        let i = m.players[&w]
+            .item_at(crate::game::store::BAG_PLAYER, SLOT_OFF_HAND)
+            .unwrap();
+        inventory::take_item(m, w, i, 1);
+        spells::learn(m, w, IMPROVED_FIRESTONE_2);
+        let talented = worn(m);
+        auras::remove_spell(m, w, IMPROVED_FIRESTONE_2, None);
+        let lost = amount(m, w, MAJOR_FIRESTONE_FIRE);
+        (plain, talented, lost)
+    })
+    .await;
+    assert_eq!(
+        out,
+        (Some(21), Some(27), Some(21)),
+        "the Firestone's fire damage: plain, with the talent, the talent gone"
+    );
+}

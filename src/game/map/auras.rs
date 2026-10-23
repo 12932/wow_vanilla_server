@@ -2701,10 +2701,28 @@ pub fn reapply_own_passives(map: &mut Map, g: Guid, spell: u32, mask: u64) {
         return;
     };
     let form = form(map, g);
+    let touched = |h: &Holder| {
+        h.caster == g
+            && h.passive
+            && h.expires.is_none()
+            && h.spell != spell
+            && data
+                .spells
+                .get(h.spell)
+                .is_some_and(|t| touches(family, mask, t))
+    };
+    // A worn item's go off, and the gear puts them on again as they are
+    // now (`inventory::sync_gear`).
+    let worn = auras(map, g).is_some_and(|a| a.holders.iter().any(|h| h.equipped && touched(h)));
+    if worn {
+        remove_where(map, g, |h| h.equipped && touched(h));
+        crate::game::map::inventory::sync_gear(map, g);
+    }
     let affected: Vec<u32> = auras(map, g)
         .map(|a| {
             a.holders
                 .iter()
+                .filter(|h| !h.equipped && h.item.is_none())
                 .filter(|h| h.caster == g && h.passive && h.expires.is_none() && h.spell != spell)
                 .filter(|h| {
                     !h.effects

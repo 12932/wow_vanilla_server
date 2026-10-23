@@ -2109,9 +2109,21 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
         let Some(s) = data.spells.get(spell) else {
             continue;
         };
+        // Its points with the wearer's modifiers to it (mangos's
+        // `CalculateSpellEffectValue`), and a bonus to damage done with
+        // their damage modifiers too: Improved Firestone's 15 or 30% on a
+        // Firestone's fire damage.
+        let m = crate::game::map::spells::mods::for_spell(map, g, s);
         let effects: Vec<(usize, i32)> = (0..3)
             .filter(|i| matches!(s.effects[*i].effect, 6 | 35) && s.effects[*i].aura != 0)
-            .map(|i| (i, crate::game::map::spells::points(s, i, 1)))
+            .map(|i| {
+                let v = m.points(s, i, crate::game::map::spells::points(s, i, 1));
+                if s.effects[i].aura == crate::game::map::auras::AURA_MOD_DAMAGE_DONE {
+                    (i, m.apply_i(crate::game::map::spells::mods::OP_DAMAGE, v))
+                } else {
+                    (i, v)
+                }
+            })
             .collect();
         if effects.is_empty() {
             continue;
