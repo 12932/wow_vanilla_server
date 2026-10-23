@@ -264,15 +264,14 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     share of his health taken and time alive. Persisted per boss, raid size and parts.
   - **Result:** Drek'Thar killed with default gear and skill at 40 bots, 4 of 144 tuned attempts; not yet reliable,
     so the raid hasn't been shrunk.
-  - **Your call:** mana potions. 1.12 raids carried them, and the bots don't. The healers' mana is what ends the
-    near-kills, so potions would help, but they make the bots stronger, not smarter, so I haven't added them.
+  - **Mana potions: yes (your call, 2026-10-23).** Mana users carry level-appropriate mana potions and drink one in a
+    fight below a tunable mark, healers first; druids' Innervate goes on the raid's healers.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
   peon on this machine, and the server itself runs 4–5× over its update budget at that size; that's server work for
   later. About 30 bots fit a 1-vCPU worker at 800 a side, so 64 tasks of 25.
-- **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
-  goes in at the next quiet moment.
+- **The navmesh's 50° rebake is live** in `data/nav` (2026-10-23), with the 52° bake kept as a backup; peon pins rustigator `ba150fe`.
 
 ## In short
 - **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an
