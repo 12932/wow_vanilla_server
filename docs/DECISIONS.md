@@ -1330,4 +1330,36 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       Arrows), nor a vendor that is nowhere (vmangos's Jimmy McWeaksauce's Thorium arrows). Before, the highest
       required level won: Jagged Arrows at 40 over the better Explosive.
 
+83. **The Booty Run, scripted, and game events on the server's clock, your ask** (2026-10-23; `feat/booty-run-walk`):
+    Short John Mithril should walk down to the arena floor, set the chest down and run back, every third hour on the
+    hour from midnight.
+    - **His walk is vmangos's own:** `creature_movement_template` has 31 points for 14508 (round the stands' walkway, down a
+      stair, the floor by the chest's place at point 14, and back), with
+      `creature_movement_scripts` 1450816 at point 14 (run; yell 9731 "Let the Bloodletting Begin!"; put out chest
+      12029) and 1450833 at home (walk, stop, gossip and quests back). mangos-classic starts the same path
+      (`MoveWaypoint` on `GAME_EVENT_GURUBASHI_ARENA`); vmangos's event-start spell (33013, in
+      `game_event_creature_data`) isn't in its spell data, so wvs does what it must: yell 9730, put the gossip and
+      quests away, set him walking. The path is walked on the navmesh between its points (the extended
+      `short_johns_path_is_walkable_down_to_the_pit_floor`). Mine: he **kneels** at point 14 (`EMOTE_ONESHOT_KNEEL`)
+      and stays down 3 s, so the chest comes out while he is down, not as he runs off (vmangos's wait is 1 s, its
+      chest at 2 s).
+    - **He is kept awake** on his run, so it happens with no one watching; if he can't put the chest down (dead,
+      gone, no path), it comes out at the event's start plus his walk (and 13 s to spare). He is faction 35,
+      friendly to all: no one in the pit's free-for-all can strike him, so only a GM kills him. A map that comes up
+      during the run has him at home and the chest out. An event stopped while he is on his way sends him home at a
+      run.
+    - **Game events are on the server's local clock,** as vmangos's `GameEventMgr` reads `game_event` (`mktime`), and
+      as game time and the weather here already were; before, wvs read the rows as UTC. The schedule is worked out on
+      the wall clock (the local date and time as if zone-less), so an event keeps its local hour through summer
+      time, where vmangos's, counted in seconds from its start, moves an hour. The Darkmoon Faire's days and the
+      holidays' fireworks go by the local date and night too. A GM's `.event start|stop` lasts its minutes, as
+      before.
+    - **The Booty Run's hours are a setting,** since vmangos's row (23:00) bakes in its UTC+1 server: `[events]
+      booty_run_first_hour` (0) and `booty_run_every_minutes` (180), Live, so 00:00, 03:00, ... 21:00 local, two
+      hours each (the row's length). Other rows' hours are vmangos's, as they were: on a server not in UTC+1 those
+      with that zone baked in (the holidays starting at 23:00 or 22:00, say) start at that local hour.
+    - **`.arena booty`** (a GM's) starts it now, as `.event start 16` does.
+    - **Raid resets are left on UTC** (`[instances] reset_hour`, 04:00 UTC): their times go to clients as absolute
+      times, and a change of clock would move every saved lockout.
+
 ## Left for later, and why

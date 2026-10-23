@@ -35,6 +35,9 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   creature; and the spread, creatures' too, now steps to a place clear of every attacker, counts a big victim's
   size, and turns no one aside at a victim on the move.
 
+- **Game events on the server's local clock** (decision 83), as vmangos's; the Booty Run every three hours from
+  local midnight (`[events] booty_run_*`); Short John kneels 3 s at the chest; raid resets left on UTC.
+
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick
   notice sent to a player in a battleground (it may clear the raid window).

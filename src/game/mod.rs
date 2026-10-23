@@ -54,6 +54,8 @@ mod tests_bg6;
 #[cfg(test)]
 mod tests_body;
 #[cfg(test)]
+mod tests_booty;
+#[cfg(test)]
 mod tests_bosses;
 #[cfg(test)]
 mod tests_bughunt_items;
@@ -1742,7 +1744,12 @@ impl Realm {
             bones: map::bones::Kept::load(startup.bones, startup.max_bones_id),
             users,
         });
-        *realm.social.events.lock() = events::active(&realm.data, chrono::Utc::now().timestamp());
+        *realm.social.events.lock() = events::active_with(
+            &realm.data,
+            events::wall_clock(chrono::Utc::now().timestamp()),
+            &ahash::AHashMap::new(),
+            &realm.config().events,
+        );
         social::start_timers(&realm);
         transports::start(&realm);
         realm

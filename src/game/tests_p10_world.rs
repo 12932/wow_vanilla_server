@@ -375,19 +375,26 @@ fn driven_events_hold_their_state_across_the_schedules_turns() {
         v
     };
     assert_eq!(
-        ids(active_with(&d, 10, &driven)),
+        ids(active_with(&d, 10, &driven, &Default::default())),
         vec![SCHEDULED],
         "scheduled"
     );
     driven.insert(DRIVEN, true);
     driven.insert(SCHEDULED, false);
     driven.insert(99, true);
-    assert_eq!(ids(active_with(&d, 10, &driven)), vec![DRIVEN], "driven");
     assert_eq!(
-        ids(active_with(&d, hour + 10, &driven)),
+        ids(active_with(&d, 10, &driven, &Default::default())),
+        vec![DRIVEN],
+        "driven"
+    );
+    assert_eq!(
+        ids(active_with(&d, hour + 10, &driven, &Default::default())),
         vec![DRIVEN],
         "held into the schedule's next turn"
     );
     driven.insert(DRIVEN, false);
-    assert_eq!(ids(active_with(&d, hour + 10, &driven)), Vec::<u32>::new());
+    assert_eq!(
+        ids(active_with(&d, hour + 10, &driven, &Default::default())),
+        Vec::<u32>::new()
+    );
 }

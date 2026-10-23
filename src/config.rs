@@ -810,6 +810,15 @@ settings! {
         /// as `.invasion on` (Thistle Tea's `scourge_invasion`, off). A
         /// GM's `.invasion on` or `off` holds until this changes.
         scourge_invasion: bool = false, Any, Live, "";
+        /// The hour of the day, on the server's clock, of Gurubashi Arena's
+        /// first Booty Run (vmangos's event 16): Short John Mithril leaves
+        /// his chest on the pit's floor then and every
+        /// `booty_run_every_minutes` after, for the event's two hours.
+        /// vmangos's row has 23:00, midnight on its UTC+1 server.
+        booty_run_first_hour: u32 = 0, Clamp(0.0, 23.0), Live, "";
+        /// Minutes from one Booty Run's start to the next, counted from
+        /// `booty_run_first_hour` each day.
+        booty_run_every_minutes: u64 = 180, Clamp(1.0, 1440.0), Live, "";
     }
 }
 
