@@ -943,6 +943,19 @@ elemental_invasion = true
 # Default false. Changes at a reload.
 scourge_invasion = false
 
+# The hour of the day, on the server's clock, of Gurubashi Arena's
+# first Booty Run (vmangos's event 16): Short John Mithril leaves
+# his chest on the pit's floor then and every
+# `booty_run_every_minutes` after, for the event's two hours.
+# vmangos's row has 23:00, midnight on its UTC+1 server.
+# Default 0. Range 0 to 23, clamped. Changes at a reload.
+booty_run_first_hour = 0
+
+# Minutes from one Booty Run's start to the next, counted from
+# `booty_run_first_hour` each day.
+# Default 180. Range 1 to 1440, clamped. Changes at a reload.
+booty_run_every_minutes = 180
+
 # The movement check: a player who moves faster than they can, over
 # time, is pulled back. GMs are never checked.
 [anticheat]

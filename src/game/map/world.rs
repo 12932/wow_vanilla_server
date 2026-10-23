@@ -362,6 +362,7 @@ fn step_creature(
         crate::game::map::creature_groups::leader_walked(map, guid);
     }
     if let Some((point, script)) = arrived {
+        crate::game::map::arena::reached(map, guid, point);
         crate::game::map::event_ai::movement_inform(map, guid, 2, point);
         if script != 0 {
             crate::game::map::scripts::start(

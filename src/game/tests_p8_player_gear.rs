@@ -614,10 +614,16 @@ async fn debug_cooldowns_and_skill_do_what_they_say_and_no_more() {
         })
         .await
         .unwrap();
-    for bad in [format!("{}", max + 1), "0".into()] {
-        a.say(&format!(".debug skill {DEFENSE} {bad}")).await;
-        a.system_message("goes from 1 to").await;
-    }
+    a.say(&format!(".debug skill {DEFENSE} 0")).await;
+    a.system_message("goes from 1 to").await;
+    // Past its cap: set to the cap, and told so.
+    a.say(&format!(".debug skill {DEFENSE} {}", max + 1)).await;
+    a.system_message(&format!("Skill {DEFENSE} at {max}, its cap")).await;
+    let capped = map
+        .query(move |m| crate::game::map::skills::value(&m.players[&g], DEFENSE))
+        .await
+        .unwrap();
+    assert_eq!(capped, Some(max));
     a.say(".debug skill 43 1").await;
     a.system_message("No skill 43").await;
     map.query(move |m| {

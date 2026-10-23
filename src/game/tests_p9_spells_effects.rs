@@ -343,9 +343,10 @@ fn data(d: &mut GameData) {
         0,
     );
     let at_caster = self_aura(AT_CASTER, AURA_DUMMY, 0, 1, LASTS_LONG);
-    // A stun on oneself of fifteen seconds, its hold checked.
+    // A stun on oneself of fifteen seconds, its hold checked, a debuff
+    // (unmarked, an aura at its caster helps: mangos's `IsPositiveEffect`).
     let mut self_stun = self_aura(SELF_STUN, AURA_MOD_STUN, 0, 1, LASTS_15S);
-    self_stun.attributes[0] |= HEARTBEAT;
+    self_stun.attributes[0] |= HEARTBEAT | crate::game::data::spells::ATTR_DEBUFF;
     insert(
         d,
         [
@@ -913,8 +914,8 @@ async fn a_procs_spell_at_its_caster_lands_on_its_owner() {
     assert_eq!(out, (true, false));
 }
 
-/// A stun of fifteen seconds that checks its hold, cast on oneself, is
-/// harmful still and so takes a heartbeat: a player's breaks at a time
+/// A stun of fifteen seconds that checks its hold, cast on oneself and
+/// marked a debuff, is harmful still and so takes a heartbeat: a player's breaks at a time
 /// drawn (twelve seconds at the spread's middle), a creature's rolls
 /// again every five seconds (Thistle Tea's "routes self heartbeat auras
 /// through the owner boundary for a sampled break"; vmangos's

@@ -574,7 +574,12 @@ async fn event_sweeps_at_once_keep_the_latest_events() {
             }
         });
         let driven = realm.social.driven_events.lock().clone();
-        let latest = events::active_with(&realm.data, mail::now(), &driven);
+        let latest = events::active_with(
+            &realm.data,
+            events::wall_clock(mail::now()),
+            &driven,
+            &realm.config().events,
+        );
         if events::current(&realm) != latest {
             stale += 1;
         }

@@ -27,11 +27,12 @@ fn transform(id: u32, look: u32, helpful: bool) -> SpellTemplate {
         custom_flags: if helpful { CUSTOM_POSITIVE } else { 0 },
         ..Default::default()
     };
+    // A curse is aimed at an enemy (at its caster, an aura helps).
     s.effects[0] = SpellEffect {
         effect: 6,
         aura: auras::AURA_TRANSFORM,
         misc_value: (LOOKS + look) as i32,
-        target_a: 1,
+        target_a: if helpful { 1 } else { 6 },
         ..Default::default()
     };
     s
