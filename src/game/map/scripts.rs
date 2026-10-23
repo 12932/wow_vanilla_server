@@ -3223,6 +3223,7 @@ pub fn place(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
     c.cell = new_cell;
     map.grid.relocate(g, old_cell, new_cell);
     crate::game::map::visibility::moved(map, g, anchor, at);
+    map.uncache_create(g);
     // Those who see it are told it is there, facing its new way, as
     // mangos's heartbeat (`SendHeartBeat`) and Thistle Tea's
     // `MsgMoveTeleport` tell them: a turn on the spot there, which ends a

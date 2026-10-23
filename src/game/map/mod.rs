@@ -561,8 +561,9 @@ pub struct Map {
     pub forget: AHashMap<Guid, Vec<Guid>>,
     /// Each observer's blocks for the coming update.
     pub batches: AHashMap<Guid, Batch>,
-    /// Create blocks built this update, by object, for every observer that
-    /// needs one.
+    /// Create blocks built this update (or this event, between updates), by
+    /// object, for every observer that needs one; an object's is dropped
+    /// when it is teleported ([`Map::uncache_create`]).
     create_cache: AHashMap<Guid, Arc<[u8]>>,
     /// The update's frames of `SMSG_UPDATE_OBJECT`, by their packets'
     /// content: one sent alike to many (a crowd told of a newcomer, the
@@ -984,6 +985,7 @@ fn flush_moves(map: &mut Map, moves: &mut Vec<moves::Move>) {
 /// counted as an event of its own).
 pub(crate) fn after_event(map: &mut Map) {
     if map.holding.is_empty() {
+        map.uncache_creates();
         return;
     }
     #[cfg(all(feature = "world-bench", unix))]
@@ -996,6 +998,7 @@ pub(crate) fn after_event(map: &mut Map) {
         )
     });
     guarded(map, "after an event", Map::after_events);
+    map.uncache_creates();
 }
 
 /// Run a map's actor until it is told to stop.
@@ -2419,8 +2422,23 @@ impl Map {
         }
     }
 
+    /// `object` has jumped (a teleport): a create of it built before shows
+    /// it where it was, and is built again.
+    pub fn uncache_create(&mut self, object: Guid) {
+        self.create_cache.remove(&object);
+    }
+
+    /// The creates built for an event's newcomers are of that event: the
+    /// next may move what they show, and nothing would tell an observer
+    /// introduced from the cache that it is elsewhere.
+    fn uncache_creates(&mut self) {
+        if !self.create_cache.is_empty() {
+            self.create_cache.clear();
+        }
+    }
+
     /// The create block for `object` as a stranger sees it, built once per
-    /// update.
+    /// update (or event).
     pub fn public_create(&mut self, object: Guid) -> Option<Arc<[u8]>> {
         if let Some(b) = self.create_cache.get(&object) {
             return Some(b.clone());

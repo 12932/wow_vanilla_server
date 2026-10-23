@@ -703,3 +703,183 @@ async fn the_navmesh_finds_one_out_of_the_pit_and_the_grace_runs() {
     assert!(seen.2 && seen.3, "struck from the pit for twenty seconds");
     assert!(!seen.4, "and not after");
 }
+
+async fn ack_teleport(c: &mut Client, g: Guid) {
+    c.wait_for("the teleport", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(t) if t.guid == g).then_some(())
+    })
+    .await;
+    c.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: g,
+        movement_counter: c.teleport_order(),
+        time: Default::default(),
+    })
+    .await;
+}
+
+/// Where `c` has been told, of all it has received, each player is: by
+/// their last create or `MSG_MOVE_TELEPORT`, `None` once told to forget
+/// them (as peon tracks those it sees).
+fn heard_of(c: &mut Client) -> ahash::AHashMap<Guid, Option<Vector3d>> {
+    let mut at = ahash::AHashMap::new();
+    for f in c.captured() {
+        let Ok(m) = ServerOpcodeMessage::read_unencrypted(&f[..]) else {
+            continue;
+        };
+        let objects = match &m {
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects[..],
+            ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects[..],
+            ServerOpcodeMessage::MSG_MOVE_TELEPORT(t) => {
+                at.insert(t.player, Some(t.info.position));
+                continue;
+            }
+            _ => continue,
+        };
+        for o in objects {
+            match &o.update_type {
+                Object_UpdateType::CreateObject {
+                    guid3, movement2, ..
+                }
+                | Object_UpdateType::CreateObject2 {
+                    guid3, movement2, ..
+                } => {
+                    if let Some(MovementBlock_UpdateFlag_Living::Living {
+                        living_position, ..
+                    }) = movement2.update_flag.get_living()
+                    {
+                        at.insert(*guid3, Some(*living_position));
+                    }
+                }
+                Object_UpdateType::OutOfRangeObjects { guids } => {
+                    for g in guids {
+                        at.insert(*g, None);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    at
+}
+
+/// Peon's arena, smaller: a battle of twelve, the fallen released to the
+/// stands one by one, the champion crowned and the fallen raised there;
+/// then each, one after another, `.revive`s and `.go`es back down to a
+/// spot on the floor, as peon's bots do before the next round. Each is
+/// seen where it is by everyone near: before, one who went down was seen
+/// by another still in the stands at its seat there, until its first step
+/// 40 to 80 yards off (peon's 93 zips in the second round). Its create
+/// had been built for one who came down before it, in that one's event,
+/// and was kept for the rest of the update: the next to come down was
+/// shown it.
+#[tokio::test]
+async fn after_a_battle_everyone_sees_everyone_back_on_the_floor() {
+    const N: usize = 12;
+    let realm = harness::realm_with(data());
+    let map = arena_map(&realm);
+    let mut cs = Vec::new();
+    let mut gs = Vec::new();
+    for i in 0..N {
+        let name = format!("Fighter{}", (b'a' + i as u8) as char);
+        let (mut c, g) = fighter(&realm, &name, 2.0 * i as f32 - 12.0).await;
+        ack_teleport(&mut c, g).await;
+        cs.push(c);
+        gs.push(g);
+    }
+    cs[0].say(".arena start 0").await;
+    hears(&mut cs[0], "FIGHT").await;
+    let champion = gs[0];
+    // All but the last to fall release to the stands; the battle's end
+    // raises them there.
+    for i in 1..N {
+        let g = gs[i];
+        map.query(move |m| crate::game::map::combat::kill(m, champion, g))
+            .await;
+        if i + 1 < N {
+            cs[i].send(CMSG_REPOP_REQUEST {}).await;
+            ack_teleport(&mut cs[i], g).await;
+        }
+    }
+    hears(&mut cs[0], "Champion of Gurubashi Arena").await;
+    for i in 1..N - 1 {
+        ack_teleport(&mut cs[i], gs[i]).await;
+    }
+    for _ in 0..5 {
+        harness::an_update(&map).await;
+    }
+    for i in 0..N {
+        let to = Vector3d {
+            x: CENTRE.x + 20.0 * (i as f32).cos(),
+            y: CENTRE.y + 20.0 * (i as f32).sin(),
+            z: CENTRE.z,
+        };
+        cs[i].say(".revive").await;
+        cs[i].say(&format!(".go xyz {} {} {}", to.x, to.y, to.z))
+            .await;
+        ack_teleport(&mut cs[i], gs[i]).await;
+    }
+    for _ in 0..5 {
+        harness::an_update(&map).await;
+    }
+    let all = gs.clone();
+    let truth = map
+        .query(move |m| {
+            all.iter()
+                .map(|g| (*g, m.players[g].position()))
+                .collect::<ahash::AHashMap<_, _>>()
+        })
+        .await
+        .unwrap();
+    let mut wrong = Vec::new();
+    for (i, c) in cs.iter_mut().enumerate() {
+        let heard = heard_of(c);
+        for (j, g) in gs.iter().enumerate() {
+            let at = heard.get(g).copied().flatten();
+            if i != j && at != Some(truth[g]) {
+                wrong.push((i, j, at, truth[g]));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} seen elsewhere (watcher, watched, seen at, is at): {wrong:?}",
+        wrong.len(),
+        N * (N - 1)
+    );
+}
+
+/// A create built in an event and then a teleport in the same: one
+/// introduced after is shown the player where they landed. Carol comes to
+/// Bob (his create is built for her), then Bob is sent to Alice, far off:
+/// Alice's create of him has him by her.
+#[tokio::test]
+async fn a_create_after_a_teleport_shows_where_one_landed() {
+    let realm = harness::realm_with(data());
+    let map = arena_map(&realm);
+    let at = |dx: f32| Vector3d {
+        x: CENTRE.x + dx,
+        ..CENTRE
+    };
+    let (mut a, alice) = fighter(&realm, "Alice", 0.0).await;
+    let (mut b, bob) = fighter(&realm, "Bob", 300.0).await;
+    let (mut c, carol) = fighter(&realm, "Carol", 600.0).await;
+    for (cl, g) in [(&mut a, alice), (&mut b, bob), (&mut c, carol)] {
+        ack_teleport(cl, g).await;
+    }
+    for _ in 0..3 {
+        harness::an_update(&map).await;
+    }
+    assert_eq!(heard_of(&mut a).get(&bob), None, "Alice is far from Bob");
+    let landed = at(5.0);
+    map.query(move |m| {
+        m.teleport(carol, m.key, at(302.0), 0.0);
+        m.after_events();
+        assert!(m.players[&carol].known.contains(&bob), "Carol sees Bob");
+        m.teleport(bob, m.key, landed, 0.0);
+        m.after_events();
+    })
+    .await;
+    harness::an_update(&map).await;
+    a.sees(bob).await;
+    assert_eq!(heard_of(&mut a).get(&bob).copied().flatten(), Some(landed));
+}
