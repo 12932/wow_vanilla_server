@@ -100,7 +100,7 @@ player's `.` line is just chat.
 | `.online`, `.maps` | 1 | Who is online; each map's counters |
 | `.save`, `.kick <name>`, `.announce <text>`, `.gm [on\|off]` | 1 | |
 | `.go [xyz] <x> <y> <z> [map]` | 2 | Teleport |
-| `.tele <place>` | 2 | Teleport to a place from vmangos's `game_tele` |
+| `.tele <place>` | 2 | Teleport to a place from vmangos's `game_tele` (by name, the start of one or a part of one), or one of wvs's own (`src/game/data/tele.rs`): `AlteracValleyFrostwolfKeep` and `AlteracValleyDunBaldar`, Alterac Valley inside each keep just outside its general's room (Drek'Thar's, Vanndar Stormpike's), out of sight of him and his guards, facing him |
 | `.speed <multiplier>` | 2 | Run speed |
 | `.spawn <entry>` | 2 | Spawn a creature |
 | `.die`, `.revive`, `.levelup [n]` | 2 | On the target, or oneself |
