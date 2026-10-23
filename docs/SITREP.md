@@ -198,6 +198,13 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - curses split by seat;
   - the demon by spec, as `[warlock]` knobs;
   - healthstones aren't handed out: peon has no trading.
+- **Shamans (phase 3):**
+  - Enhancement and Elemental heal only as the lone healer or in danger;
+  - Elemental is 31/0/20 with Elemental Mastery;
+  - resistance totems by the school of damage taken;
+  - Grounding only against players;
+  - Enhancement gets `.gear dps 2h`, since 1.12 shamans can't dual-wield;
+  - 5 Ankhs stocked for Reincarnation.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
