@@ -1296,12 +1296,35 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       each other there. wvs fans out at any victim, as it already did for creatures (Thistle Tea's), and pets
       chase from their own side, not behind.
     - **What the spread now does more than Thistle Tea's,** for creatures too: a step aside goes to a place clear of
-      where every other attacker of its victim stands or is headed (up to 8 places, turned further round either way,
-      before it settles for the first as Thistle Tea does), so a crowd ends apart in a step or two and then stands;
-      two are on each other within their radii combined (Thistle Tea's 1.12 yards, at least); a victim bigger than a
-      player has its spots out by its extra size, and one standing inside it backs off; there is no turn aside at a
-      victim on the move, any victim (Thistle Tea's, at a player), so those following a walking creature keep their
-      sides; and a step's end is on the ground there, not at its victim's height.
+      where every other attacker of its victim stands or is headed, so a crowd ends apart in a step or two and then
+      stands; two are on each other within their radii combined (Thistle Tea's 1.12 yards, at least); there is no
+      turn aside at a victim on the move, any victim (Thistle Tea's, at a player), so those following a walking
+      creature keep their sides; and a step's end is on the ground there, not at its victim's height.
+    - **An arc, not all round, your report** (`fix/fan-out-arc`): sixteen mobs from your left should fan out over
+      100 to 140 degrees on the left, never all the way round; and stand at their attack distance, not at assorted
+      ones. Before, Thistle Tea's turn aside as a chaser came in grew with the count past a half turn either way
+      (16 attackers, up to 9 radians), and a step aside turned 0.4 to 4 radians from where it stood, three times,
+      so a crowd walked round its victim; a step aside also went out 0.8 to 4 yards past its size, and one inside
+      its victim backed off to another distance, so they stood at varied depths. Now:
+      - **The arc** (`ai::arc_of`, `[creatures] fan_out_arc_degrees`, 120, live; 360 is all round) is centred on
+        the mean side its group came from: each melee attacker's bearing from its victim as it last came at it
+        (`Engagement::side`, set at each chase; a player's, where it stands), its victim's attackers and the
+        chasers still on their way (`Combat::chasers`), so a group's arc doesn't move as the rest arrive. The sides
+        are cut into groups where two neighbours are more than 90 degrees apart, so a pack from the left and one
+        from the right each keep to their own; with no such gap (fought from all round) there is no arc. The arc
+        follows the attackers, not the victim's facing, and is worked out afresh as they chase it again.
+      - **One ring:** every attacker of a crowd stands half its reach out (`ai::ring`, mangos-classic's chase,
+        `CHASE_DEFAULT_RANGE_FACTOR`, the distance it chased to), out past a victim bigger than that; one off it
+        (or any standing inside its victim) steps onto it, and every step ends on it. One alone elsewhere in reach
+        stands, as mangos's does.
+      - **The approach's turn aside** is Thistle Tea's, no wider than the arc's half, and its end is brought into
+        the arc; one that came in before the rest of its group and stands out of the arc steps into it.
+      - **A step aside** turns round the ring as mangos-classic's `FanOut` does, 36 to 45 degrees from where it
+        stands, then 18 to 30, 50 to 70 and 8 to 16, each way, no further than the arc's edge; it takes the first
+        place clear of the others. Where the arc is full (more than about five on a player at 120 degrees), it takes
+        the middle of the widest gap left in the arc, or the clearest of those looked at, side by side and
+        overlapping a little, if that is clearer than where it stands; else it stays. Three tries, as before.
+      - Pets use the same rule; twenty pets from one side fill the arc, side by side.
 
 81. **`.gear green|blue`, for peon's arena** (2026-10-23): `.gear`'s random pick of the uncommon and rare items of the
     character's level (the ten levels up to theirs) narrowed to one quality, a fresh level's greens or a dungeon's

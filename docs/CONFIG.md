@@ -260,6 +260,7 @@ Creatures: how near they notice players, how far they chase, how they call for h
 | `flee_assistance_radius` | Yards a fleeing creature looks for help within. | `30.0` | 0 to 100, clamped | live | `CreatureFamilyFleeAssistanceRadius` |
 | `flee_delay_ms` | Milliseconds a creature flees for help, where its script doesn't say (mangos's default is 10000). | `7000` | 0 to 60000, clamped | live | `CreatureFamilyFleeDelay` |
 | `interaction_pause_secs` | Seconds a wandering creature stands still once a player talks to it. | `180` | 0 to 3600, clamped | live | `InteractionPauseTimer` |
+| `fan_out_arc_degrees` | Degrees of the arc round their victim that melee attackers from one side fan out over (creatures and players' pets alike): centred on the side they came from, a crowd too big for it standing closer rather than round the back; attackers from clearly separate sides each keep to their own (360 lets them go all round). | `120.0` | 30 to 360, clamped | live |  |
 | `corpse_decay_normal` | Seconds a normal creature's corpse lies (no longer than its respawn). | `300` | 1 to 86400, clamped | live | `Corpse.Decay.NORMAL` |
 | `corpse_decay_rare` | Seconds a rare's corpse lies. | `900` | 1 to 86400, clamped | live | `Corpse.Decay.RARE` |
 | `corpse_decay_elite` | Seconds an elite's corpse lies. | `600` | 1 to 86400, clamped | live | `Corpse.Decay.ELITE` |
@@ -503,8 +504,8 @@ These tunables were constants and are now keys, at the same defaults:
 - **Chat (`[chat]`):** how far a say, a yell and an emote carry, players' and creatures'; the flood control's lines,
   gap and mute.
 - **Creatures (`[creatures]`):** the aggro range factor, the leash radius, the leash and unreachable timeouts, the
-  call-for-help radius and delay, the fleeing creature's search radius and time, a talked-to creature's pause, and
-  the corpse decay by rank.
+  call-for-help radius and delay, the fleeing creature's search radius and time, a talked-to creature's pause, the
+  fan-out's arc, and the corpse decay by rank.
 - **Players (`[players]`):** the start level and money, the level cap, the characters per account, the PvP realm,
   the group reward range (XP, loot, quest credit, reputation, honor), resurrection sickness's first level, the
   primary professions, gear's wear from blows.

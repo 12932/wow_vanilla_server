@@ -985,8 +985,10 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     if !stale {
         return;
     }
-    let goal = crate::game::map::ai::chase_goal(map, g, victim, me.position, them.position, reach);
+    let (goal, side) =
+        crate::game::map::ai::chase_goal(map, g, victim, me.position, them.position, reach);
     walk(map, g, goal, now);
+    crate::game::map::ai::chases(map, g, victim, side);
     if let Some(c) = map.creature_mut(g) {
         c.chase_target_at = Some(them.position);
         c.engagement.spread_tries = 0;
