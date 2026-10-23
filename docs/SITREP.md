@@ -266,8 +266,7 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
   peon on this machine, and the server itself runs 4–5× over its update budget at that size; that's server work for
   later. About 30 bots fit a 1-vCPU worker at 800 a side, so 64 tasks of 25.
-- **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
-  goes in at the next quiet moment.
+- **The navmesh's 50° rebake is live** in `data/nav` (2026-10-23), with the 52° bake kept as a backup; peon pins rustigator `ba150fe`.
 
 ## In short
 - **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an
