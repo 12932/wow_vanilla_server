@@ -224,6 +224,22 @@ pub struct CharacterState {
     /// A GM's `.infinitemana` (`.thereisnospoon`): their spells cost no
     /// mana, and they can always pay it (false, the default, pays as usual).
     pub infinite_mana: bool,
+    /// A GM's `.ready save`: the state `.ready load` puts them back in.
+    pub ready: Option<ReadyState>,
+}
+
+/// A character's ready state (`.ready save`, `.ready load`): where it
+/// stood, its buffs, and whether its pet was out.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReadyState {
+    /// The map and the place: x, y, z, facing.
+    pub map: u32,
+    pub at: (f32, f32, f32, f32),
+    /// Each buff as saved, with its full duration (milliseconds; `None`
+    /// for one that lasts): it comes back at that, not at what was left.
+    pub auras: Vec<(crate::game::map::spells::cooldowns::SavedAura, Option<u32>)>,
+    pub pet: bool,
 }
 
 /// A pet as it is kept: the one out (or dismissed), and those stabled.

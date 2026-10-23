@@ -366,6 +366,24 @@ pub fn world_update(map: &mut Map) {
     }
 }
 
+/// A GM's `.respawn <radius>` brought `respawned` back as new: the
+/// leaders' sweep forgets their fights (Drek'Thar raises no wolves for
+/// one ended so), and looks again at the next update.
+pub fn respawned(map: &mut Map, respawned: &[Guid]) {
+    if let Some(st) = state_mut(map) {
+        for g in respawned {
+            st.fighting.remove(g);
+        }
+        st.next_sweep = None;
+    }
+}
+
+/// The leaders the sweep last saw fighting.
+#[cfg(test)]
+pub fn leaders_fighting(map: &Map) -> Vec<Guid> {
+    state(map).map_or_else(Vec::new, |s| s.fighting.iter().copied().collect())
+}
+
 // What they do.
 
 fn set_phase(map: &mut Map, g: Guid, phase: u32) {

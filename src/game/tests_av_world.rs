@@ -433,3 +433,98 @@ async fn drek_thar_turns_from_a_paladins_divine_shield_to_another_and_stays_on_h
     );
     assert!(!home, "and he doesn't go home");
 }
+
+/// A raid attempt on Drek'Thar's keep reset, as peon resets it: Alice (a
+/// GM, unhurt) has drawn him off his spot and hurt him, the sweep has seen
+/// him fighting, two of his warmasters and a wolf are dead, and he has a
+/// summon out; `.respawn 100` from his hall brings back all of them, him
+/// home and whole and out of the fight, the summon gone, and the sweep
+/// forgets his fight.
+#[tokio::test]
+#[ignore = "extended"]
+async fn respawn_around_resets_drek_thars_keep_his_warmasters_back() {
+    let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let home = at(DREK_HOME.0, DREK_HOME.1, DREK_HOME.2);
+    let map = into_the_world_copy(
+        &realm,
+        &mut a,
+        at(DREK_HOME.0 + 3.0, DREK_HOME.1, DREK_HOME.2),
+    )
+    .await;
+    let warmasters: [u32; 8] = std::array::from_fn(|i| 14770 + i as u32);
+    let (drek, theirs, wolves, summon, fighting) = map
+        .query(move |m| {
+            m.players.get_mut(&alice).unwrap().misc.god = true;
+            let drek = all_of(m, DREK_THAR)[0];
+            let theirs: Vec<Guid> = warmasters.iter().flat_map(|e| all_of(m, *e)).collect();
+            let wolves: Vec<Guid> = [12121, 12122].iter().flat_map(|e| all_of(m, *e)).collect();
+            ai::attacked(m, drek, alice);
+            crate::game::map::combat::deal_damage(m, alice, drek, 10_000);
+            hold_at(
+                m,
+                drek,
+                at(DREK_HOME.0 + 10.0, DREK_HOME.1 - 10.0, DREK_HOME.2),
+            );
+            av_scripts::sweep_soon(m);
+            av_scripts::world_update(m);
+            for g in theirs.iter().take(2).chain(wolves.first()) {
+                crate::game::map::combat::kill(m, alice, *g);
+            }
+            let summon = crate::game::tests_p3_combat::spawn(m, alice, ICEBLOOD_WARMASTER, 60, 2.0);
+            event_ai::scripted_mut(m, summon).unwrap().summoner = Some(drek);
+            (
+                drek,
+                theirs,
+                wolves,
+                summon,
+                av_scripts::leaders_fighting(m),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(theirs.len(), 4, "his four warmasters: {theirs:?}");
+    assert!(!wolves.is_empty(), "his wolves");
+    assert!(fighting.contains(&drek), "the sweep saw him fighting");
+    a.say(".respawn 100").await;
+    let reply = a.system_message("Respawned").await;
+    assert!(reply.contains("1 summons gone"), "{reply}");
+    let all = theirs.len() + wolves.len();
+    let (back, drek_now, gone, fighting) = map
+        .query(move |m| {
+            let back = theirs
+                .iter()
+                .chain(&wolves)
+                .filter(|g| m.creature(**g).is_some_and(|c| c.alive()))
+                .count();
+            let c = m.creature(drek).unwrap();
+            let f = &c.fields;
+            let drek_now = (
+                crate::game::map::combat::dist(c.position, home) < 1.0,
+                f.get_u32(UNIT_FIELD_HEALTH) == f.get_u32(UNIT_FIELD_MAXHEALTH),
+                c.combat.attacking || c.evading,
+                c.threat.is_empty(),
+            );
+            (
+                back,
+                drek_now,
+                m.creature(summon).is_none(),
+                av_scripts::leaders_fighting(m),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        back,
+        all,
+        "his warmasters and wolves all back"
+    );
+    assert_eq!(
+        drek_now,
+        (true, true, false, true),
+        "home, whole, out of the fight"
+    );
+    assert!(gone, "his summon gone");
+    assert!(!fighting.contains(&drek), "the sweep forgets his fight");
+}
