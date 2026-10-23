@@ -810,7 +810,11 @@ pub fn trainer_buy(map: &mut Map, player: Guid, npc: Guid, spell: u32) {
 /// after another up to the highest for their level; a talent's ranks
 /// (and those trained after it) only to one with the talent. Pet and
 /// profession trainers (weapon masters among them) aren't their class's.
-/// The number learned.
+/// First, the class spells their class's quests and books teach and no
+/// trainer does, at their levels, for their race
+/// ([`crate::game::data::GameData::quest_class_spells`]): a priest's
+/// racial spells, whose later ranks the trainers then teach. The number
+/// learned.
 pub fn learn_class_spells(map: &mut Map, player: Guid) -> usize {
     let data = map.realm.data.clone();
     let most = map.cfg.players.max_primary_trade_skill as usize;
@@ -844,6 +848,38 @@ pub fn learn_class_spells(map: &mut Map, player: Guid) -> usize {
             .is_none_or(|t| talents.contains(&t))
     });
     let mut learned = 0;
+    // The class spells their quests and books teach, that no trainer
+    // does, at their levels: the trainers' later ranks of them follow.
+    let level = map.players.get(&player).map_or(0, |p| p.level());
+    let (class_bit, race_bit) = (1u32 << (class.max(1) - 1), 1u32 << (race.max(1) - 1));
+    let quested: Vec<u32> = data
+        .quest_class_spells()
+        .iter()
+        .filter(|q| {
+            q.level <= level
+                && q.classes & class_bit != 0
+                && (q.races == 0 || q.races & race_bit != 0)
+                && fits_class_race(&data, q.spell, class, race)
+        })
+        .map(|q| q.spell)
+        .collect();
+    for spell in quested {
+        if map
+            .players
+            .get(&player)
+            .is_none_or(|p| p.spells.contains(&spell))
+        {
+            continue;
+        }
+        crate::game::map::spells::learn(map, player, spell);
+        if map
+            .players
+            .get(&player)
+            .is_some_and(|p| p.spells.contains(&spell))
+        {
+            learned += 1;
+        }
+    }
     // A pass for each rank at most: each teaches what the last made
     // green.
     while let Some(p) = map.players.get(&player) {

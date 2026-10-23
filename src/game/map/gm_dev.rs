@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear [green|blue|raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn [radius], .ready [save|load], .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [green|blue|raid [1|2]] [tank|healer|caster|dps] [shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn [radius], .ready [save|load], .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], .infinitemana [on|off] (.thereisnospoon), \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -47,7 +47,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "gear" => match args {
             ["enchant", rest @ ..] => gear_enchant(map, g, rest),
             _ => match gear_args(args) {
-                Ok(pick) => gear(map, g, pick),
+                Ok((pick, wants)) => gear(map, g, pick, wants),
                 Err(usage) => Some(usage.into()),
             },
         },
@@ -455,27 +455,169 @@ enum Pick {
 const UNCOMMON: u32 = 2;
 const RARE: u32 = 3;
 
-const GEAR_USAGE: &str =
-    "Usage: .gear [green|blue|raid [1|2]] | .gear enchant <slot> <enchantment>";
+const GEAR_USAGE: &str = "Usage: .gear [green|blue|raid [1|2]] [tank|healer|caster|dps] \
+[shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm] | .gear enchant <slot> <enchantment>";
+
+/// A role `.gear` may be asked to dress for: the hands it holds by
+/// ([`role_ways`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Tank,
+    Healer,
+    Damage,
+}
+
+/// What `.gear` is asked for beyond the quality: a role, a way of holding
+/// and a kind of weapon (each, or none: the hands then by the talents
+/// spent, [`spec_ways`], or at random).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Wants {
+    role: Option<Role>,
+    hands: Option<Hands>,
+    weapon: Option<WeaponKind>,
+}
+
+/// A kind of weapon: its one-handed and two-handed item subclasses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WeaponKind {
+    one_hand: Option<u32>,
+    two_hand: Option<u32>,
+}
+
+impl WeaponKind {
+    fn named(name: &str) -> Option<Self> {
+        let (one_hand, two_hand) = match name {
+            "dagger" | "daggers" => (Some(15), None),
+            "sword" | "swords" => (Some(7), Some(8)),
+            "mace" | "maces" => (Some(4), Some(5)),
+            "axe" | "axes" => (Some(0), Some(1)),
+            "fist" | "fists" => (Some(13), None),
+            "staff" | "staves" => (None, Some(10)),
+            "polearm" | "polearms" => (None, Some(6)),
+            _ => return None,
+        };
+        Some(Self { one_hand, two_hand })
+    }
+
+    /// Whether a weapon of item subclass `subclass` is of this kind.
+    fn fits(self, subclass: u32) -> bool {
+        self.one_hand == Some(subclass) || self.two_hand == Some(subclass)
+    }
+
+    /// Whether this kind can be held so.
+    fn held(self, way: Hands) -> bool {
+        match way {
+            Hands::TwoHanded => self.two_hand.is_some(),
+            _ => self.one_hand.is_some(),
+        }
+    }
+}
 
 /// `.gear`'s arguments: none, `green`, `blue`, `raid`, or `raid 1` or `raid
-/// 2`.
-fn gear_args(args: &[&str]) -> Result<Pick, &'static str> {
-    match args {
-        [] => Ok(Pick::Random { quality: None }),
-        [q] if q.eq_ignore_ascii_case("green") => Ok(Pick::Random {
-            quality: Some(UNCOMMON),
-        }),
-        [q] if q.eq_ignore_ascii_case("blue") => Ok(Pick::Random {
-            quality: Some(RARE),
-        }),
-        [raid] if raid.eq_ignore_ascii_case("raid") => Ok(Pick::Raid { tier: None }),
-        [raid, tier] if raid.eq_ignore_ascii_case("raid") => match *tier {
-            "1" => Ok(Pick::Raid { tier: Some(1) }),
-            "2" => Ok(Pick::Raid { tier: Some(2) }),
-            _ => Err(GEAR_USAGE),
-        },
-        _ => Err(GEAR_USAGE),
+/// 2`; then, in any order, a role (`tank`, `healer` or `heal`, `caster`,
+/// `dps`), a way of holding (`shield`: a one-hander and a shield, `2h`,
+/// `dual`, `offhand`: a one-hander and an off-hand item) and a kind of
+/// weapon (`dagger`, `sword`, `mace`, `axe`, `fist`, `staff`, `polearm`),
+/// one of each at most.
+fn gear_args(args: &[&str]) -> Result<(Pick, Wants), &'static str> {
+    let lower: Vec<String> = args.iter().map(|a| a.to_ascii_lowercase()).collect();
+    let words: Vec<&str> = lower.iter().map(String::as_str).collect();
+    let (pick, rest) = match words.as_slice() {
+        ["green", rest @ ..] => (
+            Pick::Random {
+                quality: Some(UNCOMMON),
+            },
+            rest,
+        ),
+        ["blue", rest @ ..] => (
+            Pick::Random {
+                quality: Some(RARE),
+            },
+            rest,
+        ),
+        ["raid", "1", rest @ ..] => (Pick::Raid { tier: Some(1) }, rest),
+        ["raid", "2", rest @ ..] => (Pick::Raid { tier: Some(2) }, rest),
+        ["raid", rest @ ..] => (Pick::Raid { tier: None }, rest),
+        rest => (Pick::Random { quality: None }, rest),
+    };
+    let mut wants = Wants::default();
+    for w in rest {
+        let role = match *w {
+            "tank" => Some(Role::Tank),
+            "healer" | "heal" | "caster" => Some(Role::Healer),
+            "dps" => Some(Role::Damage),
+            _ => None,
+        };
+        let hands = match *w {
+            "shield" => Some(Hands::Shield),
+            "2h" | "twohand" | "two-hand" => Some(Hands::TwoHanded),
+            "dual" => Some(Hands::DualWield),
+            "offhand" | "off-hand" => Some(Hands::HeldInOffHand),
+            _ => None,
+        };
+        let weapon = WeaponKind::named(w);
+        match (role, hands, weapon) {
+            (Some(r), None, None) if wants.role.is_none() => wants.role = Some(r),
+            (None, Some(h), None) if wants.hands.is_none() => wants.hands = Some(h),
+            (None, None, Some(k)) if wants.weapon.is_none() => wants.weapon = Some(k),
+            _ => return Err(GEAR_USAGE),
+        }
+    }
+    Ok((pick, wants))
+}
+
+/// The ways of holding a role wants of a class, first first: a tank's
+/// shield (a druid's two-hander), a healer's or caster's shield for a
+/// paladin or a shaman and an off-hand item for the rest, a fighter's
+/// weapons without a shield.
+fn role_ways(class: u8, role: Role) -> Vec<Hands> {
+    match (role, class) {
+        (Role::Tank, 1 | 2 | 7) => vec![Hands::Shield],
+        (Role::Tank, 11) => vec![Hands::TwoHanded],
+        (Role::Tank, _) => Vec::new(),
+        (Role::Healer, 2 | 7) => vec![Hands::Shield],
+        (Role::Healer, _) => vec![Hands::HeldInOffHand, Hands::TwoHanded],
+        (Role::Damage, _) => vec![Hands::TwoHanded, Hands::DualWield],
+    }
+}
+
+/// The talent trees whose spec holds a shield: a warrior's Protection, a
+/// paladin's Holy and Protection, a shaman's Elemental and Restoration;
+/// and those that don't: Arms, Fury, Retribution, Enhancement.
+const SHIELD_TREES: [u32; 5] = [163, 382, 383, 261, 262];
+const WEAPON_TREES: [u32; 4] = [161, 164, 381, 263];
+
+/// The ways of holding a character's talents want: a shield for one with
+/// most of their points in a tree of [`SHIELD_TREES`], none for one with
+/// most in a tree of [`WEAPON_TREES`]; nothing for one with no points (or
+/// of another class).
+fn spec_ways(
+    data: &crate::game::data::GameData,
+    p: &crate::game::map::player::Player,
+) -> Vec<Hands> {
+    let mut points: Vec<(u32, usize)> = Vec::new();
+    for t in data.spells.talents.values() {
+        let rank = t
+            .ranks
+            .iter()
+            .rposition(|r| *r != 0 && p.spells.contains(r))
+            .map_or(0, |i| i + 1);
+        if rank == 0 {
+            continue;
+        }
+        match points.iter_mut().find(|(tab, _)| *tab == t.tab) {
+            Some((_, n)) => *n += rank,
+            None => points.push((t.tab, rank)),
+        }
+    }
+    let best = points
+        .iter()
+        .max_by_key(|(tab, n)| (*n, *tab))
+        .map(|(tab, _)| *tab);
+    match best {
+        Some(tab) if SHIELD_TREES.contains(&tab) => vec![Hands::Shield],
+        Some(tab) if WEAPON_TREES.contains(&tab) => role_ways(p.row.class, Role::Damage),
+        _ => Vec::new(),
     }
 }
 
@@ -698,7 +840,15 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 /// `.gear raid` is a raider's gear instead (see [`Pick`]): at 60 their
 /// class's tier set, 1 or 2, where it goes, and everywhere else the best
 /// there is for them.
-fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
+///
+/// After the quality may come what the hands are for ([`Wants`]): a role
+/// (`tank`, `healer` or `caster`, `dps`: [`role_ways`]), a way of holding
+/// (`shield`, `2h`, `dual`, `offhand`) and a kind of weapon (`dagger`,
+/// `sword`, `mace`, `axe`, `fist`, `staff`, `polearm`), each held as the
+/// class may; with neither a role nor a way, the talents spent say
+/// ([`spec_ways`]: a Protection warrior's or paladin's shield, a Holy
+/// paladin's, an Elemental or Restoration shaman's), else it is at random.
+fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
     use crate::game::map::inventory::{self, Destination, SLOT_MAIN_HAND, SLOT_OFF_HAND};
     use crate::game::store::BAG_PLAYER;
     use rand::seq::SliceRandom;
@@ -712,6 +862,10 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
     let trinket = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR;
     let one_hand = |t: &crate::game::data::ItemTemplate| {
         t.class == ITEM_WEAPON && weapon_for(&data, t.subclass, class)
+    };
+    // The kind of weapon asked for, in the hands that hold one.
+    let of_kind = |t: &crate::game::data::ItemTemplate, kind: Option<WeaponKind>| {
+        one_hand(t) && kind.is_none_or(|k| k.fits(t.subclass))
     };
     let mut plan: Vec<(u8, Vec<u32>)> = vec![
         (0, gear_pool(&data, who, pick, &[1], armour)),
@@ -742,14 +896,36 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
             }
         }
     }
-    // The hands: a way of holding the class has, at random, that the
-    // items let them fill both of.
+    // The hands: a way of holding the class has that the items let them
+    // fill both of: the one asked for, else the role's, else the talents',
+    // first; the rest at random. A kind of weapon asked for is held a way
+    // it can be, if the class may use it at all.
     let mut ways = hands_of(class, level);
     ways.shuffle(&mut rand::rng());
+    let mut wanted = match (wants.hands, wants.role) {
+        (Some(h), _) => vec![h],
+        (None, Some(role)) => role_ways(class, role),
+        (None, None) => map
+            .players
+            .get(&to)
+            .map_or_else(Vec::new, |p| spec_ways(&data, p)),
+    };
+    wanted.retain(|w| ways.contains(w));
+    ways.retain(|w| !wanted.contains(w));
+    let mut ways: Vec<Hands> = wanted.into_iter().chain(ways).collect();
+    let kind = wants.weapon.filter(|k| {
+        data.items
+            .values()
+            .any(|t| t.class == ITEM_WEAPON && k.fits(t.subclass) && one_hand(t))
+    });
+    if let Some(k) = kind {
+        ways.sort_by_key(|w| !k.held(*w));
+    }
     let fill = |way: Hands| {
+        let kind = kind.filter(|k| k.held(way));
         let main = match way {
-            Hands::TwoHanded => gear_pool(&data, who, pick, &[17], one_hand),
-            _ => gear_pool(&data, who, pick, &[13, 21], one_hand),
+            Hands::TwoHanded => gear_pool(&data, who, pick, &[17], |t| of_kind(t, kind)),
+            _ => gear_pool(&data, who, pick, &[13, 21], |t| of_kind(t, kind)),
         };
         let off = match way {
             Hands::TwoHanded => Vec::new(),
@@ -758,7 +934,7 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
                     && t.subclass == ARMOR_SHIELD
                     && class_gets(&data, 9116, class)
             }),
-            Hands::DualWield => gear_pool(&data, who, pick, &[13, 22], one_hand),
+            Hands::DualWield => gear_pool(&data, who, pick, &[13, 22], |t| of_kind(t, kind)),
             Hands::HeldInOffHand => gear_pool(&data, who, pick, &[23], trinket),
         };
         (way, main, off)
@@ -2358,24 +2534,68 @@ mod tests {
 
     #[test]
     fn gear_takes_a_quality_or_raid_and_a_tier() {
-        assert_eq!(gear_args(&[]), Ok(Pick::Random { quality: None }));
+        let pick = |args: &[&str]| gear_args(args).map(|(p, _)| p);
+        assert_eq!(pick(&[]), Ok(Pick::Random { quality: None }));
         assert_eq!(
-            gear_args(&["green"]),
+            pick(&["green"]),
             Ok(Pick::Random {
                 quality: Some(UNCOMMON)
             })
         );
         assert_eq!(
-            gear_args(&["Blue"]),
+            pick(&["Blue"]),
             Ok(Pick::Random {
                 quality: Some(RARE)
             })
         );
-        assert_eq!(gear_args(&["purple"]), Err(GEAR_USAGE));
-        assert_eq!(gear_args(&["raid"]), Ok(Pick::Raid { tier: None }));
-        assert_eq!(gear_args(&["RAID", "2"]), Ok(Pick::Raid { tier: Some(2) }));
-        assert_eq!(gear_args(&["raid", "3"]), Err(GEAR_USAGE));
-        assert_eq!(gear_args(&["epic"]), Err(GEAR_USAGE));
+        assert_eq!(pick(&["purple"]), Err(GEAR_USAGE));
+        assert_eq!(pick(&["raid"]), Ok(Pick::Raid { tier: None }));
+        assert_eq!(pick(&["RAID", "2"]), Ok(Pick::Raid { tier: Some(2) }));
+        assert_eq!(pick(&["raid", "3"]), Err(GEAR_USAGE));
+        assert_eq!(pick(&["epic"]), Err(GEAR_USAGE));
+    }
+
+    /// After the quality, in any order: a role, a way of holding and a
+    /// kind of weapon, one of each.
+    #[test]
+    fn gear_takes_a_role_a_way_of_holding_and_a_weapon() {
+        let wants = |args: &[&str]| gear_args(args).map(|(_, w)| w);
+        assert_eq!(
+            gear_args(&["raid", "1", "tank"]),
+            Ok((
+                Pick::Raid { tier: Some(1) },
+                Wants {
+                    role: Some(Role::Tank),
+                    ..Wants::default()
+                }
+            ))
+        );
+        assert_eq!(
+            wants(&["Sword", "dual", "dps"]),
+            Ok(Wants {
+                role: Some(Role::Damage),
+                hands: Some(Hands::DualWield),
+                weapon: WeaponKind::named("sword"),
+            })
+        );
+        for (word, hands) in [
+            ("shield", Hands::Shield),
+            ("2h", Hands::TwoHanded),
+            ("offhand", Hands::HeldInOffHand),
+        ] {
+            assert_eq!(wants(&["green", word]).map(|w| w.hands), Ok(Some(hands)));
+        }
+        for word in ["healer", "heal", "caster"] {
+            assert_eq!(wants(&[word]).map(|w| w.role), Ok(Some(Role::Healer)));
+        }
+        for args in [
+            &["sword", "dagger"][..],
+            &["tank", "dps"],
+            &["shield", "2h"],
+            &["juggle"],
+        ] {
+            assert_eq!(gear_args(args), Err(GEAR_USAGE), "{args:?}");
+        }
     }
 
     #[test]

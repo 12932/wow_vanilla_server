@@ -535,6 +535,9 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
         return;
     }
     let level = map.unit_view(player).map(|u| u.level).unwrap_or(1);
+    // Its points with the player's spell modifiers to it, as any spell's
+    // (mangos's `CalculateSpellEffectValue`).
+    let m = mods::for_spell(map, player, s);
     let effects: Vec<(usize, i32)> = (0..3)
         .filter(|i| {
             matches!(
@@ -542,7 +545,7 @@ pub fn apply_passive(map: &mut Map, player: Guid, spell: u32) {
                 EFFECT_APPLY_AURA | EFFECT_APPLY_AREA_AURA_PARTY
             ) && s.effects[*i].aura != 0
         })
-        .map(|i| (i, points(s, i, level)))
+        .map(|i| (i, m.points(s, i, points(s, i, level))))
         .collect();
     if !effects.is_empty() {
         let _ = auras::apply_spell(map, player, player, s, &effects, auras::Context::default());

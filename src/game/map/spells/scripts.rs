@@ -180,6 +180,13 @@ pub fn dummy(
         let holy_light = s.family_flags & 0x8000_0000 != 0;
         let bonus = blessing_of_light_bonus(map, target, holy_light);
         let heal = if holy_light { 19968 } else { 19993 };
+        // The heal stands for the cast: its charged modifiers are spent
+        // with it (Divine Favor's crit), as mangos's `RemoveSpellMods`
+        // takes those it applied.
+        let used = data
+            .spells
+            .get(heal)
+            .map(|t| super::mods::for_spell(map, caster, t));
         cast_with_points(
             map,
             caster,
@@ -187,6 +194,9 @@ pub fn dummy(
             target,
             [Some(amount + bonus), None, None],
         );
+        if let Some(used) = used {
+            super::mods::spend(map, caster, &used);
+        }
         return;
     }
     match s.script_name.as_str() {
@@ -258,7 +268,19 @@ pub fn dummy(
                 } else {
                     heal
                 };
+                // The strike or heal stands for the cast: its charged
+                // modifiers are spent with it (Divine Favor's crit),
+                // as mangos's `RemoveSpellMods` takes those it applied.
+                let used = map
+                    .realm
+                    .data
+                    .spells
+                    .get(spell)
+                    .map(|t| super::mods::for_spell(map, caster, t));
                 cast_triggered(map, caster, spell, Some(target));
+                if let Some(used) = used {
+                    super::mods::spend(map, caster, &used);
+                }
             }
             return;
         }

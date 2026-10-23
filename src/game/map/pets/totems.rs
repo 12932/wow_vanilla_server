@@ -228,15 +228,21 @@ pub fn summon_totem(
         c.speeds.walk = 0.0;
         c.base.run_speed = 0.0;
         c.fields.set_u32(UNIT_CREATED_BY_SPELL, s.id);
-        // A totem has the few points of health its summon spell gives.
+        // A totem has the few points of health its summon spell gives,
+        // with its shaman's modifiers to them (mangos's `EffectSummonTotem`
+        // takes the effect's `damage`, all effects' modifiers in it:
+        // Earth's Grasp's Stoneclaw).
         let health = (s
             .effects
             .iter()
-            .find(|e| {
+            .position(|e| {
                 (EFFECT_SUMMON_TOTEM_SLOT1..=EFFECT_SUMMON_TOTEM_SLOT4).contains(&e.effect)
                     || e.effect == EFFECT_SUMMON_TOTEM
             })
-            .map_or(5, |e| e.base_points + e.base_dice))
+            .map_or(5, |i| {
+                let e = &s.effects[i];
+                mods.points(s, i, e.base_points + e.base_dice)
+            }))
         .max(1) as u32;
         c.fields.set_u32(UNIT_FIELD_MAXHEALTH, health);
         c.fields.set_u32(UNIT_FIELD_HEALTH, health);
@@ -303,14 +309,10 @@ pub fn destroy_all(map: &mut Map, owner: Guid) {
 /// The party around a totem: its shaman and their group, in the map and
 /// within `radius`.
 fn party_near(map: &Map, owner: Guid, at: Vector3d, radius: f32) -> Vec<Guid> {
-    let members: Vec<Guid> = {
-        let groups = map.realm.social.groups.lock();
-        match groups.group_of(owner) {
-            Some(g) => g.members.iter().map(|m| m.guid).collect(),
-            None => vec![owner],
-        }
-    };
-    members
+    // The owner's subgroup in a raid, not all of it (mangos's
+    // `AreaAura::Update` for `AREA_AURA_PARTY`: `GetGroup` members
+    // `SameSubGroup` as the owner).
+    crate::game::map::spells::targets::members(map, owner, false)
         .into_iter()
         .filter(|g| {
             map.players.get(g).is_some_and(|p| {
@@ -370,12 +372,19 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         for p in had.iter().filter(|p| !near.contains(p)) {
             crate::game::map::auras::remove_spell(map, *p, spell, Some(g));
         }
+        // Its amounts with its shaman's modifiers, the totem's modifier owner
+        // (mangos's `CalculateSpellEffectValue` through `GetSpellModOwner`):
+        // Enhancing Totems, Restorative Totems, Guardian Totems.
         let level = level_of(map, g);
+        let mods = crate::game::map::spells::mods::for_spell(map, g, t);
         let effects: Vec<(usize, i32)> = (0..3)
             .filter(|i| {
                 t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY && t.effects[*i].aura != 0
             })
-            .map(|i| (i, crate::game::map::spells::points(t, i, u32::from(level))))
+            .map(|i| {
+                let base = crate::game::map::spells::points(t, i, u32::from(level));
+                (i, mods.points(t, i, base))
+            })
             .collect();
         for p in near.into_iter().filter(|p| !had.contains(p)) {
             let _ = crate::game::map::auras::apply_spell(

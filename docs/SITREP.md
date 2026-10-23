@@ -60,7 +60,7 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   as vmangos's; no source has them pick a caster, so a healer is charged once their healing tops the list. A refused
   Charge (too close) no longer spends its 12 to 18 s; EventAI's range event measures past the bounding radii, as
   mangos's.
-- **A warmaster and Drek'Thar stand while they whirl** (decision 89, vmangos's C++ over Thistle Tea's port): a
+- **A warmaster and Drek'Thar stand while they whirl** (decision 93, vmangos's C++ over Thistle Tea's port): a
   warmaster's (and an Elite Guard's) double Whirlwind roots it 4 s, Drek'Thar's 2 s, and nothing else is cast in
   it; what fell due goes after. Not taken: the 1 s global cooldown between their other spells, and vmangos's 5 to
   10 s wait for a Charge with no one in range.
@@ -73,6 +73,43 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
 - **Next, by the survey** ([review6.md](review/review6.md)): 47 of 69 raid bosses have no AI (Naxxramas, the Temple
   and Ruins of Ahn'Qiraj, Zul'Gurub); four quest events written in code (the Dreadsteed, Jail Break!, The
   Challenge, the Avatar of Hakkar); no player limit or login queue; no shutdown countdown or AFK logout.
+
+## The talent plan's server gaps (2026-10-23): calls for you
+The gaps the talent audits found in wvs (`fix/talents-server`). Decisions 89 to 92 depart from mangos-classic;
+the rest are calls made without you. Say which to change.
+- **`.gear`'s hands** (peon's syntax): `.gear [green|blue|raid [1|2]] [tank|healer|caster|dps]
+  [shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm]`, the words after the quality in any order,
+  one of each kind. `tank` is a one-hander and a shield for a warrior, paladin or shaman (a druid's two-hander);
+  `healer` and `caster` a shield for a paladin or shaman, an off-hand item or a two-hander for the others; `dps`
+  never a shield. A weapon kind goes in both hands when dual. With no role or way, the talents spent say: a shield
+  for most points in Protection (warrior, paladin), Holy, Elemental or Restoration, none for Arms, Fury,
+  Retribution or Enhancement; with no talents, at random as before. peon sends `.gear` before its talents, so it
+  should name the role (or the hands) itself.
+- **`.character spells` teaches the quest and book class spells** no trainer has: every class quest's spell at its
+  level and race (the priests' racials, whose later ranks the trainers then teach; Redemption's first rank;
+  Intercept; the shaman's first totems; the warlock's steeds; Conjure Water 7 and Polymorph: Pig from their 60
+  quests), and of the books that drop or are sold, those no trainer has a rank of (Tranquilizing Shot, Prayer of
+  Fortitude 1 and 2, Gift of the Wild 1 and 2, Arcane Brilliance, Prayer of Shadow Protection, Polymorph:
+  Turtle). Not a book's higher rank of a trainer's spell (the AQ and Naxxramas rank-ups, Fireball XII): loot.
+- **Anger Management** gives 0.9 rage every 3 s in combat: mangos's three fifths of its points, the client's 15.
+- **`spell_threat` by rank:** a higher rank with no row takes its first rank's (mangos's `FillHigherRanks`), the
+  chain from `spell_chain`, the talents' ranks and the skill line's `superseded_by`; this reaches every such spell,
+  not only Thunder Clap.
+- **A passive's points take its owner's spell modifiers** (Feral Instinct's bear threat 1.3 to 1.45), and a
+  modifier coming or going puts the passives it touches on again, as mangos's `ReapplyAffectedPassiveAuras`.
+- **Spirit Bond and Master Demonologist** are cast by the pet, so the master has them too (mangos's
+  `CastPetAura`).
+- **Demons have their family's passives** (mangos's `LearnPetPassives`): Command's 5% for an orc's demon (an orc
+  hunter's beast had it already, through its passive), Fel Stamina and Fel Intellect, which did nothing, and the
+  felhunter's 60 to every magic resistance.
+- **Bloodthirst's heal** was never missing: vmangos's `spell_effect_mod` gives each rank its buff. A test holds it.
+- **Paladin and shaman:** Improved Seal of Righteousness touches the seal's own flag 0x8000000 (mangos's old
+  `spell_affect`; mangos-classic now takes the DBC's 0x400, the Judgement alone), and its 15% raises the seal's
+  amount, so the strike's formula, not its weapon or spell power parts. Flametongue's strike takes its caster's
+  modifiers and damage done (Elemental Weapons, Elemental Fury, fire damage done), its spell power kept out by a
+  coefficient of 0. Improved Lay on Hands' armor goes on the one healed (mangos special-cases rank 1's alone; both
+  tooltips say the target). A totem's party aura reaches its shaman's subgroup, not the raid, and takes their
+  talents; Earth's Grasp raises Stoneclaw's health.
 
 ## The load tester and its bots: decisions of 2026-10-23
 peon's own decisions, logged here so they're reviewed in one place; peon's `docs/BOT_AI.md` has the detail.
@@ -123,6 +160,29 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - creatures not fighting the raid, or out of reach on foot, are ignored (the Frostwolf Bowmen);
   - defensives fire at 1.5 s from death;
   - a cost: party-60 deaths 1 to 4, every round still won.
+- **Drinking, round two:** a bot stops before it sits and makes no move while seated drinking. A skilled bot (the top
+  30% by skill) on a march drinks on its own regeneration tick (sits 0.25–0.5 s before it, stands when mana rises),
+  below 80% mana with more than 10 waters; the thresholds are the tuning's `[drink]` `tick_*` knobs. The cost: AV's
+  time under 10% mana rose 3% to 7%, as low bots now march and fight instead of a stood-up "rest".
+- **Warriors (talent plan, phase 3):**
+  - Mortal Strike and Bloodthirst on cooldown above Execute (below 20%), Whirlwind and Cleave;
+  - Heroic Strike and Cleave keep a main blow's rage;
+  - a tank dances to Battle Stance to Thunder Clap 3 foes or an elite, wasting at most 20 rage;
+  - the Protection build is 10/3/38 for Tactical Mastery;
+  - Death Wish only at a boss, 3+ foes or a player below half;
+  - Last Stand below 40% with under 4 s to live, Shield Wall below 30% with under 2.5 s;
+  - Challenging Shout at 3 loose foes.
+- **Druids (phase 3):**
+  - builds: Restoration 11/0/40 with Improved Tranquility; Feral 11/31/9 with Omen of Clarity, which procs only on
+    melee in 1.12, so it's in no caster build;
+  - Tranquility when 3 of the party within 20 yards are below 60%, no foe in melee on it (`[druid]` knobs);
+  - pre-HoTs on tactics' "a tank's going in" moment: Rejuvenation first, then Regrowth, then itself;
+  - Innervate on the healer lowest on mana;
+  - healers cast no damage while their tank is being hit;
+  - Nature's Grasp only in PvP;
+  - Barkskin only in caster form, as 1.12 forbids it in forms.
+  
+  Feral druids are still made healers by the party scenario's role draw, which is outside the druid's files.
 - **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
   goes in at the next quiet moment.
 

@@ -222,8 +222,10 @@ pub fn apply_level(data: &GameData, c: &mut Creature, level: u8) {
 /// The spells a pet knows at `level`: its first spells (a creature's
 /// list, or a demon's create spells and what the Grimoires teach, with a
 /// hunter's pet's Growl), each at its highest rank by then in its skill
-/// lines, as Thistle Tea's `pet_spellbook` works it out; and a hunter's
-/// pet's family passives.
+/// lines, as Thistle Tea's `pet_spellbook` works it out; and its family's
+/// passives, a demon's as a beast's (mangos's `LearnPetPassives` for every
+/// pet: the hidden passives the master's Command, Fel Stamina and Fel
+/// Intellect raise, the felhunter's resistances).
 pub fn spellbook(data: &GameData, entry: u32, level: u8, hunter: bool, family: u32) -> Vec<u32> {
     let mut first: Vec<u32> = data
         .pets
@@ -300,9 +302,7 @@ pub fn spellbook(data: &GameData, entry: u32, level: u8, hunter: bool, family: u
             spells.push(s);
         }
     }
-    if hunter {
-        spells.extend(family_passives(data, family));
-    }
+    spells.extend(family_passives(data, family));
     spells.sort_unstable();
     spells.dedup();
     spells

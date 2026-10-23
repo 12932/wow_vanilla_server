@@ -1497,7 +1497,38 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - Already right: the cast checks refuse a creature's cast inside a spell's least as a player's
       (`SPELL_FAILED_TOO_CLOSE`), and a script's random pick for a cast is one in the spell's band.
 
-89. **A warmaster and Drek'Thar stand while they whirl** (2026-10-23; `fix/av-fidelity`, a fidelity finding: wvs
+89. **Improved Scorpid Sting** (2026-10-23; `fix/talents-server`, the hunter audit). A hunter's Scorpid Sting going on
+    casts 19486 on the stung: 10, 20 or 30% (the talent's override scripts 2388 to 2390) of the strength the sting
+    takes, as stamina, for the sting's time, and it goes with the sting, as mangos's `HandleAuraModStat` and
+    `RemoveAurasTriggeredBySpell`. Two departures from mangos-classic: it looks for the script on the **hunter**
+    (mangos looks on the stung, who never has the hunter's talent, so its talent never works), and it takes the
+    share of the **strength** effect alone (mangos's handler runs for each stat effect, so its agility effect's cast
+    would replace the strength one's; the tooltip says strength). Thistle Tea has no handler.
+
+90. **Improved Firestone on the Firestone's fire damage** (2026-10-23; `fix/talents-server`, the warlock audit). A
+    worn item's aura now takes its wearer's spell modifiers, as mangos's `CalculateSpellEffectValue` (all effects'),
+    and a bonus to damage done (`SPELL_AURA_MOD_DAMAGE_DONE`) takes their damage modifiers too. That second part is
+    not mangos-classic's: it modifies no aura's amount by `SPELLMOD_DAMAGE`, so the half of Improved Firestone that
+    names the Firestones' equip auras ("Increase Fire Dam", family flag 0x200000, operation 0) does nothing there.
+    With it, a Major Firestone's 21 fire damage is 27 at rank 2 (30%). The Firestone's proc already took the
+    talent. A modifier coming or going puts the worn auras it touches on again.
+
+91. **Improved Drain Mana** (2026-10-23; `fix/talents-server`, the warlock audit). Each tick of a warlock's Drain
+    Mana deals 15 or 30% of the mana it took (the talent's override scripts 2028 and 2029) as the drain's own Shadow
+    damage, through the target's modifiers and resistances as a tick's. Neither mangos-classic nor Thistle Tea has
+    it, and the talent's auras carry no amount, so the shares are the tooltip's.
+
+92. **Divine Favor's mask and charge** (2026-10-23; `fix/talents-server`, the paladin audit). mangos-classic takes
+    20216's mask from the DBC (0x206000: Holy Shock's 0x200000 and the script heals 19968 and 19993 at 0x4000 and
+    0x2000). vmangos's `spell_effect_mod` makes every Holy Light rank a direct heal with its own flag 0x80000000, so
+    with the DBC's mask Divine Favor never touched Holy Light. wvs ORs 0xC0000000 (Holy Light and Flash of Light)
+    into the mask, as mangos's old `spell_affect` 0xC0200000 did and as 1.12's tooltip says. Its one charge is also
+    spent by the heal or strike a script casts in the cast's place (Flash of Light's 19993, Holy Shock's 25912 and
+    25914 and their ranks), as mangos's `RemoveSpellMods` does for the modifiers a spell applied; wvs otherwise
+    spends charges only on casts not triggered. Before, a Holy Shock crit for as long as Divine Favor stayed up,
+    which was for good.
+
+93. **A warmaster and Drek'Thar stand while they whirl** (2026-10-23; `fix/av-fidelity`, a fidelity finding: wvs
     followed Thistle Tea's port, whose moduledoc says "whirlwinding leaders keep moving"). vmangos's C++
     (`battleground_alterac.cpp`) is the reference, followed:
     - **The warmasters and marshals** (`npc_WarMaster`): its first Whirlwind (13736, from 12 s) sets

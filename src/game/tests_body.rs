@@ -54,9 +54,31 @@ fn meal(id: u32) -> SpellTemplate {
     }
 }
 
+/// Conjured Crystal Water's drink (22734), as its row has it: mana
+/// regeneration (85) of 700 a five seconds, no tick of its own, the
+/// meals' flags and attributes, 30 s.
+const DRINK: u32 = 22_734;
+const CRYSTAL_WATER: u32 = 8079;
+
+fn drink() -> SpellTemplate {
+    let mut s = meal(DRINK);
+    s.name = "Drink".into();
+    s.duration_index = 9;
+    s.effects[0] = SpellEffect {
+        effect: 6,
+        aura: auras::AURA_MOD_POWER_REGEN,
+        base_points: 699,
+        base_dice: 1,
+        target_a: 1,
+        ..Default::default()
+    };
+    s
+}
+
 fn data() -> GameData {
     let mut d = GameData::empty();
     d.spells.spells.insert(FOOD, meal(FOOD));
+    d.spells.spells.insert(DRINK, drink());
     let mut buff = meal(BUFF_FOOD);
     buff.effects[1] = SpellEffect {
         effect: 6,
@@ -88,7 +110,11 @@ fn data() -> GameData {
             ..Default::default()
         },
     );
-    for (entry, spell) in [(JERKY, FOOD), (WOLF_MEAT, BUFF_FOOD)] {
+    for (entry, spell) in [
+        (JERKY, FOOD),
+        (WOLF_MEAT, BUFF_FOOD),
+        (CRYSTAL_WATER, DRINK),
+    ] {
         let mut item = crate::game::data::ItemTemplate {
             entry,
             name: "Meal".into(),
@@ -282,6 +308,80 @@ async fn food_sits_the_eater_and_standing_moving_jumping_or_turning_ends_it() {
             "{how} ends the meal"
         );
     }
+}
+
+/// Water, as 1.12 has it: refused on the move (`SPELL_FAILED_MOVING`);
+/// still, it sits the drinker, and its mana comes on the drinker's own
+/// regen tick, its 700 a five seconds 280 a tick; moving stands them and
+/// ends it, and the next tick pays spirit's alone.
+#[tokio::test]
+async fn water_sits_the_still_drinker_pays_on_its_tick_and_a_move_ends_it() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "W");
+    let g = a.enter("Bodyw", Race::Human, Class::Mage).await;
+    let map = realm.registry.online(g).unwrap().map();
+    let at = on(&map, move |m| m.players[&g].position()).await;
+    let forward = |x: f32| MSG_MOVE_START_FORWARD_Client {
+        info: moved(
+            MovementInfo_MovementFlags::new_forward(),
+            Vector3d { x: at.x + x, ..at },
+            0.0,
+        ),
+    };
+    // On the move: refused, not seated.
+    a.send(forward(0.5)).await;
+    settled(&mut a).await;
+    eat(&mut a, &map, CRYSTAL_WATER).await;
+    let refused = a
+        .wait_for("SMSG_CAST_RESULT", |m| match m {
+            S::SMSG_CAST_RESULT(r) => Some((r.spell, format!("{:?}", r.result))),
+            _ => None,
+        })
+        .await;
+    assert_eq!(refused.0, DRINK);
+    assert!(refused.1.contains("Moving"), "{}", refused.1);
+    assert_eq!(state(&map, g, &[DRINK]).await, (0, vec![false]), "refused");
+    // Stopped: it sits them, and drinks.
+    a.send(MSG_MOVE_STOP_Client {
+        info: moved(
+            MovementInfo_MovementFlags::empty(),
+            Vector3d {
+                x: at.x + 1.0,
+                ..at
+            },
+            0.0,
+        ),
+    })
+    .await;
+    a.clear();
+    eat(&mut a, &map, CRYSTAL_WATER).await;
+    posture(&mut a, UnitStandState::Sit).await;
+    assert_eq!(state(&map, g, &[DRINK]).await, (1, vec![true]));
+    // Its tick: spirit's share and the drink's 280.
+    let tick = |map: MapHandle| async move {
+        on(&map, move |m| {
+            let p = m.players.get_mut(&g).unwrap();
+            p.fields.set_u32(UNIT_FIELD_MAXPOWER1, 100_000);
+            p.fields.set_u32(UNIT_FIELD_POWER1, 0);
+            p.mana_spent_at = None;
+            p.regen_at = m.now;
+            crate::game::map::stats::regen(m);
+            m.players[&g].fields.get_u32(UNIT_FIELD_POWER1)
+        })
+        .await
+    };
+    let drinking = tick(map.clone()).await;
+    // A step stands them, the drink ended.
+    a.send(forward(1.5)).await;
+    posture(&mut a, UnitStandState::Stand).await;
+    settled(&mut a).await;
+    assert_eq!(state(&map, g, &[DRINK]).await, (0, vec![false]), "moved");
+    let standing = tick(map.clone()).await;
+    assert_eq!(
+        drinking - standing,
+        280,
+        "{drinking} drinking, {standing} not"
+    );
 }
 
 /// A buff food's Well Fed, which comes while the player eats (its

@@ -507,6 +507,11 @@ pub struct GameData {
     /// bits: built at its first use (`.gear`'s choice of ammunition).
     #[cfg_attr(test, serde(skip))]
     pub ammo_sources: std::sync::OnceLock<AHashMap<u32, u8>>,
+    /// The class spells a quest or a book teaches and no trainer does
+    /// ([`Self::quest_class_spells`]), built at their first use
+    /// (`.character spells`).
+    #[cfg_attr(test, serde(skip))]
+    pub quest_spells: std::sync::OnceLock<Vec<QuestClassSpell>>,
     pub areas: AHashMap<u32, AreaInfo>,
     pub area_triggers: AHashMap<u32, AreaTrigger>,
     pub maps: AHashMap<u32, MapInfo>,
@@ -586,9 +591,178 @@ pub struct GameData {
     pub world: world::WorldData,
 }
 
+/// A class spell a quest or a book teaches ([`GameData::quest_class_spells`]):
+/// from what level, and to which classes and races (bits by id less one;
+/// 0 for any race).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuestClassSpell {
+    pub spell: u32,
+    pub level: u8,
+    pub classes: u32,
+    pub races: u32,
+}
+
 impl GameData {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// The class spells a class's quests teach (the priest's racial spells'
+    /// first ranks, a warrior's stances, Redemption's first rank) and the
+    /// books that teach what no trainer has a rank of (Tranquilizing Shot,
+    /// Prayer of Fortitude, Gift of the Wild, Arcane Brilliance), with no
+    /// trainer row of their own: the spell the quest's reward or the book
+    /// teaches, a class's by its skill line, from the level the quest or
+    /// the book asks and the spell's. A book's higher rank of a trainer's
+    /// spell (Fireball's twelfth) is loot, not this. In level order.
+    pub fn quest_class_spells(&self) -> &[QuestClassSpell] {
+        self.quest_spells.get_or_init(|| {
+            const EFFECT_LEARN_SPELL: u32 = 36;
+            const ITEM_SPELL_ON_USE: u32 = 0;
+            const ITEM_SPELL_LEARN: u32 = 6;
+            let learns = |spell: u32| -> Vec<u32> {
+                self.spells.get(spell).map_or_else(Vec::new, |s| {
+                    s.effects
+                        .iter()
+                        .filter(|e| e.effect == EFFECT_LEARN_SPELL && e.trigger_spell != 0)
+                        .map(|e| e.trigger_spell)
+                        .collect()
+                })
+            };
+            let classes_of = |spell: u32| -> u32 {
+                self.spells
+                    .skill_abilities
+                    .get(&spell)
+                    .into_iter()
+                    .flatten()
+                    .fold(0, |m, a| m | a.class_mask)
+            };
+            let level_of =
+                |spell: u32| -> u32 { self.spells.get(spell).map_or(0, |s| s.spell_level) };
+            let mut trained = ahash::AHashSet::new();
+            for list in self
+                .npc
+                .trainers
+                .values()
+                .chain(self.npc.trainer_templates.values())
+            {
+                for t in list {
+                    trained.insert(t.spell);
+                    trained.extend(learns(t.spell));
+                }
+            }
+            let trained_names: ahash::AHashSet<&str> = trained
+                .iter()
+                .filter_map(|s| self.spells.get(*s))
+                .map(|s| s.name.as_str())
+                .collect();
+            // A rank after a trainer's spell, by its chain or its skill
+            // line (Deadly Poison V after IV), or of a trainer's spell's
+            // name (Fireball XII).
+            let mut after: AHashMap<u32, u32> = AHashMap::new();
+            for (id, abilities) in &self.spells.skill_abilities {
+                for a in abilities.iter().filter(|a| a.superseded_by != 0) {
+                    after.insert(a.superseded_by, *id);
+                }
+            }
+            for (id, r) in &self.spells.ranks {
+                if r.prev != 0 {
+                    after.insert(*id, r.prev);
+                }
+            }
+            let rank_up = |spell: u32| {
+                after.get(&spell).is_some_and(|prev| trained.contains(prev))
+                    || self
+                        .spells
+                        .get(spell)
+                        .is_some_and(|t| trained_names.contains(t.name.as_str()))
+            };
+            // The books there are: dropped, found or sold.
+            let loot = &self.loot;
+            let obtainable: ahash::AHashSet<u32> = [
+                &loot.creature,
+                &loot.gameobject,
+                &loot.reference,
+                &loot.item,
+                &loot.pickpocket,
+            ]
+            .into_iter()
+            .flat_map(|t| t.values().flatten())
+            .filter(|e| e.min >= 0)
+            .map(|e| e.item)
+            .chain(
+                self.vendors
+                    .values()
+                    .chain(self.vendor_templates.values())
+                    .flatten()
+                    .map(|v| v.item),
+            )
+            .collect();
+            let mut out = Vec::new();
+            let mut push = |spell: u32, from: u32, classes: u32, races: u32| {
+                let classes = classes & classes_of(spell);
+                if classes == 0 || trained.contains(&spell) {
+                    return;
+                }
+                let level = from.max(level_of(spell)).clamp(1, 255) as u8;
+                out.push(QuestClassSpell {
+                    spell,
+                    level,
+                    classes,
+                    races,
+                });
+            };
+            for q in self.npc.quests.values().filter(|q| q.required_classes != 0) {
+                for reward in [q.reward_spell, q.reward_spell_cast] {
+                    if reward == 0 {
+                        continue;
+                    }
+                    let taught = learns(reward);
+                    let taught = if taught.is_empty() {
+                        vec![reward]
+                    } else {
+                        taught
+                    };
+                    for spell in taught {
+                        push(
+                            spell,
+                            u32::from(q.min_level),
+                            q.required_classes,
+                            q.required_races,
+                        );
+                    }
+                }
+            }
+            for item in self
+                .items
+                .values()
+                .filter(|i| obtainable.contains(&i.entry))
+            {
+                let classes = if item.allowable_class <= 0 {
+                    u32::MAX
+                } else {
+                    item.allowable_class as u32
+                };
+                let races = if item.allowable_race <= 0 {
+                    0
+                } else {
+                    item.allowable_race as u32
+                };
+                for s in item.spells.iter().filter(|s| s.id != 0) {
+                    let taught = match s.trigger {
+                        ITEM_SPELL_LEARN => vec![s.id],
+                        ITEM_SPELL_ON_USE => learns(s.id),
+                        _ => Vec::new(),
+                    };
+                    for spell in taught.into_iter().filter(|s| !rank_up(*s)) {
+                        push(spell, item.required_level, classes, races);
+                    }
+                }
+            }
+            out.sort_unstable_by_key(|q| (q.level, q.spell, q.classes, q.races));
+            out.dedup();
+            out
+        })
     }
 
     /// Whether this is vmangos's world, not the empty fallback.

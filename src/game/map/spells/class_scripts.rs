@@ -387,8 +387,12 @@ fn flametongue(
         .map_or(2000, |t| t.delay.max(1));
     let damage = flametongue_damage(amount, fire, speed);
     let mut strike = attack.clone();
-    // Its spell power is in already.
-    strike.attributes[3] |= crate::game::data::spells::ATTR_EX3_IGNORE_CASTER_MODIFIERS;
+    // Its spell power is in already: none again. Its caster's modifiers
+    // and damage done hold, as mangos casts 10444 with the total
+    // (`EffectDummy`): Elemental Weapons' damage, Elemental Fury's crit.
+    for e in &mut strike.effects {
+        e.bonus_coefficient = 0.0;
+    }
     let _ = s;
     super::scripts::cast_template_with_points(
         map,
@@ -832,10 +836,106 @@ fn cannibalizing(map: &Map, h: &Holder) -> bool {
         .is_some_and(|t| script(t, "spell_cannibalize_aura"))
 }
 
+/// Scorpid Sting's family flag, and Improved Scorpid Sting's stamina
+/// drain with its scripts' shares of the strength taken.
+const SCORPID_STING_FLAG: u64 = 0x8000;
+const IMPROVED_SCORPID_STING: u32 = 19_486;
+const IMPROVED_SCORPID_STING_SCRIPTS: [(i32, i32); 3] = [(2388, 10), (2389, 20), (2390, 30)];
+
+/// Improved Scorpid Sting: a hunter's Scorpid Sting takes stamina too, a
+/// share of the strength it takes by the hunter's script aura, for as long
+/// (mangos's `HandleAuraModStat`, which casts 19486 with it). mangos looks
+/// for the script on the stung; it is the hunter's talent, so here on the
+/// hunter.
+fn improved_scorpid_sting(map: &mut Map, target: Guid, h: &Holder) {
+    let data = map.realm.data.clone();
+    let Some(t) = data.spells.get(h.spell) else {
+        return;
+    };
+    if t.family_name != FAMILY_HUNTER || t.family_flags & SCORPID_STING_FLAG == 0 {
+        return;
+    }
+    let Some(strength) = h
+        .effects
+        .iter()
+        .find(|x| x.kind == auras::AURA_MOD_STAT && x.misc == 0)
+        .map(|x| x.amount)
+    else {
+        return;
+    };
+    let share = auras::auras(map, h.caster).map_or(0, |a| {
+        a.effects()
+            .filter(|(_, x)| x.kind == auras::AURA_OVERRIDE_CLASS_SCRIPTS)
+            .filter_map(|(_, x)| {
+                IMPROVED_SCORPID_STING_SCRIPTS
+                    .iter()
+                    .find(|(script, _)| *script == x.misc)
+                    .map(|(_, pct)| *pct)
+            })
+            .max()
+            .unwrap_or(0)
+    });
+    let stamina = strength * share / 100;
+    let Some(drain) = data.spells.get(IMPROVED_SCORPID_STING) else {
+        return;
+    };
+    if stamina == 0 {
+        return;
+    }
+    let _ = auras::apply_spell(
+        map,
+        h.caster,
+        target,
+        drain,
+        &[(0, stamina)],
+        auras::Context {
+            duration: Some(
+                h.expires
+                    .map(|e| e.saturating_duration_since(map.now).as_millis() as u32),
+            ),
+            ..Default::default()
+        },
+    );
+}
+
+/// Drain Mana's family flag, and Improved Drain Mana's scripts with the
+/// share of the mana drained each deals as damage (the talent's 15 and
+/// 30%: its auras' points say nothing).
+const DRAIN_MANA_FLAG: u64 = 0x10;
+const IMPROVED_DRAIN_MANA_SCRIPTS: [(i32, u32); 2] = [(2028, 15), (2029, 30)];
+
+/// The share, in percent, of the mana a warlock's Drain Mana takes in a
+/// tick that it deals the drained as damage too, by the warlock's Improved
+/// Drain Mana: none without it. Neither mangos-classic nor Thistle Tea
+/// has it.
+pub fn drained_as_damage(map: &Map, h: &Holder) -> u32 {
+    let drain =
+        map.realm.data.spells.get(h.spell).is_some_and(|t| {
+            t.family_name == FAMILY_WARLOCK && t.family_flags & DRAIN_MANA_FLAG != 0
+        });
+    if !drain {
+        return 0;
+    }
+    auras::auras(map, h.caster).map_or(0, |a| {
+        a.effects()
+            .filter(|(_, x)| x.kind == auras::AURA_OVERRIDE_CLASS_SCRIPTS)
+            .filter_map(|(_, x)| {
+                IMPROVED_DRAIN_MANA_SCRIPTS
+                    .iter()
+                    .find(|(script, _)| *script == x.misc)
+                    .map(|(_, pct)| *pct)
+            })
+            .max()
+            .unwrap_or(0)
+    })
+}
+
 /// An aura went on: Stoneform's disease immunity beside its poison one
 /// (Thistle Tea's `extra_effects`, which the spell's three effects have no
-/// room for), and Bestial Wrath's immunities on the pet.
+/// room for), Bestial Wrath's immunities on the pet, and Improved Scorpid
+/// Sting's stamina drain beside the sting.
 pub fn aura_applied(map: &mut Map, target: Guid, h: &Holder) {
+    improved_scorpid_sting(map, target, h);
     if cannibalizing(map, h)
         && let Some(f) = map.unit_fields_mut(target)
     {
@@ -912,6 +1012,17 @@ pub fn aura_gone(map: &mut Map, target: Guid, h: &Holder) {
         for id in BESTIAL_WRATH_IMMUNITIES {
             auras::remove_spell(map, target, id, Some(h.caster));
         }
+    }
+    // A sting's stamina drain goes with it (mangos's
+    // `RemoveAurasTriggeredBySpell`).
+    if map
+        .realm
+        .data
+        .spells
+        .get(h.spell)
+        .is_some_and(|t| t.family_name == FAMILY_HUNTER && t.family_flags & SCORPID_STING_FLAG != 0)
+    {
+        auras::remove_spell(map, target, IMPROVED_SCORPID_STING, Some(h.caster));
     }
     // Combustion and its crit go together, either way (mangos's
     // `RemoveSpellAuraHolder`): cancelling the crit takes Combustion.
@@ -1129,9 +1240,34 @@ pub fn preserves_periodic_timer(s: &SpellTemplate) -> bool {
         || PRESERVED_PERIODIC.contains(&s.id)
 }
 
+/// Divine Favor, and Holy Light's and Flash of Light's own flags: vmangos
+/// makes Holy Light a heal of its own (`spell_effect_mod`), not the
+/// script's 19968 the DBC's mask names (mangos's `spell_affect`
+/// 0xC0200000).
+const DIVINE_FAVOR: u32 = 20216;
+const HOLY_LIGHT_AND_FLASH: u64 = 0xC000_0000;
+/// Improved Seal of Righteousness's ranks, and the seal's own flag beside
+/// its Judgement's (mangos's `spell_affect` 0x8000400).
+const IMPROVED_SEAL_OF_RIGHTEOUSNESS: [u32; 5] = [20224, 20225, 20330, 20331, 20332];
+const SEAL_OF_RIGHTEOUSNESS_FLAG: u64 = 0x800_0000;
+
 /// What the scripts add to the spells' data: Shadowmeld's stealth from
-/// its passive, as a spare effect.
+/// its passive, as a spare effect; the spells Divine Favor and Improved
+/// Seal of Righteousness touch, as mangos's `spell_affect` had them.
 pub fn patch(data: &mut SpellData) {
+    let touched = IMPROVED_SEAL_OF_RIGHTEOUSNESS
+        .iter()
+        .map(|id| (*id, SEAL_OF_RIGHTEOUSNESS_FLAG))
+        .chain(std::iter::once((DIVINE_FAVOR, HOLY_LIGHT_AND_FLASH)));
+    for (id, flag) in touched {
+        if let Some(s) = data.spells.get_mut(&id) {
+            for e in s.effects.iter_mut().filter(|e| {
+                e.aura == auras::AURA_ADD_FLAT_MODIFIER || e.aura == auras::AURA_ADD_PCT_MODIFIER
+            }) {
+                e.item_type |= flag;
+            }
+        }
+    }
     let stealth = data
         .spells
         .get(&SHADOWMELD_PASSIVE)

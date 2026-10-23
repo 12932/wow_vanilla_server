@@ -795,6 +795,59 @@ async fn a_shifted_druid_keeps_the_five_second_rule_its_mana_auras_and_nothing_o
     );
 }
 
+/// A player's ticks keep their two-second cadence however late the update
+/// that pays each comes (mangos's `m_regenTimer` keeps what is left past
+/// each): 31 of them in a minute of updates 70 ms apart, each at its own
+/// phase or within one update after it, not drifting by an update's
+/// lateness a tick. An update that misses a tick outright (a stall)
+/// starts the cadence again from it.
+#[tokio::test]
+async fn a_players_regen_ticks_keep_their_cadence_whatever_the_updates_lateness() {
+    let (_a, g, map) = player(Class::Mage).await;
+    let (ticks, stalled) = map
+        .query(move |m| {
+            let mage = Pools {
+                health: 100,
+                max_health: 100,
+                spirit: 40,
+                mana: (0, 100_000),
+                ..Default::default()
+            };
+            set(m, g, mage);
+            let start = m.now;
+            m.players.get_mut(&g).unwrap().regen_at = start;
+            let mut ticks = Vec::new();
+            let mut last = pools(m, g).1;
+            for k in 0..=858 {
+                m.now = start + Duration::from_millis(70 * k);
+                stats::regen(m);
+                let mana = pools(m, g).1;
+                if mana > last {
+                    ticks.push(m.now.duration_since(start));
+                }
+                last = mana;
+            }
+            // A stall of five seconds: one tick, then two seconds on.
+            let at = m.now + Duration::from_secs(5);
+            m.now = at;
+            stats::regen(m);
+            let stalled = m.players[&g].regen_at.duration_since(at);
+            m.now = start;
+            (ticks, stalled)
+        })
+        .await
+        .unwrap();
+    assert_eq!(ticks.len(), 31, "{ticks:?}");
+    for (i, t) in ticks.iter().enumerate() {
+        let due = REGEN_INTERVAL * i as u32;
+        assert!(
+            *t >= due && *t < due + Duration::from_millis(70),
+            "tick {i} at {t:?}, due {due:?}"
+        );
+    }
+    assert_eq!(stalled, REGEN_INTERVAL);
+}
+
 #[test]
 fn players_tick_every_two_seconds_and_creatures_every_five() {
     assert_eq!(REGEN_INTERVAL, Duration::from_secs(2));

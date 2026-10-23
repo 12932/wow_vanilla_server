@@ -3,9 +3,13 @@
 //! Tea's `PetSpellModifiers` projects them), their passive talents aimed
 //! at the pet (`APPLY_AREA_AURA_PET`: Unleashed Fury, Ferocity), and the
 //! auras `spell_pet_auras` gives the pet for an aura of theirs (Master
-//! Demonologist, Spirit Bond). Each is a hidden aura on the pet from its
-//! master, marked as inherited by naming the master as its item, and kept
-//! in line with the master every second.
+//! Demonologist, Spirit Bond). Each is a hidden aura on the pet, marked as
+//! inherited by naming the master as its item, and kept in line with the
+//! master every second: from the master, but a `spell_pet_auras` aura
+//! that is the pet's area aura, which the pet casts on itself and so
+//! spreads to its master too (mangos's `Pet::CastPetAura`; Spirit Bond's
+//! regeneration and Master Demonologist's half are the warlock's and the
+//! hunter's as well).
 
 use std::time::Duration;
 
@@ -18,16 +22,24 @@ use crate::game::map::auras::{AURA_ADD_FLAT_MODIFIER, AURA_ADD_PCT_MODIFIER, Con
 /// How often a pet's inheritance is brought in line.
 pub const EVERY: Duration = Duration::from_secs(1);
 
-/// What the pet should have of its master's: each spell and the effects
-/// (with their amounts) it gives.
-fn wanted(map: &Map, pet: Guid, owner: Guid) -> Vec<(u32, Vec<(usize, i32)>)> {
+/// One of a pet's inherited auras: its spell, the effects (with their
+/// amounts) it gives, and whether the pet casts it (an area aura of
+/// `spell_pet_auras`'s) rather than its master.
+type Inherited = (u32, Vec<(usize, i32)>, bool);
+
+/// One of the pet's inherited holders: its spell, caster and effects'
+/// amounts.
+type Had = (u32, Guid, Vec<(u8, i32)>);
+
+/// What the pet should have of its master's.
+fn wanted(map: &Map, pet: Guid, owner: Guid) -> Vec<Inherited> {
     let data = &map.realm.data;
     let Some(p) = map.players.get(&owner) else {
         return Vec::new();
     };
     let entry = map.creature(pet).map_or(0, |c| c.entry);
     let level = u32::from(p.level());
-    let mut out: Vec<(u32, Vec<(usize, i32)>)> = Vec::new();
+    let mut out: Vec<Inherited> = Vec::new();
     // The master's spell modifiers.
     for h in &p.auras.holders {
         let effects: Vec<(usize, i32)> = h
@@ -36,8 +48,8 @@ fn wanted(map: &Map, pet: Guid, owner: Guid) -> Vec<(u32, Vec<(usize, i32)>)> {
             .filter(|x| matches!(x.kind, AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER))
             .map(|x| (x.effect as usize, x.amount * h.stacks.max(1) as i32))
             .collect();
-        if !effects.is_empty() && !out.iter().any(|(s, _)| *s == h.spell) {
-            out.push((h.spell, effects));
+        if !effects.is_empty() && !out.iter().any(|(s, ..)| *s == h.spell) {
+            out.push((h.spell, effects, false));
         }
     }
     // Their passives aimed at the pet.
@@ -51,8 +63,8 @@ fn wanted(map: &Map, pet: Guid, owner: Guid) -> Vec<(u32, Vec<(usize, i32)>)> {
             })
             .map(|i| (i, crate::game::map::spells::points(s, i, level)))
             .collect();
-        if !effects.is_empty() && !out.iter().any(|(x, _)| *x == s.id) {
-            out.push((s.id, effects));
+        if !effects.is_empty() && !out.iter().any(|(x, ..)| *x == s.id) {
+            out.push((s.id, effects, false));
         }
     }
     // `spell_pet_auras`.
@@ -67,8 +79,11 @@ fn wanted(map: &Map, pet: Guid, owner: Guid) -> Vec<(u32, Vec<(usize, i32)>)> {
             .filter(|i| matches!(t.effects[*i].effect, 6 | 35 | 119) && t.effects[*i].aura != 0)
             .map(|i| (i, crate::game::map::spells::points(t, i, level)))
             .collect();
-        if !effects.is_empty() && !out.iter().any(|(x, _)| *x == aura) {
-            out.push((aura, effects));
+        let by_pet = effects
+            .iter()
+            .any(|(i, _)| t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PET);
+        if !effects.is_empty() && !out.iter().any(|(x, ..)| *x == aura) {
+            out.push((aura, effects, by_pet));
         }
     }
     out
@@ -83,14 +98,18 @@ pub fn sync(map: &mut Map, pet: Guid) {
         return;
     };
     let wanted = wanted(map, pet, owner);
-    let have: Vec<(u32, Vec<(u8, i32)>)> = crate::game::map::auras::auras(map, pet)
+    let inherited = |h: &crate::game::map::auras::Holder| {
+        (h.caster == owner || h.caster == pet) && h.item == Some(owner)
+    };
+    let have: Vec<Had> = crate::game::map::auras::auras(map, pet)
         .map(|a| {
             a.holders
                 .iter()
-                .filter(|h| h.caster == owner && h.item == Some(owner))
+                .filter(|h| inherited(h))
                 .map(|h| {
                     (
                         h.spell,
+                        h.caster,
                         h.effects.iter().map(|x| (x.effect, x.amount)).collect(),
                     )
                 })
@@ -98,25 +117,27 @@ pub fn sync(map: &mut Map, pet: Guid) {
         })
         .unwrap_or_default();
     // Gone from the master, or changed: off the pet.
-    for (spell, effects) in &have {
-        let same = wanted.iter().any(|(s, e)| {
+    for (spell, caster, effects) in &have {
+        let same = wanted.iter().any(|(s, e, by_pet)| {
             s == spell
+                && *caster == if *by_pet { pet } else { owner }
                 && e.len() == effects.len()
                 && e.iter().all(|(i, a)| effects.contains(&(*i as u8, *a)))
         });
         if !same {
-            let spell = *spell;
+            let (spell, caster) = (*spell, *caster);
             crate::game::map::auras::remove_where(map, pet, |h| {
-                h.spell == spell && h.caster == owner && h.item == Some(owner)
+                h.spell == spell && h.caster == caster && h.item == Some(owner)
             });
         }
     }
     let data = map.realm.data.clone();
-    for (spell, effects) in wanted {
+    for (spell, effects, by_pet) in wanted {
+        let caster = if by_pet { pet } else { owner };
         let present = crate::game::map::auras::auras(map, pet).is_some_and(|a| {
             a.holders
                 .iter()
-                .any(|h| h.spell == spell && h.caster == owner && h.item == Some(owner))
+                .any(|h| h.spell == spell && h.caster == caster && h.item == Some(owner))
         });
         if present {
             continue;
@@ -126,7 +147,7 @@ pub fn sync(map: &mut Map, pet: Guid) {
         };
         let _ = crate::game::map::auras::apply_spell(
             map,
-            owner,
+            caster,
             pet,
             t,
             &effects,
