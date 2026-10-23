@@ -119,6 +119,18 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - creatures not fighting the raid, or out of reach on foot, are ignored (the Frostwolf Bowmen);
   - defensives fire at 1.5 s from death;
   - a cost: party-60 deaths 1 to 4, every round still won.
+- **Drinking, round two:** a bot stops before it sits and makes no move while seated drinking. A skilled bot (the top
+  30% by skill) on a march drinks on its own regeneration tick (sits 0.25–0.5 s before it, stands when mana rises),
+  below 80% mana with more than 10 waters; the thresholds are the tuning's `[drink]` `tick_*` knobs. The cost: AV's
+  time under 10% mana rose 3% to 7%, as low bots now march and fight instead of a stood-up "rest".
+- **Warriors (talent plan, phase 3):**
+  - Mortal Strike and Bloodthirst on cooldown above Execute (below 20%), Whirlwind and Cleave;
+  - Heroic Strike and Cleave keep a main blow's rage;
+  - a tank dances to Battle Stance to Thunder Clap 3 foes or an elite, wasting at most 20 rage;
+  - the Protection build is 10/3/38 for Tactical Mastery;
+  - Death Wish only at a boss, 3+ foes or a player below half;
+  - Last Stand below 40% with under 4 s to live, Shield Wall below 30% with under 2.5 s;
+  - Challenging Shout at 3 loose foes.
 - **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
   goes in at the next quiet moment.
 
