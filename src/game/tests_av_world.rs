@@ -351,20 +351,20 @@ async fn the_real_valleys_world_copy_has_drek_thar_his_warmasters_and_his_line()
     );
     assert_eq!(gate, 1, "one Frostwolf Legionnaire on the gate's spot");
     assert!(hostile, "Drek'Thar is hostile to an Alliance player");
+    // In one go, the map's own update not between: he fights Alice, is
+    // held two yards past the line, and the leaders' sweep looks.
     let drek = drek[0];
-    map.query(move |m| {
-        ai::attacked(m, drek, alice);
-        av_scripts::sweep_soon(m);
-    })
-    .await;
-    harness::an_update(&map).await;
-    map.query(move |m| {
-        hold_at(m, drek, at(LINE.0 + 1.0, LINE.1 - 2.0, 99.4));
-        av_scripts::sweep_soon(m);
-    })
-    .await;
-    until(&map, "Drek'Thar goes home", move |m| {
-        m.creature(drek).is_some_and(|c| c.evading)
-    })
-    .await;
+    let (fought, went_home) = map
+        .query(move |m| {
+            ai::attacked(m, drek, alice);
+            let fought = m.creature(drek).is_some_and(|c| c.combat.attacking);
+            hold_at(m, drek, at(LINE.0 + 1.0, LINE.1 - 2.0, 99.4));
+            av_scripts::sweep_soon(m);
+            av_scripts::world_update(m);
+            (fought, m.creature(drek).is_some_and(|c| c.evading))
+        })
+        .await
+        .unwrap();
+    assert!(fought, "Drek'Thar fights Alice");
+    assert!(went_home, "past the line, Drek'Thar goes home");
 }
