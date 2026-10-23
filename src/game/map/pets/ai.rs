@@ -939,24 +939,77 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     let (Some(me), Some(them)) = (map.unit_view(g), map.unit_view(victim)) else {
         return;
     };
-    let standoff = caster_range(map, g);
-    let close_enough = match standoff {
-        Some(r) => dist(me.position, them.position) <= r - 2.0,
-        None => combat::in_melee_range(&me, &them),
-    };
-    if close_enough {
-        stop(map, g);
-        face(map, g, victim);
-        // One whose template (or a script) bars its swing holds beside
-        // its victim (Thistle Tea's `melee_enabled?`).
-        if standoff.is_none() && crate::game::map::event_ai::melee(map, g) {
-            combat::try_swing(map, g);
-        }
+    // A caster stands back and casts (the imp: mangos's `PetAI`, its
+    // attack distance 25 yards and no melee).
+    if let Some(r) = caster_range(map, g) {
+        stand_off(map, g, victim, &me, &them, r, now);
         return;
     }
     // Told to stay, it chases only the victim its master's Attack named;
     // another that leaves its reach it lets go where it stands (Thistle
     // Tea's `Targeting.within_stay_range?`).
+    let stays =
+        state(map, g).is_some_and(|s| s.command == COMMAND_STAY && s.commanded != Some(victim));
+    // In melee it chases, stands and spreads round its victim as a
+    // creature does, sharing its victim's spots with every other fighting
+    // it, creatures and pets alike (`ai::chase_goal`, `ai::runs_on`,
+    // `ai::spread`).
+    if combat::in_melee_range(&me, &them) {
+        let (moving, runs_on) = crate::game::map::ai::runs_on(map, g, &me, &them);
+        if !runs_on {
+            stop(map, g);
+            face(map, g, victim);
+        }
+        if !moving && let Some(c) = map.creature_mut(g) {
+            c.engagement.spreading = false;
+        }
+        // One whose template (or a script) bars its swing holds beside
+        // its victim (Thistle Tea's `melee_enabled?`).
+        if crate::game::map::event_ai::melee(map, g) {
+            combat::try_swing(map, g);
+        }
+        if !moving && !stays {
+            crate::game::map::ai::spread(map, g, victim);
+        }
+        return;
+    }
+    if stays {
+        stop(map, g);
+        face(map, g, victim);
+        return;
+    }
+    let reach = combat::melee_range(&me, &them);
+    let stale = map
+        .creature(g)
+        .is_some_and(|c| crate::game::map::ai::chase_stale(c, me.position, them.position, reach));
+    if !stale {
+        return;
+    }
+    let goal = crate::game::map::ai::chase_goal(map, g, victim, me.position, them.position, reach);
+    walk(map, g, goal, now);
+    if let Some(c) = map.creature_mut(g) {
+        c.chase_target_at = Some(them.position);
+        c.engagement.spread_tries = 0;
+        c.engagement.spreading = false;
+    }
+}
+
+/// A caster's step of a fight: within `range` (less two yards) it stands
+/// and faces its victim; further, it closes to four yards inside it.
+fn stand_off(
+    map: &mut Map,
+    g: Guid,
+    victim: Guid,
+    me: &combat::UnitView,
+    them: &combat::UnitView,
+    range: f32,
+    now: Instant,
+) {
+    if dist(me.position, them.position) <= range - 2.0 {
+        stop(map, g);
+        face(map, g, victim);
+        return;
+    }
     let stays =
         state(map, g).is_some_and(|s| s.command == COMMAND_STAY && s.commanded != Some(victim));
     if stays {
@@ -972,10 +1025,7 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     if !stale {
         return;
     }
-    let reach = match standoff {
-        Some(r) => (r - 4.0).max(5.0),
-        None => combat::melee_range(&me, &them) * 0.8,
-    };
+    let reach = (range - 4.0).max(5.0);
     let to_me = Vector3d {
         x: me.position.x - them.position.x,
         y: me.position.y - them.position.y,
@@ -1053,13 +1103,19 @@ pub fn stop(map: &mut Map, g: Guid) {
     crate::game::map::ai::halt(map, g);
 }
 
-/// Walk (run) to `goal`, by the navmesh where there is one.
-fn walk(map: &mut Map, g: Guid, goal: Vector3d, now: Instant) {
+/// Walk (run) to `goal`, by the navmesh where there is one: to the ground
+/// there (a spot beside a victim on a slope is at its height).
+fn walk(map: &mut Map, g: Guid, mut goal: Vector3d, now: Instant) {
     let Some(from) = map.position_of(g) else {
         return;
     };
     let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(from, goal).unwrap_or_else(|| vec![from, goal]),
+        Some(nav) => {
+            if let Some(z) = nav.ground(goal.x, goal.y, goal.z) {
+                goal.z = z;
+            }
+            nav.path(from, goal).unwrap_or_else(|| vec![from, goal])
+        }
         None => vec![from, goal],
     };
     let spline = map.next_spline_id;

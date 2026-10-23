@@ -16,9 +16,11 @@
 //! When the steady state is over the line (a container's limit near the
 //! game data, the navmesh and the allocator's own), it never comes down,
 //! and a guard that held on would freeze the realm for good. So it holds
-//! [`MOST_HELD`] at most: then it says so at `error`, lets go, and rests
-//! (a minute, twice as long each time it gives up again, up to ten)
-//! before it may engage again.
+//! 30 s at most (`[network] memory_guard_most_held_secs`): then it says so
+//! at `error`, lets go, and rests (a minute, `memory_guard_rest_secs`,
+//! twice as long each time it gives up again, up to ten,
+//! `memory_guard_rest_max_secs`) before it may engage again. The three are
+//! read at every look, so a reload changes them at once.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,11 +31,40 @@ use tokio::sync::watch;
 /// How often the memory is looked at.
 const EVERY: Duration = Duration::from_millis(250);
 
-/// The longest the guard holds the clients back at a time.
+/// The longest the guard holds the clients back at a time, by default.
 pub const MOST_HELD: Duration = Duration::from_secs(30);
-/// Its rest after giving up, the first time, and at most.
-const REST_MIN: Duration = Duration::from_secs(60);
-const REST_MAX: Duration = Duration::from_secs(600);
+/// Its rest after giving up, the first time, and at most, by default.
+pub const REST_MIN: Duration = Duration::from_secs(60);
+pub const REST_MAX: Duration = Duration::from_secs(600);
+
+/// How long the guard holds, and rests after giving up
+/// (`[network] memory_guard_*_secs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timings {
+    pub most_held: Duration,
+    pub rest_min: Duration,
+    pub rest_max: Duration,
+}
+
+impl Default for Timings {
+    fn default() -> Self {
+        Timings {
+            most_held: MOST_HELD,
+            rest_min: REST_MIN,
+            rest_max: REST_MAX,
+        }
+    }
+}
+
+impl Timings {
+    /// The rest after one of `last`: twice it, from the first rest up to
+    /// the longest (never under the first, whatever the config says).
+    fn next_rest(&self, last: Duration) -> Duration {
+        (last * 2)
+            .max(self.rest_min)
+            .min(self.rest_max.max(self.rest_min))
+    }
+}
 
 /// Times the guard has engaged since start-up (the stats file's).
 pub static ENGAGED: AtomicU64 = AtomicU64::new(0);
@@ -81,7 +112,7 @@ pub fn decide(on: bool, rss: u64, limit: u64) -> bool {
 pub enum Change {
     On,
     Off,
-    /// Held [`MOST_HELD`] and the memory never came down: off, and resting.
+    /// Held its longest and the memory never came down: off, and resting.
     GaveUp(Duration),
 }
 
@@ -99,8 +130,8 @@ impl Guard {
         self.on
     }
 
-    /// A look at `now`: the resident memory and the limit.
-    pub fn look(&mut self, now: Instant, rss: u64, limit: u64) -> Option<Change> {
+    /// A look at `now`: the resident memory, the limit, and the timings.
+    pub fn look(&mut self, now: Instant, rss: u64, limit: u64, t: &Timings) -> Option<Change> {
         let resting = self.resting_until.is_some_and(|t| now < t);
         let want = !resting && decide(self.on, rss, limit);
         match (self.on, want) {
@@ -109,10 +140,10 @@ impl Guard {
                 self.since = Some(now);
                 Some(Change::On)
             }
-            (true, true) if self.since.is_some_and(|t| now - t >= MOST_HELD) => {
+            (true, true) if self.since.is_some_and(|s| now - s >= t.most_held) => {
                 self.on = false;
                 self.since = None;
-                self.rest = (self.rest * 2).clamp(REST_MIN, REST_MAX);
+                self.rest = t.next_rest(self.rest);
                 self.resting_until = Some(now + self.rest);
                 Some(Change::GaveUp(self.rest))
             }
@@ -173,12 +204,14 @@ pub fn start(realm: &std::sync::Arc<crate::game::Realm>) {
         let mut guard = Guard::default();
         loop {
             ticker.tick().await;
-            let fraction = realm.config().memory_guard_fraction;
+            let cfg = realm.config();
+            let fraction = cfg.memory_guard_fraction;
+            let timings = cfg.memory_guard_timings;
             let limit = (machine as f64 * fraction) as u64;
             let Some(rss) = crate::game::stats::rss_kb().map(|kb| kb * 1024) else {
                 continue;
             };
-            let Some(change) = guard.look(Instant::now(), rss, limit) else {
+            let Some(change) = guard.look(Instant::now(), rss, limit, &timings) else {
                 continue;
             };
             set(guard.on());
@@ -204,7 +237,7 @@ pub fn start(realm: &std::sync::Arc<crate::game::Realm>) {
                      past {} MB: reading less doesn't bring it down. The clients are read \
                      again; it rests {} s. Raise the memory or [network] memory_guard_fraction",
                     mb(rss),
-                    MOST_HELD.as_secs(),
+                    timings.most_held.as_secs(),
                     mb(limit),
                     rest.as_secs()
                 ),
@@ -236,24 +269,87 @@ mod tests {
         let t0 = Instant::now();
         let at = |s: u64| t0 + Duration::from_secs(s);
         let mut g = Guard::default();
-        assert_eq!(g.look(at(0), 2000, 1000), Some(Change::On));
-        assert_eq!(g.look(at(29), 2000, 1000), None, "held");
-        assert_eq!(g.look(at(30), 2000, 1000), Some(Change::GaveUp(REST_MIN)));
-        assert!(!g.on());
-        assert_eq!(g.look(at(89), 2000, 1000), None, "resting");
-        assert_eq!(g.look(at(90), 2000, 1000), Some(Change::On));
+        let t = Timings::default();
+        assert_eq!(g.look(at(0), 2000, 1000, &t), Some(Change::On));
+        assert_eq!(g.look(at(29), 2000, 1000, &t), None, "held");
         assert_eq!(
-            g.look(at(120), 2000, 1000),
+            g.look(at(30), 2000, 1000, &t),
+            Some(Change::GaveUp(REST_MIN))
+        );
+        assert!(!g.on());
+        assert_eq!(g.look(at(89), 2000, 1000, &t), None, "resting");
+        assert_eq!(g.look(at(90), 2000, 1000, &t), Some(Change::On));
+        assert_eq!(
+            g.look(at(120), 2000, 1000, &t),
             Some(Change::GaveUp(REST_MIN * 2))
         );
-        assert_eq!(g.look(at(240), 2000, 1000), Some(Change::On));
+        assert_eq!(g.look(at(240), 2000, 1000, &t), Some(Change::On));
         assert_eq!(
-            g.look(at(250), 900, 1000),
+            g.look(at(250), 900, 1000, &t),
             Some(Change::Off),
             "brought down"
         );
-        assert_eq!(g.look(at(251), 2000, 1000), Some(Change::On));
-        assert_eq!(g.look(at(281), 2000, 1000), Some(Change::GaveUp(REST_MIN)));
+        assert_eq!(g.look(at(251), 2000, 1000, &t), Some(Change::On));
+        assert_eq!(
+            g.look(at(281), 2000, 1000, &t),
+            Some(Change::GaveUp(REST_MIN))
+        );
+    }
+
+    /// The timings are the config's (`[network] memory_guard_*_secs`), read
+    /// at each look: a guard told to hold 5 s and rest 10, doubling to 15,
+    /// does; and a change between looks applies at the next.
+    #[test]
+    fn a_guard_holds_and_rests_as_long_as_its_settings_say() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let secs = Duration::from_secs;
+        let t = Timings {
+            most_held: secs(5),
+            rest_min: secs(10),
+            rest_max: secs(15),
+        };
+        let mut g = Guard::default();
+        assert_eq!(g.look(at(0), 2000, 1000, &t), Some(Change::On));
+        assert_eq!(g.look(at(4), 2000, 1000, &t), None, "held");
+        assert_eq!(
+            g.look(at(5), 2000, 1000, &t),
+            Some(Change::GaveUp(secs(10)))
+        );
+        assert_eq!(g.look(at(14), 2000, 1000, &t), None, "resting");
+        assert_eq!(g.look(at(15), 2000, 1000, &t), Some(Change::On));
+        assert_eq!(
+            g.look(at(20), 2000, 1000, &t),
+            Some(Change::GaveUp(secs(15))),
+            "doubled, up to the longest"
+        );
+        assert_eq!(g.look(at(35), 2000, 1000, &t), Some(Change::On));
+        assert_eq!(
+            g.look(at(40), 2000, 1000, &t),
+            Some(Change::GaveUp(secs(15)))
+        );
+        // A reload: hold 20 s now.
+        let longer = Timings {
+            most_held: secs(20),
+            ..t
+        };
+        assert_eq!(g.look(at(55), 2000, 1000, &longer), Some(Change::On));
+        assert_eq!(
+            g.look(at(70), 2000, 1000, &longer),
+            None,
+            "held past the old 5"
+        );
+        assert_eq!(
+            g.look(at(75), 2000, 1000, &longer),
+            Some(Change::GaveUp(secs(15)))
+        );
+        // A longest rest under the first is the first.
+        let odd = Timings {
+            rest_max: secs(1),
+            ..t
+        };
+        assert_eq!(odd.next_rest(Duration::ZERO), secs(10));
+        assert_eq!(odd.next_rest(secs(10)), secs(10));
     }
 
     #[test]

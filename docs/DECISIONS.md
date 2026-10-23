@@ -1250,7 +1250,60 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     `.debug durability` says it can't. On wears as usual again and mends nothing. The flag is the character's
     (`no_wear` in its extra state, false by default), kept across a relog. peon's bots turn it off with their gear.
 
-79. **`.gear green|blue`, for peon's arena** (2026-10-23): `.gear`'s random pick of the uncommon and rare items of the
+79. **The calls of review 6, your answers** (2026-10-23; `fix/calls-tap`, `fix/calls-loot`, `fix/calls-social`,
+    `fix/calls-server`; the questions in [review/review6.md](review/review6.md)'s calls):
+    - **1, the tap:** only damage taps a creature, as mangos-classic (`Unit::DealDamage` → `SetLootRecipient`;
+      `map/tap.rs`'s `damaged`): its first damage that gets through, melee, a spell or a tick, a player's or their
+      pet's, guardian's or possessed's, for them and their group. An aggro, a call for help, a taunt, a heal's threat,
+      a miss or a blow absorbed whole taps no one; the tap outlasts its tapper's death, feign or vanish. Thistle Tea
+      taps on combat entry (THISTLE_TEA_DIFFERENCES).
+    - **2, overkill in a kill's damage shares:** kept, as mangos-classic and Thistle Tea count it.
+    - **3, a possessed player's spellbook:** kept, mangos's (`HandlePetCastSpellOpcode` checks `HasSpell`).
+    - **4, a group's gold:** split only among those it fell to who are still on the map (wvs's near-the-kill set, mangos's
+      `m_ownerSet`); each gets `gold / n`, the remainder dropped as mangos's `SendGold` drops it.
+    - **5, two rogues at one pocket:** a second rogue's Pick Pocket at pockets another has open is refused,
+      `SPELL_FAILED_CHEST_IN_USE` ("That is already being used"; mangos's `LOOT_ERROR_LOCKED`), the effect refusing too;
+      per-rogue pockets and `picked_before` kept.
+    - **6, mail money past the cap:** takes what fits, leaves the rest on the mail (saved, the list sent again); with no
+      room, nothing taken and "internal error" (mangos's for a mail it can't take; 1.12 has no gold-cap error).
+    - **7, abandoned groups:** a group records when its last online member left (in the store); the sweep deletes one empty
+      for `[groups] expire_offline_hours` (24, your 1 day); a login or join clears it.
+    - **8, group commands in a battleground:** as mangos: in a battleground raid every command acts on the raid
+      (`GetGroup()`) but invite, which acts on one's own group; kick, leave and convert are refused there. Not the
+      "own group" the question assumed: mangos has no command reach the own group from a battleground but invite.
+    - **9, town guards:** no cap. Town raids are disruptive events; 50 attackers calling 50 guards is meant to be
+      hard (your words).
+    - **10, the memory guard's timings:** `[network] memory_guard_most_held_secs` (30), `memory_guard_rest_secs` (60),
+      `memory_guard_rest_max_secs` (600), all Live (the guard reads them at every look; a longest rest below the first
+      takes the first).
+    - **11, other client builds' logins:** still answered, for now (your call).
+    - **12, a knockback's flight:** ends at its arc, `2·vz/g` (19.29 yd/s²) + 1.5 s, at most 10 s; within it the player
+      is no further from the launch than its horizontal speed × the time (×1.25, + 3 yd); past it, the flight lasts only
+      while the client's height matches a fall along the arc (2 s for a late packet), so a fall off a ledge goes on with
+      no correction, navmesh or not. Stricter than mangos, your call.
+    - **13, a far teleport never acknowledged:** kicked as `.kick` does after `[world] worldport_ack_timeout_secs` (60,
+      Live, 0 never) from `SMSG_NEW_WORLD`; one whose connection is gone is left to the 60 s linger.
+
+80. **Pets spread round their victim, your ask** (2026-10-23; `feat/pet-fanout`): twenty hunter pets on one unit should
+    fan out as mobs on a player do, and other melee pets, the voidwalker, with them. Every melee pet of a player (a hunter's, a
+    warlock's Voidwalker, Succubus and Felhunter, a guardian, a charmed creature) chases, stands and spreads as a
+    creature does (`ai::chase_goal`, `ai::runs_on`, `ai::spread`, Thistle Tea's `approach_angle_offset` and
+    `maybe_spread`), its victim's spots shared by every one fighting it, creatures and pets alike. The imp stands off
+    and casts, as before (mangos's `PetAI`, 25 yards and no melee).
+    - **mangos-classic** fans out only those chasing a **player** (`ChaseMovementGenerator::Backpedal`, whose
+      `FanOut` steps one off another standing within a yard, 36 to 45 degrees round its target); pets chase from
+      any side (`PetAttackFromBehind = 0`, the default; 1 sends them behind). Twenty pets on a creature stand on
+      each other there. wvs fans out at any victim, as it already did for creatures (Thistle Tea's), and pets
+      chase from their own side, not behind.
+    - **What the spread now does more than Thistle Tea's,** for creatures too: a step aside goes to a place clear of
+      where every other attacker of its victim stands or is headed (up to 8 places, turned further round either way,
+      before it settles for the first as Thistle Tea does), so a crowd ends apart in a step or two and then stands;
+      two are on each other within their radii combined (Thistle Tea's 1.12 yards, at least); a victim bigger than a
+      player has its spots out by its extra size, and one standing inside it backs off; there is no turn aside at a
+      victim on the move, any victim (Thistle Tea's, at a player), so those following a walking creature keep their
+      sides; and a step's end is on the ground there, not at its victim's height.
+
+81. **`.gear green|blue`, for peon's arena** (2026-10-23): `.gear`'s random pick of the uncommon and rare items of the
     character's level (the ten levels up to theirs) narrowed to one quality, a fresh level's greens or a dungeon's
     blues, so a load test's crowd can be dressed as a real server's is; a slot with none of that quality is filled
     from both, as `.gear` fills it. A GM's (level 2), not 1.12's; `.gear` and `.gear raid` are unchanged.

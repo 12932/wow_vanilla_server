@@ -1707,6 +1707,7 @@ impl Map {
                 p.move_check = None;
                 p.fall_from = None;
                 p.awaiting_worldport = true;
+                p.worldport_sent = Some(self.now);
                 p.teleport = None;
                 // Aboard a transport, the client is told its place on deck
                 // (mangos's `TeleportTo` with a transport).
@@ -2173,6 +2174,7 @@ impl Map {
         for g in saves {
             self.save_player(g);
         }
+        login::kick_unloaded(self);
         stats::regen(self);
     }
 
