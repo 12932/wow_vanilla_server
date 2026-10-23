@@ -1,4 +1,4 @@
-# Sitrep (2026-10-22)
+# Sitrep (2026-10-23)
 
 Two days of work toward the goal you set: align wvs with Thistle Tea, using mangos-classic as a second reference;
 fix the kobold's reach; focus on performance and robustness; write down every decision and question here; then
@@ -69,6 +69,48 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
 - **Next, by the survey** ([review6.md](review/review6.md)): 47 of 69 raid bosses have no AI (Naxxramas, the Temple
   and Ruins of Ahn'Qiraj, Zul'Gurub); four quest events written in code (the Dreadsteed, Jail Break!, The
   Challenge, the Avatar of Hakkar); no player limit or login queue; no shutdown countdown or AFK logout.
+
+## The load tester and its bots: decisions of 2026-10-23
+peon's own decisions, logged here so they're reviewed in one place; peon's `docs/BOT_AI.md` has the detail.
+
+**Yours, as given:**
+- **The orchestrator model** (for Fargate):
+  - many small workers of 1 vCPU each;
+  - a worker lost mid-round voids the round;
+  - the AV tuner's best settings persist across runs, per boss;
+  - a hunt's sightings go through the orchestrator;
+  - built and tested locally first, with AWS a later step.
+- **A bot's perception:** everyone within 40 yards counts; beyond that, the nearest ~60. Random dropping is the
+  fallback if needed.
+- **The navmesh** is rebaked at the client's 50° walkable slope (WoW.exe's own test), not vmangos's 52°.
+- **The brain:** its quadratic scans fixed; strategy knobs as a hot-reloadable `brain::Tuning` file. No Lua or LuaJIT
+  layer: measured, the rules are 1–16% of a tick, LuaJIT can't be interrupted under its JIT, and 75% of edits are new
+  mechanics.
+- **Retries** of logins and lost sessions with full jitter.
+- **Every merge bumps the patch version**, in both repos.
+- **The faction battle** moved to Hillsbrad's fields; the Gurubashi Arena is last man standing.
+- **Alterac Valley:** the raid starts inside Drek'Thar's keep and resets with `.ready` and `.respawn`; the goal is a
+  kill by smarter bots, not better gear, with generic tactics and a tuner that learns between attempts.
+- **The talent and spell plan:**
+  1. an audit of every class's talents, trainable spells and racials, in the server and the bots (under way);
+  2. the server's missing talent effects;
+  3. the bots' use of them;
+  4. verifying no important spell goes uncast.
+
+**Made without you, for review:**
+- **Hunters' Volley:** only at 10 foes in PvE, and 20 players in PvP rather than the 15 you suggested, because at 15 it
+  fired as often as before. 25 would halve it again.
+- **Pre-cast heals:** none in PvP; the bottom fifth of healers by skill never pre-cast.
+- **PvP healing:**
+  - a healer stands 27.5 yards from the enemy's middle;
+  - Psychic Scream at 2 melee;
+  - no Mend Pet or Health Funnel in a PvP fight (yours).
+- **Drinking:**
+  - healers sit below 50% mana, the rest below 35%;
+  - a healer, a hunter or a Succubus warlock leaves a long fight below 20% or 15%.
+- **The mage's dive:** the top 12% of mages by skill, at 5 or more players, sparing their own side.
+- **Fan-out:** one ring at half the attackers' reach (mangos's spot is a little wider, about 3.8 yards on a player);
+  a lone attacker stays where it is.
 
 ## In short
 - **Parity:** 7,317 of Thistle Tea's 8,330 applicable tests have a wvs test that checks the same behaviour, or an
