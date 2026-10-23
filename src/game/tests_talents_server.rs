@@ -486,3 +486,49 @@ async fn improved_firestone_raises_a_worn_firestones_fire_damage() {
         "the Firestone's fire damage: plain, with the talent, the talent gone"
     );
 }
+
+const DRAIN_MANA_4: u32 = 11_704;
+
+const IMPROVED_DRAIN_MANA_2: u32 = 18_393;
+
+/// A caster with mana: a Kobold Geomancer.
+const KOBOLD_GEOMANCER: u32 = 476;
+
+/// Improved Drain Mana's rank 2: each tick of Drain Mana deals 30% of the
+/// mana it took as damage too; without the talent, none.
+#[tokio::test]
+#[ignore = "extended"]
+async fn improved_drain_mana_deals_a_share_of_the_mana_drained() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_w, w, map) = enter(&realm, "TSRVDM1", "Draina", Race::Human, Class::Warlock).await;
+    let out = on(&map, move |m| {
+        ready(m, w, 60, &[DRAIN_MANA_4]);
+        let mut out = Vec::new();
+        for talent in [false, true] {
+            if talent {
+                spells::learn(m, w, IMPROVED_DRAIN_MANA_2);
+            }
+            let caster = dummy(m, w, KOBOLD_GEOMANCER, 60, 10.0);
+            let f = m.unit_fields_mut(caster).unwrap();
+            f.set_u32(UNIT_FIELD_MAXPOWER1, 100_000);
+            f.set_u32(UNIT_FIELD_POWER1, 100_000);
+            spells::cast_triggered(m, w, DRAIN_MANA_4, Some(caster));
+            let (hp, mana) = (health(m, caster), power(m, caster, 0));
+            later(m, Duration::from_millis(1_000));
+            out.push((hp - health(m, caster), mana - power(m, caster, 0)));
+        }
+        out
+    })
+    .await;
+    let (plain, talented) = (out[0], out[1]);
+    assert!(plain.1 > 0 && talented.1 > 0, "mana drained: {out:?}");
+    assert_eq!(plain.0, 0, "no damage without the talent: {out:?}");
+    assert_eq!(
+        talented.0,
+        talented.1 * 30 / 100,
+        "30% of the drained: {out:?}"
+    );
+}

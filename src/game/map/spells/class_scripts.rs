@@ -894,6 +894,38 @@ fn improved_scorpid_sting(map: &mut Map, target: Guid, h: &Holder) {
     );
 }
 
+/// Drain Mana's family flag, and Improved Drain Mana's scripts with the
+/// share of the mana drained each deals as damage (the talent's 15 and
+/// 30%: its auras' points say nothing).
+const DRAIN_MANA_FLAG: u64 = 0x10;
+const IMPROVED_DRAIN_MANA_SCRIPTS: [(i32, u32); 2] = [(2028, 15), (2029, 30)];
+
+/// The share, in percent, of the mana a warlock's Drain Mana takes in a
+/// tick that it deals the drained as damage too, by the warlock's Improved
+/// Drain Mana: none without it. Neither mangos-classic nor Thistle Tea
+/// has it.
+pub fn drained_as_damage(map: &Map, h: &Holder) -> u32 {
+    let drain =
+        map.realm.data.spells.get(h.spell).is_some_and(|t| {
+            t.family_name == FAMILY_WARLOCK && t.family_flags & DRAIN_MANA_FLAG != 0
+        });
+    if !drain {
+        return 0;
+    }
+    auras::auras(map, h.caster).map_or(0, |a| {
+        a.effects()
+            .filter(|(_, x)| x.kind == auras::AURA_OVERRIDE_CLASS_SCRIPTS)
+            .filter_map(|(_, x)| {
+                IMPROVED_DRAIN_MANA_SCRIPTS
+                    .iter()
+                    .find(|(script, _)| *script == x.misc)
+                    .map(|(_, pct)| *pct)
+            })
+            .max()
+            .unwrap_or(0)
+    })
+}
+
 /// An aura went on: Stoneform's disease immunity beside its poison one
 /// (Thistle Tea's `extra_effects`, which the spell's three effects have no
 /// room for), Bestial Wrath's immunities on the pet, and Improved Scorpid

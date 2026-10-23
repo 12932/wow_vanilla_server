@@ -3590,6 +3590,17 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     crate::game::map::ai::add_threat(map, target, h.caster, gained as f32 * 0.5);
                 }
                 crate::game::map::proc_scripts::leeched(map, target, h, power);
+                // Improved Drain Mana: a share of the mana drained as damage.
+                let share = crate::game::map::spells::class_scripts::drained_as_damage(map, h);
+                if share > 0 && taken > 0 {
+                    crate::game::map::spells::periodic_damage(
+                        map,
+                        h,
+                        target,
+                        taken * share / 100,
+                        false,
+                    );
+                }
             } else {
                 let damage = (taken as f32 * mult) as u32;
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);
