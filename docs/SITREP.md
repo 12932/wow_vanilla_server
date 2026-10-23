@@ -131,6 +131,17 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - Death Wish only at a boss, 3+ foes or a player below half;
   - Last Stand below 40% with under 4 s to live, Shield Wall below 30% with under 2.5 s;
   - Challenging Shout at 3 loose foes.
+- **Druids (phase 3):**
+  - builds: Restoration 11/0/40 with Improved Tranquility; Feral 11/31/9 with Omen of Clarity, which procs only on
+    melee in 1.12, so it's in no caster build;
+  - Tranquility when 3 of the party within 20 yards are below 60%, no foe in melee on it (`[druid]` knobs);
+  - pre-HoTs on tactics' "a tank's going in" moment: Rejuvenation first, then Regrowth, then itself;
+  - Innervate on the healer lowest on mana;
+  - healers cast no damage while their tank is being hit;
+  - Nature's Grasp only in PvP;
+  - Barkskin only in caster form, as 1.12 forbids it in forms.
+  
+  Feral druids are still made healers by the party scenario's role draw, which is outside the druid's files.
 - **The navmesh's 50° rebake** is ready but not yet swapped in, to avoid confounding comparison runs in flight; it
   goes in at the next quiet moment.
 
