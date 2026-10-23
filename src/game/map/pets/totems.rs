@@ -366,12 +366,19 @@ pub fn step(map: &mut Map, g: Guid, now: Instant) {
         for p in had.iter().filter(|p| !near.contains(p)) {
             crate::game::map::auras::remove_spell(map, *p, spell, Some(g));
         }
+        // Its amounts with its shaman's modifiers, the totem's modifier owner
+        // (mangos's `CalculateSpellEffectValue` through `GetSpellModOwner`):
+        // Enhancing Totems, Restorative Totems, Guardian Totems.
         let level = level_of(map, g);
+        let mods = crate::game::map::spells::mods::for_spell(map, g, t);
         let effects: Vec<(usize, i32)> = (0..3)
             .filter(|i| {
                 t.effects[*i].effect == EFFECT_APPLY_AREA_AURA_PARTY && t.effects[*i].aura != 0
             })
-            .map(|i| (i, crate::game::map::spells::points(t, i, u32::from(level))))
+            .map(|i| {
+                let base = crate::game::map::spells::points(t, i, u32::from(level));
+                (i, mods.points(t, i, base))
+            })
             .collect();
         for p in near.into_iter().filter(|p| !had.contains(p)) {
             let _ = crate::game::map::auras::apply_spell(
