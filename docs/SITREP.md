@@ -252,15 +252,6 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     - a whirlwinding Warmaster now stands its 4 s, Drek'Thar his 2 s, and casts nothing else meanwhile (decision 93);
     - two differences are kept for now and taken up in round three: a Warmaster looks for a Charge every tick
       (vmangos waits 5–10 s), and linked guards go at the general's victim (vmangos's copy his threat list).
-- **Alterac Valley, round three** (fidelity, decision 95):
-  - a Warmaster charges the first of its threat list 8–25 yd off (its victim or not), and with none there waits
-    5–10 s before it looks again, as vmangos's `npc_WarMasterAI`;
-  - the general's idle linked guards take on his whole threat list with no threat of their own, fighting its last
-    (vmangos's `AggroLinkedMobsIfNeeded`), not his victim alone (Thistle Tea's, in decision 85);
-  - two warlocks' soulstones: one rank from both stands together, another rank takes the first's place, as vmangos
-    (decision 96; wvs had let two ranks stand);
-  - `.ready load` ends a spirit of redemption (decision 97): its passive state auras outlived the load and killed
-    the priest seconds into the next attempt.
   - **Tactics:**
     - loose adds go to free off-tanks, and every tank but the main is an off-tank;
     - off-tanks pull their own guard as the tanks go in, and drag splashers away;
@@ -275,6 +266,15 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     so the raid hasn't been shrunk.
   - **Mana potions: yes (your call, 2026-10-23).** Mana users carry level-appropriate mana potions and drink one in a
     fight below a tunable mark, healers first; druids' Innervate goes on the raid's healers.
+- **Alterac Valley, round three** (fidelity, decision 95):
+  - a Warmaster charges the first of its threat list 8–25 yd off (its victim or not), and with none there waits
+    5–10 s before it looks again, as vmangos's `npc_WarMasterAI`;
+  - the general's idle linked guards take on his whole threat list with no threat of their own, fighting its last
+    (vmangos's `AggroLinkedMobsIfNeeded`), not his victim alone (Thistle Tea's, in decision 85);
+  - two warlocks' soulstones: one rank from both stands together, another rank takes the first's place, as vmangos
+    (decision 96; wvs had let two ranks stand);
+  - `.ready load` ends a spirit of redemption (decision 97): its passive state auras outlived the load and killed
+    the priest seconds into the next attempt.
 - **The talent plan, phase 4 (verified):**
   - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
     never fires;
