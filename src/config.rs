@@ -558,6 +558,13 @@ settings! {
         /// Seconds a wandering creature stands still once a player talks
         /// to it.
         interaction_pause_secs: u64 = crate::game::map::creature_motion::TALK_PAUSE.as_secs(), Clamp(0.0, 3600.0), Live, "InteractionPauseTimer";
+        /// Degrees of the arc round their victim that melee attackers from
+        /// one side fan out over (creatures and players' pets alike):
+        /// centred on the side they came from, a crowd too big for it
+        /// standing closer rather than round the back; attackers from
+        /// clearly separate sides each keep to their own (360 lets them
+        /// go all round).
+        fan_out_arc_degrees: f32 = 120.0, Clamp(30.0, 360.0), Live, "";
         /// Seconds a normal creature's corpse lies (no longer than its
         /// respawn).
         corpse_decay_normal: u64 = 300, Clamp(1.0, 86_400.0), Live, "Corpse.Decay.NORMAL";

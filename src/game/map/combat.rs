@@ -123,6 +123,10 @@ pub struct Combat {
     pub last_swing_error: Option<u8>,
     /// Units fighting this one.
     pub attackers: AHashSet<Guid>,
+    /// Melee chasers that have come at it (`ai::chases`), for the fan-out's
+    /// arc: those on their way, not yet among its attackers, count too.
+    /// Let go of once they chase another or leave the fight.
+    pub chasers: Vec<Guid>,
     /// A next-swing spell waiting for the main hand (Heroic Strike).
     pub queued: Option<u32>,
     /// Auto Shot, Shoot: repeating at the ranged weapon's speed.
