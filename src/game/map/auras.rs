@@ -880,13 +880,16 @@ pub fn ticks(kind: u32) -> bool {
 }
 
 /// An aura effect's interval: its amplitude, or a second for a percentage
-/// of mana that has none (mangos's `HandleAuraModTotalManaPercentRegen`).
+/// of mana that has none (mangos's `HandleAuraModTotalManaPercentRegen`),
+/// or three for a regeneration of rage that has none (Anger Management's
+/// 0 in the DBC; mangos's `HandleModPowerRegen` ticks it every 3000 ms).
 /// A periodic aura's takes the activation-time modifiers `(flat, pct)`,
 /// and is at least a millisecond (mangos's `Aura` with
 /// `SPELLMOD_ACTIVATION_TIME`, Thistle Tea's `Modifiers.periodic_interval`).
 pub fn interval(e: &sd::SpellEffect, activation: (i32, i32)) -> Option<Duration> {
     let amplitude = match e.amplitude {
         0 if e.aura == AURA_OBS_MOD_MANA => 1000,
+        0 if e.aura == AURA_MOD_POWER_REGEN && e.misc_value == 1 => 3000,
         a => a,
     };
     if amplitude == 0 {
@@ -2216,6 +2219,9 @@ fn started(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 kind == AURA_ADD_PCT_MODIFIER,
             );
             crate::game::map::pets::master_mods_changed(map, target, h.spell, a.mask);
+            if reapplies(map, h.spell, a.misc) {
+                reapply_own_passives(map, target, h.spell, a.mask);
+            }
         }
         AURA_MOD_TOTAL_THREAT => crate::game::map::spells::threat_sync::fade_changed(map, target),
         AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE => {
@@ -2460,6 +2466,9 @@ fn ended(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 a.kind == AURA_ADD_PCT_MODIFIER,
             );
             crate::game::map::pets::master_mods_changed(map, target, h.spell, a.mask);
+            if reapplies(map, h.spell, a.misc) {
+                reapply_own_passives(map, target, h.spell, a.mask);
+            }
         }
         AURA_MOD_TOTAL_THREAT => crate::game::map::spells::threat_sync::fade_changed(map, target),
         AURA_MOD_UNATTACKABLE | AURA_AURAS_VISIBLE if !still(map, a.kind) => {
@@ -2668,6 +2677,108 @@ fn form_passives(form: u8) -> &'static [u32] {
     }
 }
 
+/// A form's passive on the unit in it, its points with the unit's spell
+/// modifiers to it (mangos's `CalculateSpellEffectValue`): Feral
+/// Instinct's threat on Bear Form's (21178).
+fn apply_form_passive(map: &mut Map, target: Guid, t: &SpellTemplate) {
+    let m = crate::game::map::spells::mods::for_spell(map, target, t);
+    let effects: Vec<(usize, i32)> = (0..3)
+        .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
+        .map(|i| (i, m.points(t, i, crate::game::map::spells::points(t, i, 1))))
+        .collect();
+    let _ = apply_spell(map, target, target, t, &effects, Context::default());
+}
+
+/// A unit's spell modifiers changed (`spell`'s, touching its family's
+/// spells whose flags meet `mask`): the permanent passives of its own they
+/// touch go on again, their points as the modifiers now make them
+/// (mangos's `Aura::ReapplyAffectedPassiveAuras` on the unit itself): a
+/// form's, or a learned spell's.
+pub fn reapply_own_passives(map: &mut Map, g: Guid, spell: u32, mask: u64) {
+    use crate::game::map::spells::mods::touches;
+    let data = map.realm.data.clone();
+    let Some(family) = data.spells.get(spell).map(|t| t.family_name) else {
+        return;
+    };
+    let form = form(map, g);
+    let touched = |h: &Holder| {
+        h.caster == g
+            && h.passive
+            && h.expires.is_none()
+            && h.spell != spell
+            && data
+                .spells
+                .get(h.spell)
+                .is_some_and(|t| touches(family, mask, t))
+    };
+    // A worn item's go off, and the gear puts them on again as they are
+    // now (`inventory::sync_gear`).
+    let worn = auras(map, g).is_some_and(|a| a.holders.iter().any(|h| h.equipped && touched(h)));
+    if worn {
+        remove_where(map, g, |h| h.equipped && touched(h));
+        crate::game::map::inventory::sync_gear(map, g);
+    }
+    let affected: Vec<u32> = auras(map, g)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| !h.equipped && h.item.is_none())
+                .filter(|h| h.caster == g && h.passive && h.expires.is_none() && h.spell != spell)
+                .filter(|h| {
+                    !h.effects
+                        .iter()
+                        .any(|x| matches!(x.kind, AURA_ADD_FLAT_MODIFIER | AURA_ADD_PCT_MODIFIER))
+                })
+                .filter(|h| {
+                    data.spells
+                        .get(h.spell)
+                        .is_some_and(|t| t.passive() && touches(family, mask, t))
+                })
+                .map(|h| h.spell)
+                .collect()
+        })
+        .unwrap_or_default();
+    for s in affected {
+        let Some(t) = data.spells.get(s) else {
+            continue;
+        };
+        remove_spell(map, g, s, Some(g));
+        if form_passives(form).contains(&s) {
+            apply_form_passive(map, g, t);
+        } else {
+            crate::game::map::spells::apply_passive(map, g, s);
+        }
+    }
+}
+
+/// Whether a modifier of `spell`'s, of operation `op`, puts its bearer's
+/// own passives on again as it comes or goes: not one with charges, nor
+/// one of the times, costs, speeds or attack power (mangos's
+/// `Aura::ReapplyAffectedPassiveAuras`).
+fn reapplies(map: &Map, spell: u32, op: i32) -> bool {
+    use crate::game::map::spells::mods::*;
+    let charged = map
+        .realm
+        .data
+        .spells
+        .get(spell)
+        .is_some_and(|t| t.proc_charges > 0);
+    let skipped = [
+        OP_DURATION,
+        OP_CHARGES,
+        OP_NOT_LOSE_CASTING_TIME,
+        OP_CASTING_TIME,
+        OP_COOLDOWN,
+        OP_COST,
+        OP_ACTIVATION_TIME,
+        OP_GLOBAL_COOLDOWN,
+        OP_SPEED,
+        OP_HASTE,
+        OP_ATTACK_POWER,
+    ];
+    !charged && !skipped.contains(&(op.max(0) as usize))
+}
+
 /// A unit takes a form (0: its own): the form byte, a druid's power, the
 /// form's passives, and auras a shapeshift breaks.
 fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
@@ -2698,11 +2809,7 @@ fn shapeshift(map: &mut Map, target: Guid, form: u8, by: u32) {
     }
     for s in form_passives(form) {
         if let Some(t) = data.spells.get(*s) {
-            let effects: Vec<(usize, i32)> = (0..3)
-                .filter(|i| t.effects[*i].effect == 6 && t.effects[*i].aura != 0)
-                .map(|i| (i, crate::game::map::spells::points(t, i, 1)))
-                .collect();
-            let _ = apply_spell(map, target, target, t, &effects, Context::default());
+            apply_form_passive(map, target, t);
         }
     }
     if let Some(p) = map.players.get_mut(&target)
@@ -3344,7 +3451,28 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::heal(map, h.caster, target, h.spell, gain, true);
             }
         }
-        AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA | AURA_MOD_POWER_REGEN => {
+        // A regeneration's tick gives only rage, to one alive whose power it
+        // is, in combat: three fifths of its amount a 3 s tick, its points
+        // being five seconds' (Anger Management's 15, a rage's 0.9; mangos's
+        // `PeriodicTick`). Mana's is the regeneration's (`stats::regen`).
+        AURA_MOD_POWER_REGEN => {
+            let rage = a.misc == 1
+                && crate::game::map::spells::shown_power(map, target) == 1
+                && map.unit_view(target).is_some_and(|u| u.alive)
+                && map.unit_fields(target).is_some_and(|f| {
+                    f.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    )
+                });
+            if let Some(f) = map.unit_fields_mut(target).filter(|_| rage) {
+                let add = ((a.amount * stacks).max(0) * 3 / 5) as u32;
+                let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + 1);
+                let now = f.get_u32(UNIT_FIELD_POWER1 + 1);
+                f.set_u32(UNIT_FIELD_POWER1 + 1, now.saturating_add(add).min(max));
+            }
+        }
+        AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA => {
             // A percentage of mana is of mana, and does nothing for one with
             // none (mangos's `PeriodicTick`, Thistle Tea's
             // `restore_percent_mana`).
@@ -3462,6 +3590,17 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                     crate::game::map::ai::add_threat(map, target, h.caster, gained as f32 * 0.5);
                 }
                 crate::game::map::proc_scripts::leeched(map, target, h, power);
+                // Improved Drain Mana: a share of the mana drained as damage.
+                let share = crate::game::map::spells::class_scripts::drained_as_damage(map, h);
+                if share > 0 && taken > 0 {
+                    crate::game::map::spells::periodic_damage(
+                        map,
+                        h,
+                        target,
+                        taken * share / 100,
+                        false,
+                    );
+                }
             } else {
                 let damage = (taken as f32 * mult) as u32;
                 crate::game::map::spells::periodic_damage(map, h, target, damage, false);

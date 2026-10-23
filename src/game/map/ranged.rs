@@ -580,6 +580,22 @@ fn land_shots(map: &mut Map) {
     }
 }
 
+/// A shot's critical multiplier: a white blow's, its bonus over the hit
+/// raised by the shooter's crit damage modifiers to the shot's spell
+/// (Mortal Shots on Auto Shot: mangos's `GetCritMultiplier`, which applies
+/// `SPELLMOD_CRIT_DAMAGE_BONUS` to the multiplier less one).
+fn shot_crit_multiplier(
+    map: &Map,
+    g: Guid,
+    target: Guid,
+    s: &crate::game::data::spells::SpellTemplate,
+) -> f32 {
+    use crate::game::map::spells::mods;
+    let bonus = combat::crit_multiplier(map, g, target) - 1.0;
+    let pct = mods::for_spell(map, g, s).pct[mods::OP_CRIT_DAMAGE_BONUS];
+    (1.0 + bonus * (100 + pct).max(0) as f32 / 100.0).max(0.0)
+}
+
 /// A shot lands: its mitigation, its log, the fight, the damage and the
 /// procs.
 fn impact(map: &mut Map, shot: &Shot, s: &crate::game::data::spells::SpellTemplate) {
@@ -602,7 +618,7 @@ fn impact(map: &mut Map, shot: &Shot, s: &crate::game::data::spells::SpellTempla
         _ if immune => 0,
         Outcome::Miss => 0,
         Outcome::Crit if wand => mitigated * 3 / 2,
-        Outcome::Crit => (mitigated as f32 * combat::crit_multiplier(map, g, target)) as u32,
+        Outcome::Crit => (mitigated as f32 * shot_crit_multiplier(map, g, target, s)) as u32,
         _ => mitigated,
     };
     // A wand's magic is partly resisted as a spell of its school is.
@@ -674,4 +690,32 @@ fn impact(map: &mut Map, shot: &Shot, s: &crate::game::data::spells::SpellTempla
             ..Default::default()
         },
     );
+}
+
+/// A test's shot of `spell` from `shooter` landing on `target` at once,
+/// `raw` before armor, a crit or a hit: what [`impact`] makes of it.
+#[cfg(test)]
+pub(crate) fn land_for_test(
+    map: &mut Map,
+    shooter: Guid,
+    target: Guid,
+    spell: u32,
+    raw: u32,
+    crit: bool,
+) {
+    let Some(s) = map.realm.data.spells.get(spell).cloned() else {
+        return;
+    };
+    let shot = Shot {
+        lands: map.now,
+        shooter,
+        target,
+        spell,
+        outcome: if crit { Outcome::Crit } else { Outcome::Hit },
+        raw,
+        school: 1,
+        wand: false,
+        immune: false,
+    };
+    impact(map, &shot, &s);
 }

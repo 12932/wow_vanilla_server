@@ -868,27 +868,7 @@ fn effect(
             let amount = amount + super::class_scripts::swiftmend(map, target, s);
             let h = outcome::healing(map, caster, target, s, index, amount.max(0) as f32, l);
             heal_crit(map, caster, target, s.id, h, false, l.crit);
-            crate::game::map::procs::trigger(
-                map,
-                crate::game::map::procs::Event {
-                    actor: caster,
-                    target,
-                    actor_flags: crate::game::map::procs::PROC_DONE_POSITIVE_SPELL,
-                    target_flags: crate::game::map::procs::PROC_TAKEN_POSITIVE_SPELL,
-                    ex: if l.crit {
-                        crate::game::map::procs::EX_CRITICAL_HIT
-                    } else {
-                        crate::game::map::procs::EX_NORMAL_HIT
-                    },
-                    spell: Some(s.id),
-                    damage: h,
-                    school: s.school_mask(),
-                    offhand: false,
-                    ranged: s.dmg_class == 3,
-                    extra_attack: false,
-                    origin: l.origin(s),
-                },
-            );
+            heal_procs(map, caster, target, s, h, l);
         }
         EFFECT_HEAL_MAX_HEALTH => {
             let max = map
@@ -899,6 +879,9 @@ fn effect(
             // `heal_max_health` does.
             let h = outcome::healing_taken(map, target, max as f32) as u32;
             heal(map, caster, target, s.id, h, false);
+            // A heal's procs, as any heal's (mangos's helpful hit procs):
+            // Improved Lay on Hands' armor on the one healed.
+            heal_procs(map, caster, target, s, h, l);
         }
         // Into any pool the target has, shown or not, alive, of a power
         // that is one and never less (mangos's `EffectEnergize`, Thistle
@@ -2620,4 +2603,30 @@ pub fn shown_power(map: &Map, g: Guid) -> u16 {
     }
     map.unit_fields(g)
         .map_or(0, |f| u16::from(f.get_byte(UNIT_FIELD_BYTES_0, 3)))
+}
+
+/// A heal's procs: the healer's helpful spell done, the healed one's
+/// taken.
+fn heal_procs(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, h: u32, l: &Landing) {
+    crate::game::map::procs::trigger(
+        map,
+        crate::game::map::procs::Event {
+            actor: caster,
+            target,
+            actor_flags: crate::game::map::procs::PROC_DONE_POSITIVE_SPELL,
+            target_flags: crate::game::map::procs::PROC_TAKEN_POSITIVE_SPELL,
+            ex: if l.crit {
+                crate::game::map::procs::EX_CRITICAL_HIT
+            } else {
+                crate::game::map::procs::EX_NORMAL_HIT
+            },
+            spell: Some(s.id),
+            damage: h,
+            school: s.school_mask(),
+            offhand: false,
+            ranged: s.dmg_class == 3,
+            extra_attack: false,
+            origin: l.origin(s),
+        },
+    );
 }
