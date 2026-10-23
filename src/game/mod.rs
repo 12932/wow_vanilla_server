@@ -1354,6 +1354,8 @@ mod tests_spells5;
 #[cfg(test)]
 mod tests_subtlety;
 #[cfg(test)]
+mod tests_talents_server;
+#[cfg(test)]
 mod tests_taming;
 #[cfg(test)]
 mod tests_terrain;

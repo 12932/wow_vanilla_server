@@ -880,13 +880,16 @@ pub fn ticks(kind: u32) -> bool {
 }
 
 /// An aura effect's interval: its amplitude, or a second for a percentage
-/// of mana that has none (mangos's `HandleAuraModTotalManaPercentRegen`).
+/// of mana that has none (mangos's `HandleAuraModTotalManaPercentRegen`),
+/// or three for a regeneration of rage that has none (Anger Management's
+/// 0 in the DBC; mangos's `HandleModPowerRegen` ticks it every 3000 ms).
 /// A periodic aura's takes the activation-time modifiers `(flat, pct)`,
 /// and is at least a millisecond (mangos's `Aura` with
 /// `SPELLMOD_ACTIVATION_TIME`, Thistle Tea's `Modifiers.periodic_interval`).
 pub fn interval(e: &sd::SpellEffect, activation: (i32, i32)) -> Option<Duration> {
     let amplitude = match e.amplitude {
         0 if e.aura == AURA_OBS_MOD_MANA => 1000,
+        0 if e.aura == AURA_MOD_POWER_REGEN && e.misc_value == 1 => 3000,
         a => a,
     };
     if amplitude == 0 {
@@ -3344,7 +3347,28 @@ fn tick(map: &mut Map, target: Guid, h: &Holder, a: &Aura) {
                 crate::game::map::spells::heal(map, h.caster, target, h.spell, gain, true);
             }
         }
-        AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA | AURA_MOD_POWER_REGEN => {
+        // A regeneration's tick gives only rage, to one alive whose power it
+        // is, in combat: three fifths of its amount a 3 s tick, its points
+        // being five seconds' (Anger Management's 15, a rage's 0.9; mangos's
+        // `PeriodicTick`). Mana's is the regeneration's (`stats::regen`).
+        AURA_MOD_POWER_REGEN => {
+            let rage = a.misc == 1
+                && crate::game::map::spells::shown_power(map, target) == 1
+                && map.unit_view(target).is_some_and(|u| u.alive)
+                && map.unit_fields(target).is_some_and(|f| {
+                    f.has_flag(
+                        UNIT_FIELD_FLAGS,
+                        crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+                    )
+                });
+            if let Some(f) = map.unit_fields_mut(target).filter(|_| rage) {
+                let add = ((a.amount * stacks).max(0) * 3 / 5) as u32;
+                let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + 1);
+                let now = f.get_u32(UNIT_FIELD_POWER1 + 1);
+                f.set_u32(UNIT_FIELD_POWER1 + 1, now.saturating_add(add).min(max));
+            }
+        }
+        AURA_PERIODIC_ENERGIZE | AURA_OBS_MOD_MANA => {
             // A percentage of mana is of mana, and does nothing for one with
             // none (mangos's `PeriodicTick`, Thistle Tea's
             // `restore_percent_mana`).
