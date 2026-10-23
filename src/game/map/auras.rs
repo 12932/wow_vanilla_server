@@ -1614,10 +1614,42 @@ fn replaces(
         return !spell.custom(sd::CUSTOM_ALLOW_STACK_BETWEEN_CASTERS)
             && !cross_caster_coexist(spell, old, effects);
     }
+    // vmangos's generic rule for spells of no class (`IsNoStackSpellDueToSpell`'s
+    // "more generic checks"): two of one icon and visual, alike helpful or
+    // harmful, neither a modifier, don't stand together, whoever cast them;
+    // the new one takes the other's place (of family 0, its ranks are no
+    // ranks there to compare). Kept to spells whose auras are all dummies,
+    // where wvs had them stand together: Soulstone Resurrection's ranks, two
+    // warlocks' stones on one friend (one rank from both stands, as vmangos's
+    // same spell from two casters).
+    if old.spell != new.spell
+        && let Some(o) = data.spells.get(old.spell)
+        && spell.family_name == 0
+        && o.family_name == 0
+        && spell.spell_icon > 1
+        && spell.spell_icon == o.spell_icon
+        && spell.spell_visual == o.spell_visual
+        && positive(spell) == positive(o)
+        && dummy_only(spell)
+        && dummy_only(o)
+    {
+        return true;
+    }
     if data.spells.same_kind(old.spell, new.spell) {
         return old.caster == new.caster || !cross_caster_coexist(spell, old, effects);
     }
     group_relation_to(data, spell, old) == Some(GroupRelation::Replaces)
+}
+
+/// Whether every aura `s` applies is a dummy (and it applies one).
+fn dummy_only(s: &SpellTemplate) -> bool {
+    let auras: Vec<u32> = s
+        .effects
+        .iter()
+        .filter(|e| e.effect == crate::game::map::spells::EFFECT_APPLY_AURA)
+        .map(|e| e.aura)
+        .collect();
+    !auras.is_empty() && auras.iter().all(|a| *a == AURA_DUMMY)
 }
 
 /// The slot fields for holder `index` of `target`.

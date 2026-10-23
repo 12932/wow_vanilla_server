@@ -1585,4 +1585,15 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       across the hall but short of taking it from Alice, is charged) and the marshals'
       `a_warmasters_charge_waits_past_the_spells_least_range_and_goes_at_once_beyond`, updated.
 
+95. **Two warlocks' soulstones on one friend, as vmangos** (2026-10-23; `fix/av-fidelity-2`, the user's question for the
+    AV all-in). Soulstone Resurrection (20707, 20762 to 20765) is a dummy aura of no class (family 0), all five ranks
+    of one icon (92) and visual (99). vmangos (`Unit::AddSpellAuraHolder`, `RemoveNoStackAurasDueToAuraHolder`,
+    `SpellMgr::IsNoStackSpellDueToSpell`): the same rank from two casters stands together (a dummy from another caster
+    is allowed to stack); another rank, from anyone, takes the first one's place (its "more generic checks": one icon
+    and visual, one family, alike helpful, not a modifier, don't stack; family 0's ranks are no ranks there, so none
+    is kept for being higher). wvs let both ranks stand. Now `auras::replaces` has vmangos's generic rule for spells of
+    family 0 whose auras are all dummies (kept that narrow: the case wvs had otherwise); one rank from two warlocks
+    still stands together. Test: `another_warlocks_soulstone_of_another_rank_takes_the_first_ones_place`. peon's
+    warlocks keep to one stone a friend anyway (none on one with a stone from anyone).
+
 ## Left for later, and why

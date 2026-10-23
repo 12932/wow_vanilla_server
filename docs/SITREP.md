@@ -251,7 +251,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - a Warmaster charges the first of its threat list 8–25 yd off (its victim or not), and with none there waits
     5–10 s before it looks again, as vmangos's `npc_WarMasterAI`;
   - the general's idle linked guards take on his whole threat list with no threat of their own, fighting its last
-    (vmangos's `AggroLinkedMobsIfNeeded`), not his victim alone (Thistle Tea's, in decision 85).
+    (vmangos's `AggroLinkedMobsIfNeeded`), not his victim alone (Thistle Tea's, in decision 85);
+  - two warlocks' soulstones: one rank from both stands together, another rank takes the first's place, as vmangos
+    (decision 95; wvs had let two ranks stand).
   - **Tactics:**
     - loose adds go to free off-tanks, and every tank but the main is an off-tank;
     - off-tanks pull their own guard as the tanks go in, and drag splashers away;
