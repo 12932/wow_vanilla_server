@@ -351,3 +351,53 @@ async fn a_pet_area_aura_of_a_masters_talent_reaches_the_master() {
         "the imp's and warlock's Master Demonologist, the beast's and hunter's Spirit Bond"
     );
 }
+
+const SCORPID_STING_4: u32 = 14_277;
+
+const IMPROVED_SCORPID_STING_3: u32 = 19_494;
+
+const IMPROVED_SCORPID_STING_DRAIN: u32 = 19_486;
+
+/// The amount of `spell`'s first effect on `g`, if it has the aura.
+fn amount(m: &Map, g: Guid, spell: u32) -> Option<i32> {
+    auras::auras(m, g).and_then(|a| {
+        a.holders
+            .iter()
+            .find(|h| h.spell == spell)
+            .and_then(|h| h.effects.first().map(|x| x.amount))
+    })
+}
+
+/// Improved Scorpid Sting's rank 3: a Scorpid Sting takes 30% of the
+/// strength it takes in stamina too (19486, mangos's `HandleAuraModStat`),
+/// gone with the sting; without the talent, none.
+#[tokio::test]
+#[ignore = "extended"]
+async fn improved_scorpid_sting_takes_stamina_with_the_sting() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (_h, h, map) = enter(&realm, "TSRVSS1", "Stinga", Race::Dwarf, Class::Hunter).await;
+    let out = on(&map, move |m| {
+        ready(m, h, 60, &[SCORPID_STING_4]);
+        let plain = dummy(m, h, KOBOLD_VERMIN, 60, 10.0);
+        spells::cast_triggered(m, h, SCORPID_STING_4, Some(plain));
+        let without = amount(m, plain, IMPROVED_SCORPID_STING_DRAIN);
+        spells::learn(m, h, IMPROVED_SCORPID_STING_3);
+        let stung = dummy(m, h, KOBOLD_VERMIN, 60, 10.0);
+        spells::cast_triggered(m, h, SCORPID_STING_4, Some(stung));
+        let strength = amount(m, stung, SCORPID_STING_4);
+        let stamina = amount(m, stung, IMPROVED_SCORPID_STING_DRAIN);
+        auras::remove_spell(m, stung, SCORPID_STING_4, None);
+        let after = amount(m, stung, IMPROVED_SCORPID_STING_DRAIN);
+        (without, strength, stamina, after)
+    })
+    .await;
+    let (without, strength, stamina, after) = out;
+    assert_eq!(without, None, "no drain without the talent");
+    let strength = strength.expect("the sting's strength");
+    assert!(strength < 0, "{strength}");
+    assert_eq!(stamina, Some(strength * 30 / 100), "30% of {strength}");
+    assert_eq!(after, None, "gone with the sting");
+}

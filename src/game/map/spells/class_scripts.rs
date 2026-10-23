@@ -832,10 +832,74 @@ fn cannibalizing(map: &Map, h: &Holder) -> bool {
         .is_some_and(|t| script(t, "spell_cannibalize_aura"))
 }
 
+/// Scorpid Sting's family flag, and Improved Scorpid Sting's stamina
+/// drain with its scripts' shares of the strength taken.
+const SCORPID_STING_FLAG: u64 = 0x8000;
+const IMPROVED_SCORPID_STING: u32 = 19_486;
+const IMPROVED_SCORPID_STING_SCRIPTS: [(i32, i32); 3] = [(2388, 10), (2389, 20), (2390, 30)];
+
+/// Improved Scorpid Sting: a hunter's Scorpid Sting takes stamina too, a
+/// share of the strength it takes by the hunter's script aura, for as long
+/// (mangos's `HandleAuraModStat`, which casts 19486 with it). mangos looks
+/// for the script on the stung; it is the hunter's talent, so here on the
+/// hunter.
+fn improved_scorpid_sting(map: &mut Map, target: Guid, h: &Holder) {
+    let data = map.realm.data.clone();
+    let Some(t) = data.spells.get(h.spell) else {
+        return;
+    };
+    if t.family_name != FAMILY_HUNTER || t.family_flags & SCORPID_STING_FLAG == 0 {
+        return;
+    }
+    let Some(strength) = h
+        .effects
+        .iter()
+        .find(|x| x.kind == auras::AURA_MOD_STAT && x.misc == 0)
+        .map(|x| x.amount)
+    else {
+        return;
+    };
+    let share = auras::auras(map, h.caster).map_or(0, |a| {
+        a.effects()
+            .filter(|(_, x)| x.kind == auras::AURA_OVERRIDE_CLASS_SCRIPTS)
+            .filter_map(|(_, x)| {
+                IMPROVED_SCORPID_STING_SCRIPTS
+                    .iter()
+                    .find(|(script, _)| *script == x.misc)
+                    .map(|(_, pct)| *pct)
+            })
+            .max()
+            .unwrap_or(0)
+    });
+    let stamina = strength * share / 100;
+    let Some(drain) = data.spells.get(IMPROVED_SCORPID_STING) else {
+        return;
+    };
+    if stamina == 0 {
+        return;
+    }
+    let _ = auras::apply_spell(
+        map,
+        h.caster,
+        target,
+        drain,
+        &[(0, stamina)],
+        auras::Context {
+            duration: Some(
+                h.expires
+                    .map(|e| e.saturating_duration_since(map.now).as_millis() as u32),
+            ),
+            ..Default::default()
+        },
+    );
+}
+
 /// An aura went on: Stoneform's disease immunity beside its poison one
 /// (Thistle Tea's `extra_effects`, which the spell's three effects have no
-/// room for), and Bestial Wrath's immunities on the pet.
+/// room for), Bestial Wrath's immunities on the pet, and Improved Scorpid
+/// Sting's stamina drain beside the sting.
 pub fn aura_applied(map: &mut Map, target: Guid, h: &Holder) {
+    improved_scorpid_sting(map, target, h);
     if cannibalizing(map, h)
         && let Some(f) = map.unit_fields_mut(target)
     {
@@ -912,6 +976,17 @@ pub fn aura_gone(map: &mut Map, target: Guid, h: &Holder) {
         for id in BESTIAL_WRATH_IMMUNITIES {
             auras::remove_spell(map, target, id, Some(h.caster));
         }
+    }
+    // A sting's stamina drain goes with it (mangos's
+    // `RemoveAurasTriggeredBySpell`).
+    if map
+        .realm
+        .data
+        .spells
+        .get(h.spell)
+        .is_some_and(|t| t.family_name == FAMILY_HUNTER && t.family_flags & SCORPID_STING_FLAG != 0)
+    {
+        auras::remove_spell(map, target, IMPROVED_SCORPID_STING, Some(h.caster));
     }
     // Combustion and its crit go together, either way (mangos's
     // `RemoveSpellAuraHolder`): cancelling the crit takes Combustion.
