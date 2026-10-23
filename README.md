@@ -104,7 +104,7 @@ player's `.` line is just chat.
 | `.speed <multiplier>` | 2 | Run speed |
 | `.spawn <entry>` | 2 | Spawn a creature |
 | `.die`, `.revive`, `.levelup [n]` | 2 | On the target, or oneself |
-| `.gear [green\|blue\|raid [1\|2]]`, `.gear enchant <slot> <id>` | 2 | Random gear of your class and level in every slot: uncommon and rare, only uncommon (green) or only rare (blue); or a raider's, at 60 a tier set and epics. Enchant puts a lasting enchantment on what is worn |
+| `.gear [green\|blue\|raid [1\|2]]`, `.gear enchant <slot> <id>` | 2 | Random gear of your class and level in every slot: uncommon and rare, only uncommon (green) or only rare (blue); or a raider's, at 60 a tier set and epics. A hunter gets the best quiver or ammo pouch of its level on its bag bar, full of the best ammunition (a vendor's or a craft's; with `raid`, a boss's drop or a quest's too), topped up to full each time. Enchant puts a lasting enchantment on what is worn |
 | `.durability [off\|on]` | 2 | Off mends everything you own (bank too), free, broken gear working again, and nothing wears until on; kept on the character. No argument says which |
 | `.arena start [countdown s] [max minutes]`, `.arena stop` | 2 | Gurubashi Arena's last man standing, with everyone alive on the pit's floor |
 | `.arena status`, `.arena history` | 0 | The battle on, and the last champions |
