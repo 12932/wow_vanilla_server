@@ -64,6 +64,11 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   warmaster's (and an Elite Guard's) double Whirlwind roots it 4 s, Drek'Thar's 2 s, and nothing else is cast in
   it; what fell due goes after. Not taken: the 1 s global cooldown between their other spells, and vmangos's 5 to
   10 s wait for a Charge with no one in range.
+- **A reset leaves nothing of the last pull** (decision 94, your bug): `.ready load` loses what the player and their
+  pet, charmed unit, totems and guardians have on its way (an imp's Firebolt), interrupts their casts and channels,
+  takes their ground areas, traps and harmful auras on others, unsummons their totems and guardians, and stands the
+  pet down (it keeps the stance saved); a creature respawned or despawned takes with it what was on its way to or
+  from it, so a respawned one (the same GUID) is never hit by a bolt cast at its old life.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick
@@ -261,6 +266,23 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     so the raid hasn't been shrunk.
   - **Mana potions: yes (your call, 2026-10-23).** Mana users carry level-appropriate mana potions and drink one in a
     fight below a tunable mark, healers first; druids' Innervate goes on the raid's healers.
+- **The talent plan, phase 4 (verified):**
+  - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
+    never fires;
+  - 88 of the 362 important spells never fired; 20 have no rule yet (for example Slam), and the rest need a situation
+    the runs never produced (undead, diseases, enrages);
+  - Grounding Totem is suspected, not traced.
+  
+  Fixed along the way:
+  - parties were of mixed factions (healers couldn't heal the other side), so a party is now one faction, and the
+    default party has a rogue instead of a paladin;
+  - a Feral druid tanks a party with no warrior;
+  - followers regroup between rounds;
+  - a bot joins its group's fight beyond 40 yards, and goes for the nearest foe it sees;
+  - a mage no longer flees its own sheep.
+  
+  Retribution's damage drop wasn't reproduced; it was single-run noise. Watch: the nearest-foe fallback also reaches
+  AV tanks when the tactics give them no target.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates

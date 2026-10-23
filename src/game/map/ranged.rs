@@ -433,6 +433,8 @@ fn shoot(map: &mut Map, g: Guid) {
 #[derive(Debug, Clone)]
 pub struct Shot {
     pub lands: std::time::Instant,
+    /// When it was loosed: a target come back as new since isn't hit.
+    pub launched: std::time::Instant,
     pub shooter: Guid,
     pub target: Guid,
     pub spell: u32,
@@ -538,6 +540,7 @@ fn resolve(
     };
     let shot = Shot {
         lands: map.now + Duration::from_millis(u64::from(delay)),
+        launched: map.now,
         shooter: g,
         target,
         spell: s.id,
@@ -556,7 +559,8 @@ fn resolve(
 }
 
 /// The shots that have got there land; one at a target dead or gone, or
-/// from a shooter gone from the map, is lost.
+/// from a shooter gone from the map, is lost, as is one at or from a
+/// creature come back as new since it was loosed.
 fn land_shots(map: &mut Map) {
     let now = map.now;
     if !map.spells.shots.iter().any(|s| s.lands <= now) {
@@ -570,6 +574,8 @@ fn land_shots(map: &mut Map) {
     for shot in due {
         if !map.unit_view(shot.target).is_some_and(|u| u.alive)
             || map.unit_view(shot.shooter).is_none()
+            || spells::new_since(map, shot.target, shot.launched)
+            || spells::new_since(map, shot.shooter, shot.launched)
         {
             continue;
         }
@@ -708,6 +714,7 @@ pub(crate) fn land_for_test(
     };
     let shot = Shot {
         lands: map.now,
+        launched: map.now,
         shooter,
         target,
         spell,

@@ -93,11 +93,19 @@ fn save(map: &mut Map, g: Guid) -> String {
         })
         .collect();
     let at = p.position();
+    let (orientation, pet) = (p.movement.orientation, p.owned.pet);
+    let pet_react = pet
+        .and_then(|g| crate::game::map::pets::state(map, g))
+        .map(|s| s.react);
     let state = ReadyState {
         map: key.map,
-        at: (at.x, at.y, at.z, p.movement.orientation),
+        at: (at.x, at.y, at.z, orientation),
         auras,
-        pet: p.owned.pet.is_some(),
+        pet: pet.is_some(),
+        pet_react,
+    };
+    let Some(p) = map.players.get_mut(&g) else {
+        return String::new();
     };
     let names = buff_names(&state, &data);
     let pet = state.pet;
@@ -152,7 +160,9 @@ fn show(map: &Map, g: Guid) -> String {
 /// passive and the gear's off, its cooldowns clear, its saved buffs back
 /// at their full time (from their caster, if here, else its own), its
 /// health and mana or energy full and its rage none; its pet up again and
-/// whole.
+/// whole. Nothing of the fight it was in is left to start another
+/// ([`stand_down`]): what it and what fights for it cast that is still on
+/// its way is lost, and so on.
 fn load(map: &mut Map, target: Guid) -> String {
     let Some(p) = map.players.get(&target) else {
         return String::new();
@@ -181,9 +191,7 @@ fn load(map: &mut Map, target: Guid) -> String {
     {
         crate::game::map::death::resurrect(map, target, 1.0);
     }
-    crate::game::map::spells::interrupt(map, target);
-    crate::game::map::combat::leave_combat(map, target);
-    crate::game::map::ai::forget(map, target);
+    stand_down(map, target);
     let key = map.key;
     map.teleport(target, key, to, state.at.3);
     auras::remove_where(map, target, |h| cleared(h, target));
@@ -243,7 +251,7 @@ fn load(map: &mut Map, target: Guid) -> String {
         p.caster.combo_points = 0;
         p.caster.combo_target = Guid::zero();
     }
-    let pet = state.pet && pet_up(map, target);
+    let pet = state.pet && pet_up(map, target, state.pet_react);
     format!(
         "{name} is ready: {back} of {} buffs back, {cleared} cooldowns cleared{}.",
         state.auras.len(),
@@ -265,9 +273,114 @@ fn fill(map: &mut Map, g: Guid) {
     f.set_u32(UNIT_FIELD_POWER1 + 1, 0);
 }
 
+/// Every unit that fights for `player`, and the player: their pet,
+/// what they charm, their totems and their guardians.
+fn side_of(map: &Map, player: Guid) -> Vec<Guid> {
+    let mut side = vec![player];
+    if let Some(p) = map.players.get(&player) {
+        let o = &p.owned;
+        side.extend(o.pet.iter().chain(o.charm.iter()));
+        side.extend(o.totems.iter().flatten().chain(o.loose_totems.iter()));
+        side.extend(o.guardians.iter());
+    }
+    side
+}
+
+/// `player` and every unit of theirs out of the fight they were in, and
+/// with nothing of it left to start another (mangos-classic has no such
+/// reset; this is what its pieces do, together):
+///
+/// - their totems and guardians gone (a Searing Totem or an Infernal
+///   would pull the next creature it saw), and their traps
+///   (`RemoveAllGameObjects`'s, but not their other objects);
+/// - every cast and channel of theirs stopped (`InterruptNonMeleeSpells`),
+///   an auto-repeat shot too, and what they cast that is still on its way
+///   lost: a bolt, a missile, an arrow (`Spell` events killed), as is what
+///   is on its way to them;
+/// - their ground areas and dynamic objects gone (`RemoveAllDynObjects`):
+///   a Blizzard, Rain of Fire or Consecration;
+/// - what harms another of theirs gone from it: a damage over time
+///   ticking on a creature would bring it back;
+/// - out of combat, and forgotten by every creature (`CombatStop`,
+///   `getHostileRefManager().deleteReferences()`); the pet stands down
+///   too: its attack, its victim, its master's Attack and its opener.
+fn stand_down(map: &mut Map, player: Guid) {
+    let owned = map.players.get(&player).map(|p| p.owned.clone());
+    if let Some(o) = owned {
+        for g in o
+            .totems
+            .iter()
+            .flatten()
+            .chain(o.loose_totems.iter())
+            .chain(o.guardians.iter())
+        {
+            crate::game::map::pets::unsummon(map, *g, false);
+        }
+    }
+    let side = side_of(map, player);
+    let traps: Vec<Guid> = map
+        .objects
+        .traps
+        .iter()
+        .filter(|(_, t)| t.owner.is_some_and(|o| side.contains(&o)))
+        .map(|(g, _)| *g)
+        .collect();
+    for t in traps {
+        crate::game::map::objects::despawn(map, t);
+    }
+    for g in &side {
+        crate::game::map::spells::interrupt(map, *g);
+        crate::game::map::ranged::cancel(map, *g, true);
+    }
+    crate::game::map::spells::lose_pending(map, &side);
+    for g in &side {
+        crate::game::map::spells::remove_dynamic_of(map, *g);
+    }
+    let others: Vec<Guid> = map
+        .with_auras
+        .iter()
+        .chain(map.players.keys())
+        .copied()
+        .filter(|g| !side.contains(g))
+        .collect();
+    for g in others {
+        auras::remove_where(map, g, |h| !h.positive && side.contains(&h.caster));
+    }
+    for g in &side {
+        crate::game::map::combat::leave_combat(map, *g);
+        crate::game::map::ai::forget(map, *g);
+    }
+    if let Some(pet) = crate::game::map::pets::pet_of(map, player) {
+        pet_stands_down(map, pet);
+    }
+}
+
+/// A pet out of its fight: no victim, no target, no Attack of its
+/// master's to go back to, its chase stopped, and on its way back to its
+/// master (mangos-classic's `AttackStop(true, true)` and a Follow).
+fn pet_stands_down(map: &mut Map, pet: Guid) {
+    use crate::game::map::pets;
+    if let Some(f) = map.unit_fields_mut(pet) {
+        f.set_guid(UNIT_FIELD_TARGET, Guid::zero());
+    }
+    if let Some(c) = map.creature_mut(pet) {
+        c.threat.clear();
+    }
+    crate::game::map::ai::halt(map, pet);
+    if let Some(s) = pets::state_mut(map, pet) {
+        s.commanded = None;
+        s.commanded_at = None;
+        s.opener = None;
+        s.command = pets::COMMAND_FOLLOW;
+        s.stay_at = None;
+        s.returning = true;
+    }
+}
+
 /// The player's pet up again if it fell, and whole, out of combat and
-/// forgotten, its harmful auras gone. Whether there is one.
-fn pet_up(map: &mut Map, owner: Guid) -> bool {
+/// forgotten, its harmful auras gone, in the stance it was saved in (if it
+/// was). Whether there is one.
+fn pet_up(map: &mut Map, owner: Guid, react: Option<u8>) -> bool {
     let dead = crate::game::map::pets::pet_of(map, owner)
         .is_none_or(|pet| map.unit_view(pet).is_none_or(|u| !u.alive));
     if dead {
@@ -280,13 +393,22 @@ fn pet_up(map: &mut Map, owner: Guid) -> bool {
         return false;
     }
     crate::game::map::spells::interrupt(map, pet);
+    crate::game::map::spells::lose_pending(map, &[pet]);
     crate::game::map::combat::leave_combat(map, pet);
     crate::game::map::ai::forget(map, pet);
+    pet_stands_down(map, pet);
     auras::remove_where(map, pet, |h| !h.passive && !h.positive);
     if let Some(c) = map.caster_mut(pet) {
         c.cooldowns.clear();
         c.category_cooldowns.clear();
         c.gcd_until = None;
+    }
+    if let Some(react) = react
+        && let Some(s) = crate::game::map::pets::state_mut(map, pet)
+        && s.react != react
+    {
+        s.react = react.min(crate::game::map::pets::REACT_AGGRESSIVE);
+        crate::game::map::pets::send_spells(map, owner);
     }
     fill(map, pet);
     true

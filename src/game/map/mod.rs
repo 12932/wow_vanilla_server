@@ -2798,6 +2798,8 @@ impl Map {
         loot::forget_pockets(self, guid);
         // What a taunt or a Fade held on it, or it on another, goes too.
         spells::threat_sync::gone(self, guid);
+        // What it cast that is on its way, and what is on its way to it.
+        spells::unit_gone(self, guid);
         self.grid.remove(guid, c.cell);
         for o in c.observers.drain() {
             if let Some(p) = self.players.get_mut(&o) {
