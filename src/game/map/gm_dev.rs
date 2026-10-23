@@ -537,7 +537,13 @@ pub(crate) fn unreal(name: &str) -> bool {
         || name.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
             matches!(
                 w,
-                "test" | "testing" | "qatest" | "deprecated" | "ph" | "unused"
+                "test"
+                    | "testing"
+                    | "qatest"
+                    | "deprecated"
+                    | "depricated"
+                    | "ph"
+                    | "unused"
             )
         })
 }
@@ -664,7 +670,9 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 /// the class wears, a cloak, a necklace, two rings and two trinkets, the
 /// weapons the class may hold (a two-hander, or a one-hander with a
 /// shield, a second weapon or an off-hand item), and a ranged weapon or a
-/// wand, with ammunition for one that takes it. The proficiencies and
+/// wand, with ammunition for one that takes it: a hunter's in the best
+/// quiver or ammo pouch for them, on the bag bar, filled
+/// ([`quiver_and_ammo`]); another's four stacks loose. The proficiencies and
 /// weapon skills the items need are taught, the skills at their caps, and
 /// Auto Shot and Shoot with a ranged weapon or a wand. One alive is left
 /// at full health and mana, as the reply says.
@@ -788,6 +796,7 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
         teach(map, to, DUAL_WIELD);
     }
     let mut names = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for (slot, picks) in plan {
         // A few tries: one may be unique and worn already, as the first
         // ring (the store refuses a second of it, `may_equip_new`), or a
@@ -811,8 +820,12 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
                     } else if class == 3 {
                         teach(map, to, AUTO_SHOT);
                     }
-                    if t.ammo_type != 0 {
-                        names.extend(give_ammo(map, to, t.ammo_type, level));
+                    if t.ammo_type != 0 && class == 3 {
+                        let (got, why) = quiver_and_ammo(map, to, t.ammo_type, pick);
+                        names.extend(got);
+                        notes.extend(why);
+                    } else if t.ammo_type != 0 {
+                        names.extend(give_ammo(map, to, t.ammo_type, level, pick));
                     }
                 }
                 break;
@@ -841,13 +854,14 @@ fn gear(map: &mut Map, g: Guid, pick: Pick) -> Option<String> {
         crate::game::map::combat::sync_aura_state(map, to);
     }
     Some(format!(
-        "Equipped {}.{}",
+        "Equipped {}.{}{}",
         names.join(", "),
         if whole {
             " At full health and mana."
         } else {
             ""
-        }
+        },
+        notes.iter().map(|n| format!(" {n}")).collect::<String>()
     ))
 }
 
@@ -932,19 +946,63 @@ fn wears_named(map: &Map, g: Guid, data: &crate::game::data::GameData, name: &st
     })
 }
 
+/// `item_template`'s flags: deprecated (a "Depricated Razor Arrow", a
+/// "BKP \"Impact\" Shot").
+const ITEM_FLAG_DEPRECATED: u32 = 0x10;
+
+/// The damage a second a projectile adds, in hundredths: its damage's
+/// mean (`derive`'s ranged bonus, the mean times the weapon's speed).
+fn ammo_dps(t: &crate::game::data::ItemTemplate) -> u32 {
+    ((t.damages[0].0 + t.damages[0].1) * 50.0).max(0.0) as u32
+}
+
+/// The best ammunition of `ammo_type` (arrows, bullets) for `level`: the
+/// most damage a second, then the higher level; of their level or below
+/// ([`gear_level`]), real, uncommon or rare at most, needing no skill or
+/// standing. `.gear`'s (and `green`'s, `blue`'s) is what anyone may buy
+/// or make: sold to all, or a craft's (Explosive Arrows, Thorium Shells);
+/// `.gear raid`'s is the best got any way but a standing: a dungeon
+/// boss's drop (Doomshot, Miniature Cannon Balls) or a quest's reward
+/// too. Without the databases' sources (the fallback world), any.
+pub(crate) fn best_ammo(
+    data: &crate::game::data::GameData,
+    ammo_type: u32,
+    level: u8,
+    raid: bool,
+) -> Option<&crate::game::data::ItemTemplate> {
+    use crate::game::data::ammo_source::*;
+    let from = if raid {
+        VENDOR | CRAFTED | DROP | QUEST
+    } else {
+        VENDOR | CRAFTED
+    };
+    let known = data.is_loaded();
+    data.items
+        .values()
+        .filter(|t| t.class == ITEM_PROJECTILE && t.subclass == ammo_type)
+        .filter(|t| gear_level(t) <= u32::from(level) && t.quality <= 3)
+        .filter(|t| t.required_reputation_faction == 0 && t.required_skill == 0)
+        .filter(|t| t.flags & ITEM_FLAG_DEPRECATED == 0 && !unreal(&t.name))
+        .filter(|t| !known || data.ammo_source(t.entry) & from != 0)
+        .max_by_key(|t| {
+            (
+                ammo_dps(t),
+                gear_level(t),
+                t.item_level,
+                std::cmp::Reverse(t.entry),
+            )
+        })
+}
+
 /// Four stacks of the best ammunition of `ammo_type` (arrows, bullets) of
 /// `level` or below, topped up to that (a `.gear` again adds none to four
 /// stacks carried), and that chosen for the ranged weapon: its name and
-/// count, if any went.
-fn give_ammo(map: &mut Map, g: Guid, ammo_type: u32, level: u8) -> Option<String> {
+/// count, if any went. A hunter's goes in a quiver instead
+/// ([`quiver_and_ammo`]); this is a warrior's or a rogue's, or a hunter's
+/// with no quiver for them.
+fn give_ammo(map: &mut Map, g: Guid, ammo_type: u32, level: u8, pick: Pick) -> Option<String> {
     let data = map.realm.data.clone();
-    let ammo = data
-        .items
-        .values()
-        .filter(|t| t.class == ITEM_PROJECTILE && t.subclass == ammo_type)
-        .filter(|t| t.required_level <= u32::from(level) && t.quality <= 3)
-        .filter(|t| t.required_reputation_faction == 0 && t.required_skill == 0)
-        .max_by_key(|t| (t.required_level, t.item_level, std::cmp::Reverse(t.entry)))?;
+    let ammo = best_ammo(&data, ammo_type, level, matches!(pick, Pick::Raid { .. }))?;
     let p = map.players.get(&g)?;
     let want = (ammo.stackable.max(1) * 4).saturating_sub(p.carried_count_of(ammo.entry));
     let n = crate::game::map::inventory::fitting(p, &data, ammo.entry, want).ok()?;
@@ -954,7 +1012,310 @@ fn give_ammo(map: &mut Map, g: Guid, ammo_type: u32, level: u8) -> Option<String
     }
     crate::game::map::inventory::add_item(map, g, ammo.entry, n, true).ok()?;
     crate::game::map::ranged::set_ammo(map, g, ammo.entry);
-    Some(format!("{n} {}", ammo.name))
+    Some(format!("{} {}", grouped(n), ammo.name))
+}
+
+/// `n` with its thousands grouped: 3,600.
+fn grouped(n: u32) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (k, c) in digits.chars().enumerate() {
+        if k > 0 && (digits.len() - k).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Item class 11: a quiver (subclass 2, for arrows) or an ammo pouch (3,
+/// for bullets), worn on the bag bar.
+const ITEM_QUIVER: u32 = 11;
+/// An item spell's trigger: on equip.
+const ON_EQUIP: u32 = 1;
+
+/// The ranged haste a quiver's or pouch's on-equip spell gives, in per
+/// cent (`SPELL_AURA_MOD_RANGED_AMMO_HASTE`: Ancient Sinew Wrapped
+/// Lamina's 15).
+fn ammo_haste(data: &crate::game::data::GameData, t: &crate::game::data::ItemTemplate) -> i32 {
+    t.spells
+        .iter()
+        .filter(|s| s.trigger == ON_EQUIP && s.id != 0)
+        .filter_map(|s| data.spells.get(s.id))
+        .flat_map(|s| s.effects.iter())
+        .filter(|e| e.effect == 6 && e.aura == crate::game::map::auras::AURA_MOD_RANGED_AMMO_HASTE)
+        .map(|e| e.base_points + 1)
+        .sum()
+}
+
+/// How a quiver ranks: its slots, then its haste.
+fn quiver_rank(
+    data: &crate::game::data::GameData,
+    t: &crate::game::data::ItemTemplate,
+) -> (u32, i32) {
+    (t.container_slots, ammo_haste(data, t))
+}
+
+/// The level `.gear` takes an item at: its required level, or, with none
+/// (the Quiver of the Night Watch, a 12-slot quest reward of item level
+/// 25, would be a level 1's), five under its item level, as the quivers
+/// with one have it (the Medium Quiver's 10 and 15).
+fn gear_level(t: &crate::game::data::ItemTemplate) -> u32 {
+    if t.required_level > 0 {
+        t.required_level
+    } else {
+        t.item_level.saturating_sub(5)
+    }
+}
+
+/// The best quiver (for `ammo_type` 2, arrows) or ammo pouch (3, bullets)
+/// for a character of `class`, `race` and `level`: the most slots, then
+/// the most haste; of their level or below ([`gear_level`]), uncommon or
+/// rare (epic too for `.gear raid`: Ancient Sinew Wrapped Lamina), real
+/// (not [`unreal`]), needing no skill, spell, rank or standing.
+fn best_quiver(
+    data: &crate::game::data::GameData,
+    (class, race, level): (u8, u8, u8),
+    ammo_type: u32,
+    pick: Pick,
+) -> Option<&crate::game::data::ItemTemplate> {
+    let subclass = match ammo_type {
+        2 => 2,
+        3 => 3,
+        _ => return None,
+    };
+    let best = match pick {
+        Pick::Random { .. } => RARE,
+        Pick::Raid { .. } => 4,
+    };
+    let allows = |mask: i32, of: u8| mask == -1 || mask == 0 || mask & (1 << (of.max(1) - 1)) != 0;
+    data.items_of_type(18)
+        .filter(|t| t.class == ITEM_QUIVER && t.subclass == subclass && t.container_slots > 0)
+        .filter(|t| t.quality <= best && gear_level(t) <= u32::from(level))
+        .filter(|t| {
+            t.required_skill == 0
+                && t.required_spell == 0
+                && t.required_honor_rank == 0
+                && t.required_reputation_faction == 0
+                && t.duration == 0
+                && !unreal(&t.name)
+        })
+        .filter(|t| allows(t.allowable_class, class) && allows(t.allowable_race, race))
+        .max_by_key(|t| (quiver_rank(data, t), t.quality, std::cmp::Reverse(t.entry)))
+}
+
+/// A hunter's quiver or ammo pouch, for the ranged weapon's `ammo_type`,
+/// and a full one of the best ammunition: what is named in the reply (the
+/// bag if it is new, the ammunition if any went), and why there is no bag
+/// if there could be none (no room for the items of the bag it would
+/// replace). With no bag, four stacks loose ([`give_ammo`]).
+fn quiver_and_ammo(
+    map: &mut Map,
+    g: Guid,
+    ammo_type: u32,
+    pick: Pick,
+) -> (Vec<String>, Option<String>) {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get(&g) else {
+        return (Vec::new(), None);
+    };
+    let who = (p.row.class, p.row.race, p.level());
+    let level = who.2;
+    let (Some(bag), Some(ammo)) = (
+        best_quiver(&data, who, ammo_type, pick),
+        best_ammo(&data, ammo_type, level, matches!(pick, Pick::Raid { .. })),
+    ) else {
+        return (
+            give_ammo(map, g, ammo_type, level, pick)
+                .into_iter()
+                .collect(),
+            None,
+        );
+    };
+    let mut names = Vec::new();
+    let slot = match wear_quiver(map, g, bag) {
+        Ok((slot, new)) => {
+            if new {
+                names.push(bag.name.clone());
+            }
+            slot
+        }
+        Err(why) => {
+            names.extend(give_ammo(map, g, ammo_type, level, pick));
+            return (names, why);
+        }
+    };
+    if let Some(n) = fill_quiver(map, g, slot, ammo.entry) {
+        names.push(format!("{} {}", grouped(n), ammo.name));
+    }
+    crate::game::map::ranged::set_ammo(map, g, ammo.entry);
+    (names, None)
+}
+
+/// Put the quiver or pouch `bag` on `g`'s bag bar, unless one as good of
+/// its kind is there: its slot, and whether it is new. It goes in place
+/// of the quiver or pouch worn (its ammunition with it if of the other
+/// kind; kept in it if of this kind, whose slots it has at least), else
+/// into an empty bag slot, else in place of the smallest bag, whose items
+/// are moved to other room. With no room for them, or no bag to replace,
+/// nothing changes: why, for the reply, if there is a why.
+fn wear_quiver(
+    map: &mut Map,
+    g: Guid,
+    bag: &crate::game::data::ItemTemplate,
+) -> Result<(u8, bool), Option<String>> {
+    use crate::game::map::inventory::{self, BAG_END, BAG_START, Destination, Proficiency};
+    use crate::game::store::BAG_PLAYER;
+    let data = map.realm.data.clone();
+    let p = map.players.get(&g).ok_or(None)?;
+    let worn = |s: u8| {
+        p.item_at(BAG_PLAYER, s)
+            .and_then(|i| data.item(p.items[i].entry))
+    };
+    let quiver = (BAG_START..BAG_END).find(|s| worn(*s).is_some_and(|t| t.class == ITEM_QUIVER));
+    if let Some(s) = quiver
+        && let Some(t) = worn(s)
+        && t.bag_family == bag.bag_family
+        && quiver_rank(&data, t) >= quiver_rank(&data, bag)
+    {
+        return Ok((s, false));
+    }
+    let slot = quiver
+        .or_else(|| (BAG_START..BAG_END).find(|s| p.item_at(BAG_PLAYER, *s).is_none()))
+        .or_else(|| {
+            (BAG_START..BAG_END)
+                .filter(|s| worn(*s).is_some_and(|t| t.class == 1))
+                .min_by_key(|s| p.bag_size(&data, *s))
+        })
+        .ok_or(None)?;
+    if inventory::can_equip(p, &Proficiency::of(p, &data), bag, slot).is_err()
+        || (bag.max_count > 0 && p.count_of(bag.entry) >= bag.max_count)
+    {
+        return Err(None);
+    }
+    let old = worn(slot);
+    let inside: Vec<usize> = (0..p.items.len())
+        .filter(|i| p.items[*i].bag == slot)
+        .collect();
+    // What is in the bag replaced: a quiver's of this kind stays where it
+    // is (the new one has as many slots or more); one of the other kind
+    // goes with it, its ammunition no use to the new weapon; a bag's goes
+    // to free room elsewhere, or the bag stays.
+    let mut gone = Vec::new();
+    let mut moves = Vec::new();
+    match old {
+        Some(o) if o.class == ITEM_QUIVER && o.bag_family == bag.bag_family => {}
+        Some(o) if o.class == ITEM_QUIVER => gone = inside,
+        Some(o) => {
+            let mut taken: Vec<(u8, u8)> = Vec::new();
+            for i in inside {
+                let t = data.item(p.items[i].entry);
+                let to = crate::game::map::items::carry_slots(&data, p, t)
+                    .into_iter()
+                    .find(|at| {
+                        at.0 != slot && p.item_at(at.0, at.1).is_none() && !taken.contains(at)
+                    });
+                let Some(to) = to else {
+                    return Err(Some(format!(
+                        "No room for the {}'s items, so no {}.",
+                        o.name, bag.name
+                    )));
+                };
+                taken.push(to);
+                moves.push((p.items[i].guid, to));
+            }
+        }
+        None => {}
+    }
+    let gone: Vec<Guid> = gone.iter().map(|i| p.items[*i].guid).collect();
+    let old = p.item_at(BAG_PLAYER, slot).map(|i| p.items[i].guid);
+    if let Some(p) = map.players.get_mut(&g) {
+        for (item, (b, s)) in moves {
+            if let Some(i) = p.item_by_guid(item) {
+                p.items[i].bag = b;
+                p.items[i].slot = s;
+            }
+        }
+        p.refresh_inventory(&data);
+    }
+    for item in gone.into_iter().chain(old) {
+        if let Some(i) = map.players.get(&g).and_then(|p| p.item_by_guid(item)) {
+            let n = map.players[&g].items[i].count();
+            inventory::take_item(map, g, i, n);
+        }
+    }
+    if let Err(f) = inventory::add_item_to(map, g, bag.entry, 1, Destination::Worn(slot)) {
+        tracing::debug!(?f, entry = bag.entry, "gear: the quiver wasn't put on");
+        // What was left in the slot's place goes, not left in no bag.
+        while let Some(i) = map
+            .players
+            .get(&g)
+            .and_then(|p| p.items.iter().position(|i| i.bag == slot))
+        {
+            let n = map.players[&g].items[i].count();
+            inventory::take_item(map, g, i, n);
+        }
+        return Err(None);
+    }
+    Ok((slot, true))
+}
+
+/// Fill the quiver or pouch in bag slot `slot` with `ammo`, to its
+/// slots × the stack: other ammunition in it goes (as `.gear` replaces
+/// what is worn; it would be shot no more), stacks of `ammo` carried
+/// elsewhere are moved in, and what is still missing is given, so a
+/// `.gear` again gives none. How many were given, if any.
+fn fill_quiver(map: &mut Map, g: Guid, slot: u8, ammo: u32) -> Option<u32> {
+    use crate::game::map::inventory::{self, Destination, EQUIPMENT_END};
+    use crate::game::store::BAG_PLAYER;
+    let data = map.realm.data.clone();
+    while let Some(i) = map.players.get(&g).and_then(|p| {
+        p.items
+            .iter()
+            .position(|i| i.bag == slot && i.entry != ammo)
+    }) {
+        let n = map.players[&g].items[i].count();
+        inventory::take_item(map, g, i, n);
+    }
+    let stack = data.item(ammo)?.stackable.max(1);
+    let p = map.players.get_mut(&g)?;
+    let size = p.bag_size(&data, slot);
+    let loose: Vec<usize> = (0..p.items.len())
+        .filter(|i| {
+            let it = &p.items[*i];
+            it.entry == ammo
+                && it.carried()
+                && it.bag != slot
+                && !(it.bag == BAG_PLAYER && it.slot < EQUIPMENT_END)
+        })
+        .collect();
+    let mut free = (0..size)
+        .filter(|s| p.item_at(slot, *s).is_none())
+        .collect::<Vec<_>>()
+        .into_iter();
+    let mut moved = false;
+    for i in loose {
+        let Some(s) = free.next() else {
+            break;
+        };
+        p.items[i].bag = slot;
+        p.items[i].slot = s;
+        moved = true;
+    }
+    if moved {
+        p.refresh_inventory(&data);
+    }
+    let room: u32 = (0..size)
+        .map(|s| {
+            p.item_at(slot, s)
+                .map_or(stack, |i| stack.saturating_sub(p.items[i].count()))
+        })
+        .sum();
+    if room == 0 {
+        return None;
+    }
+    inventory::add_item_to(map, g, ammo, room, Destination::Bag(slot, None)).ok()?;
+    Some(room)
 }
 
 fn damage(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
@@ -1965,6 +2326,91 @@ mod tests {
         ] {
             assert!(!unreal(name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_misspelt_deprecated_items_are_no_ones() {
+        assert!(unreal("Depricated Razor Arrow"));
+        assert!(!unreal("Razor Arrow"));
+    }
+
+    #[test]
+    fn counts_are_grouped_by_thousands() {
+        let got: Vec<String> = [0, 7, 200, 999, 1000, 3600, 12_345, 1_000_000]
+            .into_iter()
+            .map(grouped)
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "0",
+                "7",
+                "200",
+                "999",
+                "1,000",
+                "3,600",
+                "12,345",
+                "1,000,000"
+            ]
+        );
+    }
+
+    /// The best quiver or pouch for a level, without the real data: the
+    /// most slots of the kind the weapon shoots, of the level or below
+    /// (one with no required level by its item level less five), rare at
+    /// most but for `.gear raid`, and never a developer's.
+    #[test]
+    fn the_best_quiver_has_the_most_slots_of_the_level_and_kind() {
+        let mut data = crate::game::data::GameData::empty();
+        let bag =
+            |entry: u32, name: &str, sub: u32, quality: u32, level: u32, item: u32, slots: u32| {
+                crate::game::data::ItemTemplate {
+                    entry,
+                    class: ITEM_QUIVER,
+                    subclass: sub,
+                    name: name.into(),
+                    quality,
+                    inventory_type: 18,
+                    allowable_class: -1,
+                    allowable_race: -1,
+                    required_level: level,
+                    item_level: item,
+                    container_slots: slots,
+                    bag_family: sub - 1,
+                    ..Default::default()
+                }
+            };
+        for t in [
+            bag(1, "Light Quiver", 2, 1, 1, 1, 6),
+            bag(2, "Medium Quiver", 2, 1, 10, 15, 10),
+            bag(3, "Night Watch Quiver", 2, 2, 0, 25, 12),
+            bag(4, "Heavy Quiver", 2, 2, 30, 35, 14),
+            bag(5, "Big Test Quiver", 2, 2, 1, 1, 30),
+            bag(6, "Lamina", 2, 4, 60, 75, 18),
+            bag(7, "Harpy Hide Quiver", 2, 3, 55, 60, 16),
+            bag(8, "Small Ammo Pouch", 3, 1, 1, 1, 6),
+            bag(9, "Medium Shot Pouch", 3, 1, 10, 15, 10),
+        ] {
+            data.items.insert(t.entry, t);
+        }
+        let random = Pick::Random { quality: None };
+        let raid = Pick::Raid { tier: None };
+        let best = |level: u8, ammo: u32, pick: Pick| {
+            best_quiver(&data, (3, 3, level), ammo, pick).map(|t| t.entry)
+        };
+        assert_eq!(best(1, 2, random), Some(1));
+        assert_eq!(best(19, 2, random), Some(2), "the Night Watch's at 20");
+        assert_eq!(best(20, 2, random), Some(3));
+        assert_eq!(best(40, 2, random), Some(4));
+        assert_eq!(best(60, 2, random), Some(7), "rare at most");
+        assert_eq!(best(60, 2, raid), Some(6), "an epic for a raider");
+        assert_eq!(best(59, 2, raid), Some(7));
+        assert_eq!(best(40, 3, random), Some(9), "a pouch for a gun");
+        assert_eq!(best(40, 4, random), None, "no bag for thrown");
+        assert_eq!(
+            best_quiver(&data, (3, 3, 40), 2, random).map(|t| t.name.as_str()),
+            Some("Heavy Quiver")
+        );
     }
 
     /// Every class has its two sets, and they are the classes' own:

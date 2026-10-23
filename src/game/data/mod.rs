@@ -503,6 +503,10 @@ pub struct GameData {
     /// then.
     #[cfg_attr(test, serde(skip))]
     pub items_by_type: std::sync::OnceLock<AHashMap<u32, Vec<u32>>>,
+    /// Where each projectile (arrows, bullets) comes from, [`ammo_source`]'s
+    /// bits: built at its first use (`.gear`'s choice of ammunition).
+    #[cfg_attr(test, serde(skip))]
+    pub ammo_sources: std::sync::OnceLock<AHashMap<u32, u8>>,
     pub areas: AHashMap<u32, AreaInfo>,
     pub area_triggers: AHashMap<u32, AreaTrigger>,
     pub maps: AHashMap<u32, MapInfo>,
@@ -809,6 +813,86 @@ pub fn gender(g: u8) -> Gender {
 }
 
 impl GameData {
+    /// Where projectile `entry` comes from: [`ammo_source`]'s bits, 0 for
+    /// nowhere (a developer's, or one never given out).
+    pub fn ammo_source(&self, entry: u32) -> u8 {
+        use ammo_source::*;
+        let sources = self.ammo_sources.get_or_init(|| {
+            const PROJECTILE: u32 = 6;
+            const CREATE_ITEM: u32 = 24;
+            let ammo: ahash::AHashSet<u32> = self
+                .items
+                .values()
+                .filter(|t| t.class == PROJECTILE)
+                .map(|t| t.entry)
+                .collect();
+            let mut out: AHashMap<u32, u8> = AHashMap::new();
+            let mut mark = |item: u32, bit: u8| {
+                if ammo.contains(&item) {
+                    *out.entry(item).or_default() |= bit;
+                }
+            };
+            // Sold by a creature that is somewhere; behind a standing
+            // (the Alterac Valley quartermasters') or not.
+            let spawned: ahash::AHashSet<u32> = self
+                .creature_spawns
+                .values()
+                .flatten()
+                .flat_map(|s| s.entries.iter().copied())
+                .collect();
+            for entry in &spawned {
+                for v in self.vendor_items(*entry) {
+                    mark(
+                        v.item,
+                        if v.condition == 0 {
+                            VENDOR
+                        } else {
+                            GATED_VENDOR
+                        },
+                    );
+                }
+            }
+            for s in self.spells.spells.values() {
+                for e in s.effects.iter().filter(|e| e.effect == CREATE_ITEM) {
+                    mark(e.item_type as u32, CRAFTED);
+                }
+            }
+            for q in self.npc.quests.values() {
+                for (item, _) in q.rewards.iter().chain(q.choice_rewards.iter()) {
+                    mark(*item, QUEST);
+                }
+            }
+            // Dropped: a creature's or a chest's loot, a container's, and
+            // the reference tables they roll, however deep.
+            let mut refs: Vec<u32> = Vec::new();
+            let tables = [&self.loot.creature, &self.loot.gameobject, &self.loot.item];
+            for entries in tables.iter().flat_map(|t| t.values()) {
+                for l in entries {
+                    if l.min < 0 {
+                        refs.push(l.min.unsigned_abs());
+                    } else {
+                        mark(l.item, DROP);
+                    }
+                }
+            }
+            let mut seen = ahash::AHashSet::new();
+            while let Some(r) = refs.pop() {
+                if !seen.insert(r) {
+                    continue;
+                }
+                for l in self.loot.reference.get(&r).into_iter().flatten() {
+                    if l.min < 0 {
+                        refs.push(l.min.unsigned_abs());
+                    } else {
+                        mark(l.item, DROP);
+                    }
+                }
+            }
+            out
+        });
+        sources.get(&entry).copied().unwrap_or(0)
+    }
+
     /// What a vendor sells: its entry's list, then its template's.
     pub fn vendor_items(&self, entry: u32) -> Vec<VendorItem> {
         let mut items = self.vendors.get(&entry).cloned().unwrap_or_default();
@@ -820,6 +904,21 @@ impl GameData {
         }
         items
     }
+}
+
+/// Where a projectile comes from ([`GameData::ammo_source`]), as bits.
+pub mod ammo_source {
+    /// Sold by a vendor, to anyone.
+    pub const VENDOR: u8 = 1;
+    /// Made by a spell (a craft: Explosive Arrow, Thorium Shells).
+    pub const CRAFTED: u8 = 2;
+    /// Dropped: a creature's loot, a chest's, a container's.
+    pub const DROP: u8 = 4;
+    /// A quest's reward.
+    pub const QUEST: u8 = 8;
+    /// Sold only to those of a standing (Ice Threaded Arrows, at Alterac
+    /// Valley's quartermasters at Honored).
+    pub const GATED_VENDOR: u8 = 16;
 }
 
 /// A battleground's rules from `battleground_template`.

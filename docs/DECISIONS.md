@@ -1308,4 +1308,26 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     blues, so a load test's crowd can be dressed as a real server's is; a slot with none of that quality is filled
     from both, as `.gear` fills it. A GM's (level 2), not 1.12's; `.gear` and `.gear raid` are unchanged.
 
+82. **`.gear` fills a hunter's quiver, your ask** (2026-10-23; `feat/gear-quiver`): a hunter gets the best quiver
+    (bow, crossbow) or ammo pouch (gun) of its level on the bag bar, filled with the best ammunition, its slots ×
+    200 (3,200 at 40 in a Quickdraw Quiver), the ammunition chosen; four stacks loose only when no bag can go on.
+    `.gear` is wvs's own, so these are calls of mine:
+    - **The bag:** the most slots, then the most haste (the Harpy Hide Quiver or Gnoll Skin Bandolier at 60, the
+      epic Ancient Sinew Wrapped Lamina for `.gear raid`). One with no required level (the Quiver of the Night
+      Watch, 12 slots, item level 25; the Hunting Quiver) is taken at five under its item level, not at level 1.
+      Kept if as good, of the weapon's kind; else it goes where the quiver or pouch worn is (a pouch's bullets with
+      it, when a bow comes; arrows kept in a better quiver), else in an empty bag slot, else in place of the
+      smallest bag, whose items move elsewhere or, with no room, the bag stays and the reply says so.
+    - **The ammunition in it** is all the chosen kind: other ammunition in the quiver goes (as the gear `.gear`
+      replaces goes), loose stacks of the chosen kind are moved in, and what is missing is given, so a `.gear`
+      again gives nothing (peon's bots say it at every reconnect).
+    - **The ammunition chosen** goes by the damage it adds, then level, among what anyone may buy or make for
+      `.gear`, `green` and `blue` (a vendor's, a craft's: Explosive Arrows at 37 and Thorium Shells at 52), and
+      for `.gear raid` also a boss's drop or a quest's reward (Doomshot from Shadow Hunter Vosh'gajin,
+      Miniature Cannon Balls from Cannon Master Willey, Rockshard Pellets from Lord Roccor, Thorium Headed Arrows
+      from Alterac Valley's quests). The Ice Threaded Arrows and Bullets (sold only at Honored with Alterac
+      Valley's sides) are neither's; nor what is deprecated or no one gives (the "Depricated" arrows, Elven
+      Arrows), nor a vendor that is nowhere (vmangos's Jimmy McWeaksauce's Thorium arrows). Before, the highest
+      required level won: Jagged Arrows at 40 over the better Explosive.
+
 ## Left for later, and why
