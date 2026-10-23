@@ -1422,4 +1422,79 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       line on the bake: the way from his spawn to the gate crosses it once, his hall's corners are reached
       without crossing it.
 
+86. **A creature leaves the immune be while it has anyone else to fight** (2026-10-23; `fix/skip-immune-target`,
+    your rule: "Drek'thar (or any other mob for that matter) should never attack players who are immune to attacks,
+    like paladin bubble, IF they have other players in their aggro table"). mangos-classic's rule, followed: one on a
+    creature's threat list immune to the school of its blows (Divine Shield, Ice Block, Blessing of Protection against
+    a physical creature, not one whose blows are magic) is held below everyone else on the list, their threat kept
+    (`STATE_SUPPRESSED`, sorted after the rest in `ThreatContainer::update`). A creature whose victim is held turns at
+    its next look to the top of the rest at once, with no tenths to pass; among the rest, and among the held when no
+    one else is left, the tenth near and three tenths far decide as before; a taunt holds over it. Alone on its list,
+    the immune one stays its victim: it swings into the immunity and doesn't go home. Once the immunity ends they stay
+    held until their threat on it changes (a heal, a blow) or another on the list is newly held
+    (`m_suppresabilityToggle`, `ClearSuppressed`). A script's or EventAI's pick walks the list as sorted: the second on
+    it is the second of those it may hurt; one at random may be anyone, as mangos's. Pets keep their own choice
+    (mangos's pets have no threat list and its `PetAI` no such test).
+    - **Where it departs from mangos:** mangos holds a target as their immunity goes on, for the creatures that have
+      them on their lists then; one that puts them on its list afterwards (a bubbled paladin's heal pulling a new pack)
+      treats them as anyone. wvs looks before each choice of victim, so they are held there too, as your rule has it.
+    - **Not taken:** mangos also holds the confused, the feared and those in a stun that damage breaks
+      (`IsSuppressedTarget`); wvs holds only the immune, your rule. Nor mangos's slip in `ATTACKING_TARGET_BOTTOMAGGRO`
+      (it walks from the bottom but returns the top): the last on the list is the last, a held one if there is one.
+
+87. **`.ready save|load` and `.respawn <radius>`, a raid attempt's reset** (2026-10-23; `feat/gm-ready`, your goal:
+    "reduce the time it takes to get the raid ready... new GM commands or perhaps have some 'ready' state where the
+    players are all buffed and full HP that they can be quickly reset back to"). mangos-classic has neither; both are
+    game masters' (level 2), as `.durability`.
+    - **`.ready save`** keeps the GM's own ready state on the character (`CharacterState::ready`, in the store's
+      JSON, so it survives a relog and a restart): the map, the place and the facing; each helpful aura a cast put on
+      (the player's own or another's: Fortitude, Mark of the Wild, a blessing, a warlock's armor, a form or a stance,
+      a mount), with its caster, amounts, stacks and charges as they stand, and its full time; and whether a pet is
+      out. Not kept: passives, gear's, another's lasting aura of an area (it comes back by itself), an aura another
+      aura put on, a channel's, and any harmful aura. A dead GM can't save.
+    - **`.ready load`** puts the selected player (or the GM) back in their own saved state. On another map, it sends
+      them there and does nothing else: load again there. Else, in order: risen if dead or a ghost (no sickness); the
+      cast stopped; out of combat, and every creature forgets them (its threat gone, turning to the next or going
+      home); at the saved place; every aura off but passives, gear's and another's lasting area aura (debuffs, and
+      buffs had since, a potion's or a trinket's); every cooldown cleared, the client told: spells', items'
+      (potions, healthstones), categories', the global ones, those waiting for an aura's end, an interrupt's
+      lockouts; each saved buff put on again at its **full** time, not what was left, with its saved amounts, stacks
+      and charges, from its saved caster if that player (or creature) is on the map, else from the player
+      themselves, so a blessing or a stack stays its caster's; health, mana, energy (and a pet's focus) full, rage
+      none, no combo points; the pet, if one was out, revived (a hunter's or a demon's record) at full health, out of
+      combat, forgotten, its harmful auras gone and its cooldowns clear. A buff's amounts are the caster's when saved,
+      so every attempt starts identical.
+    - **`.respawn`** alone keeps what it did: the selected creature dead or alive comes back at its spawn as new at
+      the next update. **`.respawn <radius>`** (0 to 500 yards) does it now for every spawned creature within the
+      radius of the GM, by where it is or where it spawned (one drawn off is caught), not a player's pet, totem or
+      charmed unit: the dead back, the living taken out and spawned again (home, whole, out of combat, its EventAI
+      and script state new, its tap gone; a pool picks again). Their summons, and the summons' summons, go first
+      (`scripts::remove_for_good`), so the new summoners hear nothing of them. On Alterac Valley (its world copy or a
+      match) the leaders' sweep forgets the fights of those respawned (Drek'Thar raises no wolves for a fight ended
+      so) and looks again at the next update. Objects within the radius in use (a door, a button, a goober waiting
+      to go back) go back as they rest now, and objects gone (used, or a looted chest or node) come back at the next
+      update. Not reset: an instance script's encounter data, nor creatures summoned by no one there (a GM's
+      `.spawn`).
+    - **For peon**, between attempts: one GM `.respawn <radius>` by the keep, then each bot `.ready load`; no wait
+      is needed between them, and none after but the next update (50 ms) for the respawned creatures' creates.
+
+88. **The warmasters' and marshals' Charge** (2026-10-23; `fix/av-warmasters`, your question: "the warmasters in the
+    room shouldn't be able to charge to targets beside them ... I'm used to them dashing across the room to knock down
+    healers when they are casting"). Charge (22911) is range 95, 8 to 25 yards, past both combat reaches as mangos's
+    `GetMinMaxRange` measures it (11 to 28 yards between a warmaster's centre and a player's); its blow is the weapon's
+    and 75, and it stuns 2 s. vmangos's `npc_WarMaster` (Thistle Tea's port) charges its victim only, from 8 to 25
+    yards; no source (vmangos's script, its unused EventAI rows, mangos-classic) charges a caster or a random target,
+    so none is invented: a healer who takes the top of its list by healing is charged across the room, as you
+    remember, and one beside it never is. What was wrong, fixed:
+    - **A refused Charge spent its timer.** The event fired from 8 yards between centres, the cast was refused below
+      11 (too close), and the warmaster then waited 12 to 18 s, past a victim who had stepped into the band. Now its
+      timer starts over only once the Charge goes (vmangos's `DoCastSpellIfCan(..) == CAST_OK`), and it looks again
+      at its next tick.
+    - **EventAI's range event** (`EVENT_T_RANGE`) measured between centres; it is mangos's `IsInRange(victim, min,
+      max, true, true)` now: past both bounding radii, from the least, short of the most.
+    - **The Elite Guards' healer pick** (your twist on this Charge) measured 8 to 25 yards between centres,
+      and could pick a healer the cast then refused, every second; it measures past both combat reaches now.
+    - Already right: the cast checks refuse a creature's cast inside a spell's least as a player's
+      (`SPELL_FAILED_TOO_CLOSE`), and a script's random pick for a cast is one in the spell's band.
+
 ## Left for later, and why

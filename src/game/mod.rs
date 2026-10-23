@@ -138,9 +138,13 @@ mod tests_gifts;
 #[cfg(test)]
 mod tests_gm_durability;
 #[cfg(test)]
+mod tests_gm_ready;
+#[cfg(test)]
 mod tests_guards;
 #[cfg(test)]
 mod tests_hyperspawn;
+#[cfg(test)]
+mod tests_immune_target;
 #[cfg(test)]
 mod tests_items3;
 #[cfg(test)]

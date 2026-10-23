@@ -10,6 +10,7 @@ use wow_world_messages::vanilla::*;
 
 use super::tests_p8_scripts_av::{AV, all_of, spawn_at};
 use super::tests_pvp2::{creature, npc, valley};
+use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::battleground::av_scripts::{self, DREK_THAR_LEASH, Leash};
 use crate::game::map::{Map, MapHandle, MapKey, ai, event_ai};
@@ -367,4 +368,321 @@ async fn the_real_valleys_world_copy_has_drek_thar_his_warmasters_and_his_line()
         .unwrap();
     assert!(fought, "Drek'Thar fights Alice");
     assert!(went_home, "past the line, Drek'Thar goes home");
+}
+
+/// Your rule, on the real valley: Alice (a paladin) tops Drek'Thar's list
+/// with Bob below her; her Divine Shield (642, the real spell) turns him to
+/// Bob at his next look, her threat kept; alone on his list, shielded, she
+/// stays his victim and he doesn't go home.
+#[tokio::test]
+#[ignore = "extended"]
+async fn drek_thar_turns_from_a_paladins_divine_shield_to_another_and_stays_on_her_alone() {
+    let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Paladin).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let near = at(DREK_HOME.0 + 3.0, DREK_HOME.1, DREK_HOME.2);
+    let map = into_the_world_copy(&realm, &mut a, near).await;
+    into_the_world_copy(&realm, &mut b, near).await;
+    let (before, turned, kept, alone, home) = map
+        .query(move |m| {
+            let drek = all_of(m, DREK_THAR)[0];
+            hold_at(m, drek, at(DREK_HOME.0, DREK_HOME.1, DREK_HOME.2));
+            // His blows and his guards' next to nothing: at level 1 they
+            // stand a few.
+            let keep: Vec<Guid> = m.creatures.iter().map(|(_, c)| c.guid).collect();
+            for g in keep {
+                let f = m.unit_fields_mut(g).unwrap();
+                f.set_f32(UNIT_FIELD_MINDAMAGE, 1.0);
+                f.set_f32(UNIT_FIELD_MAXDAMAGE, 1.0);
+            }
+            ai::attacked(m, drek, alice);
+            ai::add_threat(m, drek, alice, 1000.0);
+            ai::add_threat(m, drek, bob, 100.0);
+            ai::update_creatures(m);
+            let victim = |m: &Map| m.creature(drek).map(|c| c.combat.victim);
+            let before = victim(m);
+            crate::game::map::spells::cast_triggered(m, alice, 642, Some(alice));
+            ai::update_creatures(m);
+            let turned = victim(m);
+            let kept = m
+                .creature(drek)
+                .and_then(|c| c.threat.iter().find(|(t, _)| *t == alice).map(|(_, v)| *v));
+            // Bob gone from his list: Alice, shielded, alone on it.
+            if let Some(c) = m.creature_mut(drek) {
+                c.threat.retain(|(t, _)| *t != bob);
+            }
+            ai::update_creatures(m);
+            let c = m.creature(drek).unwrap();
+            (before, turned, kept, Some(c.combat.victim), c.evading)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        before,
+        Some(alice),
+        "Drek'Thar fights Alice, top of his list"
+    );
+    assert_eq!(turned, Some(bob), "her shield up, he turns to Bob");
+    assert!(kept.is_some_and(|t| t >= 1000.0), "her threat is kept");
+    assert_eq!(
+        alone,
+        Some(alice),
+        "alone on his list, she stays his victim"
+    );
+    assert!(!home, "and he doesn't go home");
+}
+
+/// A raid attempt on Drek'Thar's keep reset, as peon resets it: Alice (a
+/// GM, unhurt) has drawn him off his spot and hurt him, the sweep has seen
+/// him fighting, two of his warmasters and a wolf are dead, and he has a
+/// summon out; `.respawn 100` from his hall brings back all of them, him
+/// home and whole and out of the fight, the summon gone, and the sweep
+/// forgets his fight.
+#[tokio::test]
+#[ignore = "extended"]
+async fn respawn_around_resets_drek_thars_keep_his_warmasters_back() {
+    let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let home = at(DREK_HOME.0, DREK_HOME.1, DREK_HOME.2);
+    let map = into_the_world_copy(
+        &realm,
+        &mut a,
+        at(DREK_HOME.0 + 3.0, DREK_HOME.1, DREK_HOME.2),
+    )
+    .await;
+    let warmasters: [u32; 8] = std::array::from_fn(|i| 14770 + i as u32);
+    let (drek, theirs, wolves, summon, fighting) = map
+        .query(move |m| {
+            m.players.get_mut(&alice).unwrap().misc.god = true;
+            let drek = all_of(m, DREK_THAR)[0];
+            let theirs: Vec<Guid> = warmasters.iter().flat_map(|e| all_of(m, *e)).collect();
+            let wolves: Vec<Guid> = [12121, 12122].iter().flat_map(|e| all_of(m, *e)).collect();
+            ai::attacked(m, drek, alice);
+            crate::game::map::combat::deal_damage(m, alice, drek, 10_000);
+            hold_at(
+                m,
+                drek,
+                at(DREK_HOME.0 + 10.0, DREK_HOME.1 - 10.0, DREK_HOME.2),
+            );
+            av_scripts::sweep_soon(m);
+            av_scripts::world_update(m);
+            for g in theirs.iter().take(2).chain(wolves.first()) {
+                crate::game::map::combat::kill(m, alice, *g);
+            }
+            let summon = crate::game::tests_p3_combat::spawn(m, alice, ICEBLOOD_WARMASTER, 60, 2.0);
+            event_ai::scripted_mut(m, summon).unwrap().summoner = Some(drek);
+            (
+                drek,
+                theirs,
+                wolves,
+                summon,
+                av_scripts::leaders_fighting(m),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(theirs.len(), 4, "his four warmasters: {theirs:?}");
+    assert!(!wolves.is_empty(), "his wolves");
+    assert!(fighting.contains(&drek), "the sweep saw him fighting");
+    a.say(".respawn 100").await;
+    let reply = a.system_message("Respawned").await;
+    assert!(reply.contains("1 summons gone"), "{reply}");
+    let all = theirs.len() + wolves.len();
+    let (back, drek_now, gone, fighting) = map
+        .query(move |m| {
+            let back = theirs
+                .iter()
+                .chain(&wolves)
+                .filter(|g| m.creature(**g).is_some_and(|c| c.alive()))
+                .count();
+            let c = m.creature(drek).unwrap();
+            let f = &c.fields;
+            let drek_now = (
+                crate::game::map::combat::dist(c.position, home) < 1.0,
+                f.get_u32(UNIT_FIELD_HEALTH) == f.get_u32(UNIT_FIELD_MAXHEALTH),
+                c.combat.attacking || c.evading,
+                c.threat.is_empty(),
+            );
+            (
+                back,
+                drek_now,
+                m.creature(summon).is_none(),
+                av_scripts::leaders_fighting(m),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        back,
+        all,
+        "his warmasters and wolves all back"
+    );
+    assert_eq!(
+        drek_now,
+        (true, true, false, true),
+        "home, whole, out of the fight"
+    );
+    assert!(gone, "his summon gone");
+    assert!(!fighting.contains(&drek), "the sweep forgets his fight");
+}
+
+/// The user's question, on the real valley: the Iceblood Warmaster charges
+/// (22911: 8 to 25 yards past both combat reaches, its blow and a 2 s
+/// stun) whom it fights, as vmangos's `npc_WarMaster` does; never one
+/// beside it. Alice (a warrior) beside it, its victim: no charge, and its
+/// Charge still due. Bob (a priest) 15 yards off across Drek'Thar's hall
+/// takes the top of its list, as a healer's threat does: it charges him at
+/// once, not Alice, and he is stunned. (The hall's others gone, and the
+/// warmaster friendly until both are in, so that only the test fights.)
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_real_warmaster_charges_the_one_it_fights_across_the_hall_not_the_one_beside_it() {
+    const SPOT: (f32, f32, f32) = (-1368.01, -219.481, 98.5099);
+    const CHARGE: u32 = av_scripts::CHARGE;
+    let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
+    let mut a = Client::connect(&realm, "A");
+    let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    let mut b = Client::connect(&realm, "B");
+    let bob = b.enter("Bob", Race::Human, Class::Priest).await;
+    // Their intros over: they see from where they stand.
+    a.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    b.send(CMSG_COMPLETE_CINEMATIC {}).await;
+    let map = into_the_world_copy(&realm, &mut a, at(SPOT.0 + 2.0, SPOT.1, SPOT.2)).await;
+    let hardy = |m: &mut Map, g: Guid| {
+        if let Some(f) = m.unit_fields_mut(g) {
+            f.set_u32(UNIT_FIELD_MAXHEALTH, 100_000);
+            f.set_u32(UNIT_FIELD_HEALTH, 100_000);
+        }
+    };
+    let (warmaster, faction) = map
+        .query(move |m| {
+            hardy(m, alice);
+            let w = all_of(m, ICEBLOOD_WARMASTER)[0];
+            let others: Vec<Guid> = m
+                .creatures
+                .iter()
+                .map(|(_, c)| c.guid)
+                .filter(|g| *g != w)
+                .collect();
+            for g in others {
+                crate::game::map::scripts::despawn(m, g);
+            }
+            crate::game::map::combat::leave_combat(m, w);
+            let f = m.unit_fields_mut(w).unwrap();
+            let faction = f.get_u32(UNIT_FIELD_FACTIONTEMPLATE);
+            f.set_u32(UNIT_FIELD_FACTIONTEMPLATE, 35);
+            f.set_f32(UNIT_FIELD_MINDAMAGE, 1.0);
+            f.set_f32(UNIT_FIELD_MAXDAMAGE, 1.0);
+            (w, faction)
+        })
+        .await
+        .unwrap();
+    into_the_world_copy(&realm, &mut b, at(SPOT.0 + 15.0, SPOT.1, SPOT.2)).await;
+    let w = warmaster;
+    until(&map, "Bob sees the warmaster", move |m| {
+        m.creature(w).is_some_and(|c| c.observers.contains(&bob))
+    })
+    .await;
+    let (range, beside) = map
+        .query(move |m| {
+            hardy(m, bob);
+            m.unit_fields_mut(w)
+                .unwrap()
+                .set_u32(UNIT_FIELD_FACTIONTEMPLATE, faction);
+            let s = m.realm.data.spells.get(CHARGE).unwrap();
+            let range = m.realm.data.spells.range(s);
+            hold_at(m, w, at(SPOT.0, SPOT.1, SPOT.2));
+            ai::attacked(m, w, alice);
+            ai::add_threat(m, w, alice, 100.0);
+            ai::update_creatures(m);
+            hold_at(m, w, at(SPOT.0, SPOT.1, SPOT.2));
+            let i = super::tests_p3_scripts::index(m, w, charge_event(m));
+            let now = m.now;
+            if let Some(s) = event_ai::scripted_mut(m, w) {
+                s.timers[i] = Some(now);
+                s.next_tick = None;
+            }
+            event_ai::tick(m, w);
+            let look = |m: &Map| {
+                let c = m.creature(w).unwrap();
+                let due = event_ai::scripted(m, w)
+                    .and_then(|s| s.timers[i])
+                    .is_some_and(|t| t <= m.now);
+                (c.combat.victim, c.engagement.charge.is_some(), due)
+            };
+            let beside = look(m);
+            // Alice 9.5 yards from its centre: past the event's 8 yards
+            // (between their bounding radii), short of the spell's least
+            // (11 between their centres). Refused, too close; due still.
+            hold_at(m, w, at(SPOT.0 - 7.5, SPOT.1, SPOT.2));
+            if let Some(s) = event_ai::scripted_mut(m, w) {
+                s.next_tick = None;
+            }
+            event_ai::tick(m, w);
+            (range, [beside, look(m)])
+        })
+        .await
+        .unwrap();
+    assert_eq!(range, (8.0, 25.0), "Charge's range, 95");
+    assert_eq!(
+        beside,
+        [(alice, false, true); 2],
+        "Alice beside it, then too close, its victim: no charge, its Charge still due"
+    );
+    // Bob tops its list, across the hall.
+    b.clear();
+    let (victim, charging) = map
+        .query(move |m| {
+            hold_at(m, w, at(SPOT.0, SPOT.1, SPOT.2));
+            ai::add_threat(m, w, bob, 1000.0);
+            ai::update_creatures(m);
+            hold_at(m, w, at(SPOT.0, SPOT.1, SPOT.2));
+            if let Some(s) = event_ai::scripted_mut(m, w) {
+                s.next_tick = None;
+            }
+            event_ai::tick(m, w);
+            let c = m.creature(w).unwrap();
+            let at_bob = c.engagement.charge.as_ref().map(|x| x.attack);
+            (c.combat.victim, at_bob)
+        })
+        .await
+        .unwrap();
+    assert_eq!(victim, bob, "Bob tops its list");
+    assert_eq!(charging, Some(Some(bob)), "it charges Bob at once");
+    let casts = super::tests_p3_scripts::casts_by(&mut b, w, Duration::from_secs(1)).await;
+    assert!(casts.contains(&(CHARGE, bob)), "{casts:?}");
+    assert!(!casts.contains(&(CHARGE, alice)), "{casts:?}");
+    until(
+        &map,
+        "Bob stunned by its Charge, it at his side",
+        move |m| {
+            let stunned =
+                crate::game::map::auras::auras(m, bob).is_some_and(|a| a.has_spell(CHARGE));
+            let by = m
+                .position_of(w)
+                .zip(m.position_of(bob))
+                .is_some_and(|(p, q)| crate::game::map::combat::dist(p, q) < 5.0);
+            stunned && by
+        },
+    )
+    .await;
+}
+
+/// The warmaster's Charge event's id.
+fn charge_event(m: &Map) -> u32 {
+    let s = &m.realm.data.scripts;
+    s.ai_events[&ICEBLOOD_WARMASTER]
+        .iter()
+        .find(|e| {
+            e.actions
+                .iter()
+                .filter_map(|a| s.ai_scripts.get(a))
+                .flatten()
+                .any(|x| x.command == 15 && x.datalong[0] == av_scripts::CHARGE)
+        })
+        .map(|e| e.id)
+        .expect("its Charge")
 }

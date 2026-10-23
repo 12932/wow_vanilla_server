@@ -48,6 +48,18 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   general with his four), its leaders keep their leash and call their guards there; Drek'Thar's leash is your line
   (y -254.89, across the one corridor out of his hall) in place of vmangos's 33 yards; his warmasters and wolves have
   none of his; Vanndar keeps vmangos's 35 yards (mangos-classic has no line of his).
+- **Creatures leave the immune be while anyone else is on their list** (decision 86, your rule, as mangos-classic's
+  `STATE_SUPPRESSED`): one immune to their blows' school is held below the rest, their threat kept, and stays held
+  after the immunity until their threat moves; alone, the immune one is still fought. Departing from mangos, one
+  already immune when first on a list is held there too; the confused, feared and stunned mangos also holds are not.
+- **`.ready save|load` and `.respawn <radius>`** (decision 87, your goal): a ready state's buffs come back at
+  their full time from their casters if here, else the player's own; load clears every aura but passives and gear's,
+  all cooldowns, and combat; respawn around resets every spawned creature in the radius, its summons gone, and
+  Alterac Valley's leaders' sweep; an instance's encounter data isn't reset.
+- **The warmasters' Charge** (decision 88, your question): at their victim only, 8 to 25 yards past both reaches,
+  as vmangos's; no source has them pick a caster, so a healer is charged once their healing tops the list. A refused
+  Charge (too close) no longer spends its 12 to 18 s; EventAI's range event measures past the bounding radii, as
+  mangos's.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick

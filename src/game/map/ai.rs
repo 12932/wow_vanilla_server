@@ -251,13 +251,27 @@ pub fn add_threat(map: &mut Map, creature: Guid, from: Guid, amount: f32) {
     if from == creature || from.is_zero() || guid::is_game_object(from) {
         return;
     }
+    // Held below the rest since an immunity that has ended, a change of
+    // their threat lets them up (mangos's `HostileReference::addThreat`
+    // with `m_suppresabilityToggle`).
+    let lingering = map
+        .creature(creature)
+        .is_some_and(|c| c.suppressed.contains(&from))
+        && !immune_to_blows(map, creature, from);
     let Some(c) = map.creature_mut(creature).filter(|c| keeps_threat(c)) else {
         return;
     };
     match c.threat.iter_mut().find(|(g, _)| *g == from) {
-        Some((_, t)) => *t = (*t + amount).max(0.0),
+        Some((_, t)) => {
+            let before = *t;
+            *t = (*t + amount).max(0.0);
+            if lingering && *t != before {
+                unsuppress(map, creature);
+            }
+        }
         None if amount < 0.0 => {}
         None => {
+            c.suppressed.retain(|t| *t != from);
             c.threat.push((from, amount));
             map.note_fighting(creature);
             if guid::is_player(from) {
@@ -389,6 +403,7 @@ pub fn victim_died(map: &mut Map, g: Guid) {
 fn pet_fight_over(map: &mut Map, g: Guid) {
     if let Some(c) = map.creature_mut(g) {
         c.threat.clear();
+        c.suppressed.clear();
         c.chase_target_at = None;
         c.engagement.side = None;
         c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
@@ -531,6 +546,7 @@ pub fn die_rewarding(map: &mut Map, creature: Guid, tapper: Guid, killer: Guid, 
     let moving = matches!(c.motion, Motion::Moving(_));
     c.motion = Motion::Idle { until: None };
     c.threat.clear();
+    c.suppressed.clear();
     c.combat = Default::default();
     c.evading = false;
     c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
@@ -876,6 +892,7 @@ pub fn quiet_death_for(map: &mut Map, g: Guid, respawn: Duration) {
         respawn_at: now + respawn,
     };
     c.threat.clear();
+    c.suppressed.clear();
     c.combat = Default::default();
     c.evading = false;
     c.fields.set_u32(UNIT_FIELD_HEALTH, 0);
@@ -1196,6 +1213,7 @@ fn stand_down(map: &mut Map, g: Guid) {
     crate::game::map::spells::threat_sync::wiped(map, g);
     if let Some(c) = map.creature_mut(g) {
         c.threat.clear();
+        c.suppressed.clear();
         c.combat_start = None;
     }
     combat::leave_combat(map, g);
@@ -1259,11 +1277,81 @@ fn prune_threat(map: &mut Map, g: Guid) {
 /// again.
 fn pick_victim(map: &Map, g: Guid, pruned: bool) -> Option<Guid> {
     let c = map.creature(g)?;
+    // Those it may hurt above those it may not, whatever their threat
+    // (mangos's `ThreatContainer::update`, by `GetHostileState`).
     c.threat
         .iter()
         .filter(|(t, _)| pruned || valid_victim(map, g, *t))
-        .max_by(|a, b| effective_threat(a.1).total_cmp(&effective_threat(b.1)))
-        .map(|(t, _)| *t)
+        .map(|(t, v)| (*t, effective_threat(*v), !suppressed(map, g, *t)))
+        .max_by(|a, b| a.2.cmp(&b.2).then(a.1.total_cmp(&b.1)))
+        .map(|(t, _, _)| t)
+}
+
+/// Whether `g`'s blows can't hurt `t`: an immunity to the school of its
+/// melee (Divine Shield, Ice Block; Blessing of Protection against a
+/// physical one), mangos's `IsSuppressedTarget`'s first test.
+fn immune_to_blows(map: &Map, g: Guid, t: Guid) -> bool {
+    combat::school_immune(map, t, combat::melee_school(map, g))
+}
+
+/// Whether `t` is held below everyone else on `g`'s threat list, its
+/// threat kept (mangos-classic's `STATE_SUPPRESSED`): immune to `g`'s
+/// blows, or since they were, until their threat on `g` changes or
+/// another on the list is newly held. With no one else on the list, `g`
+/// fights them still.
+pub(crate) fn suppressed(map: &Map, g: Guid, t: Guid) -> bool {
+    immune_to_blows(map, g, t) || map.creature(g).is_some_and(|c| c.suppressed.contains(&t))
+}
+
+/// Those on `g`'s list newly immune to its blows are held below the rest,
+/// and with that, those held since an immunity that has ended are let up
+/// (mangos's `HandleSuppressed` as an immunity goes on, and
+/// `ThreatManager::ClearSuppressed` at any change of one's state). Asked
+/// before each choice of victim, so one who is immune when first on the
+/// list is held too (decision 86).
+fn update_suppressed(map: &mut Map, g: Guid) {
+    let Some(c) = map.creature(g) else {
+        return;
+    };
+    let newly = c
+        .threat
+        .iter()
+        .any(|(t, _)| !c.suppressed.contains(t) && immune_to_blows(map, g, *t));
+    let gone = c
+        .suppressed
+        .iter()
+        .any(|t| !c.threat.iter().any(|(x, _)| x == t));
+    if newly {
+        unsuppress(map, g);
+        let held: Vec<Guid> = map.creature(g).map_or_else(Vec::new, |c| {
+            c.threat
+                .iter()
+                .map(|(t, _)| *t)
+                .filter(|t| immune_to_blows(map, g, *t))
+                .collect()
+        });
+        if let Some(c) = map.creature_mut(g) {
+            c.suppressed = held;
+        }
+    } else if gone && let Some(c) = map.creature_mut(g) {
+        let on: Vec<Guid> = c.threat.iter().map(|(t, _)| *t).collect();
+        c.suppressed.retain(|t| on.contains(t));
+    }
+}
+
+/// A change of one's state on `g`'s list: those held who are no longer
+/// immune are let up (mangos's `ThreatManager::ClearSuppressed`).
+fn unsuppress(map: &mut Map, g: Guid) {
+    let keep: Vec<Guid> = map.creature(g).map_or_else(Vec::new, |c| {
+        c.suppressed
+            .iter()
+            .copied()
+            .filter(|t| immune_to_blows(map, g, *t))
+            .collect()
+    });
+    if let Some(c) = map.creature_mut(g) {
+        c.suppressed = keep;
+    }
 }
 
 /// A creature attacking `g` that `g` may fight, the first by key: what
@@ -1340,16 +1428,27 @@ fn overtake_of(map: &Map, g: Guid, current: Guid, pruned: bool) -> Guid {
     };
     // Down the list from the top (Thistle Tea's `Threat.decide`): past a
     // tenth more, one in melee range takes over; past three tenths, anyone.
-    let mut sorted: Vec<(Guid, f32)> = c
+    // Those it may hurt first (mangos's `ThreatContainer::update`): one it
+    // may hurt takes over at once from a victim it may not (by
+    // `GetHostileState` in `SelectNextVictim`), and among either the
+    // tenths decide.
+    let mut sorted: Vec<(Guid, f32, bool)> = c
         .threat
         .iter()
         .filter(|(t, _)| pruned || valid_victim(map, g, *t))
-        .map(|(t, v)| (*t, effective_threat(*v)))
+        .map(|(t, v)| (*t, effective_threat(*v), suppressed(map, g, *t)))
         .collect();
-    sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
+    sorted.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.total_cmp(&a.1)));
+    let held = suppressed(map, g, current);
     let me = map.unit_view(g);
-    for (t, theirs) in sorted {
-        if t == current || theirs <= mine * 1.1 {
+    for (t, theirs, theirs_held) in sorted {
+        if t == current {
+            return current;
+        }
+        if held && !theirs_held {
+            return t;
+        }
+        if theirs <= mine * 1.1 {
             return current;
         }
         let near = match (&me, map.unit_view(t)) {
@@ -1378,6 +1477,7 @@ fn fight_step(map: &mut Map, g: Guid) {
         return;
     }
     prune_threat(map, g);
+    update_suppressed(map, g);
     let Some(c) = map.creature(g) else {
         return;
     };
@@ -2370,6 +2470,7 @@ fn evade(map: &mut Map, g: Guid) {
     };
     c.evading = true;
     c.threat.clear();
+    c.suppressed.clear();
     c.combat = Default::default();
     c.caster = Default::default();
     crate::game::map::tap::clear(c);

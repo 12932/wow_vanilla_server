@@ -508,11 +508,18 @@ fn satisfy(map: &Map, g: Guid, e: &AiEvent, invoker: Option<Guid>) -> Option<Opt
             let v = victim(map, g)?;
             ok(mana_pct(map, v).is_some_and(|p| within(p, e)))
         }
+        // Its victim from the least yards to the most, past both bounding
+        // radii (mangos's `IsInRange(victim, min, max, true, true)`: from
+        // the least, short of the most).
         EVENT_RANGE => {
             let v = victim(map, g)?;
             let (a, b) = (map.position_of(g)?, map.position_of(v)?);
-            let d = dist(a, b);
-            ok(d >= e.params[0] as f32 && d <= e.params[1] as f32)
+            let radius = |u: Guid| {
+                map.unit_fields(u)
+                    .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+            };
+            let d = dist(a, b) - radius(g) - radius(v);
+            ok(d >= e.params[0] as f32 && d < e.params[1] as f32)
         }
         // Its own look about, with line of sight: `ooc_los`.
         EVENT_OOC_LOS => None,

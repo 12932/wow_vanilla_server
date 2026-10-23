@@ -79,6 +79,8 @@ pub const EQUIPMENT: u32 = ELITE_GUARD;
 /// Charge's reach (spell 22911's range, 95).
 pub const CHARGE_MIN: f32 = 8.0;
 pub const CHARGE_MAX: f32 = 25.0;
+/// The most a player's combat reach is (a tauren's), for the look about.
+const MAX_REACH: f32 = 2.5;
 /// The classes that heal: paladin, priest, shaman and druid.
 pub const HEALERS: [u8; 4] = [2, 5, 7, 11];
 /// How lately a heal makes a healer the one charged.
@@ -159,13 +161,20 @@ pub fn install(data: &mut GameData) {
 /// hostile player of a class that heals, in sight, between 8 and 25
 /// yards, at random, one who cast a heal in the last five seconds over one
 /// who hasn't; with none, its victim at 8 to 25 yards, as the warmaster
-/// charges.
+/// charges. The yards are past both combat reaches, as Charge's cast
+/// measures them (`checks::check_target`, mangos's `GetMinMaxRange`): one
+/// nearer would be picked only for the cast to be refused, too close.
 pub fn charge_target(map: &Map, g: Guid) -> Option<Guid> {
     let me = map.position_of(g)?;
     let now = map.now;
-    let in_reach = |p: Vector3d| (CHARGE_MIN..=CHARGE_MAX).contains(&dist(me, p));
+    let reach = |u: Guid| map.unit_view(u).map_or(0.0, |v| v.combat_reach.max(0.0));
+    let mine = reach(g);
+    let in_reach = |u: Guid, p: Vector3d| {
+        let d = dist(me, p) - mine - reach(u);
+        (CHARGE_MIN..=CHARGE_MAX).contains(&d)
+    };
     let mut healers: Vec<(Guid, bool)> = Vec::new();
-    for u in map.grid.around(me.x, me.y, CHARGE_MAX) {
+    for u in map.grid.around(me.x, me.y, CHARGE_MAX + mine + MAX_REACH) {
         let Some(p) = map.players.get(&u) else {
             continue;
         };
@@ -173,7 +182,7 @@ pub fn charge_target(map: &Map, g: Guid) -> Option<Guid> {
             && !p.awaiting_worldport
             && !p.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_GM)
             && HEALERS.contains(&p.row.class)
-            && in_reach(p.position());
+            && in_reach(u, p.position());
         if !able
             || !combat::hostile(map, g, u)
             || !combat::can_attack(map, g, u)
@@ -205,7 +214,7 @@ pub fn charge_target(map: &Map, g: Guid) -> Option<Guid> {
         .map(|c| c.combat.victim)
         .filter(|v| !v.is_zero())?;
     let at = map.unit_view(victim).filter(|u| u.alive)?.position;
-    in_reach(at).then_some(victim)
+    in_reach(victim, at).then_some(victim)
 }
 
 /// An Elite Guard's charge reached `target`: it fights it, its threat

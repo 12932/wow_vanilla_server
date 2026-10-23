@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear [green|blue|raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn, .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [green|blue|raid [1|2]], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn [radius], .ready [save|load], .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], .infinitemana [on|off] (.thereisnospoon), \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -31,7 +31,7 @@ pub fn needed_level(name: &str) -> Option<u8> {
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
         | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "god"
         | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
-        | "event" | "durability" | "infinitemana" | "thereisnospoon" => GAME_MASTER,
+        | "event" | "durability" | "infinitemana" | "thereisnospoon" | "ready" => GAME_MASTER,
         _ => return None,
     })
 }
@@ -54,7 +54,20 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "pet" => pet(map, g, args),
         "damage" => damage(map, g, args),
         "kill" => kill(map, g),
-        "respawn" => respawn(map, g),
+        "respawn" => match args {
+            [] => respawn(map, g),
+            [r] => match r.parse::<f32>() {
+                Ok(r) if r > 0.0 && r <= crate::game::map::ready::MAX_RADIUS => {
+                    Some(crate::game::map::ready::respawn_around(map, g, r))
+                }
+                _ => Some(RESPAWN_USAGE.into()),
+            },
+            _ => Some(RESPAWN_USAGE.into()),
+        },
+        "ready" => {
+            let to = player_target(map, g);
+            crate::game::map::ready::command(map, g, args, to)
+        }
         "move" => move_target(map, g, args),
         "threat" => threat(map, g),
         "guid" => Some(format!("Target: {}", selected(map, g))),
@@ -1349,6 +1362,8 @@ fn kill(map: &mut Map, g: Guid) -> Option<String> {
     None
 }
 
+const RESPAWN_USAGE: &str = "Usage: .respawn [radius], a radius of 500 yards or less";
+
 /// `.respawn`: the selected creature, dead or alive, back at its spawn as
 /// new.
 fn respawn(map: &mut Map, g: Guid) -> Option<String> {
@@ -1633,6 +1648,57 @@ fn durability(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     Some(format!(
         "Durability off: your gear doesn't wear ({mended} items mended)."
     ))
+}
+
+/// Every cooldown of `to` cleared, its client told: its spells' and
+/// items' (a potion's, a healthstone's), their categories', the global
+/// cooldowns, those waiting for an aura's end, and an interrupt's school
+/// lockouts (Thistle Tea's `.debug cooldowns`). How many spells were
+/// cooling.
+pub fn clear_cooldowns(map: &mut Map, to: Guid) -> usize {
+    let data = map.realm.data.clone();
+    let Some(p) = map.players.get_mut(&to) else {
+        return 0;
+    };
+    let spells: Vec<u32> = p.caster.cooldowns.keys().copied().collect();
+    // And each known spell of a category cooling, its client told of it at
+    // the cast (Frost Nova's ranks, a wait of the category's alone), and
+    // each waiting for its aura to go.
+    let categories = &p.caster.category_cooldowns;
+    let of_categories: Vec<u32> = p
+        .spells
+        .iter()
+        .copied()
+        .filter(|id| {
+            !p.caster.cooldowns.contains_key(id)
+                && data
+                    .spells
+                    .get(*id)
+                    .is_some_and(|t| t.category != 0 && categories.contains_key(&t.category))
+        })
+        .chain(
+            p.caster
+                .pending_cooldowns
+                .iter()
+                .copied()
+                .filter(|id| !p.caster.cooldowns.contains_key(id)),
+        )
+        .collect();
+    p.caster.cooldowns.clear();
+    p.caster.category_cooldowns.clear();
+    p.caster.pending_cooldowns.clear();
+    p.caster.pending_times.clear();
+    p.caster.cooldown_sources.clear();
+    p.caster.gcd_until = None;
+    p.caster.other_gcds.clear();
+    p.caster.school_lockout.clear();
+    for id in spells.iter().chain(&of_categories) {
+        p.outbound.send(&SMSG_CLEAR_COOLDOWN {
+            id: *id,
+            target: to,
+        });
+    }
+    spells.len()
 }
 
 /// `.infinitemana [on|off]` (`.thereisnospoon`): a GM's spells cost no
@@ -1922,37 +1988,8 @@ fn debug(map: &mut Map, g: Guid, args: &[&str]) -> Option<String> {
     match args {
         ["cooldowns"] => {
             let to = player_target(map, g);
-            let p = map.players.get_mut(&to)?;
-            let spells: Vec<u32> = p.caster.cooldowns.keys().copied().collect();
-            // And each known spell of a category cooling, its client told
-            // of it at the cast (Frost Nova's ranks, a wait of the
-            // category's alone).
-            let categories = &p.caster.category_cooldowns;
-            let of_categories: Vec<u32> = p
-                .spells
-                .iter()
-                .copied()
-                .filter(|id| {
-                    !p.caster.cooldowns.contains_key(id)
-                        && data.spells.get(*id).is_some_and(|t| {
-                            t.category != 0 && categories.contains_key(&t.category)
-                        })
-                })
-                .collect();
-            p.caster.cooldowns.clear();
-            p.caster.category_cooldowns.clear();
-            p.caster.gcd_until = None;
-            p.caster.other_gcds.clear();
-            // And an interrupt's school lockouts (Thistle Tea's `.debug
-            // cooldowns`).
-            p.caster.school_lockout.clear();
-            for id in spells.iter().chain(&of_categories) {
-                p.outbound.send(&SMSG_CLEAR_COOLDOWN {
-                    id: *id,
-                    target: to,
-                });
-            }
-            Some(format!("Cleared {} cooldowns.", spells.len()))
+            let cleared = clear_cooldowns(map, to);
+            Some(format!("Cleared {cleared} cooldowns."))
         }
         ["durability", percent, ..] => {
             // A percent of 0 to 100; anything else is refused (Thistle
