@@ -25,6 +25,9 @@ const FLASH_OF_LIGHT: u32 = 19750;
 const HOLY_SHOCK: u32 = 20473;
 const SEAL_OF_RIGHTEOUSNESS: u32 = 20154;
 const IMPROVED_SOR_5: u32 = 20332;
+const LAY_ON_HANDS: u32 = 633;
+const IMPROVED_LOH_2: u32 = 20235;
+const LOH_ARMOR_2: u32 = 20236;
 const STRENGTH_OF_EARTH_5: u32 = 25361;
 const STRENGTH_OF_EARTH_AURA_5: u32 = 25362;
 const STONESKIN_6: u32 = 10408;
@@ -287,4 +290,32 @@ async fn divine_favor_crits_holy_light_flash_and_shock_and_goes_with_the_first()
     );
     assert!(!out.1, "Divine Favor spent by a Holy Light");
     assert!(!out.2, "Divine Favor spent by a Holy Shock");
+}
+
+/// Improved Lay on Hands' armor goes on the one healed, a friend or the
+/// paladin themself (mangos's 20233 at the victim of the proc).
+#[tokio::test]
+#[ignore = "extended"]
+async fn improved_lay_on_hands_armors_whom_it_heals() {
+    let Some(realm) = realm() else { return };
+    let (_a, p, map) = kit::player(&realm, "TPSLH1", "Layera", Race::Human, Class::Paladin).await;
+    let (_b, friend, _) =
+        kit::player(&realm, "TPSLH2", "Layerb", Race::Human, Class::Warrior).await;
+    let out = on(&map, move |m| {
+        kit::ready(m, p, 60, &[LAY_ON_HANDS, IMPROVED_LOH_2]);
+        kit::ready(m, friend, 60, &[]);
+        kit::set_health(m, friend, 100);
+        assert!(cast_fresh(m, p, LAY_ON_HANDS, at(friend)));
+        kit::pass(m, 100);
+        let friend_armored = kit::has(m, friend, LOH_ARMOR_2);
+        let healed = health(m, friend) > 100;
+        kit::set_health(m, p, 100);
+        assert!(cast_fresh(m, p, LAY_ON_HANDS, at(p)));
+        kit::pass(m, 100);
+        (healed, friend_armored, kit::has(m, p, LOH_ARMOR_2))
+    })
+    .await;
+    assert!(out.0, "Lay on Hands healed");
+    assert!(out.1, "the friend's armor");
+    assert!(out.2, "the paladin's own");
 }
