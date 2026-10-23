@@ -1284,4 +1284,23 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     - **13, a far teleport never acknowledged:** kicked as `.kick` does after `[world] worldport_ack_timeout_secs` (60,
       Live, 0 never) from `SMSG_NEW_WORLD`; one whose connection is gone is left to the 60 s linger.
 
+80. **Pets spread round their victim, your ask** (2026-10-23; `feat/pet-fanout`): twenty hunter pets on one unit should
+    fan out as mobs on a player do, and other melee pets, the voidwalker, with them. Every melee pet of a player (a hunter's, a
+    warlock's Voidwalker, Succubus and Felhunter, a guardian, a charmed creature) chases, stands and spreads as a
+    creature does (`ai::chase_goal`, `ai::runs_on`, `ai::spread`, Thistle Tea's `approach_angle_offset` and
+    `maybe_spread`), its victim's spots shared by every one fighting it, creatures and pets alike. The imp stands off
+    and casts, as before (mangos's `PetAI`, 25 yards and no melee).
+    - **mangos-classic** fans out only those chasing a **player** (`ChaseMovementGenerator::Backpedal`, whose
+      `FanOut` steps one off another standing within a yard, 36 to 45 degrees round its target); pets chase from
+      any side (`PetAttackFromBehind = 0`, the default; 1 sends them behind). Twenty pets on a creature stand on
+      each other there. wvs fans out at any victim, as it already did for creatures (Thistle Tea's), and pets
+      chase from their own side, not behind.
+    - **What the spread now does more than Thistle Tea's,** for creatures too: a step aside goes to a place clear of
+      where every other attacker of its victim stands or is headed (up to 8 places, turned further round either way,
+      before it settles for the first as Thistle Tea does), so a crowd ends apart in a step or two and then stands;
+      two are on each other within their radii combined (Thistle Tea's 1.12 yards, at least); a victim bigger than a
+      player has its spots out by its extra size, and one standing inside it backs off; there is no turn aside at a
+      victim on the move, any victim (Thistle Tea's, at a player), so those following a walking creature keep their
+      sides; and a step's end is on the ground there, not at its victim's height.
+
 ## Left for later, and why

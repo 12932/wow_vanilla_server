@@ -1280,6 +1280,8 @@ mod tests_parity_world;
 #[cfg(test)]
 mod tests_perf2;
 #[cfg(test)]
+mod tests_pet_fanout;
+#[cfg(test)]
 mod tests_pets;
 #[cfg(test)]
 mod tests_pets2;
