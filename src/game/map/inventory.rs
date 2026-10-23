@@ -2110,9 +2110,10 @@ pub fn sync_gear(map: &mut Map, g: Guid) {
             continue;
         };
         // Its points with the wearer's modifiers to it (mangos's
-        // `CalculateSpellEffectValue`), and a bonus to damage done with
-        // their damage modifiers too: Improved Firestone's 15 or 30% on a
-        // Firestone's fire damage.
+        // `CalculateSpellEffectValue` for the item's or enchantment's cast:
+        // Elemental Weapons' Rockbiter attack power), and a bonus to damage
+        // done with their damage modifiers too: Improved Firestone's 15 or
+        // 30% on a Firestone's fire damage.
         let m = crate::game::map::spells::mods::for_spell(map, g, s);
         let effects: Vec<(usize, i32)> = (0..3)
             .filter(|i| matches!(s.effects[*i].effect, 6 | 35) && s.effects[*i].aura != 0)

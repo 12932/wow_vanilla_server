@@ -387,8 +387,12 @@ fn flametongue(
         .map_or(2000, |t| t.delay.max(1));
     let damage = flametongue_damage(amount, fire, speed);
     let mut strike = attack.clone();
-    // Its spell power is in already.
-    strike.attributes[3] |= crate::game::data::spells::ATTR_EX3_IGNORE_CASTER_MODIFIERS;
+    // Its spell power is in already: none again. Its caster's modifiers
+    // and damage done hold, as mangos casts 10444 with the total
+    // (`EffectDummy`): Elemental Weapons' damage, Elemental Fury's crit.
+    for e in &mut strike.effects {
+        e.bonus_coefficient = 0.0;
+    }
     let _ = s;
     super::scripts::cast_template_with_points(
         map,

@@ -10,10 +10,11 @@ use std::sync::Arc;
 use wow_world_messages::Guid;
 use wow_world_messages::vanilla::*;
 
-use super::tests_p3_spells_kit::{self as kit, cast_fresh};
+use super::tests_p3_combat::equip;
+use super::tests_p3_spells_kit::{self as kit, cast_fresh, health};
 use crate::game::Realm;
 use crate::game::fields::*;
-use crate::game::map::spells::Targets;
+use crate::game::map::spells::{self, Targets};
 use crate::game::map::{Map, MapHandle};
 use crate::game::social::groups;
 
@@ -25,12 +26,18 @@ const MANA_SPRING_4: u32 = 10497;
 const MANA_SPRING_AURA_4: u32 = 10494;
 const STONECLAW_6: u32 = 10428;
 const STONECLAW_TOTEM: u32 = 7399;
+const ROCKBITER_7: u32 = 16316;
+const ROCKBITER_AURA_7: u32 = 16313;
+const FLAMETONGUE_PROC_4: u32 = 16344;
 const ENHANCING_TOTEMS_2: u32 = 16295;
 const GUARDIAN_TOTEMS_2: u32 = 16293;
 const RESTORATIVE_TOTEMS_5: u32 = 16208;
 const EARTHS_GRASP_2: u32 = 16130;
+const ELEMENTAL_WEAPONS_3: u32 = 29080;
 /// The four totems a shaman carries.
 const TOTEMS: [u32; 4] = [5175, 5176, 5177, 5178];
+const WORN_SHORTSWORD: u32 = 25;
+const MAIN_HAND: u8 = 15;
 
 async fn on<T: Send + 'static>(
     map: &MapHandle,
@@ -160,4 +167,48 @@ async fn earths_grasp_raises_stoneclaws_health() {
     .await;
     assert!(out[0] > 0, "{out:?}");
     assert_eq!(out[1], out[0] * 150 / 100, "Stoneclaw's health: {out:?}");
+}
+
+/// Elemental Weapons raises Rockbiter's attack power and Flametongue's
+/// strike (its damage modifier touches 10444, as mangos casts the strike
+/// with its caster's modifiers).
+#[tokio::test]
+#[ignore = "extended"]
+async fn elemental_weapons_raises_rockbiter_and_flametongue() {
+    let Some(realm) = realm() else { return };
+    let (_a, plain, map) = kit::player(&realm, "TPSEW1", "Weapona", Race::Orc, Class::Shaman).await;
+    let (_b, keen, _) = kit::player(&realm, "TPSEW2", "Weaponb", Race::Orc, Class::Shaman).await;
+    let out = on(&map, move |m| {
+        m.spells.rolls = Some(false);
+        let mut got = Vec::new();
+        for (g, talents) in [(plain, &[][..]), (keen, &[ELEMENTAL_WEAPONS_3][..])] {
+            shaman(m, g, talents);
+            equip(m, g, WORN_SHORTSWORD, MAIN_HAND);
+            let weapon = m.players[&g]
+                .item_at(crate::game::store::BAG_PLAYER, MAIN_HAND)
+                .map(|i| m.players[&g].items[i].guid);
+            assert!(cast_fresh(
+                m,
+                g,
+                ROCKBITER_7,
+                Targets {
+                    item: weapon,
+                    ..Default::default()
+                }
+            ));
+            crate::game::map::inventory::sync_gear(m, g);
+            let ap = amount(m, g, ROCKBITER_AURA_7).unwrap_or(0);
+            let kobold = kit::dummy(m, g, 60, 3.0);
+            let before = health(m, kobold);
+            spells::cast_triggered(m, g, FLAMETONGUE_PROC_4, Some(kobold));
+            kit::pass(m, 2_000);
+            got.push((ap, before - health(m, kobold)));
+        }
+        got
+    })
+    .await;
+    let ((ap, fire), (keen_ap, keen_fire)) = (out[0], out[1]);
+    assert!(ap > 0 && fire > 0, "{out:?}");
+    assert_eq!(keen_ap, ap * 120 / 100, "Rockbiter's attack power: {out:?}");
+    assert_eq!(keen_fire, fire * 115 / 100, "Flametongue's strike: {out:?}");
 }
