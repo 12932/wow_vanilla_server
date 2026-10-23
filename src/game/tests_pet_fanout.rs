@@ -90,7 +90,10 @@ fn radius(m: &Map, g: Guid) -> f32 {
 /// in melee reach of `w`.
 fn settled(m: &Map, fighters: &[Guid], w: Guid) -> (Vec<Vector3d>, bool) {
     let them = m.unit_view(w).unwrap();
-    let at: Vec<Vector3d> = fighters.iter().map(|g| m.position_of(*g).unwrap()).collect();
+    let at: Vec<Vector3d> = fighters
+        .iter()
+        .map(|g| m.position_of(*g).unwrap())
+        .collect();
     let ok = fighters.iter().all(|g| {
         let c = m.creature(*g).unwrap();
         matches!(c.motion, crate::game::map::creature::Motion::Idle { .. })
@@ -113,10 +116,13 @@ fn tightest(m: &Map, fighters: &[Guid], at: &[Vector3d]) -> f32 {
     worst
 }
 
-/// Twenty hunters' pets sent at one wolf each make for a spot of their
-/// own about it: they end standing in its reach, no two nearer than
-/// their radii, and stay so while it stands; and round a big wolf (a
-/// boss's bounding radius and reach) outside its size.
+/// Twenty hunters' pets sent at one wolf from their hunters' side fan out
+/// over the arc on that side (`[creatures] fan_out_arc_degrees`, 120):
+/// they end standing in its reach, on one ring about it, within the arc
+/// and over most of it, side by side and overlapping a little (twenty
+/// don't fit in a third of a circle at their reach), none in another's
+/// place, and stay so while it stands; and round a big wolf (a boss's
+/// bounding radius and reach) on a ring outside its size.
 async fn twenty_pets_on(radius_of_wolf: f32, reach_of_wolf: f32) {
     let realm = harness::realm_with(data());
     let (_clients, hunters, map) = players(&realm, 20, Class::Hunter).await;
@@ -146,10 +152,27 @@ async fn twenty_pets_on(radius_of_wolf: f32, reach_of_wolf: f32) {
             let (before, ok) = settled(m, &pets, w);
             let worst = tightest(m, &pets, &before);
             let wolf = m.position_of(w).unwrap();
-            let nearest = before
+            let apart: Vec<f32> = before.iter().map(|p| planar(*p, wolf)).collect();
+            let nearest = apart.iter().copied().fold(f32::MAX, f32::min);
+            let furthest = apart.iter().copied().fold(0.0, f32::max);
+            // The side they came from: the mean of each one's.
+            let (sin, cos) = pets
                 .iter()
-                .map(|p| planar(*p, wolf))
-                .fold(f32::MAX, f32::min);
+                .filter_map(|p| m.creature(*p).unwrap().engagement.side)
+                .fold((0.0f32, 0.0f32), |(s, c), (_, a)| {
+                    (s + a.sin(), c + a.cos())
+                });
+            let from = sin.atan2(cos);
+            let off: Vec<f32> = before
+                .iter()
+                .map(|p| {
+                    let a = (p.y - wolf.y).atan2(p.x - wolf.x) - from;
+                    a.sin().atan2(a.cos()).to_degrees()
+                })
+                .collect();
+            let widest = off.iter().map(|a| a.abs()).fold(0.0, f32::max);
+            let span = off.iter().copied().fold(f32::MIN, f32::max)
+                - off.iter().copied().fold(f32::MAX, f32::min);
             // Forty updates more, the wolf still: no one moves.
             let mut stepped = 0;
             for _ in 0..40 {
@@ -161,19 +184,35 @@ async fn twenty_pets_on(radius_of_wolf: f32, reach_of_wolf: f32) {
                     .filter(|(a, b)| dist(**a, **b) > 0.01)
                     .count();
             }
-            (ready, ok, worst, nearest, stepped)
+            (
+                ready,
+                ok,
+                worst,
+                (nearest, furthest),
+                (widest, span),
+                stepped,
+            )
         })
         .await
         .unwrap();
-    let (ready, ok, worst, nearest, stepped) = out;
+    let (ready, ok, worst, (nearest, furthest), (widest, span), stepped) = out;
     assert!(ready.is_some() && ok, "all twenty stand in reach");
     assert!(
-        worst >= 1.0,
-        "no two nearer than their radii combined: {worst:.2} of it"
+        furthest - nearest <= 1.0,
+        "on one ring: {nearest:.2} to {furthest:.2} yards"
     );
     assert!(
         nearest >= radius_of_wolf,
         "outside the wolf's size {radius_of_wolf}: {nearest:.2}"
+    );
+    assert!(
+        widest <= 61.0,
+        "within the arc on their side: {widest:.1} degrees off it"
+    );
+    assert!(span >= 90.0, "over most of the arc: {span:.1} degrees");
+    assert!(
+        worst >= 0.1,
+        "none in another's place: {worst:.2} of their radii"
     );
     assert_eq!(stepped, 0, "the spots hold while the wolf stands");
 }
@@ -189,7 +228,9 @@ async fn twenty_pets_spread_round_a_big_victim_outside_its_size() {
 }
 
 /// A Voidwalker, a Felhunter and a hunter's boar fighting a wolf with
-/// three footmen share its spots: the six stand apart, each in reach.
+/// three footmen, all from one side, share its arc: the six stand side by
+/// side, each in reach, overlapping no more than a little (six don't stand
+/// a full 1.12 yards apart in a third of a circle at their reach).
 #[tokio::test]
 async fn demons_a_hunters_pet_and_creatures_spread_among_each_other() {
     let realm = harness::realm_with(data());
@@ -239,7 +280,10 @@ async fn demons_a_hunters_pet_and_creatures_spread_among_each_other() {
         .unwrap();
     let (ok, worst) = out;
     assert!(ok, "all six stand in reach");
-    assert!(worst >= 1.0, "apart: {worst:.2} of their radii");
+    assert!(
+        worst >= 0.6,
+        "side by side: {worst:.2} of their radii apart"
+    );
 }
 
 /// The imp takes no melee spot: it casts its Firebolt from its range,
@@ -315,8 +359,8 @@ async fn hunters_in_tanaris(
 }
 
 /// On the real navmesh, ten pets sent at a wolf on a dune's slope in
-/// Tanaris spread round it on the ground: each spot on the navmesh, within
-/// a yard of the ground there, apart and in reach.
+/// Tanaris fan out over its arc on the ground: each spot on the navmesh,
+/// within a yard of the ground there, side by side and in reach.
 #[tokio::test]
 #[ignore = "extended"]
 async fn pets_spread_round_a_victim_on_a_slope_on_the_navmesh() {
@@ -339,7 +383,12 @@ async fn pets_spread_round_a_victim_on_a_slope_on_the_navmesh() {
             // The wolf on the dune's slope, eight yards below the hunters.
             let w = victim(m, hunters[0], 13.9, 0.5, 1.5);
             let at = m.position_of(w).unwrap();
-            let z = m.nav.as_mut().unwrap().ground(at.x, at.y, at.z + 5.0).unwrap();
+            let z = m
+                .nav
+                .as_mut()
+                .unwrap()
+                .ground(at.x, at.y, at.z + 5.0)
+                .unwrap();
             let c = m.creature_mut(w).unwrap();
             c.position.z = z;
             for p in &pets {
@@ -371,7 +420,16 @@ async fn pets_spread_round_a_victim_on_a_slope_on_the_navmesh() {
         .unwrap();
     let (ok, worst, off, slope) = out;
     assert!(ok, "all ten stand in reach");
-    assert!(worst >= 1.0, "apart: {worst:.2} of their radii");
-    assert!(off <= 1.0, "each on the ground: {off:.2} yards off it at most");
-    assert!(slope > 0.5, "on a slope: {slope:.2} yards between the spots");
+    assert!(
+        worst >= 0.25,
+        "side by side, ten in a third of a circle: {worst:.2} of their radii apart"
+    );
+    assert!(
+        off <= 1.0,
+        "each on the ground: {off:.2} yards off it at most"
+    );
+    assert!(
+        slope > 0.5,
+        "on a slope: {slope:.2} yards between the spots"
+    );
 }

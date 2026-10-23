@@ -390,6 +390,7 @@ fn pet_fight_over(map: &mut Map, g: Guid) {
     if let Some(c) = map.creature_mut(g) {
         c.threat.clear();
         c.chase_target_at = None;
+        c.engagement.side = None;
         c.fields.set_guid(UNIT_FIELD_TARGET, Guid::zero());
         if let Some(s) = c.pet.as_deref_mut() {
             s.commanded = None;
@@ -1546,7 +1547,11 @@ fn fight_step(map: &mut Map, g: Guid) {
                 from
             }
         }
-        None => chase_goal(map, g, victim, me.position, them.position, reach),
+        None => {
+            let (goal, side) = chase_goal(map, g, victim, me.position, them.position, reach);
+            chases(map, g, victim, side);
+            goal
+        }
     };
     // As its habitat lets it: through the air, the water, or only to the
     // edge of what it can't enter.
@@ -1594,9 +1599,57 @@ fn side_of(me: Vector3d, them: Vector3d) -> f32 {
     }
 }
 
-/// How many fight `t`.
+/// How many fight `t`, or are on their way to (`fighters`).
 fn attackers(map: &Map, t: Guid) -> usize {
-    map.combat(t).map_or(0, |c| c.attackers.len())
+    map.combat(t).map_or(0, |c| {
+        c.attackers.len()
+            + c.chasers
+                .iter()
+                .filter(|g| !c.attackers.contains(g) && chasing(map, **g, t))
+                .count()
+    })
+}
+
+/// Who fights `t` in melee: its attackers, and the melee chasers on their
+/// way to it not yet among them (`Combat::chasers`, those still coming at
+/// it), once each.
+fn fighters(map: &Map, t: Guid) -> Vec<Guid> {
+    let Some(c) = map.combat(t) else {
+        return Vec::new();
+    };
+    let mut all: Vec<Guid> = c.attackers.iter().copied().collect();
+    all.extend(c.chasers.iter().copied().filter(|g| chasing(map, *g, t)));
+    all.sort_unstable_by_key(|g| g.guid());
+    all.dedup();
+    all
+}
+
+/// Whether `g` is a melee chaser of `t` still: alive, and last come at it.
+fn chasing(map: &Map, g: Guid, t: Guid) -> bool {
+    map.creature(g)
+        .is_some_and(|c| c.alive() && c.engagement.side.is_some_and(|(v, _)| v == t))
+}
+
+/// `g`, of side `side`, comes at `victim` in melee: noted on itself
+/// ([`Engagement::side`]) and among its victim's chasers, which lets go of
+/// any no longer chasing it.
+///
+/// [`Engagement::side`]: crate::game::map::creature_combat::Engagement::side
+pub(crate) fn chases(map: &mut Map, g: Guid, victim: Guid, side: f32) {
+    if let Some(c) = map.creature_mut(g) {
+        c.engagement.side = Some((victim, side));
+    }
+    let Some(list) = map.combat(victim).map(|c| c.chasers.clone()) else {
+        return;
+    };
+    let kept: Vec<Guid> = list
+        .into_iter()
+        .filter(|c| *c != g && chasing(map, *c, victim))
+        .chain(std::iter::once(g))
+        .collect();
+    if let Some(c) = map.combat_mut(victim) {
+        c.chasers = kept;
+    }
 }
 
 /// Whether `t` is on the move.
@@ -1614,8 +1667,10 @@ fn on_the_move(map: &Map, t: Guid) -> bool {
 /// (Thistle Tea's `approach_angle_offset`, at a player on the move; at
 /// any here, so that those following a moving creature, a pack of pets
 /// on a walking boss, keep their sides rather than take a new one at
-/// every path).
-fn approach_offset(map: &Map, g: Guid, victim: Guid) -> f32 {
+/// every path). Thistle Tea's grows with the count past a half turn
+/// either way, so a crowd came at its victim from every side: here it is
+/// no wider than `half`, the fan-out's arc's half ([`arc_of`]).
+fn approach_offset(map: &Map, g: Guid, victim: Guid, half: f32) -> f32 {
     let count = if on_the_move(map, victim) {
         0
     } else {
@@ -1626,14 +1681,129 @@ fn approach_offset(map: &Map, g: Guid, victim: Guid) -> f32 {
     }
     let size = bounding(map, g) + bounding(map, victim);
     let size = if size < 0.1 { DEFAULT_BOUNDING } else { size };
-    let spread = std::f32::consts::FRAC_PI_2 - std::f32::consts::PI * rand::rng().random::<f32>();
-    spread * count as f32 / size * 0.3
+    let widest = std::f32::consts::FRAC_PI_2 * count as f32 / size * 0.3;
+    (1.0 - 2.0 * rand::rng().random::<f32>()) * widest.min(half)
 }
 
-/// Where a melee chaser makes for: half its `reach` from its victim
-/// ([`combat::chase_distance`]), from its own side, turned aside by the
-/// others fighting it ([`approach_offset`]). A creature's chase and a
-/// player's pet's alike.
+/// Attackers' sides more than this apart are separate groups, each
+/// fanning out over an arc of its own.
+const SIDES_APART: f32 = std::f32::consts::FRAC_PI_2;
+/// How near its victim an attacker that never chased it (a player, one
+/// that was in reach from the start) counts towards a side: melee, not a
+/// caster at its range.
+const SIDE_YARDS: f32 = 8.0;
+
+/// `a` turned into `(-PI, PI]`.
+fn wrap(a: f32) -> f32 {
+    a.sin().atan2(a.cos())
+}
+
+/// The bearing from `them` of the side `a` fights `victim` from: the side
+/// it last came at it from ([`chase_goal`]), or where it stands: a
+/// creature's, unless it is a caster standing off; a player's, if it is
+/// in melee.
+fn side_from(map: &Map, a: Guid, victim: Guid, them: Vector3d) -> Option<f32> {
+    let creature = map.creature(a);
+    if let Some(c) = creature {
+        if let Some((v, side)) = c.engagement.side
+            && v == victim
+        {
+            return Some(side);
+        }
+        if c.scripted
+            .as_ref()
+            .is_some_and(|s| s.caster_chase_distance.is_some())
+        {
+            return None;
+        }
+    }
+    let at = map.position_of(a)?;
+    let (dx, dy) = (at.x - them.x, at.y - them.y);
+    let near = creature.is_some() || dx * dx + dy * dy <= SIDE_YARDS * SIDE_YARDS;
+    (near && (dx.abs() > 1e-4 || dy.abs() > 1e-4)).then(|| dy.atan2(dx))
+}
+
+/// How far from its victim a melee attacker of radius `mine` stands, one
+/// of radius `theirs` it reaches at `reach`: half its reach, as it chases
+/// to ([`combat::chase_distance`], mangos-classic's chase), out past a
+/// victim bigger than that, and inside its reach. One ring: a step aside
+/// goes round it, never in or out.
+fn ring(mine: f32, theirs: f32, reach: f32) -> f32 {
+    combat::chase_distance(reach)
+        .max(mine + theirs)
+        .min(reach - 0.1)
+}
+
+/// The arc round `victim` at `them` that `g`, of side `mine`, fans out
+/// over (`[creatures] fan_out_arc_degrees`): its centre and its half,
+/// round the mean side of `g`'s group of its victim's attackers. Their
+/// sides are cut into groups where two neighbours are more than a right
+/// angle apart, so a crowd from the left and one from the right keep each
+/// to their own; none, at a victim fought from all round, or an arc of a
+/// whole turn. One look at each attacker, and a sort of their sides.
+fn arc_of(map: &Map, g: Guid, victim: Guid, them: Vector3d, mine: f32) -> Option<(f32, f32)> {
+    let half = map.cfg.creatures.fan_out_arc_degrees.to_radians() / 2.0;
+    if half >= std::f32::consts::PI - 1e-3 {
+        return None;
+    }
+    let tau = std::f32::consts::TAU;
+    let mine = mine.rem_euclid(tau);
+    let mut sides: Vec<f32> = fighters(map, victim)
+        .into_iter()
+        .filter(|a| *a != g)
+        .filter_map(|a| side_from(map, a, victim, them))
+        .map(|s| s.rem_euclid(tau))
+        .collect();
+    sides.push(mine);
+    sides.sort_by(f32::total_cmp);
+    let n = sides.len();
+    // The gaps between neighbours, the last's to the first round the turn.
+    let gap = |i: usize| {
+        if i + 1 < n {
+            sides[i + 1] - sides[i]
+        } else {
+            sides[0] + tau - sides[i]
+        }
+    };
+    let cut = (0..n).find(|i| gap(*i) > SIDES_APART)?;
+    // From just past a wide gap, round, each group ends at the next.
+    let (mut sin, mut cos, mut found) = (0.0f32, 0.0f32, false);
+    for k in 0..n {
+        let i = (cut + 1 + k) % n;
+        sin += sides[i].sin();
+        cos += sides[i].cos();
+        found |= sides[i] == mine;
+        if gap(i) > SIDES_APART {
+            if found {
+                return Some((sin.atan2(cos), half));
+            }
+            (sin, cos) = (0.0, 0.0);
+        }
+    }
+    None
+}
+
+/// `a` brought into the arc of centre `c` and half `half`: one past an
+/// edge as far back inside it (no further than the far edge).
+fn into_arc(a: f32, (c, half): (f32, f32)) -> f32 {
+    let d = wrap(a - c);
+    let d = if d > half {
+        (2.0 * half - d).max(-half)
+    } else if d < -half {
+        (-2.0 * half - d).min(half)
+    } else {
+        d
+    };
+    c + d
+}
+
+/// Where a melee chaser makes for: on its ring about its victim, half its
+/// `reach` from it ([`ring`]), from its own side, turned aside by the
+/// others fighting it ([`approach_offset`]), inside its group's arc
+/// ([`arc_of`]). A creature's chase and a player's pet's alike; with the
+/// side it comes from, for its [`Engagement::side`].
+///
+/// [`Engagement::side`]: crate::game::map::creature_combat::Engagement::side
 pub(crate) fn chase_goal(
     map: &Map,
     g: Guid,
@@ -1641,14 +1811,23 @@ pub(crate) fn chase_goal(
     me: Vector3d,
     them: Vector3d,
     reach: f32,
-) -> Vector3d {
-    let to = combat::chase_distance(reach);
-    let angle = side_of(me, them) + approach_offset(map, g, victim);
-    Vector3d {
+) -> (Vector3d, f32) {
+    let side = side_of(me, them);
+    let moving = on_the_move(map, victim);
+    let to = ring(bounding(map, g), bounding(map, victim), reach);
+    let arc = (!moving && attackers(map, victim) > 1)
+        .then(|| arc_of(map, g, victim, them, side))
+        .flatten();
+    let angle = match arc {
+        Some(arc) => into_arc(side + approach_offset(map, g, victim, arc.1), arc),
+        None => side + approach_offset(map, g, victim, std::f32::consts::PI),
+    };
+    let goal = Vector3d {
         x: them.x + to * angle.cos(),
         y: them.y + to * angle.sin(),
         z: them.z,
-    }
+    };
+    (goal, side)
 }
 
 /// Whether a chaser must path again: its victim at `them` is out of
@@ -1711,28 +1890,46 @@ fn stacked(a: f32, b: f32) -> f32 {
     (a.max(b).min(0.25) + 1.0).sqrt().max(a + b)
 }
 
-/// Whether `at` is clear, for `g` of radius `mine`, of every other
-/// fighting `victim`, creatures, pets and players alike, where they stand
-/// or are headed: one look at each of its attackers.
-fn clear(map: &Map, g: Guid, victim: Guid, at: Vector3d, mine: f32) -> bool {
-    map.combat(victim).is_none_or(|c| {
-        c.attackers.iter().all(|&a| {
-            a == g
-                || spot_of(map, a).is_none_or(|s| planar(s, at) >= stacked(mine, bounding(map, a)))
+/// How clear `at` is, for `g` of radius `mine`, of every one of `others`
+/// fighting its victim ([`fighters`]), creatures, pets and players alike, where they stand or are
+/// headed: the nearest's distance over how near would be standing on it
+/// ([`stacked`]), 1 or more clear. One look at each.
+fn room(map: &Map, g: Guid, others: &[Guid], at: Vector3d, mine: f32) -> f32 {
+    others
+        .iter()
+        .filter(|a| **a != g)
+        .filter_map(|&a| {
+            let s = spot_of(map, a)?;
+            Some(planar(s, at) / stacked(mine, bounding(map, a)))
         })
-    })
+        .fold(f32::MAX, f32::min)
 }
 
-/// Places looked at for a step aside before it settles for the first.
-const SPREAD_CANDIDATES: usize = 8;
+/// The turns round its victim, in degrees, a step aside looks at, each
+/// both ways: mangos-classic's `FanOut` (36 to 45 degrees from where it
+/// stands) first, then half that, then further, then a little, for a gap
+/// among a crowd; each no further than its arc's edge.
+const SPREAD_TURNS: [(f32, f32); 4] = [(36.0, 45.0), (18.0, 30.0), (50.0, 70.0), (8.0, 16.0)];
+/// How far off its ring ([`ring`]) one of a crowd stands before it steps
+/// onto it.
+const OFF_RING: f32 = 0.35;
+/// How far out of its arc ([`arc_of`]) one stands, in radians (a degree),
+/// before it steps into it.
+const OFF_ARC: f32 = 0.0175;
 
 /// Standing in reach, a creature (or a player's pet) every three seconds
-/// or so steps back off a victim it stands in, or (three times, until its
-/// victim moves) aside from another standing on it, at a walk and facing
-/// its victim (Thistle Tea's `maybe_spread`). Its step goes to a place
-/// clear of the others fighting its victim where there is one in reach,
-/// turned further round its victim, either way, at each place taken; and
-/// a bigger victim has its spots further out, round its size.
+/// or so steps onto its ring about its victim if it is off it (one of a
+/// crowd, or any standing in its victim), or
+/// round into its arc if it is out of it (one of a group that took its
+/// side before the rest came), or (three times, until its victim moves)
+/// round its ring, aside from another standing on it, at a walk and
+/// facing its victim (Thistle Tea's `maybe_spread`, mangos-classic's
+/// `FanOut`). Every step ends on its ring, never nearer or further, and
+/// in its group's arc ([`arc_of`]); a step aside goes to a place clear of
+/// the others fighting its victim where there is one, and where the arc
+/// is full, to the clearest of the places looked at, side by side with
+/// the others and overlapping them a little (and not at all if none is
+/// clearer than where it stands).
 pub(crate) fn spread(map: &mut Map, g: Guid, victim: Guid) {
     let now = map.now;
     let mut rng = rand::rng();
@@ -1756,14 +1953,33 @@ pub(crate) fn spread(map: &mut Map, g: Guid, victim: Guid) {
     };
     let reach = combat::melee_range(&me, &them);
     let (mine, theirs) = (bounding(map, g), bounding(map, victim));
-    let apart = planar(me.position, them.position);
-    // Back off one it stands in.
-    if apart < (0.5 * mine.min(theirs) + 1.0).sqrt().max(theirs) {
-        let d = 1.0 + mine + theirs;
-        if d < reach {
-            let angle = side_of(me.position, them.position);
-            step_about(map, g, victim, them.position, angle, d, false);
+    let d = ring(mine, theirs, reach);
+    let mine_angle = side_of(me.position, them.position);
+    let own = side_from(map, g, victim, them.position).unwrap_or(mine_angle);
+    let arc = arc_of(map, g, victim, them.position, own);
+    // Out of its arc (one that came while its group was still coming):
+    // back into it.
+    let outside = arc.is_some_and(|(c, half)| wrap(mine_angle - c).abs() > half + OFF_ARC);
+    // Inside the arc, and as far round either way as it leaves room.
+    let (mine_angle, room_by) = match arc {
+        Some((c, half)) => {
+            let base = into_arc(mine_angle, (c, half));
+            let off = wrap(base - c);
+            (base, [half - off, half + off])
         }
+        None => (mine_angle, [f32::MAX; 2]),
+    };
+    // Onto its ring, one of a crowd off it (come too near, or stopped
+    // short), or any standing in its victim; or round it into its arc.
+    // One alone elsewhere in reach stands, as mangos-classic's does.
+    let apart = planar(me.position, them.position);
+    let off_ring = if attackers(map, victim) > 1 {
+        (apart - d).abs() > OFF_RING
+    } else {
+        apart < (0.5 * mine.min(theirs) + 1.0).sqrt().max(theirs)
+    };
+    if outside || off_ring {
+        step_about(map, g, victim, them.position, mine_angle, d, false);
         return;
     }
     let tries = map.creature(g).map_or(0, |c| c.engagement.spread_tries);
@@ -1785,41 +2001,95 @@ pub(crate) fn spread(map: &mut Map, g: Guid, victim: Guid) {
     let Some((at, _)) = neighbour else {
         return;
     };
-    let mine_angle = side_of(me.position, them.position);
     let his = (at.y - them.position.y).atan2(at.x - them.position.x);
-    let away = if (his - mine_angle).sin().atan2((his - mine_angle).cos()) > 0.0 {
+    let away = if wrap(his - mine_angle) > 0.0 {
         -1.0
     } else {
         1.0
     };
-    let widest: f32 = if attackers(map, victim) > 5 { 4.0 } else { 2.0 };
-    // Out past a victim bigger than a player, and inside its reach.
-    let out = mine + (theirs - DEFAULT_BOUNDING).max(0.0);
-    let widest = widest.min(reach - out - 0.1);
-    if widest <= 0.8 {
-        return;
-    }
-    let mut first = None;
-    for i in 0..SPREAD_CANDIDATES {
+    let spot = |angle: f32| Vector3d {
+        x: them.position.x + d * angle.cos(),
+        y: them.position.y + d * angle.sin(),
+        z: them.position.z,
+    };
+    let others = fighters(map, victim);
+    let mut best: Option<(f32, f32)> = None;
+    for i in 0..SPREAD_TURNS.len() * 2 {
         let side = if i % 2 == 0 { away } else { -away };
-        let turn = side * rng.random_range(0.4f32..1.0) * (1 + i / 2) as f32;
-        let d = out + rng.random_range(0.8f32..widest);
-        let angle = mine_angle + turn;
-        first.get_or_insert((angle, d));
-        let to = Vector3d {
-            x: them.position.x + d * angle.cos(),
-            y: them.position.y + d * angle.sin(),
-            z: them.position.z,
-        };
-        if clear(map, g, victim, to, mine)
-            && step_about(map, g, victim, them.position, angle, d, true)
-        {
+        let (lo, hi) = SPREAD_TURNS[i / 2];
+        let mut turn = rng.random_range(lo..hi).to_radians();
+        // No further than the arc's edge that way: somewhere short of it.
+        let room_that_way = room_by[usize::from(side < 0.0)];
+        if turn > room_that_way {
+            turn = room_that_way * rng.random::<f32>();
+        }
+        let angle = mine_angle + side * turn;
+        let clearance = room(map, g, &others, spot(angle), mine);
+        if clearance >= 1.0 && step_about(map, g, victim, them.position, angle, d, true) {
             return;
         }
+        if best.is_none_or(|b| clearance > b.0) {
+            best = Some((clearance, angle));
+        }
     }
-    if let Some((angle, d)) = first {
-        step_about(map, g, victim, them.position, angle, d, true);
+    // None clear: the middle of the widest gap left in its arc, or the
+    // clearest looked at, if it is clearer than where it stands.
+    if let Some(arc) = arc
+        && let Some(angle) = widest_gap(map, g, &others, them.position, arc)
+    {
+        let clearance = room(map, g, &others, spot(angle), mine);
+        if best.is_none_or(|b| clearance > b.0) {
+            best = Some((clearance, angle));
+        }
     }
+    let here = room(map, g, &others, me.position, mine);
+    match best {
+        Some((clearance, angle)) if clearance > here => {
+            step_about(map, g, victim, them.position, angle, d, true);
+        }
+        _ => {
+            if let Some(c) = map.creature_mut(g) {
+                c.engagement.spread_tries += 1;
+            }
+        }
+    }
+}
+
+/// The bearing from `them`, in the arc `(c, half)`, furthest round from
+/// every one of `others` but `g` standing in it: the middle of the widest
+/// gap between two of them, or an edge of the arc, if the gap from it to
+/// the nearest is wider than half that. One look at each, and a sort.
+fn widest_gap(
+    map: &Map,
+    g: Guid,
+    others: &[Guid],
+    them: Vector3d,
+    (c, half): (f32, f32),
+) -> Option<f32> {
+    let mut at: Vec<f32> = others
+        .iter()
+        .filter(|a| **a != g)
+        .filter_map(|a| spot_of(map, *a))
+        .map(|s| wrap((s.y - them.y).atan2(s.x - them.x) - c))
+        .filter(|a| a.abs() <= half)
+        .collect();
+    if at.is_empty() {
+        return None;
+    }
+    at.sort_by(f32::total_cmp);
+    // (room either side, where): the edges' room is all of their gap.
+    let mut best = (at[0] + half, -half);
+    let last = at[at.len() - 1];
+    if half - last > best.0 {
+        best = (half - last, half);
+    }
+    for w in at.windows(2) {
+        let room = (w[1] - w[0]) / 2.0;
+        if room > best.0 {
+            best = (room, (w[0] + w[1]) / 2.0);
+        }
+    }
+    Some(c + best.1)
 }
 
 /// `g` walks to `d` yards from its victim at `angle`, facing it: whether

@@ -112,6 +112,10 @@ pub struct Engagement {
     pub spread_at: Option<Instant>,
     pub spread_tries: u8,
     pub spreading: bool,
+    /// The side of its victim it last came at it from, as a bearing from
+    /// it (`ai::chase_goal`), and that victim: what its fan-out's arc is
+    /// worked out from.
+    pub side: Option<(Guid, f32)>,
     /// Since when it has stood still in reach of its victim, attacking,
     /// as of its last renewal of its leash so ([`stood_attacking`]).
     pub standing_since: Option<Instant>,
@@ -408,6 +412,7 @@ pub fn disengaged(map: &mut Map, g: Guid) {
         c.engagement.origin = None;
         c.engagement.unreachable_since = None;
         c.engagement.flee = None;
+        c.engagement.side = None;
         // No chase under way: its next fight's walks are its own until it
         // chases again.
         c.chase_target_at = None;

@@ -577,6 +577,15 @@ flee_delay_ms = 7000
 # Default 180. Range 0 to 3600, clamped. Changes at a reload. mangos: InteractionPauseTimer.
 interaction_pause_secs = 180
 
+# Degrees of the arc round their victim that melee attackers from
+# one side fan out over (creatures and players' pets alike):
+# centred on the side they came from, a crowd too big for it
+# standing closer rather than round the back; attackers from
+# clearly separate sides each keep to their own (360 lets them
+# go all round).
+# Default 120.0. Range 30 to 360, clamped. Changes at a reload.
+fan_out_arc_degrees = 120.0
+
 # Seconds a normal creature's corpse lies (no longer than its
 # respawn).
 # Default 300. Range 1 to 86400, clamped. Changes at a reload. mangos: Corpse.Decay.NORMAL.

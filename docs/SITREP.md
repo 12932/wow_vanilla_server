@@ -37,6 +37,10 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
 - **Pets fan out at any victim** (decision 80): mangos fans out only those on a player, and its pets stack on a
   creature; and the spread, creatures' too, now steps to a place clear of every attacker, counts a big victim's
   size, and turns no one aside at a victim on the move.
+- **The fan-out's arc and ring** (decision 80, your report): attackers from one side keep to a 120-degree arc
+  there (`[creatures] fan_out_arc_degrees`), groups more than 90 degrees apart each to their own; a crowd stands
+  on one ring at half its reach (mangos's chase distance), a lone attacker anywhere in reach; a full arc packs
+  them side by side.
 
 - **Game events on the server's local clock** (decision 83), as vmangos's; the Booty Run every three hours from
   local midnight (`[events] booty_run_*`); Short John kneels 3 s at the chest; raid resets left on UTC.

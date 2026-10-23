@@ -985,8 +985,10 @@ fn fight(map: &mut Map, g: Guid, victim: Guid, now: Instant) {
     if !stale {
         return;
     }
-    let goal = crate::game::map::ai::chase_goal(map, g, victim, me.position, them.position, reach);
+    let (goal, side) =
+        crate::game::map::ai::chase_goal(map, g, victim, me.position, them.position, reach);
     walk(map, g, goal, now);
+    crate::game::map::ai::chases(map, g, victim, side);
     if let Some(c) = map.creature_mut(g) {
         c.chase_target_at = Some(them.position);
         c.engagement.spread_tries = 0;
@@ -1231,6 +1233,7 @@ fn jump(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
     c.cell = new_cell;
     map.grid.relocate(g, old_cell, new_cell);
     crate::game::map::visibility::moved(map, g, anchor, at);
+    map.uncache_create(g);
     let frame = crate::game::map::ai::stop_packet(g, at, spline);
     map.send_to_observers(g, &frame, false);
 }

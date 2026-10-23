@@ -122,6 +122,8 @@ mod tests_entity_views;
 #[cfg(test)]
 mod tests_events;
 #[cfg(test)]
+mod tests_fan_out_arc;
+#[cfg(test)]
 mod tests_gear;
 #[cfg(test)]
 mod tests_gear_quality;
