@@ -216,6 +216,13 @@ pub fn dummy(
                 .cloned()
                 .unwrap_or_else(|| s.clone());
             strike.dmg_class = 2;
+            // The strike is a spell of its own (mangos-classic's
+            // `WarriorExecute` casts 20647), its crit its own: the dummy
+            // deals nothing, so its landing never crits.
+            let l = &Landing {
+                crit: outcome::melee_crit(map, caster, target, &strike, &l.mods),
+                ..l.clone()
+            };
             let d = outcome::damage(map, caster, target, &strike, 0, damage.max(0) as f32, l);
             outcome::deal(map, caster, target, s, d, l);
             return;

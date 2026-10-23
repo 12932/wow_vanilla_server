@@ -229,6 +229,11 @@ impl Roll {
         self.miss()
     }
 
+    /// The crit chance, in hundredths of a percent.
+    pub fn crit_bp(&self) -> i32 {
+        self.crit_chance()
+    }
+
     fn skill_diff(&self) -> i32 {
         self.attacker_skill - self.victim_defense
     }
