@@ -1669,4 +1669,33 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
      `deadly_poison_stacks_to_five_on_a_boss`,
      `a_rogues_threat_is_its_damages_71_feint_and_vanish_take_it_off`, `seal_fate_adds_a_point_on_a_crit`).
 
+101. **A flight master's guardians are two at a time** (2026-10-24; `fix/flightmaster-guards`, from your report:
+     "only 2 should ever be active at a time, even if attacked on separate occasions"). A flight master's aggro event
+     (`creature_ai_events`, flags 0: once a fight) runs a script of two summon steps (Dungar Longdrink's 35201: two
+     Enraged Gryphons, 9526; Gringer's two Enraged Wyverns, 9297; Vesprystus's two Enraged Hippogryphs, 9527; Michael
+     Garrett's two Enraged Felbats, 9521), each set on the master's victim (attack target type 1). Three things in wvs
+     let them pile up:
+     - **Gryphons and wyverns never went** (a bug, now vmangos's). Their steps have no time (`datalong2` 0) and
+       despawn type 4 (`TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT`); wvs gave a summon with no time no timer at all, so
+       they lived on after every fight. vmangos's `TemporarySummon::Summon` sets the timer to 0, and its `Update`
+       unsummons one of type 1, 2 or 4 the moment it is out of combat, alive or dead. Now a summon of those types
+       with no time goes as its fight ends (89 rows of `creature_ai_scripts`, every flight master's, and 6 of
+       `generic_scripts`).
+     - **A creature pulled again by a blow fired no aggro events** (a bug). An evade left `combat_start` set, and a
+       blow puts the creature in combat before it hears of its attacker, so its next fight wasn't taken as a new
+       one: no aggro event, no leash begun. vmangos's `CreatureEventAI::EnterCombat` fires `EVENT_T_AGGRO` at every
+       fight's start. Now an evade clears it.
+     - **Not vmangos's (yours): a once-a-fight event's summons are capped at one firing's.** vmangos re-arms the
+       event every fight and summons two more each time: the gryphons go with the fight, so two is the most there,
+       but the felbats and hippogryphs (type 1, 30 s) wait 30 s past their fight, and a pull within that has four;
+       a master pulled again while its gryphons still fight someone has four too. Now a summon step run by an
+       EventAI event that isn't repeatable (`EFLAG_REPEATABLE` clear) calls no more of its creature than that
+       script's summon steps bring at once, counting those it summoned earlier that live; at the cap it keeps one,
+       and sets one out of its fight on the new victim, as a new summon would be. One killed is replaced at the next
+       pull. Generic: any once-a-fight summon, a boss's at a health mark too; a repeatable event's summons (adds on a
+       timer) are uncapped, as vmangos's.
+     - Tests: `a_flight_masters_gryphons_are_two_however_often_it_is_attacked`,
+       `felbats_waiting_out_their_time_are_called_back_not_called_again_summon` (through the protocol), and
+       `vmangos_flight_masters_summon_two_guardians_a_fight` (extended: Dungar Longdrink and Vesprystus).
+
 ## Left for later, and why

@@ -71,6 +71,9 @@ pub struct Scripted {
     /// its summoner, goes when it goes, and drops no loot.
     pub guardian: bool,
     pub summoned: Vec<Guid>,
+    /// The once-a-fight script that summoned it, if one did (its table
+    /// and id): what [`scripts::summons_kept`]'s cap counts.
+    pub from_script: Option<(crate::game::data::scripts::ScriptTable, u32)>,
     /// Script moves run rather than walk.
     pub run: bool,
     /// Passive: it doesn't look for enemies.
@@ -855,6 +858,7 @@ fn run_actions(map: &mut Map, g: Guid, i: usize, e: &AiEvent, target: Option<Gui
             g,
             target.unwrap_or_default(),
             checked,
+            e.flags & EF_REPEATABLE == 0,
         );
     }
 }
@@ -1078,6 +1082,12 @@ fn when_due(kind: i32, alive: bool, fighting: bool) -> Due {
     } else {
         Due::Despawn
     }
+}
+
+/// Whether a summon of despawn type `kind` waits out its fights, its time
+/// starting again as each ends (vmangos's types 1, 2 and 4).
+pub fn waits_out_combat(kind: i32) -> bool {
+    WAITS_OUT_COMBAT.contains(&kind)
 }
 
 /// Whether a summon of despawn type `kind` starts its time when it is
