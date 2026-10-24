@@ -1360,6 +1360,8 @@ mod tests_spells5;
 #[cfg(test)]
 mod tests_subtlety;
 #[cfg(test)]
+mod tests_summon_caps;
+#[cfg(test)]
 mod tests_talents_paladin_shaman;
 #[cfg(test)]
 mod tests_talents_server;

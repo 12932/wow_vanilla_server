@@ -350,6 +350,13 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     - Feint on cooldown in a 5-player party (about 5% of a rogue's damage), none in raids (it cut their damage there
       with no fewer deaths). I'd keep it.
     - The expected ranges are worked out from wvs's ideal rotation, not a real 1.12 log; a log would be better.
+- **A flight master's guardians, two at a time** (your report, decision 101):
+  - **Fixed, as vmangos:** gryphons and wyverns now go when their fight ends (they never despawned). A creature
+    pulled again by a blow now runs its aggro events (an evade left its last fight's start behind).
+  - **Made without you, for your rule:** vmangos summons two more at every pull. Its felbats and hippogryphs last
+    30 s past a fight, so a quick pull again gives four. Now a once-a-fight event calls no more than one firing
+    brings; the ones still alive rejoin the fight instead. This applies to every creature, not only flight masters.
+    The alternative is vmangos's: up to four for 30 s.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).

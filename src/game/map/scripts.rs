@@ -86,6 +86,9 @@ pub struct Run {
     /// Its steps run at once, their delays aside: an EventAI event's
     /// actions, as Thistle Tea runs them (`Run.start`'s `:direct`).
     pub direct: bool,
+    /// An EventAI event's that fires once a fight (not repeatable): its
+    /// summons are capped at what one firing calls ([`summons_kept`]).
+    pub once: bool,
 }
 
 /// The scripts running on a map.
@@ -97,6 +100,8 @@ pub struct Runner {
     /// under way from under their indices (and slip their next steps a
     /// tick).
     depth: u32,
+    /// The once-a-fight run whose step is under way, if one is.
+    once: Option<(ScriptTable, u32)>,
 }
 
 /// How deep scripts may start scripts at once (a relay, a step's script
@@ -114,10 +119,11 @@ impl Runner {
 /// Start script `id` of `table` from `source` on `target`; its first
 /// steps with no delay run at once.
 pub fn start(map: &mut Map, table: ScriptTable, id: u32, source: Guid, target: Guid) {
-    start_checked(map, table, id, source, target, None);
+    start_checked(map, table, id, source, target, None, false);
 }
 
-/// [`start`], for an EventAI event that checks the result.
+/// [`start`], for an EventAI event: one that checks the result, one that
+/// fires once a fight (`once`).
 pub fn start_checked(
     map: &mut Map,
     table: ScriptTable,
@@ -125,6 +131,7 @@ pub fn start_checked(
     source: Guid,
     target: Guid,
     checked: Option<(Guid, usize)>,
+    once: bool,
 ) {
     if id == 0 || !map.realm.data.scripts.table(table).contains_key(&id) {
         return;
@@ -149,6 +156,7 @@ pub fn start_checked(
         target,
         checked,
         direct: table == ScriptTable::CreatureAi,
+        once,
     });
     let i = map.scripts.runs.len() - 1;
     map.scripts.depth += 1;
@@ -211,9 +219,13 @@ fn advance(map: &mut Map, i: usize) {
             map.scripts.runs[i].next = usize::MAX;
             return;
         }
-        if !execute(map, step, run.source, run.target)
-            && let Some(r) = map.scripts.runs.get_mut(i)
-        {
+        let outer = std::mem::replace(
+            &mut map.scripts.once,
+            run.once.then_some((run.table, run.id)),
+        );
+        let ok = execute(map, step, run.source, run.target);
+        map.scripts.once = outer;
+        if !ok && let Some(r) = map.scripts.runs.get_mut(i) {
             r.next = usize::MAX;
             if let Some((g, event)) = r.checked {
                 event_ai::retry(map, g, event);
@@ -1663,7 +1675,13 @@ fn command(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> bool
             };
             let mut any = false;
             for _ in 0..count {
-                any |= summon_step(map, step, source, target);
+                any |= match summons_kept(map, step, source) {
+                    Some(kept) => {
+                        rally(map, step, source, target, kept);
+                        true
+                    }
+                    None => summon_step(map, step, source, target),
+                };
             }
             any
         }
@@ -3086,20 +3104,24 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             .and_then(|n| crate::game::map::world::wander_point(n, at, e.scatter, &mut rand::rng()))
             .unwrap_or(at);
     }
-    let despawn = (d2 > 0).then(|| {
-        (
+    // No time, for a type that waits out its fight, is none past it: it
+    // goes as its fight ends (vmangos's `TemporarySummon::Update`, its
+    // timer at 0; a flight master's gryphons).
+    let kind = step.dataint[3];
+    let despawn = if d2 > 0 {
+        Some((
             Duration::from_millis(u64::from(d2)),
-            if step.dataint[3] > 0 {
-                step.dataint[3]
-            } else {
-                1
-            },
-        )
-    });
+            if kind > 0 { kind } else { 1 },
+        ))
+    } else {
+        event_ai::waits_out_combat(kind).then_some((Duration::ZERO, kind))
+    };
     let Some(g) = summon(map, source, d1, at, o, despawn) else {
         return false;
     };
+    let once = map.scripts.once;
     if let Some(s) = event_ai::scripted_mut(map, g) {
+        s.from_script = once;
         if flags & 0x1 != 0 {
             s.run = true;
         }
@@ -3113,8 +3135,13 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
     if step.dataint[1] > 0 {
         start(map, ScriptTable::Generic, step.dataint[1] as u32, g, target);
     }
-    // An attack target by target type, with the step's target parameters
-    // (a player only, in sight); -1 for none.
+    attack_by_type(map, step, source, target, g);
+    true
+}
+
+/// A summon step's attack target for `g`, by its target type, with the
+/// step's target parameters (a player only, in sight); -1 for none.
+fn attack_by_type(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid, g: Guid) {
     if step.dataint[2] >= 0 {
         let attack = ScriptStep {
             command: step.command,
@@ -3130,7 +3157,68 @@ fn summon_step(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid) -> 
             crate::game::map::ai::attacked(map, g, t);
         }
     }
-    true
+}
+
+/// A summon step of a once-a-fight run (an EventAI event that isn't
+/// repeatable) calls no more of its creature than one firing of that
+/// script does: when as many as its summon steps bring are still alive
+/// from its earlier firings, the step keeps one of those (one out of its
+/// fight first) in place of a new one. A flight master pulled again while
+/// its two gryphons live calls none (decision 101; vmangos calls two more
+/// each fight, the old ones going only with their time).
+fn summons_kept(map: &Map, step: &ScriptStep, source: Guid) -> Option<Guid> {
+    let run = map.scripts.once?;
+    let entry = step.datalong[0];
+    let cap: u32 = map
+        .realm
+        .data
+        .scripts
+        .table(run.0)
+        .get(&run.1)?
+        .iter()
+        .filter(|s| s.command == 10 && s.datalong[0] == entry)
+        .map(|s| match s.ext.as_ref().map(|e| e.count) {
+            Some(SummonCount::Fixed(n)) => n,
+            Some(SummonCount::ThreatPlayers(_, _, most)) => most,
+            None => 1,
+        })
+        .sum();
+    let living: Vec<&Creature> = map
+        .creature(source)?
+        .scripted
+        .as_deref()?
+        .summoned
+        .iter()
+        .filter_map(|g| map.creature(*g))
+        .filter(|c| c.entry == entry && c.alive())
+        .filter(|c| c.scripted.as_deref().and_then(|s| s.from_script) == Some(run))
+        .collect();
+    if (living.len() as u32) < cap.max(1) {
+        return None;
+    }
+    let idle = |c: &&&Creature| {
+        !c.combat.attacking
+            && !c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+    };
+    living.iter().find(idle).or(living.first()).map(|c| c.guid)
+}
+
+/// A kept summon (see [`summons_kept`]) out of its fight joins the new
+/// one, as a new summon would; one fighting fights on.
+fn rally(map: &mut Map, step: &ScriptStep, source: Guid, target: Guid, g: Guid) {
+    let fighting = map.creature(g).is_some_and(|c| {
+        c.combat.attacking
+            || c.fields.has_flag(
+                UNIT_FIELD_FLAGS,
+                crate::game::map::player::UNIT_FLAG_IN_COMBAT,
+            )
+    });
+    if !fighting {
+        attack_by_type(map, step, source, target, g);
+    }
 }
 
 /// A player cast `spell` on `creature`: the quests that ask for it.
