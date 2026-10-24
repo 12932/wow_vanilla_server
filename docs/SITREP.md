@@ -399,6 +399,17 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   sooner. No game rule changed. **Left:** a charge's first seconds (p99 59 ms, single updates to 150–190 ms, from
   everyone's spells landing at once and 240 pets leaving stealth together); 800 a side not yet run in peon (this
   machine can't host the bots; Fargate would).
+- **Alterac Valley, round five** (peon 0.1.32; 19 decisions in peon's BOT_AI):
+  - **Result:** the smallest reliable raid was **32** (7 in 10) before decision 103, and is **34** (6 in 10) after it;
+    40 is 7 in 10 after it (9 before). Its best, before the masters moved: 34 killed him 10 in 10, 32 9 in 10.
+  - **Found:** tanks stood beside a loose Drek'Thar with Taunt ready and didn't use it (a stance dance for a Charge
+    too close to make, or for Thunder Clap); fixed. A backup tank stands by the boss and taunts as the main tank is
+    about to die; damage dealers respect a new tank's threat; the nearest healthy tank takes a loose boss.
+  - **Made without you, for your review:** **your start spot moved** down the corridor, past his leash line and 25 yd
+    from every warmaster: with decision 103 they noticed the raid by the doors and charged it during its buffs. (Whether
+    vmangos's notice ignores walls is being checked again.)
+  - **Left:** the warmasters still come to the first tanks at the doors and Whirlwind about a fifth of the raid at
+    18–22 s; at 30 two of the seven tanks are bears, and they die first.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
