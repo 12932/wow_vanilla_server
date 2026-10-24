@@ -48,6 +48,8 @@ mod tests_arena;
 #[cfg(test)]
 mod tests_arrow_travel;
 #[cfg(test)]
+mod tests_av_tele;
+#[cfg(test)]
 mod tests_av_world;
 #[cfg(test)]
 mod tests_bg5;
@@ -1365,6 +1367,8 @@ mod tests_taming;
 mod tests_terrain;
 #[cfg(test)]
 mod tests_visibility;
+#[cfg(test)]
+mod tests_warrior_dps;
 #[cfg(test)]
 mod tests_world;
 #[cfg(test)]
