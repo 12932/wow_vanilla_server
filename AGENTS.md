@@ -44,9 +44,12 @@ There is no world tick.
   what time drives, works out visibility, and flushes changed fields.
 - **Update fields** (`src/game/fields.rs`, `src/game/update.rs`): each object's fields are a flat array with dirty
   bits. A values block is encoded once and shared by every observer; a player's own client gets its private fields
-  in a second block. Blocks are batched per observer per update; big batches are compressed. A client with creates
-  waiting for it is held (`Outbound::hold`): what is sent to it meanwhile waits, in order, until it is let go at the
-  event's end (`Map::after_events`) or at the update's "held" step, creates and forgets first.
+  in a second block. Blocks are batched per observer per update; big batches are compressed, what no two clients
+  share across visibility's threads. A block a crowd gets alike goes in packets shared among it, broadcast through
+  the feed after each client's own batch (`map/values.rs`). A client with creates waiting for it is held
+  (`Outbound::hold`): what is sent to it meanwhile waits, in order, until it is let go at the event's end
+  (`Map::after_events`), at the end of an update step before visibility's (`Map::let_go_waiting`) or at the
+  update's "held" step, creates and forgets first.
 - **Guards** (`map/guards.rs`, `map/elites.rs`, `jaina.rs`): a civilian with `CALLS_GUARDS` calls a guard per victim it takes
   (mangos-classic's `HandleSpawnGuard`); each town keeps an alarm that escalates (`[guards]`), and at its top Jaina
   comes from Theramore to Stormwind, her state in `Realm::social.jaina`, across maps 0 and 1.

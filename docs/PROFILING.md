@@ -129,6 +129,15 @@ where the time went, and by mean to see what is slow each time.
 **Messages:** the log's warnings (yellow) and errors (red), on the timeline where they happened: an update that took
 too long, a panic, a lost save. The log's other lines stay out.
 
+### Without Tracy: the world benchmark's probe
+
+With the `world-bench` feature, while the maps' probe records (`map::bench_probe::enable`), every zone on a map's
+thread is timed too, Tracy off: its count and wall time by name, a map's alone with `bench_probe::zones_of`, taken
+with `bench_probe::take_zones`. `benches/battle.rs` prints them (`BATTLE_ZONES=40`: the 40 dearest), beside each
+step's CPU time and the slowest updates' dearest steps (`BATTLE_SLOWEST`). A zone added to look inside a step shows
+there at the next run, with no profiler and no rights (this machine's `perf_event_paranoid` is 2). Zones on other
+threads (the visibility pool's, the writers') aren't counted.
+
 ### Adding a zone
 
 `src/tracy.rs` has the helpers. A zone named by a literal lasts to the end of its scope:

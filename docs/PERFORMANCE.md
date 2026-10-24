@@ -1859,3 +1859,137 @@ side through the protocol; the Subtlety rogue must still be swinging, out of ste
 and its damage at least 40% of the Combat rogue's. Without the fix the fast test fails, and so does the extended
 one at 40. What is sent doesn't change but for the Vanished that no longer comes. The fast suite passes, and so do
 the extended tests for procs, stealth, Sap, rogues and talents.
+
+## A battle of 1,600 in one spot (2026-10-24)
+
+The goal: 800 Horde against 800 Alliance fighting in one spot in Hillsbrad, the map's update within its 50 ms.
+peon's 800-a-side battle (`peon run hillsbrad --side 800`, on 16 to 24 one-core workers) had the update at
+p50 28 to 41 ms and p99 180 to 250 ms (max 260 to 490), 14 to 16 updates a second, 24 to 40% of them over 50 ms;
+its dearest steps over the fight `values` 14 to 20 ms an update, `spells` 6 to 8, `batches` 6 to 8, `pets` 2.4
+to 3.8, `auras` 3.1 to 3.8. peon itself can't keep up at that size on this machine (about fifty one-core
+workers' worth of bots), so the work here was measured on a load of the server's own.
+
+### The load: `benches/battle.rs`
+
+`cargo bench --features world-bench --bench battle` (with `WVS_DATA`): N Horde against N Alliance, made through
+the real sessions and map over channels as `benches/crowd.rs` makes its crowd (no sockets or cipher), each made
+ready as peon's are (`.character level 60`, `.character spells`, `.gear`, `.god on` so that the fight stays as
+big, `.gm off`, the PvP flag), in raids of 40, put on a disc 80 yards across in Hillsbrad, each side on its half
+(everyone in sight of everyone). Each side, by turns of 20: three warriors, two rogues, four mages, three priests
+(two healing), two warlocks, three hunters with their pets (`.pet`, sent at a foe every 10 s), a druid healing,
+and a paladin or shaman healing and one not. Melee pair off with a foe, meet it and circle it strafing, a
+heartbeat each 500 ms, swinging and using their strikes; casters turn to a foe within 30 yards and cast their
+rotation (bolts, damage over time, Blizzard, Rain of Fire and Volley on the ground, Arcane Explosion, Psychic
+Scream, Fear, Chain Lightning, Hunter's Mark ...), each busy for its cast or channel and the global cooldown;
+healers heal, shield and buff friends within 40; one caster in ten walks a few yards now and then. About 2,300
+packets a second from the bots at 1,600; each client is sent about 13,000 frames a second, 500 kB. With
+`BATTLE_GAP=60` each side starts 60 yards back, out of the other's sight, and charges to its spot first (the
+charge is measured on its own, then the fight). It reports the update's wall time, each step's CPU time (mean and
+p99), the slowest updates' dearest steps (`BATTLE_SLOWEST`), the events by kind, every zone on the map's thread
+(`BATTLE_ZONES`: the probe times Tracy's zones while it records, Tracy off), and the process's CPU.
+
+It is heavier than peon's on `values` (its health and power change more often: no one dies) and lighter on
+`pets`; the steps and their order of cost are the same.
+
+### What changed
+
+1. **A crowd's values blocks in packets shared among it** (`map::values`). Each object's public values block
+   (players', creatures', game objects') was copied into the batch of each of its observers, and each batch cut,
+   hashed and framed: the square of the crowd each update (1,600 players, a quarter to a half of them changed an
+   update: 1.6 million copies and hashes, 30 ms). Now each is kept once with its audience (its observers'
+   clients, as `conn::Clients` bits), and at the update's end the blocks, near objects first, are cut into
+   chunks of at most `update::PACKET_LIMIT`, each with its *core* (the clients in the audience of all of its
+   blocks); a chunk's packet is broadcast once through the map's feed to its core. A player isn't among their own
+   observers, so a chunk with their block isn't for them: its players in its core get it through a tree over its
+   blocks (leaves of 8; each node's packet to the members under its sibling, the rest of their own leaf in their
+   batch). Those outside the core who get some of its blocks (a crowd wider than sight, or one whose sight is
+   still being worked out) are grouped by which of each 64 of its blocks they get, a packet for each share more
+   than one gets; the rest, and the observers of a block with fewer than 8 of them (a few players keep the
+   packets they had), get them in their batch as before. Each client gets the same blocks as before, each once;
+   only the packets differ, and they come after its own batch (its forgets, creates and own fields).
+2. **A crowd's packets compressed across threads** (`update::SharedFrames::finish_all`). The update's batches,
+   and the held clients' at the "held" step, are cut and looked up on the map's thread, and the packets no two
+   clients share (a charge's creates: 4,500 compressions a second at 81 µs, 31 ms an update) compressed across
+   visibility's threads (`[visibility] refresh_threads`), each from its own bytes: the frames are those the
+   map's thread would make, each client's in its order.
+3. **Visibility's chunks sized to its budget.** A chunk of refreshes is as many as what is left of `[visibility]
+   refresh_budget_ms` has room for at what a refresh cost in the last (16 to 128; with a budget of 0, a whole
+   chunk): two sides coming into each other's sight introduce hundreds of pairs a refresh, and a chunk of 128
+   took 30 to 60 ms. What is left waits for the next update, as over the budget before.
+4. **A client held in one of the update's first steps is let go at the step's end** (`Map::let_go_waiting`). A
+   pet's Prowl broken by its first blow, or any stealth ending, has the crowd see it at once, every observer held
+   for its create; held until the "held" step, each was sent every broadcast of the steps after (the pets' and
+   creatures' blows) into its hold one by one, and each queued again at its release (1,600 held through the pets'
+   step: 50,000 frames, 40 ms each way). Now each step before the update's visibility lets go of those it held
+   that have frames waiting, their forgets and creates first and then what waited, as the "held" step and an
+   event's end do; one with nothing waiting stays held for the update's batch; none goes while something put in
+   the map waits for the update's visibility.
+5. **Smaller ones.** The quest objects' tenth-update look goes through the game objects' observers, not every
+   player's known set (a 9 ms update in ten at 1,600); an observer's few forgets are settled by looks, not sets
+   and maps made for each; a spell area's fade (`SMSG_GAMEOBJECT_DESPAWN_ANIM`) is broadcast once, not sent to
+   each.
+
+### Measured
+
+`benches/battle.rs` on this 32-core machine, the branch's start (`0b78816`) and its end alternated size by size,
+load average 1 to 3; a step's CPU time an update, mean / p99, ms; "busy" is the map thread's share of the second
+in updates and events:
+
+| Players | | Updates/s | Update p50 / p99 / max ms | Busy | `values` | `batches` | `spells` | `auras` | `visibility` | `pets` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 400 | before | 20.0 | 5.8 / 11.3 / 13.1 | 13% | 1.6 / 4.6 | 0.6 / 1.3 | 0.7 / 2.2 | 1.0 / 2.1 | | 0.4 / 0.7 |
+| 400 | after | 20.0 | 4.7 / 9.1 / 11.0 | 11% | 0.5 / 1.0 | 0.1 / 0.4 | 0.7 / 2.7 | 1.1 / 2.1 | | 0.4 / 0.7 |
+| 800 | before | 20.0 | 11.8 / 32.1 / 36.8 | 30% | 5.0 / 16.9 | 1.6 / 4.2 | 1.9 / 6.4 | 1.6 / 2.6 | | 0.5 / 1.0 |
+| 800 | after | 20.0 | 7.0 / 14.4 / 16.7 | 18% | 0.9 / 2.0 | 0.2 / 0.8 | 1.7 / 5.4 | 1.5 / 2.6 | | 0.5 / 0.9 |
+| 1,600 | before | 14.9 | 47.9 / 124.6 / 150.2 | 91% | 29.5 / 81.6 | 7.5 / 18.5 | 6.8 / 19.0 | 2.7 / 5.5 | | 0.9 / 2.2 |
+| 1,600 | after | 19.9 | 14.4 / 33.4 / 44.2 | 40% | 1.9 / 5.3 | 0.7 / 2.0 | 5.2 / 17.8 | 2.5 / 4.0 | | 0.6 / 1.7 |
+| 1,600, the charge | before | 12.4 | 24.6 / 272.9 / 277.2 | 67% | 4.6 / 32.4 | 34.3 / 203.3 | | 1.6 / 4.1 | 6.7 / 43.3 | 1.4 / 1.6 |
+| 1,600, the charge | after | 19.5 | 19.4 / 59.1 / 158.0 | 28% | 1.3 / 1.7 | 0.9 / 4.3 | 0.1 / 2.1 | 1.6 / 2.0 | 5.0 / 19.2 | 1.1 / 1.2 |
+| 1,600, after the charge | before | 12.4 | 52.3 / 168.0 / 313.7 | 91% | 37.3 / 101.1 | 12.5 / 27.1 | 6.2 / 20.3 | 2.4 / 10.3 | | 1.3 / 3.8 |
+| 1,600, after the charge | after | 19.5 | 18.2 / 42.1 / 188.7 | 48% | 3.0 / 8.5 | 0.9 / 2.5 | 7.2 / 27.2 | 2.5 / 6.6 | 0.1 / 2.7 | 0.9 / 2.7 |
+
+The process's CPU (the server and the bots) over the 1,600 fight: 3.39 cores before, 2.95 after. Each client is
+sent about as many update packets as before (75 a second against 91; 44 kB against 49) and as many frames (12,700
+a second against 12,400).
+`benches/values.rs` (`cargo bench --bench values`), the values step alone, every player changed each update:
+1,600 players 192 ms one by one, 4.1 ms shared; 3,000, 658 ms and 9.5 ms; a third of them changed, 70 and 1.1 ms.
+
+peon's faction battle (`peon run battle --side N --rounds 1 --round-secs 90 --buff-secs 10 --workers W
+--cores-per-worker 1`), the branch's start and its end one after the other, the same seed and bots; 800 a side is
+more than this machine can host (about fifty workers' worth of bots), so 400 a side on 16 workers (wvs on 16
+cores) and 600 a side on 24 (wvs on 8), load average 3 to 12. The round's update over its fight, as peon's summary
+has it:
+
+| A side | | Update p50 / p99 / max ms | Over 50 ms | Updates/s | Dearest steps, ms an update | wvs CPU (all in) | Packets out/s (all in) |
+|---|---|---|---|---|---|---|---|
+| 400 | before | 7.9 / 39.8 / 65.4 | 0% | 19.9 | values 3.03, auras 1.62, batches 1.45, spells 1.03 | 1.76 cores | 917,000 |
+| 400 | after | 7.2 / 25.7 / 42.5 | 0% | 20.0 | auras 1.79, spells 1.45, values 1.06, pets 0.72 | 2.31 cores | 1,141,000 |
+| 600 | before | 13.0 / 95.1 / 157.8 | 9% | 19.2 | values 7.42, batches 3.13, spells 2.72, auras 2.35 | 1.87 cores | 1,914,000 |
+| 600 | after | 9.4 / 45.8 / 103.2 | 1% | 20.1 | spells 2.58, auras 2.37, values 1.57, pets 1.14 | 2.37 cores | 2,153,000 |
+
+The fights weren't the same (the bots act on what the server tells them: at 400 a side the round was won at 68 s
+after, a draw at 90 s before; at 600, won at 70 s and 66 s), and the server sent 12 to 24% more packets a second,
+at 5 to 12% more CPU a packet: the server used 0.5 to 0.6 cores more over the fight, where in the bench, on
+the same load both ways, it used 0.1 (800) to 0.4 cores (1,600) less. Not looked into further: the visibility
+threads' spinning between the update's now more frequent hand-offs is a candidate.
+
+### What is left
+
+At 1,600 in one spot the update fits at p99 (33 ms) once the fight has settled. It doesn't yet at every moment:
+
+- **The game's own work.** `spells` and `auras` are now most of an update: a hit of a spell's area costs about 6
+  µs (its roll, modifiers, absorbs, the log, the damage, the procs), an aura put on about 50 µs (of it, `derive::unit`
+  working out the unit's stats again, 20 µs), the units with auras' look about 1.4 µs each, a cast ending about
+  60 µs. They grow with what the crowd does, not with its square, but a volley in step (every caster arriving at
+  its spot at once after the charge, their casts and their areas' ticks in the same updates) put 150 ms in one
+  update and 30 to 60 ms in a few (the 188.7 ms max and the p99 of 42 above).
+- **A crowd's stealth.** 240 cats going into Prowl in one update (as the charge began) cost 95 ms: each a whole
+  refresh among 1,600, each observer told to forget it (384,000 forgets); each Prowl broken, every observer told of
+  it again. Batching those refreshes would change which broadcasts of the same step reach whom.
+- **Visibility in a charge**: p99 19 ms against its 10 ms budget (a chunk of 16 refreshes can still cost more than
+  it), and the charge's p99 59 ms is mostly that and the threads it waits for.
+- **Spell areas arriving** (`after events`): each holds the whole crowd and introduces it, 1.7 ms of the map's
+  thread a Blizzard, Rain of Fire, Volley or Consecration (40 a second in the bench).
+- **Held clients between updates**: a broadcast while clients are held still goes into each one's hold; the
+  update's steps now let theirs go (4. above), an event's end does, but a crowd held through a long event pays it.
+- **Member stats**: a raid's member stats are looked at once a second, 7 ms at 1,600 in that update.

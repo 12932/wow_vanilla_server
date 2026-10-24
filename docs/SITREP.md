@@ -69,6 +69,12 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   takes their ground areas, traps and harmful auras on others, unsummons their totems and guardians, and stands the
   pet down (it keeps the stance saved); a creature respawned or despawned takes with it what was on its way to or
   from it, so a respawned one (the same GUID) is never hit by a bolt cast at its old life.
+- **A crowd's update packets** (decision 100, your goal of 800 a side in one spot): a block a crowd of 8 or more
+  gets alike comes in packets shared among it, after each client's own batch, where mangos sends each client one
+  packet of everything (the same blocks, each once); a crowd's creates are compressed on visibility's threads
+  (`[visibility] refresh_threads`, no key of its own); visibility's chunk is sized to its budget (16 to 128
+  refreshes), so in a charge some wait for the next update sooner than before; a client held in an update step
+  before visibility's goes at the step's end. No rule changed: nothing capped, no relay slowed, so no new key.
 
 **Found, not yet done:**
 - **Client checks first:** every frame capped at 32,766 bytes (mangos caps only updates and mail), and the kick

@@ -1627,4 +1627,31 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     him (`redemption::aura_gone`). Now the load ends a spirit first (`redemption::end_without_death`, as leaving a
     battleground does), the talent kept. Test: `ready_load_ends_a_spirit_of_redemption`.
 
+100. **A crowd's update packets** (2026-10-24; `perf/crowd-1600`, the user's goal: 800 a side fighting in one spot
+    in Hillsbrad, the map's update within its 50 ms; numbered past 98 and 99, `fix/warrior-calls`' and
+    `fix/rogue-dps`'). Made without the user; none changes a rule of the game (nothing a crowded client is sent is
+    capped, no relay is slowed), so none has a key of its own. docs/PERFORMANCE.md, "A battle of 1,600 in one spot".
+    - **Values blocks a crowd gets alike, in packets shared among it** (`map::values`). mangos-classic builds one
+      `SMSG_UPDATE_OBJECT` per player per update with every block for them (`UpdateData`); wvs did the same, a batch
+      per observer. Now an object's public values block for 8 or more observers goes in packets broadcast to those
+      who get every block in them, after each client's own batch (its forgets, creates and own fields); the rest as
+      before. Each client gets the same blocks, each once, and nothing for an object before its create: only the
+      packets differ (no more of them: about 75 update packets a second a client at 1,600, against 91). Fewer than
+      8 observers keep the one packet (a create and its values together, as the client check has them).
+    - **A crowd's creates compressed across visibility's threads** (`[visibility] refresh_threads`, which now
+      compress the update's packets no two clients share as well as working out visibility's decisions): each
+      packet compressed from its own bytes alone, so what is sent is the same; the key's 1 keeps both on the map's
+      thread.
+    - **Visibility's chunk sized to its budget** (`[visibility] refresh_budget_ms`): as many refreshes as what is
+      left of the budget has room for at what one cost in the last, 16 to 128 (a budget of 0 is still a whole chunk
+      of 128 an update). In a charge some refreshes wait for the next update where before a chunk of 128 ran over
+      the budget by 20 to 50 ms; over the budget they waited before too, oldest first.
+    - **A client held in an update step before visibility's is let go at the step's end** (`Map::let_go_waiting`)
+      if frames wait for it, as at an event's end: its creates first, then what waited. Before, it waited for the
+      update's "held" step, every broadcast meanwhile copied into its hold. Each client's packets come in the same
+      order.
+    - Tests: `map::values`' own, `tests_crowd_values`, `tests_held_steps`,
+      `update::batches_framed_across_a_pool_are_framed_as_one_by_one`, `visibility::a_chunk_is_sized_to_the_budget_left`,
+      `tests_client_emu::a_crowds_shared_values_pass_the_client`; benches `battle` and `values`.
+
 ## Left for later, and why
