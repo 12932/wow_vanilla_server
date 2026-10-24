@@ -283,7 +283,7 @@ impl Roll {
         )
     }
 
-    fn sitting_crit(&self) -> bool {
+    pub fn sitting_crit(&self) -> bool {
         self.victim_is_player
             && !self.standing
             && self.can_crit

@@ -1651,4 +1651,22 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       `an_avoided_ability_gives_back_its_rage_or_energy_as_its_outcome_allows` and
       `a_dodged_rage_ability_gives_back_four_fifths_of_its_cost`.
 
+99. **Spirit of Redemption lasts 10 s** (2026-10-24; `fix/redemption-10s`, your call: "take the client's version, 10
+    seconds"). wvs had Thistle Tea's 15 s; the client's Spell.dbc gives the spirit (27827) duration index 1, 10,000 ms,
+    as mangos-classic reads it. Test: `spirit_of_redemption_heals_on_then_dies`.
+
+100. **An ability's crit is its crit chance of its hits** (2026-10-24; `fix/rogue-dps`, from the rogues' damage check).
+     A melee or ranged ability rolled its hit on the table (`outcome::melee_roll`), then, as it landed, rolled the
+     whole table again and crit only if that second roll came up a crit: its miss, dodge (and a creature's parry
+     and block from the front) were taken off its crit chance a second time. At a level-63 boss from behind that is
+     7 to 15% of the chance lost: a raid-geared Combat rogue's Sinister Strike crit 11.8% of its hits for its 13.6%
+     (the test's, without Precision). mangos-classic rolls the crit once, past the hit (`Spell.cpp`'s
+     `target->isCrit = Unit::RollSpellCritOutcome(...)`: `roll_chance_combat(CalculateSpellCritChance)`, a sitting
+     player crit by a melee ability). Now a hit (not a partial block) crits on `outcome::melee_crit`'s single roll,
+     a sitting player always. Every class's abilities: Sinister Strike, Backstab, Eviscerate, Bloodthirst, Mortal
+     Strike, Aimed Shot; and Seal Fate's points with them. Test: `an_abilitys_crit_is_its_crit_chance_of_its_hits`;
+     the rogue's numbers checked beside it (`a_rogues_blows_and_energy_are_1_12s`,
+     `deadly_poison_stacks_to_five_on_a_boss`,
+     `a_rogues_threat_is_its_damages_71_feint_and_vanish_take_it_off`, `seal_fate_adds_a_point_on_a_crit`).
+
 ## Left for later, and why

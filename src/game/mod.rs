@@ -1330,6 +1330,8 @@ mod tests_review5_social;
 #[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
+mod tests_rogue_dps;
+#[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
 mod tests_rules5;

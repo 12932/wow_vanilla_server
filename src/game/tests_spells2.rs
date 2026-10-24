@@ -377,8 +377,16 @@ async fn spirit_of_redemption_heals_on_then_dies() {
             };
             let heals = spells::checks::check(m, g, &heal, &at_self, None, false, &mods);
             let smites = spells::checks::check(m, g, &smite, &at_self, None, false, &mods);
-            // The spirit's time ends.
+            // The spirit lasts the client's 10 s (Spell.dbc's duration 1 for 27827).
             let now = m.now;
+            let lasts = m.players[&g]
+                .auras
+                .holders
+                .iter()
+                .find(|h| h.spell == redemption::FORM)
+                .and_then(|h| h.expires)
+                .map(|e| e.duration_since(now).as_millis());
+            // The spirit's time ends.
             for h in m.players.get_mut(&g).unwrap().auras.holders.iter_mut() {
                 if redemption::STATE.contains(&h.spell) || h.spell == redemption::FORM {
                     h.expires = Some(now);
@@ -386,11 +394,12 @@ async fn spirit_of_redemption_heals_on_then_dies() {
             }
             auras::update(m);
             let dead = m.players[&g].death != crate::game::map::death::Death::Alive;
-            (spirit, alive, full, heals, smites, dead)
+            (spirit, alive, full, heals, smites, dead, lasts)
         })
         .await
         .unwrap();
-    let (spirit, alive, full, heals, smites, dead) = out;
+    let (spirit, alive, full, heals, smites, dead, lasts) = out;
+    assert_eq!(lasts, Some(10_000), "the spirit's 10 s, as the client's");
     assert!(
         spirit && alive && full,
         "a spirit at full health: {spirit} {alive} {full}"
