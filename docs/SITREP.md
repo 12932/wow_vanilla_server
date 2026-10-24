@@ -283,6 +283,19 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   
   Retribution's damage drop wasn't reproduced; it was single-run noise. Watch: the nearest-foe fallback also reaches
   AV tanks when the tactics give them no target.
+- **Warriors' damage** (measured on `dummy-60`, a tanked boss, no raid buffs):
+  - wvs: Execute's strike now crits on its own roll, as mangos casts it. Everything else checked against mangos
+    matches: rage, the hit table, glancing blows, ability numbers, attack power, the talents.
+  - peon: melee keep their seat behind a boss for 4 s instead of swapping every 50–200 ms, which stopped their
+    swings; damage warriors don't Disarm-dance at bosses or Thunder Clap the tank's boss; Recklessness on bosses;
+    weapons by build. Fury 170 to 210 dps and Arms 143 to 192 in raid gear.
+  - Still mid-pack, from the setting, not bugs: rage-starved without raid buffs, and `.gear raid` gives warriors tank
+    tier sets with no hit.
+  - **Your calls:**
+    - rage on a dodge or parry: wvs gives 75% as Thistle Tea does, mangos none;
+    - weapon skill above 300 against a boss's crit: wvs ignores it as vmangos does, mangos counts it;
+    - should Bloodthirst and Mortal Strike stay above Whirlwind? At this attack power Whirlwind does more per rage;
+    - should `.gear raid` pick damage pieces with hit for damage warriors?
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
