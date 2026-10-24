@@ -26,10 +26,13 @@
 //!   leaves of [`LEAF`]: each node's packet goes to the members under its
 //!   sibling, and a member gets the rest of their own leaf in their batch.
 //!   An observer of the chunk outside it gets the whole chunk in one packet.
-//! - **The rest** (in the audience of some of a chunk's blocks but not all)
-//!   get those blocks in their batch, as before; so do the observers of a
-//!   block with fewer than [`SHARE_FROM`] of them (a few players keep the
-//!   packets they had).
+//! - **The rest** (in the audience of some of a chunk's blocks but not all:
+//!   a crowd wider than sight, or one whose sight is still being worked
+//!   out) are grouped by which of each [`SEGMENT`] of the chunk's blocks
+//!   they get: a packet for each share more than one of them gets, the
+//!   blocks of the others in their batches, as before; so do the observers
+//!   of a block with fewer than [`SHARE_FROM`] of them (a few players keep
+//!   the packets they had).
 //!
 //! So each client gets the same blocks as before, each once, and only the
 //! packets they come in differ: they come after the client's own batch
@@ -150,16 +153,35 @@ impl Shared {
             false
         });
         let mut out = Vec::new();
+        let mut patterns = Patterns::new(guids.len());
         let mut start = 0;
         while start < told.len() {
             let (end, core) = chunk(&told, start);
             let chunk = &told[start..end];
-            // Those in some of its audiences but not in its core: theirs,
-            // block by block, as before.
-            for t in chunk {
-                for i in t.to.iter_without(&core) {
-                    if let Some(g) = guid_of(i) {
-                        batches.entry(g).or_default().push(&t.block);
+            // Those in some of its audiences but not in its core: theirs by
+            // what of it each gets, a packet for each such share that more
+            // than one gets, the rest into their batches.
+            for seg in chunk.chunks(SEGMENT) {
+                for (pattern, who) in patterns.of(seg, &core) {
+                    if who.len() >= 2 {
+                        let mut to = Clients::default();
+                        for &i in &who {
+                            to.insert(i);
+                        }
+                        let blocks = (0..seg.len())
+                            .filter(|k| pattern & (1 << k) != 0)
+                            .map(|k| seg[k].block.as_slice());
+                        out.push((update::frame_blocks(blocks), Arc::new(to)));
+                        continue;
+                    }
+                    let Some(g) = who.first().and_then(|&i| guid_of(i)) else {
+                        continue;
+                    };
+                    let batch = batches.entry(g).or_default();
+                    for (k, t) in seg.iter().enumerate() {
+                        if pattern & (1 << k) != 0 {
+                            batch.push(&t.block);
+                        }
                     }
                 }
             }
@@ -186,6 +208,52 @@ impl Shared {
             }
             start = end;
         }
+        out
+    }
+}
+
+/// What of a chunk outside its core is shared by its pattern: this many
+/// blocks at a time, a bit each.
+const SEGMENT: usize = 64;
+
+/// Each client's pattern over a segment of a chunk (which of its blocks
+/// it gets), worked out in a table by client kept between segments.
+struct Patterns {
+    of: Vec<u64>,
+    touched: Vec<usize>,
+}
+
+impl Patterns {
+    fn new(clients: usize) -> Self {
+        Self {
+            of: vec![0; clients],
+            touched: Vec::new(),
+        }
+    }
+
+    /// The clients outside `core` of each pattern over `seg` (at most
+    /// [`SEGMENT`] blocks), patterns in order.
+    fn of(&mut self, seg: &[Told], core: &Clients) -> Vec<(u64, Vec<usize>)> {
+        debug_assert!(seg.len() <= SEGMENT);
+        for (k, t) in seg.iter().enumerate() {
+            for i in t.to.iter_without(core) {
+                if i >= self.of.len() {
+                    self.of.resize(i + 1, 0);
+                }
+                if self.of[i] == 0 {
+                    self.touched.push(i);
+                }
+                self.of[i] |= 1 << k;
+            }
+        }
+        let mut by: AHashMap<u64, Vec<usize>> = AHashMap::new();
+        for i in self.touched.drain(..) {
+            by.entry(std::mem::take(&mut self.of[i]))
+                .or_default()
+                .push(i);
+        }
+        let mut out: Vec<(u64, Vec<usize>)> = by.into_iter().collect();
+        out.sort_unstable_by_key(|(p, _)| *p);
         out
     }
 }

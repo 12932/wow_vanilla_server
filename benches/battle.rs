@@ -364,6 +364,10 @@ struct Fighter {
     horde: bool,
     role: Role,
     at: (f32, f32),
+    /// Its spot on the disc: a caster stands there, a charge runs to it.
+    home: (f32, f32),
+    /// Running to its spot, after a charge's start.
+    running: bool,
     /// Melee: where it meets its foe, and which side of it it circles.
     meet: (f32, f32),
     phase: f32,
@@ -685,6 +689,27 @@ fn report_map(key: MapKey, secs: f64) {
         pct(&boxes, 0.5),
         boxes.last().copied().unwrap_or(0.0)
     );
+    // The slowest updates, by their dearest steps.
+    let slowest: usize = env("BATTLE_SLOWEST", 0);
+    if slowest > 0 {
+        let mut by: Vec<_> = samples.iter().collect();
+        by.sort_by_key(|s| std::cmp::Reverse(s.wall));
+        for s in by.iter().take(slowest) {
+            let mut steps = s.steps.clone();
+            steps.sort_by_key(|x| std::cmp::Reverse(x.1));
+            let top: Vec<String> = steps
+                .iter()
+                .take(4)
+                .map(|(n, d)| format!("{n} {:.1}", d.as_secs_f64() * 1e3))
+                .collect();
+            println!(
+                "  a slow update: {:.1} ms wall, {:.1} ms CPU: {}",
+                s.wall.as_secs_f64() * 1e3,
+                s.cpu.as_secs_f64() * 1e3,
+                top.join(", ")
+            );
+        }
+    }
     println!("  steps, CPU ms an update (mean / p99):");
     for (name, mean, p99) in steps.iter().take(14) {
         println!("    {name:<20} {mean:>8.3} / {p99:>8.3}");
@@ -744,18 +769,23 @@ async fn battle(
         let db = (b.0 - CENTRE.0) * HORDE_WAY.0 + (b.1 - CENTRE.1) * HORDE_WAY.1;
         db.total_cmp(&da)
     });
+    // With a charge, each side starts `BATTLE_GAP` yards back from its half,
+    // out of the other's sight, and runs to its spot.
+    let gap: f32 = env("BATTLE_GAP", 0.0);
     let t = Instant::now();
     let gate = Arc::new(tokio::sync::Semaphore::new(64));
     let mut joins = Vec::with_capacity(n);
-    for (i, &at) in spots.iter().enumerate() {
+    for (i, &home) in spots.iter().enumerate() {
         let horde = i < side;
         let (race, class, role) = draw(horde, if horde { i } else { i - side });
+        let back = if horde { gap } else { -gap };
+        let at = (home.0 + back * HORDE_WAY.0, home.1 + back * HORDE_WAY.1);
         let realm = realm.clone();
         let gate = gate.clone();
         joins.push(tokio::spawn(async move {
             let _p = gate.acquire_owned().await.ok()?;
             match ready(realm, i, horde, race, class, at).await {
-                Ok((tx, rx, guid)) => Some((tx, rx, guid, horde, role, at)),
+                Ok((tx, rx, guid)) => Some((tx, rx, guid, horde, role, at, home)),
                 Err(e) => {
                     eprintln!("  bot {i}: {e}");
                     None
@@ -766,7 +796,7 @@ async fn battle(
     let mut fighters = Vec::with_capacity(n);
     let mut queues = Vec::with_capacity(n);
     for j in joins {
-        if let Ok(Some((tx, rx, guid, horde, role, at))) = j.await {
+        if let Ok(Some((tx, rx, guid, horde, role, at, home))) = j.await {
             queues.push(rx);
             fighters.push(Fighter {
                 tx,
@@ -774,7 +804,9 @@ async fn battle(
                 horde,
                 role,
                 at,
-                meet: at,
+                home,
+                running: at != home,
+                meet: home,
                 phase: 0.0,
                 foe: None,
                 picks: Vec::new(),
@@ -811,7 +843,7 @@ async fn battle(
     let spots: Arc<Vec<(f32, f32)>> = Arc::new(
         fighters
             .iter()
-            .map(|f| if f.role.melee() { f.meet } else { f.at })
+            .map(|f| if f.role.melee() { f.meet } else { f.home })
             .collect(),
     );
     let groups = 8;
@@ -833,6 +865,22 @@ async fn battle(
         tasks.push(tokio::spawn(fight(
             group, guids, spots, started, seed, stop, refused, sent,
         )));
+    }
+    if gap > 0.0 {
+        // The charge: from the start until every caster is at its spot and
+        // a second more.
+        let charge = Duration::from_secs_f32(gap / 7.0 + 1.0);
+        bench_probe::enable();
+        bench_probe::take();
+        bench_probe::take_kinds();
+        bench_probe::take_mailbox();
+        bench_probe::take_zones();
+        bench_probe::zones_of(Some(key));
+        tokio::time::sleep(charge).await;
+        bench_probe::disable();
+        println!("  the charge ({:.0} s):", charge.as_secs_f32());
+        report_map(key, charge.as_secs_f64());
+        println!("  the fight:");
     }
     tokio::time::sleep(Duration::from_secs(warm)).await;
     for c in [
@@ -965,7 +1013,7 @@ fn plan(fighters: &mut [Fighter]) {
         if !fighters[i].role.melee() || paired[i] {
             continue;
         }
-        let me = fighters[i].at;
+        let me = fighters[i].home;
         let best = (0..n)
             .filter(|&j| {
                 !paired[j]
@@ -978,8 +1026,8 @@ fn plan(fighters: &mut [Fighter]) {
             paired[i] = true;
             paired[j] = true;
             let meet = (
-                (me.0 + fighters[j].at.0) / 2.0,
-                (me.1 + fighters[j].at.1) / 2.0,
+                (me.0 + fighters[j].home.0) / 2.0,
+                (me.1 + fighters[j].home.1) / 2.0,
             );
             fighters[i].foe = Some(j);
             fighters[j].foe = Some(i);
@@ -1006,9 +1054,9 @@ fn plan(fighters: &mut [Fighter]) {
                 let at = if fighters[j].role.melee() {
                     fighters[j].meet
                 } else {
-                    fighters[j].at
+                    fighters[j].home
                 };
-                (dist(f.at, at), j)
+                (dist(f.home, at), j)
             })
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1124,6 +1172,35 @@ async fn fight(
                     f.turn += 1;
                     f.next_cast = now + Duration::from_millis(cast.busy_ms + next() % 400);
                     try_send(&f.tx, spell(cast, f.guid, guids[foe], spots[foe]));
+                }
+                continue;
+            }
+            // A charge: running to its spot, heartbeats each 500 ms, then a
+            // stop.
+            if f.running {
+                if now >= f.next_beat {
+                    f.next_beat = now + Duration::from_millis(500);
+                    let away = dist(f.at, f.home);
+                    let o = facing(f.at, f.home);
+                    let step = away.min(3.5) / away.max(f32::EPSILON);
+                    f.at = (
+                        f.at.0 + (f.home.0 - f.at.0) * step,
+                        f.at.1 + (f.home.1 - f.at.1) * step,
+                    );
+                    let m: ClientOpcodeMessage = if away <= 3.5 {
+                        f.running = false;
+                        f.at = f.home;
+                        MSG_MOVE_STOP_Client {
+                            info: info(f.at, o, MovementInfo_MovementFlags::empty(), ms),
+                        }
+                        .into()
+                    } else {
+                        MSG_MOVE_HEARTBEAT_Client {
+                            info: info(f.at, o, MovementInfo_MovementFlags::new_forward(), ms),
+                        }
+                        .into()
+                    };
+                    try_send(&f.tx, m);
                 }
                 continue;
             }

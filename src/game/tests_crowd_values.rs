@@ -208,8 +208,13 @@ async fn shared_values_are_the_blocks_each_client_had_one_by_one() {
     use crate::game::map::vis_bench::Crowd;
     let n = 300;
     let radius = 90.0;
-    let mut before = Crowd::new(n, radius);
-    let mut after = Crowd::new(n, radius);
+    // Every refresh done in its update, so that the two crowds see alike.
+    let cfg = || crate::game::RealmConfig {
+        visibility_budget: std::time::Duration::from_secs(3600),
+        ..crate::game::RealmConfig::default()
+    };
+    let mut before = Crowd::with_config(cfg(), n, radius);
+    let mut after = Crowd::with_config(cfg(), n, radius);
     before.values_one_by_one(true);
     for round in 0..12u32 {
         for c in [&mut before, &mut after] {

@@ -2274,18 +2274,37 @@ impl Map {
     /// everyone. A client nothing waited for keeps its blocks for the one
     /// batch.
     fn release_held(&mut self) {
-        let held = Held(std::mem::take(&mut self.holding));
-        for (g, out) in &held.0 {
-            let first = if out.has_held() {
-                match self.batches.remove(g) {
-                    Some(b) => b.finish_shared(&mut self.shared_frames),
-                    None => Vec::new(),
-                }
-            } else {
-                Vec::new()
-            };
+        let mut held = Held(std::mem::take(&mut self.holding));
+        // Those with frames waiting: their batches framed together, what
+        // none shares compressed across the visibility threads (a crowd
+        // held by a volley of spell areas has hundreds), then each let go
+        // in turn, its creates first.
+        let mut waiting: Vec<usize> = Vec::new();
+        let mut batches: Vec<Batch> = Vec::new();
+        for (k, (g, out)) in held.0.iter().enumerate() {
+            if out.has_held()
+                && let Some(b) = self.batches.remove(g)
+            {
+                waiting.push(k);
+                batches.push(b);
+            }
+        }
+        let pool = self.encode_pool();
+        let framed = self.shared_frames.finish_all(batches, pool);
+        let mut firsts: Vec<Vec<Arc<[u8]>>> = vec![Vec::new(); held.0.len()];
+        for (k, frames) in waiting.into_iter().zip(framed) {
+            firsts[k] = frames;
+        }
+        for ((_, out), first) in held.0.drain(..).zip(firsts) {
             out.release(first);
         }
+    }
+
+    /// The threads a crowd's packets are compressed on: visibility's
+    /// (`[visibility] refresh_threads`), or none.
+    fn encode_pool(&self) -> Option<&'static rayon::ThreadPool> {
+        let threads = self.cfg.visibility_threads;
+        (threads != 1).then(|| visibility::pool(threads)).flatten()
     }
 
     /// After an event (a packet, a call) between updates: a client it held
@@ -2442,11 +2461,24 @@ impl Map {
     }
 
     fn flush_batches(&mut self) {
+        // Each client's batch framed, what none shares compressed across
+        // the visibility threads (a crowd's creates); then sent, each
+        // client's in its order.
+        let mut to: Vec<Guid> = Vec::with_capacity(self.batches.len());
+        let mut batches: Vec<Batch> = Vec::with_capacity(self.batches.len());
         for (guid, batch) in self.batches.drain() {
+            if self.players.contains_key(&guid) {
+                to.push(guid);
+                batches.push(batch);
+            }
+        }
+        let pool = self.encode_pool();
+        let framed = self.shared_frames.finish_all(batches, pool);
+        for (guid, frames) in to.into_iter().zip(framed) {
             let Some(p) = self.players.get(&guid) else {
                 continue;
             };
-            for frame in batch.finish_shared(&mut self.shared_frames) {
+            for frame in frames {
                 p.outbound.send_frame(frame);
             }
         }
