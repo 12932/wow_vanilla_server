@@ -83,6 +83,7 @@ pub fn load(db: &Connection, data: &mut GameData) {
                 c.u32("action3_script"),
             ],
             miss_repeat: None,
+            gcd_ms: None,
         }
     }) {
         s.ai_events.entry(e.creature).or_default().push(e);

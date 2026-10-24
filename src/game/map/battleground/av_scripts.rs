@@ -1638,6 +1638,7 @@ impl<'a> Builder<'a> {
             params,
             actions: ids,
             miss_repeat: None,
+            gcd_ms: None,
         });
     }
 
@@ -1656,6 +1657,44 @@ impl<'a> Builder<'a> {
 
     fn on(&mut self, entry: u32, kind: u32, phases: u32, steps: Vec<ScriptStep>) {
         self.event(entry, kind, [0; 4], 0, phases, vec![steps]);
+    }
+
+    /// The last event made is a cast of a C++ script under its global
+    /// cooldown (vmangos's `m_uiGlobalCooldown`): due, it waits while the
+    /// cooldown runs or the creature casts; its first step's cast that
+    /// goes sets the cooldown `ms` and starts its timer over, one refused
+    /// leaves it due and sets none (`DoCastSpellIfCan(..) == CAST_OK`).
+    fn under_gcd(&mut self, entry: u32, ms: u32) {
+        let Some(e) = self
+            .data
+            .ai_events
+            .get_mut(&entry)
+            .and_then(|e| e.last_mut())
+        else {
+            return;
+        };
+        e.flags |= EF_CHECK_RESULT;
+        e.gcd_ms = Some(ms);
+        for a in e.actions.into_iter().filter(|a| *a != 0) {
+            if let Some(first) = self.data.ai_scripts.get_mut(&a).and_then(|s| s.first_mut()) {
+                first.data_flags |= SF_ABORT_ON_FAILURE;
+            }
+        }
+    }
+
+    /// `entry` notices units short of `yards` past both bounding radii,
+    /// in place of its detection range by level ([`Notice`]).
+    fn notices(&mut self, entry: u32, yards: f32, opener: Option<Opener>) {
+        self.data.notice.insert(entry, Notice { yards, opener });
+    }
+
+    /// The id of the last event made.
+    fn last_event(&self, entry: u32) -> u32 {
+        self.data
+            .ai_events
+            .get(&entry)
+            .and_then(|e| e.last())
+            .map_or(0, |e| e.id)
     }
 
     /// In combat: first after `first`, then every `repeat` (ms).
@@ -1767,6 +1806,7 @@ pub fn install(data: &mut GameData) {
     let s = &mut data.scripts;
     for e in scripted_entries() {
         s.ai_events.remove(&e);
+        s.notice.remove(&e);
     }
     let mut b = Builder::new(s, BASE);
     leaders(&mut b);
@@ -1829,23 +1869,45 @@ fn barks(b: &mut Builder, entry: u32, texts: [u32; 6]) {
     }
 }
 
+/// How near the generals and the marshals and warmasters notice a unit,
+/// past both bounding radii, in place of their detection range by level
+/// (vmangos's `MoveInLineOfSight`: `GetDistance(m_creature) < 23` in
+/// `npc_Vanndar`, `< 22` in `npc_DrekThar` and `npc_WarMaster`).
+pub const VANNDAR_NOTICES: f32 = 23.0;
+pub const DREK_THAR_NOTICES: f32 = 22.0;
+pub const WARMASTER_NOTICES: f32 = 22.0;
+/// A general's global cooldown after each of his spells
+/// (`m_uiGlobalCooldown`): Vanndar's three, Drek'Thar's Knockdown and
+/// Frenzy 1 s, his Whirlwind 2 s.
+pub const GENERAL_GCD_MS: u32 = 1000;
+const WHIRLWIND_GCD_MS: u32 = 2000;
+/// Vanndar's spells (`npc_VanndarAI`).
+pub const AVATAR: u32 = 19135;
+pub const STORM_BOLT: u32 = 19136;
+pub const THUNDERCLAP: u32 = 15588;
+
 fn leaders(b: &mut Builder) {
     let whirlwind = 13736;
-    // Vanndar Stormpike.
+    // Vanndar Stormpike (vmangos's `npc_VanndarAI`): Avatar, Storm Bolt
+    // and Thunderclap, in that order when due together, a second apart.
     b.on(VANNDAR, EVENT_AGGRO, 0, vec![say(&[10243])]);
     b.every(
         VANNDAR,
         (12000, 20000),
         (20000, 30000),
-        vec![self_cast(19135, 0)],
+        vec![self_cast(AVATAR, 0)],
     );
-    b.every(VANNDAR, (8000, 8000), (8000, 10000), vec![cast(19136)]);
+    b.under_gcd(VANNDAR, GENERAL_GCD_MS);
+    b.every(VANNDAR, (8000, 8000), (8000, 10000), vec![cast(STORM_BOLT)]);
+    b.under_gcd(VANNDAR, GENERAL_GCD_MS);
     b.every(
         VANNDAR,
         (5000, 5000),
         (5000, 8000),
-        vec![self_cast(15588, 0)],
+        vec![self_cast(THUNDERCLAP, 0)],
     );
+    b.under_gcd(VANNDAR, GENERAL_GCD_MS);
+    b.notices(VANNDAR, VANNDAR_NOTICES, None);
     barks(b, VANNDAR, [8838, 8839, 8840, 8841, 8842, 8843]);
     // Drek'Thar (vmangos's `npc_DrekThar`): his Whirlwind holds him where
     // he stands two seconds, and his Knockdown and Frenzy wait it out.
@@ -1872,9 +1934,13 @@ fn leaders(b: &mut Builder) {
             start_script(unroot),
         ],
     );
+    b.under_gcd(DREK_THAR, WHIRLWIND_GCD_MS);
     b.every(DREK_THAR, (18000, 18000), (16000, 24000), vec![cast(19128)]);
+    b.under_gcd(DREK_THAR, GENERAL_GCD_MS);
     b.below(DREK_THAR, 30, Some(120000), vec![self_cast(28747, 0)]);
+    b.under_gcd(DREK_THAR, GENERAL_GCD_MS);
     b.skip_in(DREK_THAR, spells, WHIRLING);
+    b.notices(DREK_THAR, DREK_THAR_NOTICES, None);
     // Out of the fight mid-whirl, he moves again, and says his say as
     // one fighting (his leash sets its own phase first).
     b.on(
@@ -1941,9 +2007,20 @@ fn leaders(b: &mut Builder) {
     b.every(GALVANGAR, (4000, 4000), (7000, 9000), vec![cast(15284)]);
     b.every(GALVANGAR, (7000, 7000), (9000, 13000), vec![cast(16856)]);
     b.on(GALVANGAR, EVENT_EVADE, 0, vec![say(&[10378])]);
-    // The marshals and warmasters.
+    // The marshals and warmasters, who charge the first they notice
+    // (`npc_WarMasterAI::MoveInLineOfSight`: its Charge's timer 12 s on
+    // if it goes).
     for entry in 14762..=14777 {
-        warmaster(b, entry, ChargeAt::InRange, Some(120_000));
+        let charge = warmaster(b, entry, ChargeAt::InRange, Some(120_000));
+        b.notices(
+            entry,
+            WARMASTER_NOTICES,
+            Some(Opener {
+                spell: CHARGE,
+                event: charge,
+                repeat_ms: 12_000,
+            }),
+        );
     }
 }
 
@@ -1982,7 +2059,13 @@ pub(crate) enum ChargeAt {
 /// `m_uiIsInWhirlwind_Timer` root and its global cooldown; Thistle Tea's
 /// port keeps it moving). Its scripts stop as it evades, and it moves
 /// again.
-pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_every: Option<i32>) {
+/// Its Charge's event, by id.
+pub(crate) fn warmaster(
+    b: &mut Builder,
+    entry: u32,
+    charge: ChargeAt,
+    enrage_every: Option<i32>,
+) -> u32 {
     let spells = b.count(entry);
     match charge {
         ChargeAt::InRange => {
@@ -2011,6 +2094,7 @@ pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_ev
             }]],
         ),
     }
+    let charge_event = b.last_event(entry);
     b.every(entry, (8000, 8000), (8000, 10000), vec![cast(CLEAVE)]);
     b.every(
         entry,
@@ -2059,6 +2143,7 @@ pub(crate) fn warmaster(b: &mut Builder, entry: u32, charge: ChargeAt, enrage_ev
             phase_step(0),
         ],
     );
+    charge_event
 }
 
 fn summoners(b: &mut Builder) {

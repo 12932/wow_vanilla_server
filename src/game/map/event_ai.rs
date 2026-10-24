@@ -120,6 +120,9 @@ pub struct Scripted {
     /// A despawn a script put off (`SCRIPT_COMMAND_DESPAWN_SELF`): when,
     /// and the respawn's delay over its spawn's.
     pub script_despawn: Option<(Instant, Option<Duration>)>,
+    /// A C++ script's global cooldown, as its events' casts set it
+    /// (`AiEvent::gcd_ms`): until then they wait.
+    pub gcd_until: Option<Instant>,
 }
 
 /// A script's faction for a while, as Thistle Tea's `TemporaryFaction`
@@ -397,6 +400,7 @@ fn reset_ooc(s: &mut Scripted, events: &[AiEvent], now: Instant) {
 
 fn reset_for_combat(s: &mut Scripted, events: &[AiEvent], now: Instant) {
     s.clock = Some(now);
+    s.gcd_until = None;
     s.timers = vec![None; events.len()];
     s.disabled = vec![false; events.len()];
     for (i, e) in events.iter().enumerate() {
@@ -766,6 +770,15 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
         {
             continue;
         }
+        // Under its script's global cooldown, or casting (vmangos's
+        // `m_uiGlobalCooldown`, held while `IsNonMeleeSpellCasted`), an
+        // event of the script waits, due.
+        if e.gcd_ms.is_some()
+            && (s.gcd_until.is_some_and(|t| t > now)
+                || map.creature(g).is_some_and(|c| c.caster.casting.is_some()))
+        {
+            continue;
+        }
         if e.flags & EF_PAUSE_WHILE_STUNNED != 0
             && map
                 .creature(g)
@@ -826,6 +839,13 @@ fn fire(map: &mut Map, g: Guid, matches: impl Fn(&AiEvent) -> bool, invoker: Opt
         if e.chance == 0 {
             continue;
         }
+        // Its cast sets the script's global cooldown; one refused
+        // ([`retry`]) takes it off again.
+        if let Some(ms) = e.gcd_ms
+            && let Some(s) = scripted_mut(map, g)
+        {
+            s.gcd_until = Some(now + Duration::from_millis(u64::from(ms)));
+        }
         run_actions(map, g, i, e, target.or_else(|| victim(map, g)));
         // An action may have killed or despawned the creature.
         if map.creature(g).is_none() {
@@ -867,10 +887,40 @@ fn run_actions(map: &mut Map, g: Guid, i: usize, e: &AiEvent, target: Option<Gui
 /// vmangos timer starts over only when its cast lands.
 pub fn retry(map: &mut Map, g: Guid, i: usize) {
     let now = map.now;
+    let gcd = map
+        .creature(g)
+        .and_then(|c| events_of(map, ai_entry(c)))
+        .and_then(|events| events.get(i))
+        .is_some_and(|e| e.gcd_ms.is_some());
     if let Some(s) = map.creature_mut(g).and_then(|c| c.scripted.as_deref_mut())
         && i < s.timers.len()
     {
         s.timers[i] = Some(now);
+        s.disabled[i] = false;
+        // A script's cast that didn't go sets no global cooldown
+        // (vmangos's `DoCastSpellIfCan(..) == CAST_OK`).
+        if gcd {
+            s.gcd_until = None;
+        }
+    }
+}
+
+/// `g`'s EventAI event `id` due `after` from now (a C++ script's timer
+/// that another of its casts sets: [`crate::game::data::scripts::Opener`]).
+pub fn due_in(map: &mut Map, g: Guid, id: u32, after: Duration) {
+    let now = map.now;
+    ensure_started(map, g);
+    let Some(i) = map
+        .creature(g)
+        .and_then(|c| events_of(map, ai_entry(c)))
+        .and_then(|events| events.iter().position(|e| e.id == id))
+    else {
+        return;
+    };
+    if let Some(s) = scripted_mut(map, g)
+        && i < s.timers.len()
+    {
+        s.timers[i] = Some(now + after);
         s.disabled[i] = false;
     }
 }
