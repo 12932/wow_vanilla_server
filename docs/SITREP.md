@@ -275,6 +275,33 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     (decision 96; wvs had let two ranks stand);
   - `.ready load` ends a spirit of redemption (decision 97): its passive state auras outlived the load and killed
     the priest seconds into the next attempt.
+- **Alterac Valley, round three** (peon 0.1.26; every call in peon's BOT_AI):
+  - **Result:** 1 kill in 10 at 40 bots (the tuned mean held fixed, seeds 1 and 2, your roster, default gear and
+    skill). The best fixed result was 4 in 10, with 7 tanks before the roster. The roster has fewer ranged damage
+    dealers, and damage on Drek'Thar fell from 1,580 to 1,100–1,330 a second. So the raid hasn't been shrunk; a probe
+    at 35 got no kill in 20.
+  - **Your asks, done:**
+    - mana potions (healer mana at 60 s from 34% to about 50%);
+    - Innervate on the lowest healer, another before itself;
+    - the coward fix: time in his room from 69% to 96%;
+    - soulstones on tanks first, then healers, one a person; 12 of 12 soulstoned deaths now rise;
+    - facing: 89–94% of the time still, up from 46%;
+    - rogues: from about 900 to 2,650 damage on him an attempt, stepping out only around a learned Whirlwind;
+    - a moonkin out of mana goes bear;
+    - in-flight casts and pets stopped before a reset.
+  - **Calls I made, for you:**
+    - **Seven tanks** (one for Drek'Thar, one per guard) instead of five: it took fixed kills from 1 in 10 to 4 in 10.
+      The alternative is to keep five and accept loose adds.
+    - **No healing priest gets a soulstone:** 1.12 can't inspect talents, so any priest who heals is assumed to
+      have Spirit of Redemption. The alternative is to tell bots each other's talents, which a real raid leader
+      would know.
+    - **Nobody leaves a boss fight to drink** (`tactics.commit`, not tunable): drinking 36 yards off was one cause of
+      the cowards.
+    - **A moonkin goes bear at 12% mana, not 10%:** Bear Form costs about 9–11% of a level 60 druid's mana.
+    - **No buffing during an attempt:** priests spent eight Divine Spirits an attempt in his room before the pull.
+    - **The raid tells its bots each other's parts** (tank, healer): a leader would, in 1.12. Without it, healers'
+      rotation counted no healers and soulstones went to Balance druids.
+    - **Five potions each**, topped up before every attempt.
 - **The talent plan, phase 4 (verified):**
   - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
     never fires;
