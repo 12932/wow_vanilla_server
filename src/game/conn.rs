@@ -110,6 +110,66 @@ impl Clients {
         })
     }
 
+    /// Only those in `other` too, and `also` (whether `other` has it or
+    /// not) if it is here.
+    pub fn keep_common(&mut self, other: &Clients, also: Option<usize>) {
+        let kept = also.filter(|&i| self.contains(i));
+        self.0.truncate(other.0.len());
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a &= b;
+        }
+        if let Some(i) = kept {
+            self.insert(i);
+        }
+    }
+
+    /// How many would be left by [`Clients::keep_common`], without the
+    /// change.
+    pub fn common(&self, other: &Clients, also: Option<usize>) -> usize {
+        let n: usize = self
+            .0
+            .iter()
+            .zip(&other.0)
+            .map(|(a, b)| (a & b).count_ones() as usize)
+            .sum();
+        match also {
+            Some(i) if self.contains(i) && !other.contains(i) => n + 1,
+            _ => n,
+        }
+    }
+
+    /// `other`'s too.
+    pub fn add_all(&mut self, other: &Clients) {
+        if self.0.len() < other.0.len() {
+            self.0.resize(other.0.len(), 0);
+        }
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a |= b;
+        }
+    }
+
+    /// These, but not `other`'s (in place).
+    pub fn take_all(&mut self, other: &Clients) {
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a &= !b;
+        }
+    }
+
+    /// Each here that isn't in `other`, in order.
+    pub fn iter_without<'a>(&'a self, other: &'a Clients) -> impl Iterator<Item = usize> + 'a {
+        self.0.iter().enumerate().flat_map(move |(w, &word)| {
+            let mut word = word & !other.0.get(w).copied().unwrap_or(0);
+            std::iter::from_fn(move || {
+                if word == 0 {
+                    return None;
+                }
+                let bit = word.trailing_zeros() as usize;
+                word &= word - 1;
+                Some(w * 64 + bit)
+            })
+        })
+    }
+
     /// Whether any of `other` is here too.
     fn meets(&self, other: &Clients) -> bool {
         self.0.iter().zip(&other.0).any(|(a, b)| a & b != 0)

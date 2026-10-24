@@ -3367,9 +3367,16 @@ pub fn update(map: &mut Map) {
     let data = map.realm.data.clone();
     // Areas first: a channel's area has its last tick before the channel,
     // run out, takes it away.
-    effects::tick_areas(map);
-    channel_costs(map);
-    channels_in_reach(map);
+    {
+        let _z = crate::zone!("spells: areas");
+        effects::tick_areas(map);
+    }
+    {
+        let _z = crate::zone!("spells: channels");
+        channel_costs(map);
+        channels_in_reach(map);
+    }
+    let _z = crate::zone!("spells: casts ending");
     let mut done: Vec<Guid> = map
         .players
         .values()

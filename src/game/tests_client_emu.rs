@@ -916,3 +916,74 @@ pub(crate) fn checker() -> Option<(PathBuf, PathBuf)> {
     }
     Some((check_py, wow_exe))
 }
+
+/// A crowd's values in the packets shared among it (`map::values`): forty
+/// players, every one's health and power changed in one update, so that
+/// each client gets the others' blocks in a whole chunk (compressed) or in
+/// the tree's packets about its own, and its own block in its batch. Every
+/// such packet passes the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_crowds_shared_values_pass_the_client() {
+    use crate::game::fields::{UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH, UNIT_FIELD_POWER1};
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let mut crowd = Vec::new();
+    for i in 0..40u8 {
+        let name = format!(
+            "Sharer{}{}",
+            (b'a' + i / 26) as char,
+            (b'a' + i % 26) as char
+        );
+        crowd.push(enter(&realm, &format!("S{i}"), &name).await);
+    }
+    let guids: Vec<Guid> = crowd.iter().map(|(_, g)| *g).collect();
+    for (c, me) in &mut crowd {
+        for g in &guids {
+            if g != me {
+                c.sees(*g).await;
+            }
+        }
+    }
+    harness::an_update(&map).await;
+    let before: Vec<usize> = crowd.iter_mut().map(|(c, _)| c.captured().len()).collect();
+    let all = guids.clone();
+    let updates = map
+        .query(move |m| {
+            for (i, g) in all.iter().enumerate() {
+                let p = m.players.get_mut(g).unwrap();
+                p.fields.set_u32(UNIT_FIELD_MAXHEALTH, 500 + i as u32);
+                p.fields.set_u32(UNIT_FIELD_HEALTH, 300 + i as u32);
+                p.fields.set_u32(UNIT_FIELD_POWER1 + 1, 10 * i as u32);
+            }
+            m.stats.updates
+        })
+        .await
+        .unwrap();
+    while map.query(|m| m.stats.updates).await.unwrap_or(u64::MAX) < updates + 2 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The packets of the update, shared and not.
+    let mut seen = AHashSet::new();
+    let mut capture = Vec::new();
+    let mut shared = 0;
+    for ((c, _), from) in crowd.iter_mut().zip(before) {
+        for frame in &c.captured()[from..] {
+            let opcode = u16::from_le_bytes([frame[2], frame[3]]);
+            if !CHECKED.contains(&opcode) {
+                continue;
+            }
+            if !seen.insert(frame.as_ptr() as usize) {
+                shared += 1;
+                continue;
+            }
+            capture.extend_from_slice(&frame[..]);
+        }
+    }
+    assert!(shared > 0, "some of the crowd's packets were shared");
+    run_checker(&check_py, &wow_exe, &capture);
+}

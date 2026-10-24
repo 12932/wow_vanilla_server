@@ -441,7 +441,23 @@ fn empty_fields() -> &'static Fields {
 const COMPRESS_ABOVE: usize = 1024;
 /// A batch is cut into packets of at most this many bytes of blocks, so
 /// no packet needs a size the 1.12 client can't read.
-const PACKET_LIMIT: usize = 24 * 1024;
+pub const PACKET_LIMIT: usize = 24 * 1024;
+
+/// One packet of `blocks` (none a create of a transport, at most
+/// [`PACKET_LIMIT`] bytes of them), framed as a batch's packet is:
+/// compressed past [`COMPRESS_ABOVE`].
+pub fn frame_blocks<'a>(blocks: impl IntoIterator<Item = &'a [u8]>) -> Arc<[u8]> {
+    let mut payload = Vec::with_capacity(4 * 1024);
+    payload.extend_from_slice(&[0; 5]);
+    let mut count = 0u32;
+    for b in blocks {
+        payload.extend_from_slice(b);
+        count += 1;
+    }
+    payload[..4].copy_from_slice(&count.to_le_bytes());
+    debug_assert!(payload.len() <= PACKET_LIMIT + 5);
+    frame_update(&payload)
+}
 
 /// One observer's blocks for one update, framed into packets by
 /// [`Batch::finish`].
@@ -539,6 +555,9 @@ impl Batch {
     /// than three an object: a hearth within a continent forgets and
     /// creates a thousand or more).
     pub fn settle_forgets(&mut self, forgets: &[(Guid, u32)], known: impl Fn(Guid) -> bool) {
+        if forgets.len() <= SMALL_FORGETS && self.forget.len() <= SMALL_FORGETS * 4 {
+            return self.settle_few(forgets, known);
+        }
         let wanted: ahash::AHashSet<Guid> = forgets.iter().map(|(g, _)| *g).collect();
         let mut spans: ahash::AHashMap<Guid, smallvec::SmallVec<[usize; 2]>> =
             ahash::AHashMap::with_capacity(forgets.len());
@@ -556,6 +575,40 @@ impl Batch {
             let creates = of.iter().filter(|&&i| is_create(i)).count() as i64;
             let now = i64::from(known(g));
             if now + i64::from(n) - creates > 0 && queued.insert(g) {
+                self.forget.push(g);
+            }
+            let last = if now == 1 {
+                of.iter().rev().copied().find(|&i| is_create(i))
+            } else {
+                None
+            };
+            for &i in of {
+                if last.is_none_or(|l| i < l) {
+                    self.spans[i].live = false;
+                }
+            }
+        }
+    }
+
+    /// [`Batch::settle_forgets`] for a few forgets (an update's for one
+    /// observer are mostly one or two: a spell's area gone), by looks
+    /// through them rather than sets and maps made for each observer.
+    fn settle_few(&mut self, forgets: &[(Guid, u32)], known: impl Fn(Guid) -> bool) {
+        let mut spans: smallvec::SmallVec<[smallvec::SmallVec<[usize; 2]>; SMALL_FORGETS]> =
+            smallvec::smallvec![smallvec::SmallVec::new(); forgets.len()];
+        for (i, s) in self.spans.iter().enumerate() {
+            if let Some(o) = s.object
+                && let Some(k) = forgets.iter().position(|(g, _)| *g == o)
+            {
+                spans[k].push(i);
+            }
+        }
+        for (k, &(g, n)) in forgets.iter().enumerate() {
+            let of = spans[k].as_slice();
+            let is_create = |i: usize| self.spans[i].live && self.spans[i].create;
+            let creates = of.iter().filter(|&&i| is_create(i)).count() as i64;
+            let now = i64::from(known(g));
+            if now + i64::from(n) - creates > 0 && !self.forget.contains(&g) {
                 self.forget.push(g);
             }
             let last = if now == 1 {
@@ -657,6 +710,10 @@ impl Batch {
     }
 }
 
+/// At most this many forgets for an observer are settled by looks rather
+/// than sets ([`Batch::settle_few`]).
+const SMALL_FORGETS: usize = 8;
+
 /// Past this many bytes of blocks, a packet may end after any block
 /// ([`Batch::packets`]).
 /// Small next to a packet, so that two batches cut alike soon after
@@ -716,6 +773,10 @@ pub struct SharedFrames {
 /// A packet's payload, and its frame.
 type Shared = (Vec<u8>, Arc<[u8]>);
 
+/// [`SharedFrames::finish_all`] frames its new packets across the pool
+/// from this many.
+const PARALLEL_FRAMES: usize = 8;
+
 /// What [`SharedFrames`] keeps at most before it starts afresh.
 const SHARED_LIMIT: usize = 64 * 1024 * 1024;
 
@@ -727,16 +788,25 @@ impl SharedFrames {
     }
 
     fn frame(&mut self, p: Packet) -> Arc<[u8]> {
-        if let Some(same) = self
-            .by_key
-            .get(&p.key)
-            .and_then(|v| v.iter().find(|(payload, _)| *payload == p.payload))
-        {
+        if let Some(same) = self.built_for(&p) {
             self.hits += 1;
-            return same.1.clone();
+            return same;
         }
         self.built += 1;
         let frame = frame_update(&p.payload);
+        self.keep(p, frame.clone());
+        frame
+    }
+
+    /// The frame built already for a packet like `p`.
+    fn built_for(&self, p: &Packet) -> Option<Arc<[u8]>> {
+        self.by_key
+            .get(&p.key)
+            .and_then(|v| v.iter().find(|(payload, _)| *payload == p.payload))
+            .map(|(_, f)| f.clone())
+    }
+
+    fn keep(&mut self, p: Packet, frame: Arc<[u8]>) {
         if self.bytes + p.payload.len() > SHARED_LIMIT {
             self.clear();
         }
@@ -744,8 +814,74 @@ impl SharedFrames {
         self.by_key
             .entry(p.key)
             .or_default()
-            .push((p.payload, frame.clone()));
-        frame
+            .push((p.payload, frame));
+    }
+
+    /// [`Batch::finish_shared`] for each of `batches`, in order, the
+    /// packets none had before framed (and compressed, most of the cost of
+    /// a crowd's creates) across `pool` if there are enough of them: each
+    /// is framed from its own bytes alone, so the frames are the ones the
+    /// map's thread would make.
+    pub fn finish_all(
+        &mut self,
+        batches: Vec<Batch>,
+        pool: Option<&rayon::ThreadPool>,
+    ) -> Vec<Vec<Arc<[u8]>>> {
+        enum Slot {
+            Ready(Arc<[u8]>),
+            New(usize),
+        }
+        let mut new: Vec<Packet> = Vec::new();
+        let mut new_by_key: ahash::AHashMap<u64, smallvec::SmallVec<[usize; 1]>> =
+            ahash::AHashMap::new();
+        let mut slots: Vec<Vec<Slot>> = Vec::with_capacity(batches.len());
+        for b in batches {
+            let mut of = Vec::new();
+            for p in b.packets() {
+                if let Some(f) = self.built_for(&p) {
+                    self.hits += 1;
+                    of.push(Slot::Ready(f));
+                    continue;
+                }
+                let same = new_by_key
+                    .get(&p.key)
+                    .and_then(|v| v.iter().copied().find(|&i| new[i].payload == p.payload));
+                match same {
+                    Some(i) => {
+                        self.hits += 1;
+                        of.push(Slot::New(i));
+                    }
+                    None => {
+                        new_by_key.entry(p.key).or_default().push(new.len());
+                        of.push(Slot::New(new.len()));
+                        new.push(p);
+                    }
+                }
+            }
+            slots.push(of);
+        }
+        self.built += new.len() as u64;
+        let frames: Vec<Arc<[u8]>> = match pool {
+            Some(pool) if new.len() >= PARALLEL_FRAMES => {
+                use rayon::prelude::*;
+                pool.install(|| new.par_iter().map(|p| frame_update(&p.payload)).collect())
+            }
+            _ => new.iter().map(|p| frame_update(&p.payload)).collect(),
+        };
+        for (p, f) in new.into_iter().zip(&frames) {
+            self.keep(p, f.clone());
+        }
+        slots
+            .into_iter()
+            .map(|of| {
+                of.into_iter()
+                    .map(|s| match s {
+                        Slot::Ready(f) => f,
+                        Slot::New(i) => frames[i].clone(),
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
 
@@ -1345,5 +1481,84 @@ mod tests {
                 ("create", vec![other]),
             ]
         );
+    }
+
+    /// Batches framed at once across a pool (`SharedFrames::finish_all`)
+    /// are framed as each alone on the map's thread: the same frames, in
+    /// the same order, those alike shared.
+    #[test]
+    fn batches_framed_across_a_pool_are_framed_as_one_by_one() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        // Blocks a crowd shares (a newcomer's creates), and some of each
+        // observer's own.
+        let common: Vec<Vec<u8>> = (0..300u32)
+            .map(|i| {
+                let mut b = vec![0u8];
+                b.extend_from_slice(&i.to_le_bytes());
+                b.extend((0..(20 + i % 300)).map(|k| (k * 7 + i) as u8));
+                b
+            })
+            .collect();
+        for round in 0..6 {
+            let make = |next: &mut dyn FnMut() -> u64| -> Vec<Batch> {
+                (0..60)
+                    .map(|o: u32| {
+                        let mut b = Batch::new();
+                        let skip = next() % 7;
+                        for (i, c) in common.iter().enumerate() {
+                            if !(i as u64 + skip).is_multiple_of(9) {
+                                b.push(c);
+                            }
+                        }
+                        let mut own = vec![0u8, 0xEE];
+                        own.extend_from_slice(&o.to_le_bytes());
+                        b.push(&own);
+                        if next().is_multiple_of(3) {
+                            b.forget(guid::player(o + 1));
+                        }
+                        b
+                    })
+                    .collect()
+            };
+            let mut s1 = seed_copy(&mut next);
+            let mut s2 = s1;
+            let one: Vec<Vec<Arc<[u8]>>> = {
+                let mut shared = SharedFrames::default();
+                make(&mut || step(&mut s1))
+                    .into_iter()
+                    .map(|b| b.finish_shared(&mut shared))
+                    .collect()
+            };
+            let mut shared = SharedFrames::default();
+            let all = shared.finish_all(make(&mut || step(&mut s2)), Some(&pool));
+            assert_eq!(one.len(), all.len(), "round {round}");
+            for (a, b) in one.iter().zip(&all) {
+                let a: Vec<&[u8]> = a.iter().map(|f| &f[..]).collect();
+                let b: Vec<&[u8]> = b.iter().map(|f| &f[..]).collect();
+                assert_eq!(a, b, "round {round}");
+            }
+            assert!(shared.hits > 0, "round {round}: some packets were shared");
+        }
+    }
+
+    fn seed_copy(next: &mut impl FnMut() -> u64) -> u64 {
+        next() | 1
+    }
+
+    fn step(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
     }
 }

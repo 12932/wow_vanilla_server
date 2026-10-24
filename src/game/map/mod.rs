@@ -104,6 +104,7 @@ pub mod trade;
 pub mod trade_spells;
 pub mod trinkets;
 pub mod ubrs_stadium;
+pub mod values;
 pub mod vendor;
 pub mod views;
 #[doc(hidden)]
@@ -570,6 +571,10 @@ pub struct Map {
     /// content: one sent alike to many (a crowd told of a newcomer, the
     /// crowd's creates for newcomers) is framed and compressed once.
     shared_frames: update::SharedFrames,
+    /// The update's values blocks told alike (`values`), and the packets
+    /// they were put in, to be sent after the batches.
+    pub(crate) shared_values: values::Shared,
+    shared_packets: values::Packets,
     pub stats: MapStats,
     /// How long the map keeps its players' movement before it sends it on
     /// ([`batch`]): its own, steered by its load.
@@ -680,6 +685,9 @@ pub struct Map {
     pub hyperspawn: hyperspawn::Hyperspawn,
     /// The clients held ([`Map::hold`]) until their creates go.
     pub holding: Vec<(Guid, crate::game::conn::Outbound)>,
+    /// In the update's steps before its visibility: those held that have
+    /// frames waiting are let go at each step's end ([`Map::let_go_waiting`]).
+    pub(crate) let_go_after_steps: bool,
     /// What came into the map (or was placed in it) since the update's
     /// visibility, near players ([`Map::hold_near`]).
     pub fresh: Vec<Guid>,
@@ -1394,6 +1402,8 @@ impl Map {
             batches: AHashMap::new(),
             create_cache: AHashMap::new(),
             shared_frames: update::SharedFrames::default(),
+            shared_values: values::Shared::default(),
+            shared_packets: Vec::new(),
             stats: MapStats::default(),
             started: now,
             now,
@@ -1437,6 +1447,7 @@ impl Map {
             objects: Default::default(),
             hyperspawn: Default::default(),
             holding: Vec::new(),
+            let_go_after_steps: false,
             fresh: Vec::new(),
             lost_sight: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
@@ -2076,7 +2087,10 @@ impl Map {
         let probe = bench_probe::enabled().then(bench_probe::start);
 
         // Each step under its own guard: one that panics costs itself,
-        // this once, and the rest (the flushes most of all) go on.
+        // this once, and the rest (the flushes most of all) go on. Up to
+        // visibility's, each lets go of the clients it held that have
+        // frames waiting (`Map::let_go_waiting`).
+        self.let_go_after_steps = true;
         self.step("players", Map::update_players);
         // The tiles read since the last update, for all that follows.
         self.step("tiles", tiles::update);
@@ -2120,6 +2134,7 @@ impl Map {
         self.step("cheer speakers", crate::game::cheer_speakers::update);
         self.step("necrotic camps", necrotic_camps::update);
         self.step("the dead", ai::update_dead);
+        self.let_go_after_steps = false;
         self.step("visibility", visibility::refresh_dirty);
         self.step("quest objects", quests::update_objects);
         self.step("forgets", Map::flush_forgets);
@@ -2204,14 +2219,25 @@ impl Map {
             return;
         };
         // Each forget took it from `known`, each create put it there.
-        let mut counts: ahash::AHashMap<Guid, usize> = ahash::AHashMap::with_capacity(guids.len());
-        let mut forgets: Vec<(Guid, u32)> = Vec::with_capacity(guids.len());
-        for &g in guids {
-            let i = *counts.entry(g).or_insert_with(|| {
-                forgets.push((g, 0));
-                forgets.len() - 1
-            });
-            forgets[i].1 += 1;
+        let mut forgets: smallvec::SmallVec<[(Guid, u32); 4]> = smallvec::SmallVec::new();
+        if guids.len() <= 16 {
+            // Mostly one or two: by looks, without a map.
+            for &g in guids {
+                match forgets.iter_mut().find(|(f, _)| *f == g) {
+                    Some(f) => f.1 += 1,
+                    None => forgets.push((g, 1)),
+                }
+            }
+        } else {
+            let mut counts: ahash::AHashMap<Guid, usize> =
+                ahash::AHashMap::with_capacity(guids.len());
+            for &g in guids {
+                let i = *counts.entry(g).or_insert_with(|| {
+                    forgets.push((g, 0));
+                    forgets.len() - 1
+                });
+                forgets[i].1 += 1;
+            }
         }
         let batch = self.batches.entry(observer).or_default();
         batch.settle_forgets(&forgets, |g| p.known.contains(&g));
@@ -2256,16 +2282,76 @@ impl Map {
     /// everyone. A client nothing waited for keeps its blocks for the one
     /// batch.
     fn release_held(&mut self) {
-        let held = Held(std::mem::take(&mut self.holding));
-        for (g, out) in &held.0 {
-            let first = if out.has_held() {
-                match self.batches.remove(g) {
-                    Some(b) => b.finish_shared(&mut self.shared_frames),
-                    None => Vec::new(),
-                }
+        let mut held = Held(std::mem::take(&mut self.holding));
+        // Those with frames waiting: their batches framed together, what
+        // none shares compressed across the visibility threads (a crowd
+        // held by a volley of spell areas has hundreds), then each let go
+        // in turn, its creates first.
+        let mut waiting: Vec<usize> = Vec::new();
+        let mut batches: Vec<Batch> = Vec::new();
+        for (k, (g, out)) in held.0.iter().enumerate() {
+            if out.has_held()
+                && let Some(b) = self.batches.remove(g)
+            {
+                waiting.push(k);
+                batches.push(b);
+            }
+        }
+        let pool = self.encode_pool();
+        let framed = self.shared_frames.finish_all(batches, pool);
+        let mut firsts: Vec<Vec<Arc<[u8]>>> = vec![Vec::new(); held.0.len()];
+        for (k, frames) in waiting.into_iter().zip(framed) {
+            firsts[k] = frames;
+        }
+        for ((_, out), first) in held.0.drain(..).zip(firsts) {
+            out.release(first);
+        }
+    }
+
+    /// The threads a crowd's packets are compressed on: visibility's
+    /// (`[visibility] refresh_threads`), or none.
+    fn encode_pool(&self) -> Option<&'static rayon::ThreadPool> {
+        let threads = self.cfg.visibility_threads;
+        (threads != 1).then(|| visibility::pool(threads)).flatten()
+    }
+
+    /// After one of the update's steps before its visibility: a client the
+    /// step held (a stealthed pet striking from its prowl, seen by a crowd
+    /// at once) that has frames waiting gets its forgets and creates now,
+    /// then what waited, as it would at the "held" step, rather than
+    /// having every broadcast of the update's later steps copied into its
+    /// hold one by one (a crowd of 1,600 held through a pets' step: 50,000
+    /// frames, 40 ms each way). Each client's packets come in the same
+    /// order: its creates before anything naming what they create. One
+    /// with nothing waiting stays held, its blocks for the update's one
+    /// batch, as at the "held" step; and none goes while something put in
+    /// the map waits for the update's visibility (`fresh`), as those held
+    /// near it wait for its create.
+    pub(crate) fn let_go_waiting(&mut self) {
+        if self.holding.is_empty() || !self.fresh.is_empty() {
+            return;
+        }
+        let _z = crate::zone!("held after a step");
+        let mut kept = Vec::new();
+        let mut going = Held(Vec::new());
+        for (g, out) in std::mem::take(&mut self.holding) {
+            if out.has_held() {
+                going.0.push((g, out));
             } else {
-                Vec::new()
-            };
+                kept.push((g, out));
+            }
+        }
+        self.holding = kept;
+        let mut batches: Vec<Batch> = Vec::with_capacity(going.0.len());
+        for (g, _) in &going.0 {
+            if let Some(guids) = self.forget.remove(g) {
+                self.settle_forgets(*g, &guids);
+            }
+            batches.push(self.batches.remove(g).unwrap_or_default());
+        }
+        let pool = self.encode_pool();
+        let framed = self.shared_frames.finish_all(batches, pool);
+        for ((_, out), first) in going.0.drain(..).zip(framed) {
             out.release(first);
         }
     }
@@ -2300,6 +2386,8 @@ impl Map {
                 visibility::refresh(self, g);
             }
         }
+        let z = crate::zone!("after events: let go");
+        z.value(self.holding.len() as u64);
         let mut pending = Held(std::mem::take(&mut self.holding));
         while let Some((g, out)) = pending.0.pop() {
             if waiting.contains(&g) {
@@ -2331,7 +2419,11 @@ impl Map {
     }
 
     fn flush_values(&mut self) {
+        self.shared_values.clear();
+        self.shared_packets.clear();
         let batches = &mut self.batches;
+        let shared = &mut self.shared_values;
+        let table = &self.clients;
         let realm = &self.realm;
         let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
@@ -2362,7 +2454,7 @@ impl Map {
                 } else {
                     Vec::new()
                 };
-                p.views_told = views::tell_player(batches, p, &mates);
+                p.views_told = views::tell_player(batches, shared, table, p, &mates);
             } else {
                 p.views_told = views::Viewers::of_player(p);
             }
@@ -2385,9 +2477,7 @@ impl Map {
             if !o.observers.is_empty()
                 && let Some(block) = update::values_block(o.guid, &o.fields, Visibility::Public)
             {
-                for p in &o.observers {
-                    batches.entry(*p).or_default().push(&block);
-                }
+                shared.tell(o.guid, None, o.cell, block, o.observers.clients(table));
             }
             o.fields.clear_dirty();
         }
@@ -2408,22 +2498,42 @@ impl Map {
             c.views_told = if c.observers.is_empty() {
                 views::Viewers::of_creature(c)
             } else {
-                views::tell_creature(realm, batches, c, tap_changed)
+                views::tell_creature(realm, batches, shared, table, c, tap_changed)
             };
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
         drop(z);
+        // The blocks told alike, in packets shared among their observers;
+        // the rest of them into batches, before those are framed.
+        self.shared_packets = self.shared_values.plan(&self.clients, &mut self.batches);
     }
 
     fn flush_batches(&mut self) {
+        // Each client's batch framed, what none shares compressed across
+        // the visibility threads (a crowd's creates); then sent, each
+        // client's in its order.
+        let mut to: Vec<Guid> = Vec::with_capacity(self.batches.len());
+        let mut batches: Vec<Batch> = Vec::with_capacity(self.batches.len());
         for (guid, batch) in self.batches.drain() {
+            if self.players.contains_key(&guid) {
+                to.push(guid);
+                batches.push(batch);
+            }
+        }
+        let pool = self.encode_pool();
+        let framed = self.shared_frames.finish_all(batches, pool);
+        for (guid, frames) in to.into_iter().zip(framed) {
             let Some(p) = self.players.get(&guid) else {
                 continue;
             };
-            for frame in batch.finish_shared(&mut self.shared_frames) {
+            for frame in frames {
                 p.outbound.send_frame(frame);
             }
+        }
+        // After each client's own: what it has of the values told alike.
+        for (frame, to) in std::mem::take(&mut self.shared_packets) {
+            self.broadcast(&frame, &to);
         }
     }
 

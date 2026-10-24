@@ -1,6 +1,6 @@
 [package]
 name = "wow_vanilla_server"
-version = "0.1.128"
+version = "0.1.129"
 edition = "2024"
 default-run = "wow_vanilla_server"
 
@@ -146,6 +146,22 @@ harness = false
 # crowd`, docs/PERFORMANCE.md). It reads the maps' probe, so the feature.
 [[bench]]
 name = "crowd"
+harness = false
+required-features = ["world-bench"]
+
+# The update's values in a crowd of 100 to 3,000 in sight of each other:
+# shared packets against each block into every observer's batch (`cargo
+# bench --bench values`, docs/PERFORMANCE.md).
+[[bench]]
+name = "values"
+harness = false
+
+# A faction battle in one spot, through the real sessions and map: N Horde
+# against N Alliance at level 60 in Hillsbrad, moving, casting and swinging,
+# the update's steps measured (`cargo bench --features world-bench --bench
+# battle`, docs/PERFORMANCE.md). Needs the real world (WVS_DATA).
+[[bench]]
+name = "battle"
 harness = false
 required-features = ["world-bench"]
 

@@ -116,6 +116,8 @@ mod tests_cooldowns;
 #[cfg(test)]
 mod tests_creatures4;
 #[cfg(test)]
+mod tests_crowd_values;
+#[cfg(test)]
 mod tests_dead_body;
 #[cfg(test)]
 mod tests_elites;
@@ -143,6 +145,8 @@ mod tests_gm_durability;
 mod tests_gm_ready;
 #[cfg(test)]
 mod tests_guards;
+#[cfg(test)]
+mod tests_held_steps;
 #[cfg(test)]
 mod tests_hyperspawn;
 #[cfg(test)]

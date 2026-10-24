@@ -47,7 +47,7 @@
 
 use std::collections::VecDeque;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ahash::AHashMap;
 use rayon::prelude::*;
@@ -71,8 +71,14 @@ pub const STEALTH_THRESHOLD: f32 = 2.0;
 /// marks it, so that one marked is taken whole only if it goes on a long
 /// way (a charge, a refresh put off by the budget) before its refresh.
 pub const DRIFT: f32 = 2.0 * MOVE_THRESHOLD;
-/// The refreshes worked out together, and between looks at the budget.
+/// The refreshes worked out together, and between looks at the budget:
+/// at most this many ...
 const CHUNK: usize = 128;
+/// ... and at least this many, a chunk being as many as what is left of
+/// the budget has room for at what a refresh cost in the last (a crowd
+/// coming into another's sight introduces hundreds of pairs a refresh,
+/// and a chunk of 128 such took 30 to 60 ms).
+const MIN_CHUNK: usize = 16;
 /// Fewer in a chunk than this are worked out on the map's thread alone.
 const PARALLEL_FROM: usize = 16;
 
@@ -100,6 +106,9 @@ pub struct Dirty {
     /// tests and the benchmark measure it against.
     #[doc(hidden)]
     pub one_by_one: bool,
+    /// What a refresh cost in the last chunk worked out: the next chunk's
+    /// size, against the budget.
+    per_refresh: Duration,
     /// Since the map began: the pairs the quick path skipped without a
     /// look, and those looked at.
     pub skipped: u64,
@@ -368,9 +377,12 @@ pub fn refresh_dirty(map: &mut Map) {
     let mut done = 0;
     loop {
         let one_by_one = map.visibility_dirty.one_by_one;
-        let mut chunk = map
-            .visibility_dirty
-            .take(if one_by_one { 1 } else { CHUNK }, last);
+        let size = if one_by_one {
+            1
+        } else {
+            chunk_size(budget, started.elapsed(), map.visibility_dirty.per_refresh)
+        };
+        let mut chunk = map.visibility_dirty.take(size, last);
         if chunk.is_empty() {
             break;
         }
@@ -378,12 +390,27 @@ pub fn refresh_dirty(map: &mut Map) {
             chunk[0].1 = Kind::Full;
         }
         done += chunk.len();
+        let began = Instant::now();
         run(map, &chunk);
+        map.visibility_dirty.per_refresh = began.elapsed() / chunk.len() as u32;
         if started.elapsed() >= budget {
             break;
         }
     }
     z.value(done as u64);
+}
+
+/// A chunk's size: what is left of `budget` after `spent`, at `per` a
+/// refresh, between [`MIN_CHUNK`] and [`CHUNK`]. A budget of nothing is a
+/// whole chunk an update.
+fn chunk_size(budget: Duration, spent: Duration, per: Duration) -> usize {
+    if budget.is_zero() || per.is_zero() {
+        return CHUNK;
+    }
+    let left = budget.saturating_sub(spent).as_nanos();
+    usize::try_from(left / per.as_nanos())
+        .unwrap_or(CHUNK)
+        .clamp(MIN_CHUNK, CHUNK)
 }
 
 /// Who should know `object` now, and, if it is a player, what it should
@@ -987,5 +1014,26 @@ pub fn send_self(map: &mut Map, guid: Guid) {
     p.fields.clear_dirty();
     for item in &mut p.items {
         item.fields.clear_dirty();
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    /// A chunk is as many refreshes as the budget left has room for, at
+    /// what one cost, between the least and the most; with no budget, or
+    /// no cost known, a whole chunk.
+    #[test]
+    fn a_chunk_is_sized_to_the_budget_left() {
+        let ms = Duration::from_millis;
+        let us = Duration::from_micros;
+        assert_eq!(chunk_size(ms(10), ms(0), Duration::ZERO), CHUNK);
+        assert_eq!(chunk_size(Duration::ZERO, ms(0), us(500)), CHUNK);
+        assert_eq!(chunk_size(ms(10), ms(0), us(10)), CHUNK);
+        assert_eq!(chunk_size(ms(10), ms(0), us(200)), 50);
+        assert_eq!(chunk_size(ms(10), ms(6), us(100)), 40);
+        assert_eq!(chunk_size(ms(10), ms(0), ms(2)), MIN_CHUNK);
+        assert_eq!(chunk_size(ms(10), ms(12), us(100)), MIN_CHUNK);
     }
 }

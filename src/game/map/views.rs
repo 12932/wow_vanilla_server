@@ -24,7 +24,9 @@ use crate::game::map::Map;
 use crate::game::map::auras::{AURA_EMPATHY, AURA_MOD_STALKED, Auras, DYNFLAG_TRACK_UNIT};
 use crate::game::map::creature::Creature;
 use crate::game::map::loot::DYNFLAG_LOOTABLE;
+use crate::game::map::observers::ClientTable;
 use crate::game::map::player::Player;
+use crate::game::map::values::Shared;
 use crate::game::update::{self, Batch};
 
 /// Those who see a unit otherwise than a stranger does, but for its tap.
@@ -338,6 +340,8 @@ fn tell_each(
 pub fn tell_creature(
     realm: &Realm,
     batches: &mut AHashMap<Guid, Batch>,
+    shared: &mut Shared,
+    table: &ClientTable,
     c: &Creature,
     tap_changed: bool,
 ) -> Viewers {
@@ -352,10 +356,9 @@ pub fn tell_creature(
         || ((viewers.master.is_some() || !viewers.empathic.is_empty())
             && owner_only_dirty(&c.fields));
     if !personal {
+        // The one block for all, shared among them (`values`).
         if let Some(b) = update::values_block(c.guid, &c.fields, Visibility::Public) {
-            for o in &c.observers {
-                batches.entry(*o).or_default().push(&b);
-            }
+            shared.tell(c.guid, None, c.cell, b, c.observers.clients(table));
         }
         return viewers;
     }
@@ -393,7 +396,13 @@ fn owner_only_dirty(f: &Fields) -> bool {
 /// group's members when a quest log id changed: each's own view of their
 /// tracking flag in them. The markers they were told by are
 /// `p.views_told`; the ones now come back.
-pub fn tell_player(batches: &mut AHashMap<Guid, Batch>, p: &Player, mates: &[Guid]) -> Viewers {
+pub fn tell_player(
+    batches: &mut AHashMap<Guid, Batch>,
+    shared: &mut Shared,
+    table: &ClientTable,
+    p: &Player,
+    mates: &[Guid],
+) -> Viewers {
     let viewers = Viewers::of_player(p);
     let group = !mates.is_empty();
     let told = viewers != p.views_told;
@@ -403,13 +412,23 @@ pub fn tell_player(batches: &mut AHashMap<Guid, Batch>, p: &Player, mates: &[Gui
         let grouped = group
             .then(|| update::values_block(p.guid, &p.fields, Visibility::Group))
             .flatten();
-        for o in &p.observers {
-            let b = if mates.contains(o) {
-                grouped.as_ref()
-            } else {
-                public.as_ref()
-            };
-            if let Some(b) = b {
+        // The public block shared among those who get it (`values`); the
+        // group's, to each of its members who sees them.
+        if let Some(b) = public {
+            let mut to = p.observers.clients(table);
+            if group {
+                let mut but = (*to).clone();
+                for m in mates {
+                    if let Some(i) = table.get(*m) {
+                        but.remove(i);
+                    }
+                }
+                to = std::sync::Arc::new(but);
+            }
+            shared.tell(p.guid, table.get(p.guid), p.cell, b, to);
+        }
+        if let Some(b) = &grouped {
+            for o in mates.iter().filter(|m| p.observers.contains(*m)) {
                 batches.entry(*o).or_default().push(b);
             }
         }
