@@ -1,6 +1,6 @@
 //! Spirit of Redemption, as Thistle Tea's `Entity` and aura scripts run it:
 //! a priest with the talent who would die becomes a spirit instead, at full
-//! health and mana, rooted and unattackable, free to heal for fifteen
+//! health and mana, rooted and unattackable, free to heal for ten
 //! seconds; then the spirit's end kills them.
 
 use wow_world_messages::Guid;
@@ -13,7 +13,7 @@ pub const TALENT: u32 = 20711;
 pub const FORM: u32 = 27827;
 pub const STATE: [u32; 2] = [27792, 27795];
 pub const SUICIDE: u32 = 27965;
-pub const DURATION_MS: u32 = 15_000;
+pub const DURATION_MS: u32 = 10_000;
 
 /// Whether `g` is a spirit of redemption.
 pub fn spirit(map: &Map, g: Guid) -> bool {

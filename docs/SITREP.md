@@ -302,6 +302,31 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     - **The raid tells its bots each other's parts** (tank, healer): a leader would, in 1.12. Without it, healers'
       rotation counted no healers and soulstones went to Balance druids.
     - **Five potions each**, topped up before every attempt.
+  - **Your answers (2026-10-24):** seven tanks, the moonkin's 12%, no buffing in a fight, parts told to bots and
+    five potions: kept. Damage dealers also get a level-appropriate healthstone (your ask; under way in round four).
+    Soulstones: the raid tells its bots each other's talents, so only priests with Spirit of Redemption are
+    skipped (under way in round four). Nobody leaves a boss fight to drink: kept.
+- **Alterac Valley, round four** (peon 0.1.27; 22 decisions in peon's BOT_AI):
+  - **Result:** Drek'Thar killed **9 times in 10 at 40** (default gear and skill, your roster, seven tanks, the
+    tuned mean held fixed): the goal met. Shrunk: 38 and 36 hold (7 in 10 each), 34 doesn't (2 of 5 on one seed).
+    The smallest reliable raid is **36**.
+  - **The biggest fix was a bug of mine:** round three's "no buffing in a fight" dropped a buff after the brain
+    chose it, and it still took the global cooldown. Warrior tanks chose Battle Shout about 120 times an attempt,
+    sat on full rage and did 30–50 dps. Fixed, it alone took kills from 1 in 10 to 6 in 10.
+  - **Then:** off-tanks pair with adds nearest first, splashers first; drag spots held unless clearly better; weak
+    adds (his wolves) taken last; Shield Wall when the boss enrages; Shout and Roar as one demoralize; healthstones;
+    talents told to the raid for soulstones.
+  - **Calls I made, for you:**
+    - **Healthstones for tanks and healers too, on by default** (you asked for damage dealers): at 36, 7 kills in 10
+      against 4 with damage dealers only.
+    - **Seven tanks at every size:** six at 36 killed him once in 10.
+    - **The raid shrinks from the roster's end** (38 drops seats 38 and 39), so the class mix shifts slightly.
+  - **Spirit of Redemption lasts the client's 10 s** (your call, 2026-10-24; decision 99), not Thistle Tea's 15.
+  - **What's left:** the warmasters kill about twice as many raiders as Drek'Thar (Charges on healers, Whirlwinds
+    in the melee); below 36 the fight from his 30% runs longer than his tanks live.
+- **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
+- **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
+  (your call, 2026-10-24).
 - **The talent plan, phase 4 (verified):**
   - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
     never fires;
@@ -327,11 +352,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     weapons by build. Fury 170 to 210 dps and Arms 143 to 192 in raid gear.
   - Still mid-pack, from the setting, not bugs: rage-starved without raid buffs, and `.gear raid` gives warriors tank
     tier sets with no hit.
-  - **Your calls:**
-    - rage on a dodge or parry: wvs gives 75% as Thistle Tea does, mangos none;
-    - weapon skill above 300 against a boss's crit: wvs ignores it as vmangos does, mangos counts it;
-    - should Bloodthirst and Mortal Strike stay above Whirlwind? At this attack power Whirlwind does more per rage;
-    - should `.gear raid` pick damage pieces with hit for damage warriors?
+  - **Your calls (answered 2026-10-24):**
+    - rage on a dodge or parry: **none, as mangos** (was 75%, Thistle Tea's); under way, `fix/warrior-calls`;
+    - weapon skill above 300 against a boss's crit: **ignored, as vmangos** (kept);
+    - Bloodthirst and Mortal Strike stay above Whirlwind: **agreed**;
+    - `.gear raid` picks damage pieces with hit for damage warriors: **yes**; under way, `fix/warrior-calls`, with
+      the other damage specs checked for the same gap.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
