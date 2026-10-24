@@ -2478,6 +2478,10 @@ fn evade(map: &mut Map, g: Guid) {
     c.threat.clear();
     c.suppressed.clear();
     c.combat = Default::default();
+    // Its fight over: the next is a new one, its aggro events with it
+    // (vmangos's `CreatureEventAI::EnterCombat` on each), however it is
+    // pulled; a blow puts it in combat before it hears of the attacker.
+    c.combat_start = None;
     c.caster = Default::default();
     crate::game::map::tap::clear(c);
     c.chase_target_at = None;
