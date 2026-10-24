@@ -283,7 +283,7 @@ impl Roll {
         )
     }
 
-    fn sitting_crit(&self) -> bool {
+    pub fn sitting_crit(&self) -> bool {
         self.victim_is_player
             && !self.standing
             && self.can_crit
@@ -2234,12 +2234,12 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
             outcome,
             Outcome::Hit | Outcome::Crit | Outcome::Glancing | Outcome::Crushing | Outcome::Block
         );
+    // Rage comes only from damage dealt: a missed, dodged or parried swing
+    // gives none (mangos-classic's `Unit::DealDamage`, which calls
+    // `Player::RewardRage` with the damage done; decision 98, over Thistle
+    // Tea's three quarters).
     if landed && damage > 0 {
         gain_rage(map, attacker, damage, false);
-    }
-    // A dodged or parried blow still gives three quarters of its rage.
-    if matches!(outcome, Outcome::Dodge | Outcome::Parry) {
-        gain_rage(map, attacker, mitigated * 3 / 4, false);
     }
     // A blow on the immune trains nothing (Thistle Tea's `CombatSkills`).
     if !immune {
@@ -2951,33 +2951,27 @@ pub fn grant_extra_attacks(map: &mut Map, g: Guid, spell: u32, count: u32) {
     c.extra_attacks = count;
 }
 
-/// Thistle Tea's `AttackFeedback`: an ability that pays rage or energy and
-/// discounts its power on a miss gives back 82% of what it cost when it is
-/// avoided: rage on a dodge or parry, energy on a miss, dodge, parry or
-/// immunity.
+/// mangos-classic's `Spell::finish`: an ability with
+/// `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS` that misses, is dodged, parried or
+/// deflected gives back 80% of what it cost, truncated, in its own power
+/// (`ModifyPower(powerType, int32(float(m_powerCost) * 0.8f))`). Nothing on
+/// an immunity, a block, a resist, an evade or a reflect. Overpower and
+/// Execute carry the attribute, so they are refunded too (Execute its base
+/// cost: the rage it spends beyond that goes in its effect, which an avoided
+/// strike never reaches). Decision 98, over Thistle Tea's 82%.
 pub fn ability_avoided(map: &mut Map, caster: Guid, spell: u32, outcome_ex: u32, cost: u32) {
-    let refundable = map.realm.data.spells.get(spell).is_some_and(|s| {
-        s.attr(1, crate::game::data::spells::ATTR_EX_DISCOUNT_POWER_ON_MISS)
-            && match s.power_type {
-                1 => outcome_ex & (procs::EX_DODGE | procs::EX_PARRY) != 0,
-                3 => {
-                    outcome_ex
-                        & (procs::EX_MISS | procs::EX_DODGE | procs::EX_PARRY | procs::EX_IMMUNE)
-                        != 0
-                }
-                _ => false,
-            }
-    });
-    if !refundable {
+    const AVOIDED: u32 = procs::EX_MISS | procs::EX_DODGE | procs::EX_PARRY | procs::EX_DEFLECT;
+    let Some(s) = map.realm.data.spells.get(spell) else {
+        return;
+    };
+    if !s.attr(1, crate::game::data::spells::ATTR_EX_DISCOUNT_POWER_ON_MISS)
+        || outcome_ex & AVOIDED == 0
+        || s.power_type > 4
+    {
         return;
     }
-    let power = map
-        .realm
-        .data
-        .spells
-        .get(spell)
-        .map_or(0, |s| s.power_type.min(4) as u16);
-    let refund = (cost as f32 * 0.82).round() as u32;
+    let power = s.power_type as u16;
+    let refund = cost * 4 / 5;
     if let Some(f) = map.unit_fields_mut(caster) {
         let max = f.get_u32(UNIT_FIELD_MAXPOWER1 + power);
         let now = f.get_u32(UNIT_FIELD_POWER1 + power);

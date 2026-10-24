@@ -316,7 +316,7 @@ fn apply(
 #[tokio::test]
 async fn avoided_blows_and_abilities_give_power_back() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;
-    let (rage_back, no_refund, energy_back) = map
+    let (rage_back, after_miss, energy_back) = map
         .query(move |m| {
             m.players
                 .get_mut(&ga)
@@ -325,24 +325,24 @@ async fn avoided_blows_and_abilities_give_power_back() {
                 .set_u32(UNIT_FIELD_POWER1 + 1, 0);
             combat::ability_avoided(m, ga, STRIKE, procs::EX_DODGE, 150);
             let rage_back = power(m, ga, 1);
-            // A miss gives rage abilities nothing.
+            // A miss refunds rage too (mangos-classic's `Spell::finish`).
             combat::ability_avoided(m, ga, STRIKE, procs::EX_MISS, 150);
-            let no_refund = power(m, ga, 1) == rage_back;
+            let after_miss = power(m, ga, 1);
             let p = m.players.get_mut(&ga).unwrap();
             p.fields.set_u32(UNIT_FIELD_MAXPOWER1 + 3, 100);
             p.fields.set_u32(UNIT_FIELD_POWER1 + 3, 0);
             combat::ability_avoided(m, ga, SHIV, procs::EX_MISS, 40);
-            (rage_back, no_refund, power(m, ga, 3))
+            (rage_back, after_miss, power(m, ga, 3))
         })
         .await
         .unwrap();
-    assert_eq!(rage_back, 123, "82% of 150");
-    assert!(no_refund);
-    assert_eq!(energy_back, 33, "82% of 40");
+    assert_eq!(rage_back, 120, "80% of 150");
+    assert_eq!(after_miss, 240, "80% of 150 again");
+    assert_eq!(energy_back, 32, "80% of 40");
 }
 
 #[tokio::test]
-async fn a_dodged_swing_still_gives_rage() {
+async fn a_dodged_swing_gives_no_rage() {
     let (_realm, mut a, ga, map) = setup(Class::Warrior).await;
     let target = unit(DUMMY);
     map.query(move |m| {
@@ -358,8 +358,10 @@ async fn a_dodged_swing_still_gives_rage() {
         b.len() > 20
     })
     .await;
+    // mangos-classic's `Unit::DealDamage`: rage only from damage dealt
+    // (decision 98).
     let rage = map.query(move |m| power(m, ga, 1)).await.unwrap();
-    assert!(rage > 0, "{rage}");
+    assert_eq!(rage, 0);
 }
 
 #[tokio::test]

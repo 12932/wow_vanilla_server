@@ -397,14 +397,15 @@ async fn a_spells_cost_goes_by_its_rank_then_its_modifiers_in_order() {
     assert_eq!(cheap, (2, 0), "2.7 truncated; scaled below nothing");
 }
 
-/// An ability kept off by an immunity gives back 82% of what was paid for
-/// it: of the cost a charged modifier cut, which is spent; nothing when a
-/// modifier made it free, nor for a triggered one, which paid nothing. One
-/// with two effects gives back once and adds no combo point. A finisher
-/// without the attribute gives nothing back, and keeps its combo points
-/// (Thistle Tea's paid cast feedback and `AttackFeedback`; mangos's
-/// `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS` and its combo points kept on a
-/// miss).
+/// A dodged ability gives back 80% of what was paid for it, truncated
+/// (mangos-classic's `Spell::finish`, decision 98): of the cost a charged
+/// modifier cut, which is spent; nothing when a modifier made it free, nor
+/// for a triggered one, which paid nothing. One with two effects gives back
+/// once and adds no combo point. A finisher without the attribute gives
+/// nothing back, and keeps its combo points (Thistle Tea's paid cast
+/// feedback; mangos's `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS` and its combo
+/// points kept on a miss). An immunity gives nothing back in mangos, so a
+/// dodge stands in for Thistle Tea's.
 #[tokio::test]
 async fn an_avoided_ability_gives_back_what_was_paid() {
     let realm = fast_realm(rogue);
@@ -416,7 +417,10 @@ async fn an_avoided_ability_gives_back_what_was_paid() {
                 f.set_u32(UNIT_FIELD_MAXPOWER1 + 3, 100);
             }
             let kobold = kit::dummy(m, a, 60, 2.0);
-            kit::apply(m, kobold, kobold, SHIELD);
+            if let Some(p) = m.players.get_mut(&a) {
+                p.derived.hit = 100.0;
+            }
+            m.creature_mut(kobold).unwrap().derived.dodge = 100.0;
             let mut energy = Vec::new();
             let mut strike =
                 |m: &mut crate::game::map::Map, spell: u32, from: u32, aura: Option<u32>| {
@@ -450,12 +454,12 @@ async fn an_avoided_ability_gives_back_what_was_paid() {
     let (energy, thrift_left, free_left, triggered, points, kept) = out;
     assert_eq!(
         energy,
-        [93, 50, 92, 65],
-        "40 paid, 33 back; free; 45 paid, 37 back once; a finisher's 35 kept"
+        [92, 50, 91, 65],
+        "40 paid, 32 back; free; 45 paid, 36 back once; a finisher's 35 kept"
     );
     assert!(!thrift_left && !free_left, "the charges spent");
     assert_eq!(triggered, 50, "a triggered strike paid nothing");
-    assert_eq!(points, Some(0), "no combo point on an immune target");
+    assert_eq!(points, Some(0), "no combo point for a dodged strike");
     assert_eq!(kept, Some((5, true)), "the finisher keeps its points");
 }
 

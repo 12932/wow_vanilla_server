@@ -69,7 +69,7 @@ memory guard's timings settings; a knockback's flight ends at its arc; an unackn
   takes their ground areas, traps and harmful auras on others, unsummons their totems and guardians, and stands the
   pet down (it keeps the stance saved); a creature respawned or despawned takes with it what was on its way to or
   from it, so a respawned one (the same GUID) is never hit by a bolt cast at its old life.
-- **A crowd's update packets** (decision 100, your goal of 800 a side in one spot): a block a crowd of 8 or more
+- **A crowd's update packets** (decision 102, your goal of 800 a side in one spot): a block a crowd of 8 or more
   gets alike comes in packets shared among it, after each client's own batch, where mangos sends each client one
   packet of everything (the same blocks, each once); a crowd's creates are compressed on visibility's threads
   (`[visibility] refresh_threads`, no key of its own); visibility's chunk is sized to its budget (16 to 128
@@ -308,6 +308,77 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     - **The raid tells its bots each other's parts** (tank, healer): a leader would, in 1.12. Without it, healers'
       rotation counted no healers and soulstones went to Balance druids.
     - **Five potions each**, topped up before every attempt.
+  - **Your answers (2026-10-24):** seven tanks, the moonkin's 12%, no buffing in a fight, parts told to bots and
+    five potions: kept. Damage dealers also get a level-appropriate healthstone (your ask; under way in round four).
+    Soulstones: the raid tells its bots each other's talents, so only priests with Spirit of Redemption are
+    skipped (under way in round four). Nobody leaves a boss fight to drink: kept.
+- **Alterac Valley, round four** (peon 0.1.27; 22 decisions in peon's BOT_AI):
+  - **Result:** Drek'Thar killed **9 times in 10 at 40** (default gear and skill, your roster, seven tanks, the
+    tuned mean held fixed): the goal met. Shrunk: 38 and 36 hold (7 in 10 each), 34 doesn't (2 of 5 on one seed).
+    The smallest reliable raid is **36**.
+  - **The biggest fix was a bug of mine:** round three's "no buffing in a fight" dropped a buff after the brain
+    chose it, and it still took the global cooldown. Warrior tanks chose Battle Shout about 120 times an attempt,
+    sat on full rage and did 30–50 dps. Fixed, it alone took kills from 1 in 10 to 6 in 10.
+  - **Then:** off-tanks pair with adds nearest first, splashers first; drag spots held unless clearly better; weak
+    adds (his wolves) taken last; Shield Wall when the boss enrages; Shout and Roar as one demoralize; healthstones;
+    talents told to the raid for soulstones.
+  - **Calls I made, for you:**
+    - **Healthstones for tanks and healers too, on by default** (you asked for damage dealers): at 36, 7 kills in 10
+      against 4 with damage dealers only.
+    - **Seven tanks at every size:** six at 36 killed him once in 10.
+    - **The raid shrinks from the roster's end** (38 drops seats 38 and 39), so the class mix shifts slightly.
+  - **Spirit of Redemption lasts the client's 10 s** (your call, 2026-10-24; decision 99), not Thistle Tea's 15.
+  - **What's left:** the warmasters kill about twice as many raiders as Drek'Thar (Charges on healers, Whirlwinds
+    in the melee); below 36 the fight from his 30% runs longer than his tanks live.
+- **Warriors' calls, done** (wvs 0.1.127, decision 98): no rage from a missed, dodged or parried swing; an avoided
+  ability gives back 80% of its cost, any power, as mangos-classic's `Spell::finish` (Overpower and Execute too;
+  Whirlwind and Cleave nothing). `.gear raid` dresses weapon damage dealers (warriors, rogues, hunters, Retribution,
+  Enhancement, Feral damage) in their tier's boss loot, weighted toward the 9% hit cap: tier 2 reaches 6–12% hit
+  against 0–3% from the tier sets. Tanks, healers and casters keep their sets.
+  - **Made without you:** damage dealers' `.gear raid` no longer takes AQ40 epics (the old fill took any epic to level
+    60); Execute's refund rolls with its strike, where mangos rolls its dummy separately.
+- **Rogues and the damage harness** (peon 0.1.28, wvs decision 100):
+  - **`peon run dps`:** any class and build on a tanked level 63 dummy, several side by side, with buffs, facing and
+    downtime options; reports dps with a 95% interval, each ability's outcomes, resource waste, uptimes, the hit table
+    against mangos-classic's. A new class is a data entry (`dps/dps.toml`), not code.
+  - **Single-target, rogues are fine:** about 260 dps in raid gear, second to Fire mages (about 300), ahead of Fury
+    (about 187), inside the expected range.
+  - **A server bug, for every class:** an ability rolled the whole hit table again for its crit, so miss and dodge
+    came off its crit chance twice (Sinister Strike crit 11.8% of hits for 13.6%). Now one roll past the hit, as
+    mangos-classic.
+  - **In AV they die to Whirlwinds:** Drek'Thar's and the warmasters' (tanked within 8 yd of his back), 40–55% of a
+    rogue's health a tick. Evasion and Vanish now fire in raids; the rest is tactics, passed to round five.
+  - **Calls for you:**
+    - Combat's weapon in default `.gear`: daggers or swords? Equal in raid gear; daggers won one run of two in
+      greens. I'd leave it as is (swords for Combat Swords, daggers for daggers builds).
+    - Combat never casts Eviscerate: Slice and Dice takes every combo point, worth the same per point (185 vs 188).
+      I'd keep it.
+    - Feint on cooldown in a 5-player party (about 5% of a rogue's damage), none in raids (it cut their damage there
+      with no fewer deaths). I'd keep it.
+    - The expected ranges are worked out from wvs's ideal rotation, not a real 1.12 log; a log would be better.
+- **A flight master's guardians, two at a time** (your report, decision 101):
+  - **Fixed, as vmangos:** gryphons and wyverns now go when their fight ends (they never despawned). A creature
+    pulled again by a blow now runs its aggro events (an evade left its last fight's start behind).
+  - **Made without you, for your rule:** vmangos summons two more at every pull. Its felbats and hippogryphs last
+    30 s past a fight, so a quick pull again gives four. Now a once-a-fight event calls no more than one firing
+    brings; the ones still alive rejoin the fight instead. This applies to every creature, not only flight masters.
+    The alternative is vmangos's: up to four for 30 s.
+- **Bots' movement** (your reports; peon 0.1.29, 18 decisions in peon's BOT_AI "Movement"):
+  - **Hunters chasing Drek'Thar:** a hunter closed in past 28 yd (its shots reach 35), so every tank's pull across the
+    room took the hunters along. Now it closes only past 34 yd, to 30. Hunters ran 125 yd an attempt, now 45; time
+    moving 26% to 11%.
+  - **The hunter circling outside the keep:** after `.ready load` the bots still remembered the last attempt's
+    splash, so ranged bots stepped apart on the way in and were sent back, over and over. A reset now forgets the last
+    fight (not what was learned about creature kinds) and the walker's route; nobody steps apart on the march in.
+  - **Jitter:** no hysteresis anywhere (a step stopped on the edge it crossed and restarted); short hops took the
+    navmesh's wide corridors' wander; the all-in and the brain undid each other's moves; re-facing before nearly
+    every cast. Fixed: reversals 8.2 to 6.4 a minute (hunters 10.3 to 1.6), stops and starts 47 to 34.
+  - Kills at 40 unchanged or better (9 to 10 in 10, within the noise). wvs relays movement correctly: no zips seen.
+  - **Made without you:** hunters' reach marks (34 and 30 yd); routes under 15 yd go straight; an off-tank drags only
+    an add within 8 yd that can move.
+- **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
+- **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
+  (your call, 2026-10-24).
 - **The talent plan, phase 4 (verified):**
   - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
     never fires;
@@ -333,11 +404,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     weapons by build. Fury 170 to 210 dps and Arms 143 to 192 in raid gear.
   - Still mid-pack, from the setting, not bugs: rage-starved without raid buffs, and `.gear raid` gives warriors tank
     tier sets with no hit.
-  - **Your calls:**
-    - rage on a dodge or parry: wvs gives 75% as Thistle Tea does, mangos none;
-    - weapon skill above 300 against a boss's crit: wvs ignores it as vmangos does, mangos counts it;
-    - should Bloodthirst and Mortal Strike stay above Whirlwind? At this attack power Whirlwind does more per rage;
-    - should `.gear raid` pick damage pieces with hit for damage warriors?
+  - **Your calls (answered 2026-10-24):**
+    - rage on a dodge or parry: **none, as mangos** (was 75%, Thistle Tea's); under way, `fix/warrior-calls`;
+    - weapon skill above 300 against a boss's crit: **ignored, as vmangos** (kept);
+    - Bloodthirst and Mortal Strike stay above Whirlwind: **agreed**;
+    - `.gear raid` picks damage pieces with hit for damage warriors: **yes**; under way, `fix/warrior-calls`, with
+      the other damage specs checked for the same gap.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates

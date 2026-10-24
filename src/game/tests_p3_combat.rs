@@ -715,14 +715,13 @@ async fn armor_takes_only_physical_blows_down_and_never_below_one() {
 
 #[test]
 fn rage_for_a_swing_follows_its_damage_and_level() {
-    // 200 dealt at 60: six and a half rage; three quarters of it for a
-    // dodge or parry.
+    // 200 dealt at 60: six and a half rage.
     assert_eq!(combat::rage_for(200, 60, false), 65);
     assert_eq!(combat::rage_for(150, 60, false), 48);
 }
 
 #[tokio::test]
-async fn a_swing_gives_rage_when_it_lands_three_quarters_when_avoided_and_none_on_a_miss() {
+async fn a_swing_gives_rage_when_it_lands_and_none_when_missed_dodged_or_parried() {
     let (_realm, _a, ga, map) = setup(Class::Warrior).await;
     let rage = map
         .query(move |m| {
@@ -744,7 +743,9 @@ async fn a_swing_gives_rage_when_it_lands_three_quarters_when_avoided_and_none_o
         })
         .await
         .unwrap();
-    assert_eq!(rage, vec![65, 48, 48, 0]);
+    // mangos-classic's `Unit::DealDamage` rewards only damage dealt
+    // (decision 98, over Thistle Tea's three quarters on a dodge or parry).
+    assert_eq!(rage, vec![65, 0, 0, 0]);
 }
 
 #[tokio::test]

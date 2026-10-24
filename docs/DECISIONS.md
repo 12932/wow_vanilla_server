@@ -1627,9 +1627,79 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     him (`redemption::aura_gone`). Now the load ends a spirit first (`redemption::end_without_death`, as leaving a
     battleground does), the talent kept. Test: `ready_load_ends_a_spirit_of_redemption`.
 
-100. **A crowd's update packets** (2026-10-24; `perf/crowd-1600`, the user's goal: 800 a side fighting in one spot
-    in Hillsbrad, the map's update within its 50 ms; numbered past 98 and 99, `fix/warrior-calls`' and
-    `fix/rogue-dps`'). Made without the user; none changes a rule of the game (nothing a crowded client is sent is
+98. **No rage from an avoided swing; an avoided ability's refund as mangos-classic** (your call, 2026-10-24;
+    `fix/warrior-calls`, from the warriors' damage round). Departs from Thistle Tea, which wvs followed until now.
+    - **White swings:** wvs gave a dodged or parried swing three quarters of the rage its damage would have given
+      (Thistle Tea), a miss none. mangos-classic gives rage only from damage dealt: `Unit::DealDamage` calls
+      `Player::RewardRage(damage, true)` with the damage done, which an avoided swing has none of. Your call was "give
+      none": now a miss, a dodge and a parry give the attacker no rage. A blocked swing still gives rage from what
+      got through, as before. The victim's side is unchanged: none from a blow it dodged or parried (mangos's
+      `hitOutCome != MELEE_HIT_DODGE && != MELEE_HIT_PARRY`), and none from nothing taken.
+    - **Abilities:** mangos-classic's `Spell::finish` gives back `int32(float(m_powerCost) * 0.8f)` of the spell's
+      own power for each target that a spell with `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS` missed, or that dodged,
+      parried or deflected it (`SPELL_MISS_MISS`, `_DODGE`, `_PARRY`, `_DEFLECT`); nothing on an immunity, a block, a
+      resist, an evade or a reflect. wvs had Thistle Tea's: 82%, rounded; rage only on a dodge or a parry, energy also
+      on a miss and an immunity, mana never. Now mangos's: 80%, truncated (15 rage back 12, 40 energy back 32), on a
+      miss, dodge, parry or deflect, in whatever power the ability costs (no mana spell in 1.12's data has the
+      attribute). Overpower and Execute carry the attribute in `Spell.dbc`, so they are refunded too: Execute 80% of
+      its base cost, and the rest of the rage is kept (mangos's `WarriorExecuteDamage` empties it only on a hit).
+      Not followed: mangos rolls Execute twice, the dummy (5308, whose roll decides the refund) and the strike it
+      casts (20647, whose roll decides the damage); wvs rolls once, for both.
+      Whirlwind and Cleave have no attribute and get nothing back, as before.
+    - Tests: `a_swing_gives_rage_when_it_lands_and_none_when_missed_dodged_or_parried`, `a_dodged_swing_gives_no_rage`
+      (through the protocol), `avoided_blows_and_abilities_give_power_back`,
+      `an_avoided_ability_gives_back_its_rage_or_energy_as_its_outcome_allows` and
+      `a_dodged_rage_ability_gives_back_four_fifths_of_its_cost`.
+
+99. **Spirit of Redemption lasts 10 s** (2026-10-24; `fix/redemption-10s`, your call: "take the client's version, 10
+    seconds"). wvs had Thistle Tea's 15 s; the client's Spell.dbc gives the spirit (27827) duration index 1, 10,000 ms,
+    as mangos-classic reads it. Test: `spirit_of_redemption_heals_on_then_dies`.
+
+100. **An ability's crit is its crit chance of its hits** (2026-10-24; `fix/rogue-dps`, from the rogues' damage check).
+     A melee or ranged ability rolled its hit on the table (`outcome::melee_roll`), then, as it landed, rolled the
+     whole table again and crit only if that second roll came up a crit: its miss, dodge (and a creature's parry
+     and block from the front) were taken off its crit chance a second time. At a level-63 boss from behind that is
+     7 to 15% of the chance lost: a raid-geared Combat rogue's Sinister Strike crit 11.8% of its hits for its 13.6%
+     (the test's, without Precision). mangos-classic rolls the crit once, past the hit (`Spell.cpp`'s
+     `target->isCrit = Unit::RollSpellCritOutcome(...)`: `roll_chance_combat(CalculateSpellCritChance)`, a sitting
+     player crit by a melee ability). Now a hit (not a partial block) crits on `outcome::melee_crit`'s single roll,
+     a sitting player always. Every class's abilities: Sinister Strike, Backstab, Eviscerate, Bloodthirst, Mortal
+     Strike, Aimed Shot; and Seal Fate's points with them. Test: `an_abilitys_crit_is_its_crit_chance_of_its_hits`;
+     the rogue's numbers checked beside it (`a_rogues_blows_and_energy_are_1_12s`,
+     `deadly_poison_stacks_to_five_on_a_boss`,
+     `a_rogues_threat_is_its_damages_71_feint_and_vanish_take_it_off`, `seal_fate_adds_a_point_on_a_crit`).
+
+101. **A flight master's guardians are two at a time** (2026-10-24; `fix/flightmaster-guards`, from your report:
+     "only 2 should ever be active at a time, even if attacked on separate occasions"). A flight master's aggro event
+     (`creature_ai_events`, flags 0: once a fight) runs a script of two summon steps (Dungar Longdrink's 35201: two
+     Enraged Gryphons, 9526; Gringer's two Enraged Wyverns, 9297; Vesprystus's two Enraged Hippogryphs, 9527; Michael
+     Garrett's two Enraged Felbats, 9521), each set on the master's victim (attack target type 1). Three things in wvs
+     let them pile up:
+     - **Gryphons and wyverns never went** (a bug, now vmangos's). Their steps have no time (`datalong2` 0) and
+       despawn type 4 (`TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT`); wvs gave a summon with no time no timer at all, so
+       they lived on after every fight. vmangos's `TemporarySummon::Summon` sets the timer to 0, and its `Update`
+       unsummons one of type 1, 2 or 4 the moment it is out of combat, alive or dead. Now a summon of those types
+       with no time goes as its fight ends (89 rows of `creature_ai_scripts`, every flight master's, and 6 of
+       `generic_scripts`).
+     - **A creature pulled again by a blow fired no aggro events** (a bug). An evade left `combat_start` set, and a
+       blow puts the creature in combat before it hears of its attacker, so its next fight wasn't taken as a new
+       one: no aggro event, no leash begun. vmangos's `CreatureEventAI::EnterCombat` fires `EVENT_T_AGGRO` at every
+       fight's start. Now an evade clears it.
+     - **Not vmangos's (yours): a once-a-fight event's summons are capped at one firing's.** vmangos re-arms the
+       event every fight and summons two more each time: the gryphons go with the fight, so two is the most there,
+       but the felbats and hippogryphs (type 1, 30 s) wait 30 s past their fight, and a pull within that has four;
+       a master pulled again while its gryphons still fight someone has four too. Now a summon step run by an
+       EventAI event that isn't repeatable (`EFLAG_REPEATABLE` clear) calls no more of its creature than that
+       script's summon steps bring at once, counting those it summoned earlier that live; at the cap it keeps one,
+       and sets one out of its fight on the new victim, as a new summon would be. One killed is replaced at the next
+       pull. Generic: any once-a-fight summon, a boss's at a health mark too; a repeatable event's summons (adds on a
+       timer) are uncapped, as vmangos's.
+     - Tests: `a_flight_masters_gryphons_are_two_however_often_it_is_attacked`,
+       `felbats_waiting_out_their_time_are_called_back_not_called_again_summon` (through the protocol), and
+       `vmangos_flight_masters_summon_two_guardians_a_fight` (extended: Dungar Longdrink and Vesprystus).
+
+102. **A crowd's update packets** (2026-10-24; `perf/crowd-1600`, the user's goal: 800 a side fighting in one spot
+    in Hillsbrad, the map's update within its 50 ms; numbered after master's 101). Made without the user; none changes a rule of the game (nothing a crowded client is sent is
     capped, no relay is slowed), so none has a key of its own. docs/PERFORMANCE.md, "A battle of 1,600 in one spot".
     - **Values blocks a crowd gets alike, in packets shared among it** (`map::values`). mangos-classic builds one
       `SMSG_UPDATE_OBJECT` per player per update with every block for them (`UpdateData`); wvs did the same, a batch

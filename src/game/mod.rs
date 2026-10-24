@@ -1334,6 +1334,8 @@ mod tests_review5_social;
 #[cfg(test)]
 mod tests_robust;
 #[cfg(test)]
+mod tests_rogue_dps;
+#[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
 mod tests_rules5;
@@ -1361,6 +1363,8 @@ mod tests_spells4;
 mod tests_spells5;
 #[cfg(test)]
 mod tests_subtlety;
+#[cfg(test)]
+mod tests_summon_caps;
 #[cfg(test)]
 mod tests_talents_paladin_shaman;
 #[cfg(test)]

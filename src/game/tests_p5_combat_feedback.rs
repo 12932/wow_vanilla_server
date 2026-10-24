@@ -86,15 +86,15 @@ fn set_power(m: &mut Map, g: Guid, power: u16, to: u32) {
     f.set_u32(UNIT_FIELD_POWER1 + power, to);
 }
 
-/// Thistle Tea's "energy builders refund miss dodge parry and immunity
-/// using the paid cost", "rage refunds only dodge and parry and mana is
-/// never refunded", "free casts ... cannot create power" and "abilities
-/// without the refund attribute get nothing back on dodge": an ability
-/// that discounts its power on a miss gives back 82% of what it was paid,
-/// energy on a miss, dodge, parry or immunity and rage on a dodge or parry
-/// only, nothing on a block, a resist, an evade, a reflect or a hit; mana
-/// never; nothing for a cast paid nothing, nor for an ability without the
-/// attribute.
+/// mangos-classic's `Spell::finish` (decision 98, over Thistle Tea's
+/// "energy builders refund miss dodge parry and immunity", "rage refunds
+/// only dodge and parry and mana is never refunded"; its "free casts ...
+/// cannot create power" and "abilities without the refund attribute get
+/// nothing back on dodge" still hold): an ability that discounts its power
+/// on a miss gives back 80% of what it was paid, truncated, in whatever
+/// power it costs, on a miss, dodge, parry or deflect; nothing on an
+/// immunity, a block, a resist, an evade, a reflect or a hit; nothing for a
+/// cast paid nothing, nor for an ability without the attribute.
 #[tokio::test]
 async fn an_avoided_ability_gives_back_its_rage_or_energy_as_its_outcome_allows() {
     let (_realm, _a, ga, map) = setup_with(data(), Class::Rogue).await;
@@ -109,6 +109,7 @@ async fn an_avoided_ability_gives_back_its_rage_or_energy_as_its_outcome_allows(
                 procs::EX_MISS,
                 procs::EX_DODGE,
                 procs::EX_PARRY,
+                procs::EX_DEFLECT,
                 procs::EX_IMMUNE,
                 procs::EX_BLOCK,
                 procs::EX_RESIST,
@@ -135,9 +136,9 @@ async fn an_avoided_ability_gives_back_its_rage_or_energy_as_its_outcome_allows(
         .await
         .unwrap();
     let (energy, rage, mana, free, plain) = r;
-    assert_eq!(energy, [33, 33, 33, 33, 0, 0, 0, 0, 0], "energy");
-    assert_eq!(rage, [0, 123, 123, 0, 0, 0, 0, 0, 0], "rage");
-    assert_eq!(mana, [0; 9], "mana");
+    assert_eq!(energy, [32, 32, 32, 32, 0, 0, 0, 0, 0, 0], "energy");
+    assert_eq!(rage, [120, 120, 120, 120, 0, 0, 0, 0, 0, 0], "rage");
+    assert_eq!(mana, [120, 120, 120, 120, 0, 0, 0, 0, 0, 0], "mana");
     assert_eq!(free, 0, "a free cast");
     assert_eq!(plain, 0, "no refund attribute");
 }
@@ -206,7 +207,34 @@ async fn a_builder_adds_its_point_once_and_an_avoided_finisher_keeps_them_all() 
         .unwrap();
     let (landed, dodged, kept, spent) = r;
     assert_eq!(landed, ((1, true), 60), "a point, once");
-    assert_eq!(dodged, ((1, true), 53), "no point, 33 of 40 back");
+    assert_eq!(dodged, ((1, true), 52), "no point, 32 of 40 back");
     assert_eq!(kept, ((5, true), 30), "all five kept, the cost paid");
     assert_eq!(spent.0, 0, "spent on a hit");
+}
+
+/// Decision 98, mangos-classic's `Spell::finish`: a warrior's rage ability
+/// dodged gives back 80% of its cost (120 of 150), where Thistle Tea gave
+/// 82%; one that lands gives nothing back.
+#[tokio::test]
+async fn a_dodged_rage_ability_gives_back_four_fifths_of_its_cost() {
+    let (_realm, _a, ga, map) = setup_with(data(), Class::Warrior).await;
+    let (dodged, landed) = map
+        .query(move |m| {
+            m.players.get_mut(&ga).unwrap().spells.push(RAGE_STRIKE);
+            let brute = spawn(m, ga, BRUTE, 10, 2.0);
+            m.players.get_mut(&ga).unwrap().derived.hit = 100.0;
+            dodging(m, brute, true);
+            set_power(m, ga, 1, 300);
+            cast(m, ga, RAGE_STRIKE, brute);
+            let dodged = power(m, ga, 1);
+            dodging(m, brute, false);
+            m.creature_mut(brute).unwrap().derived.parry = 0.0;
+            set_power(m, ga, 1, 300);
+            cast(m, ga, RAGE_STRIKE, brute);
+            (dodged, power(m, ga, 1))
+        })
+        .await
+        .unwrap();
+    assert_eq!(dodged, 270, "300 - 150 + 120");
+    assert_eq!(landed, 150, "paid in full");
 }
