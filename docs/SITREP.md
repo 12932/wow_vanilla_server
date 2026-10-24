@@ -306,6 +306,25 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     five potions: kept. Damage dealers also get a level-appropriate healthstone (your ask; under way in round four).
     Soulstones: the raid tells its bots each other's talents, so only priests with Spirit of Redemption are
     skipped (under way in round four). Nobody leaves a boss fight to drink: kept.
+- **Alterac Valley, round four** (peon 0.1.27; 22 decisions in peon's BOT_AI):
+  - **Result:** Drek'Thar killed **9 times in 10 at 40** (default gear and skill, your roster, seven tanks, the
+    tuned mean held fixed): the goal met. Shrunk: 38 and 36 hold (7 in 10 each), 34 doesn't (2 of 5 on one seed).
+    The smallest reliable raid is **36**.
+  - **The biggest fix was a bug of mine:** round three's "no buffing in a fight" dropped a buff after the brain
+    chose it, and it still took the global cooldown. Warrior tanks chose Battle Shout about 120 times an attempt,
+    sat on full rage and did 30–50 dps. Fixed, it alone took kills from 1 in 10 to 6 in 10.
+  - **Then:** off-tanks pair with adds nearest first, splashers first; drag spots held unless clearly better; weak
+    adds (his wolves) taken last; Shield Wall when the boss enrages; Shout and Roar as one demoralize; healthstones;
+    talents told to the raid for soulstones.
+  - **Calls I made, for you:**
+    - **Healthstones for tanks and healers too, on by default** (you asked for damage dealers): at 36, 7 kills in 10
+      against 4 with damage dealers only.
+    - **Seven tanks at every size:** six at 36 killed him once in 10.
+    - **The raid shrinks from the roster's end** (38 drops seats 38 and 39), so the class mix shifts slightly.
+  - **A question for you:** wvs's spirit of redemption lasts 15 s (Thistle Tea's value); the client's Spell.dbc
+    says 10 s. I'd take the client's 10 s.
+  - **What's left:** the warmasters kill about twice as many raiders as Drek'Thar (Charges on healers, Whirlwinds
+    in the melee); below 36 the fight from his 30% runs longer than his tanks live.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).
