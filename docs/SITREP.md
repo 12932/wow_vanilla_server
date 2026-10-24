@@ -357,6 +357,19 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     30 s past a fight, so a quick pull again gives four. Now a once-a-fight event calls no more than one firing
     brings; the ones still alive rejoin the fight instead. This applies to every creature, not only flight masters.
     The alternative is vmangos's: up to four for 30 s.
+- **Bots' movement** (your reports; peon 0.1.29, 18 decisions in peon's BOT_AI "Movement"):
+  - **Hunters chasing Drek'Thar:** a hunter closed in past 28 yd (its shots reach 35), so every tank's pull across the
+    room took the hunters along. Now it closes only past 34 yd, to 30. Hunters ran 125 yd an attempt, now 45; time
+    moving 26% to 11%.
+  - **The hunter circling outside the keep:** after `.ready load` the bots still remembered the last attempt's
+    splash, so ranged bots stepped apart on the way in and were sent back, over and over. A reset now forgets the last
+    fight (not what was learned about creature kinds) and the walker's route; nobody steps apart on the march in.
+  - **Jitter:** no hysteresis anywhere (a step stopped on the edge it crossed and restarted); short hops took the
+    navmesh's wide corridors' wander; the all-in and the brain undid each other's moves; re-facing before nearly
+    every cast. Fixed: reversals 8.2 to 6.4 a minute (hunters 10.3 to 1.6), stops and starts 47 to 34.
+  - Kills at 40 unchanged or better (9 to 10 in 10, within the noise). wvs relays movement correctly: no zips seen.
+  - **Made without you:** hunters' reach marks (34 and 30 yd); routes under 15 yd go straight; an off-tank drags only
+    an add within 8 yd that can move.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).
