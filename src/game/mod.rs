@@ -1368,6 +1368,8 @@ mod tests_terrain;
 #[cfg(test)]
 mod tests_visibility;
 #[cfg(test)]
+mod tests_warrior_dps;
+#[cfg(test)]
 mod tests_world;
 #[cfg(test)]
 mod tests_world5;

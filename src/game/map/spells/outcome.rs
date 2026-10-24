@@ -589,6 +589,28 @@ pub fn melee_roll(
     }
 }
 
+/// Whether ability `s`, landed, crits as a blow does: its own roll on the
+/// crit chance [`melee_roll`] gives it, past the hit (a strike a dummy
+/// cast lands, Execute's).
+pub fn melee_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &Mods) -> bool {
+    if s.attr(2, sd::ATTR_EX2_CANT_CRIT) {
+        return false;
+    }
+    let hand = if s.dmg_class == 3 {
+        combat::Hand::Ranged
+    } else {
+        combat::Hand::Main
+    };
+    let Some(mut r) = combat::roll_for(map, caster, target, hand) else {
+        return false;
+    };
+    if !uses_weapon_skill(s) {
+        r.attacker_skill = r.attacker_level * 5;
+    }
+    r.crit += m.flat[mods::OP_CRITICAL_CHANCE] as f32;
+    roll(map) < r.crit_bp()
+}
+
 /// Whether ability `s` rolls with its weapon's skill: one wanting a weapon,
 /// a melee one, or a ranged one of the ranged slot (mangos-classic's
 /// `IsSpellUseWeaponSkill`).
