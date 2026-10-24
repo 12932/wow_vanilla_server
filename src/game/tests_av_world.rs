@@ -534,6 +534,17 @@ async fn respawn_around_resets_drek_thars_keep_his_warmasters_back() {
     let realm = harness::realm_with(harness::load_real(&harness::real_data("db")));
     let mut a = Client::connect(&realm, "A");
     let alice = a.enter("Alice", Race::Human, Class::Warrior).await;
+    // Unhurt from before she lands: his hall's warmasters notice her at 22
+    // yards as she does, and charge her at once (vmangos's
+    // `npc_WarMasterAI::MoveInLineOfSight`, decision 103), which kills a
+    // level-1 player.
+    realm
+        .registry
+        .online(alice)
+        .unwrap()
+        .map()
+        .query(move |m| m.players.get_mut(&alice).unwrap().misc.god = true)
+        .await;
     let home = at(DREK_HOME.0, DREK_HOME.1, DREK_HOME.2);
     let map = into_the_world_copy(
         &realm,

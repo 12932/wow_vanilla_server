@@ -1763,6 +1763,8 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
      - Tests: `vanndars_three_spells_are_at_least_a_second_apart`,
        `vanndar_notices_a_player_at_twenty_two_and_a_half_yards_not_at_twenty_three_and_a_half` and
        `a_marshal_notices_at_twenty_two_yards_and_charges_the_first_it_notices` (`tests_av_vanndar`, through the
-       protocol; the first skips the map's clock).
+       protocol; the first skips the map's clock). `respawn_around_resets_drek_thars_keep_his_warmasters_back`
+       now makes Alice a god before she lands in his hall: his warmasters charge her as she lands, as vmangos's
+       would, and killed her (level 1) before the test's first look about 4 times in 5.
 
 ## Left for later, and why
