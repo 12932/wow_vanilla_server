@@ -414,6 +414,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     your start spot by the doors come back. I'd add it: it reads as a shortcut in the scripts, not a rule.
   - **Left:** the warmasters still come to the first tanks at the doors and Whirlwind about a fifth of the raid at
     18–22 s; at 30 two of the seven tanks are bears, and they die first.
+- **Bots through walls** (your report; peon 0.1.33): no bot's move crossed a wall in about 150 attempts across peon
+  0.1.27 to 0.1.32, by a new per-move check. What a watcher could see: bots turning corners without telling the
+  server (it shows them running straight, through the corner), and pets dropping through the floor of Drek'Thar's
+  room (server-driven; for later). Fixed: corners and heartbeats are sent; a move is checked a yard at a time for
+  walls, drops and the navmesh's edge (the old check missed half the keep's walls), on its whole first leg (the
+  Horde round's 2-yard check), each tick and as a last guard before it's sent; the summary counts any it refuses.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
