@@ -1699,8 +1699,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        `vmangos_flight_masters_summon_two_guardians_a_fight` (extended: Dungar Longdrink and Vesprystus).
 
 102. **A crowd's update packets** (2026-10-24; `perf/crowd-1600`, the user's goal: 800 a side fighting in one spot
-    in Hillsbrad, the map's update within its 50 ms; numbered after master's 101). Made without the user; none changes a rule of the game (nothing a crowded client is sent is
-    capped, no relay is slowed), so none has a key of its own. docs/PERFORMANCE.md, "A battle of 1,600 in one spot".
+    in Hillsbrad, the map's update within its 50 ms; numbered after master's 101). Made without the user; none
+    changes a rule of the game (nothing a crowded client is sent is capped, no relay is slowed), so none has a key
+    of its own. docs/PERFORMANCE.md, "A battle of 1,600 in one spot".
     - **Values blocks a crowd gets alike, in packets shared among it** (`map::values`). mangos-classic builds one
       `SMSG_UPDATE_OBJECT` per player per update with every block for them (`UpdateData`); wvs did the same, a batch
       per observer. Now an object's public values block for 8 or more observers goes in packets broadcast to those
