@@ -321,8 +321,7 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
       against 4 with damage dealers only.
     - **Seven tanks at every size:** six at 36 killed him once in 10.
     - **The raid shrinks from the roster's end** (38 drops seats 38 and 39), so the class mix shifts slightly.
-  - **A question for you:** wvs's spirit of redemption lasts 15 s (Thistle Tea's value); the client's Spell.dbc
-    says 10 s. I'd take the client's 10 s.
+  - **Spirit of Redemption lasts the client's 10 s** (your call, 2026-10-24; decision 99), not Thistle Tea's 15.
   - **What's left:** the warmasters kill about twice as many raiders as Drek'Thar (Charges on healers, Whirlwinds
     in the melee); below 36 the fight from his 30% runs longer than his tanks live.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
