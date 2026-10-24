@@ -1627,4 +1627,8 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     him (`redemption::aura_gone`). Now the load ends a spirit first (`redemption::end_without_death`, as leaving a
     battleground does), the talent kept. Test: `ready_load_ends_a_spirit_of_redemption`.
 
+99. **Spirit of Redemption lasts 10 s** (2026-10-24; `fix/redemption-10s`, your call: "take the client's version, 10
+    seconds"). wvs had Thistle Tea's 15 s; the client's Spell.dbc gives the spirit (27827) duration index 1, 10,000 ms,
+    as mangos-classic reads it. Test: `spirit_of_redemption_heals_on_then_dies`.
+
 ## Left for later, and why
