@@ -1583,4 +1583,48 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       on its user, Alterac Valley's scripted timers (`av_scripts`), and helpful auras on others are left alone;
       `.respawn` takes no player's ground area there (each bot's `.ready load` does).
 
+95. **A warmaster's Charge and the linked guards, as vmangos's C++** (2026-10-23; `fix/av-fidelity-2`, round three of
+    the AV all-in, taking up what decision 93 left; amends decision 85's guards). vmangos's
+    `battleground_alterac.cpp` is the reference, followed:
+    - **The Charge** (`npc_WarMasterAI`): due from the fight's start, its timer runs out and, with no global cooldown,
+      it looks for `GetVictimInRange(8, 25)`: the first of its threat list, the most threat first, from 8 to 25
+      yards between bounding radii (`IsInRange`, 3D), its victim or not. A cast that goes starts its timer over 12 to
+      18 s on; one refused (in range, short of the spell's least past both combat reaches) leaves it due, looked at
+      again at its next tick; with none in range it waits 5 to 10 s. wvs had mangos's EventAI range event at its
+      victim alone, looked at each tick (Thistle Tea's). Now an event of wvs's own (`EVENT_THREAT_IN_RANGE`, 1000:
+      the first of the threat list in range, fired at that one) and a wait of its own when its test fails with a
+      victim (`AiEvent::miss_repeat`, set only by `av_scripts`; no database has it). The marshals and the four
+      warmasters by Drek'Thar alike (they share the script); the Elite Guards keep their own pick (`ChargeAt::Picked`).
+      So a warmaster on a tank with a healer high on its list 8 to 25 yards off charges the healer.
+    - **The linked guards** (`npc_alterac_bossHelper::AggroLinkedMobsIfNeeded`): each of the general's linked
+      guards within 100 yards, alive and out of a fight, gets `AttackStart` at every unit on his threat list, the
+      most threat first; each adds its target to its own list with no threat (`AddThreat` of 0) and switches its
+      victim, so it ends on the last, the least of his list, and the first who does it harm or heals against it takes
+      it (anything past none). wvs's went at his victim alone (Thistle Tea's choice, in 85). Now they take on his
+      whole list, none with threat of its own, fighting its last; with an empty list, his victim. The world copy and
+      a match alike.
+    - Tests: `drek_thars_warmaster_takes_on_his_whole_threat_list_and_fights_its_last`,
+      `a_warmaster_with_no_one_to_charge_looks_again_five_to_ten_seconds_on`, and the real valley's
+      `a_real_warmaster_charges_the_one_it_fights_across_the_hall_not_the_one_beside_it` (Bob, top of its list
+      across the hall but short of taking it from Alice, is charged) and the marshals'
+      `a_warmasters_charge_waits_past_the_spells_least_range_and_goes_at_once_beyond`, updated.
+
+96. **Two warlocks' soulstones on one friend, as vmangos** (2026-10-23; `fix/av-fidelity-2`, the user's question for the
+    AV all-in). Soulstone Resurrection (20707, 20762 to 20765) is a dummy aura of no class (family 0), all five ranks
+    of one icon (92) and visual (99). vmangos (`Unit::AddSpellAuraHolder`, `RemoveNoStackAurasDueToAuraHolder`,
+    `SpellMgr::IsNoStackSpellDueToSpell`): the same rank from two casters stands together (a dummy from another caster
+    is allowed to stack); another rank, from anyone, takes the first one's place (its "more generic checks": one icon
+    and visual, one family, alike helpful, not a modifier, don't stack; family 0's ranks are no ranks there, so none
+    is kept for being higher). wvs let both ranks stand. Now `auras::replaces` has vmangos's generic rule for spells of
+    family 0 whose auras are all dummies (kept that narrow: the case wvs had otherwise); one rank from two warlocks
+    still stands together. Test: `another_warlocks_soulstone_of_another_rank_takes_the_first_ones_place`. peon's
+    warlocks keep to one stone a friend anyway (none on one with a stone from anyone).
+
+97. **`.ready load` ends a spirit of redemption** (2026-10-23; `fix/av-fidelity-2`, found by the AV all-in's
+    telemetry: priests "killed by nothing" 1 to 12 s into an attempt, 9 deaths in 5 of 66 attempts). A priest who
+    died into a spirit near an attempt's end came back from `.ready load` whole but still with the spirit's state
+    auras: 27792 and 27795 are passive, and the load clears all but the passive and the gear's; 27795's end killed
+    him (`redemption::aura_gone`). Now the load ends a spirit first (`redemption::end_without_death`, as leaving a
+    battleground does), the talent kept. Test: `ready_load_ends_a_spirit_of_redemption`.
+
 ## Left for later, and why

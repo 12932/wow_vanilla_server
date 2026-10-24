@@ -781,3 +781,55 @@ async fn ordinary_trigger_effects_always_cast_their_spells() {
     .await;
     assert!(out.iter().all(|b| *b == (true, true)), "{out:?}");
 }
+
+/// vmangos's generic stacking rule for Soulstone Resurrection (a dummy aura
+/// of no class, one icon and visual for its five ranks): two warlocks'
+/// stones of one rank on one friend stand together (the same spell from two
+/// casters, `AddSpellAuraHolder`'s dummy), but another rank from another
+/// warlock takes the first one's place (`IsNoStackSpellDueToSpell`'s "more
+/// generic checks"). Before, wvs let both ranks stand.
+#[tokio::test]
+async fn another_warlocks_soulstone_of_another_rank_takes_the_first_ones_place() {
+    const RANK_1: u32 = 97_701;
+    const RANK_5: u32 = 97_705;
+    let mut d = data();
+    for id in [RANK_1, RANK_5] {
+        let mut s = aura_spell(id, auras::AURA_DUMMY, 0, 0);
+        s.spell_icon = 92;
+        s.spell_visual = 99;
+        d.spells.spells.insert(id, s);
+    }
+    let (realm, _a, ga, map) = setup_with(d, Class::Warrior).await;
+    let mut b = crate::game::harness::Client::connect(&realm, "B");
+    let gb = b.enter("Bob", Race::Human, Class::Warrior).await;
+    let mut c = crate::game::harness::Client::connect(&realm, "C");
+    let gc = c.enter("Carol", Race::Human, Class::Priest).await;
+    let out = on(&map, move |m| {
+        let put = |m: &mut Map, caster: Guid, id: u32| {
+            let s = m.realm.data.spells.spells[&id].clone();
+            let _ = auras::apply_spell(m, caster, gc, &s, &[(0, 0)], auras::Context::default());
+            let mut on: Vec<(u32, Guid)> = auras::auras(m, gc)
+                .map(|a| {
+                    a.holders
+                        .iter()
+                        .filter(|h| [RANK_1, RANK_5].contains(&h.spell))
+                        .map(|h| (h.spell, h.caster))
+                        .collect()
+                })
+                .unwrap_or_default();
+            on.sort_by_key(|(s, g)| (*s, g.guid()));
+            on
+        };
+        let one = put(m, ga, RANK_1);
+        let same = put(m, gb, RANK_1);
+        let other = put(m, gb, RANK_5);
+        (one, same, other)
+    })
+    .await;
+    let (one, same, other) = out;
+    assert_eq!(one, [(RANK_1, ga)]);
+    let mut both = vec![(RANK_1, ga), (RANK_1, gb)];
+    both.sort_by_key(|(s, g)| (*s, g.guid()));
+    assert_eq!(same, both, "one rank from two warlocks stands together");
+    assert_eq!(other, [(RANK_5, gb)], "another rank takes their place");
+}
