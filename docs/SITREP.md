@@ -304,7 +304,8 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     - **Five potions each**, topped up before every attempt.
   - **Your answers (2026-10-24):** seven tanks, the moonkin's 12%, no buffing in a fight, parts told to bots and
     five potions: kept. Damage dealers also get a level-appropriate healthstone (your ask; under way in round four).
-    Healing priests and soulstones, and leaving a boss fight to drink: explained, awaiting your answer.
+    Soulstones: the raid tells its bots each other's talents, so only priests with Spirit of Redemption are
+    skipped (under way in round four). Nobody leaves a boss fight to drink: kept.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).
@@ -335,7 +336,7 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     tier sets with no hit.
   - **Your calls (answered 2026-10-24):**
     - rage on a dodge or parry: **none, as mangos** (was 75%, Thistle Tea's); under way, `fix/warrior-calls`;
-    - weapon skill above 300 against a boss's crit: explained, awaiting your answer;
+    - weapon skill above 300 against a boss's crit: **ignored, as vmangos** (kept);
     - Bloodthirst and Mortal Strike stay above Whirlwind: **agreed**;
     - `.gear raid` picks damage pieces with hit for damage warriors: **yes**; under way, `fix/warrior-calls`, with
       the other damage specs checked for the same gap.
