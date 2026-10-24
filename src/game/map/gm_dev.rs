@@ -15,7 +15,7 @@ use crate::game::guid;
 use crate::game::map::{Map, MapKey};
 
 pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spell>, .unlearn <spell>, \
-.character level <n>, .character spells, .gear [green|blue|raid [1|2]] [tank|healer|caster|dps] [shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm], .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn [radius], .ready [save|load], .move [x y z], .threat, .guid, .pos, \
+.character level <n>, .character spells, .gear [green|blue|raid [1|2]] [tank|healer|caster|dps] [shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm] (raid: damage dealers in the tier's loot with hit, others their tier set), .gear enchant <slot> <enchantment>, .pet [creature], .damage <n>, .kill, .respawn [radius], .ready [save|load], .move [x y z], .threat, .guid, .pos, \
 .modify hp|mana|rage|energy|money|speed <n>, .rested [n], .start, .talents reset|learn <talent>[:<ranks>] ..., .tgm [on|off], .god [on|off], .durability [off|on], .infinitemana [on|off] (.thereisnospoon), \
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
@@ -444,7 +444,9 @@ fn weapon_for(data: &crate::game::data::GameData, subclass: u32, class: u8) -> b
 /// dungeon's), a slot with none of that quality filled from both; or the
 /// best they may wear, a raider's (`.gear raid`): at 60 a tier set, 1 or 2
 /// (at random, or as asked), and the rest of the best quality there is
-/// (epic, else rare, else uncommon), the highest item level first.
+/// (epic, else rare, else uncommon), the highest item level first. A
+/// weapon damage dealer's raid gear is the tier's loot instead, by their
+/// stat weights ([`damage_weights`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pick {
     Random { quality: Option<u32> },
@@ -456,7 +458,10 @@ const UNCOMMON: u32 = 2;
 const RARE: u32 = 3;
 
 const GEAR_USAGE: &str = "Usage: .gear [green|blue|raid [1|2]] [tank|healer|caster|dps] \
-[shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm] | .gear enchant <slot> <enchantment>";
+[shield|2h|dual|offhand] [dagger|sword|mace|axe|fist|staff|polearm] | .gear enchant <slot> <enchantment>. \
+raid: a tank, healer or caster in their tier set; a weapon damage dealer (dps, a rogue, a hunter, or most \
+talents in Arms, Fury, Retribution, Enhancement or Feral) in the tier's raid loot by strength, agility, crit \
+and hit, up to 9% hit.";
 
 /// A role `.gear` may be asked to dress for: the hands it holds by
 /// ([`role_ways`]).
@@ -595,6 +600,19 @@ fn spec_ways(
     data: &crate::game::data::GameData,
     p: &crate::game::map::player::Player,
 ) -> Vec<Hands> {
+    match best_tree(data, p) {
+        Some(tab) if SHIELD_TREES.contains(&tab) => vec![Hands::Shield],
+        Some(tab) if WEAPON_TREES.contains(&tab) => role_ways(p.row.class, Role::Damage),
+        _ => Vec::new(),
+    }
+}
+
+/// The talent tree a character has spent most points in, if any (the
+/// later tree on a tie).
+fn best_tree(
+    data: &crate::game::data::GameData,
+    p: &crate::game::map::player::Player,
+) -> Option<u32> {
     let mut points: Vec<(u32, usize)> = Vec::new();
     for t in data.spells.talents.values() {
         let rank = t
@@ -610,20 +628,208 @@ fn spec_ways(
             None => points.push((t.tab, rank)),
         }
     }
-    let best = points
+    points
         .iter()
         .max_by_key(|(tab, n)| (*n, *tab))
-        .map(|(tab, _)| *tab);
-    match best {
-        Some(tab) if SHIELD_TREES.contains(&tab) => vec![Hands::Shield],
-        Some(tab) if WEAPON_TREES.contains(&tab) => role_ways(p.row.class, Role::Damage),
-        _ => Vec::new(),
+        .map(|(tab, _)| *tab)
+}
+
+/// What a point of each stat is worth to a class's weapon damage dealer,
+/// in attack power: a stat weight table, for `.gear raid`'s damage pieces
+/// ([`damage_weights`]). Crit and hit are per 1%; hit is worth nothing
+/// past [`HIT_CAP`], and below it more than its share of damage alone (40
+/// attack power, about 20 strength), so the pieces aim for the cap, as the
+/// user asked. `melee_dps` and `ranged_dps` weigh a weapon's damage a
+/// second in the hands, or the ranged slot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Weights {
+    strength: f32,
+    agility: f32,
+    stamina: f32,
+    intellect: f32,
+    attack_power: f32,
+    ranged_attack_power: f32,
+    crit: f32,
+    hit: f32,
+    melee_dps: f32,
+    ranged_dps: f32,
+}
+
+/// The weight tables by class, for the builds that deal damage with
+/// weapons. 1.12's rules: a warrior's, a paladin's and a shaman's strength
+/// is two attack power, their agility only crit (20 a 1%); a rogue's
+/// agility is attack power and crit (29 a 1%), its strength one attack
+/// power; a hunter's agility two ranged attack power and crit (53 a 1%); a
+/// cat's strength two attack power, its weapon's damage nothing (a form's
+/// claws).
+#[rustfmt::skip]
+const DAMAGE_WEIGHTS: [(u8, Weights); 6] = [
+    (1, Weights { strength: 2.0, agility: 1.2, stamina: 0.1, intellect: 0.0, attack_power: 1.0, ranged_attack_power: 0.0, crit: 25.0, hit: 40.0, melee_dps: 14.0, ranged_dps: 0.0 }),
+    (2, Weights { strength: 2.0, agility: 1.0, stamina: 0.1, intellect: 0.2, attack_power: 1.0, ranged_attack_power: 0.0, crit: 22.0, hit: 40.0, melee_dps: 14.0, ranged_dps: 0.0 }),
+    (3, Weights { strength: 0.0, agility: 2.4, stamina: 0.1, intellect: 0.3, attack_power: 0.1, ranged_attack_power: 1.0, crit: 25.0, hit: 40.0, melee_dps: 1.0, ranged_dps: 14.0 }),
+    (4, Weights { strength: 1.0, agility: 1.8, stamina: 0.1, intellect: 0.0, attack_power: 1.0, ranged_attack_power: 0.0, crit: 25.0, hit: 40.0, melee_dps: 14.0, ranged_dps: 0.0 }),
+    (7, Weights { strength: 2.0, agility: 1.0, stamina: 0.1, intellect: 0.2, attack_power: 1.0, ranged_attack_power: 0.0, crit: 22.0, hit: 40.0, melee_dps: 14.0, ranged_dps: 0.0 }),
+    (11, Weights { strength: 2.0, agility: 1.3, stamina: 0.1, intellect: 0.0, attack_power: 1.0, ranged_attack_power: 0.0, crit: 25.0, hit: 40.0, melee_dps: 0.0, ranged_dps: 0.0 }),
+];
+
+/// 1.12's chance to miss a boss (three levels up) with no weapon skill over
+/// 300: 9%, hit beyond which is wasted.
+const HIT_CAP: f32 = 9.0;
+
+/// The talent trees whose builds deal damage with weapons: Arms, Fury,
+/// Retribution, Enhancement and Feral Combat (a cat; a bear asks `tank`).
+const DAMAGE_TREES: [u32; 5] = [161, 164, 381, 263, 281];
+
+/// The weights `.gear raid` dresses a character by, if it dresses them as a
+/// weapon damage dealer: one asked for `dps`, or asked for no role and a
+/// rogue, a hunter, or one with most points in a tree of [`DAMAGE_TREES`];
+/// of a class in [`DAMAGE_WEIGHTS`]. A tank, a healer or a caster keeps
+/// their tier set.
+fn damage_weights(
+    data: &crate::game::data::GameData,
+    p: &crate::game::map::player::Player,
+    wants: Wants,
+) -> Option<&'static Weights> {
+    let class = p.row.class;
+    let w = DAMAGE_WEIGHTS
+        .iter()
+        .find(|(c, _)| *c == class)
+        .map(|(_, w)| w)?;
+    let damage = match wants.role {
+        Some(Role::Damage) => true,
+        Some(_) => false,
+        None => {
+            matches!(class, 3 | 4) || best_tree(data, p).is_some_and(|t| DAMAGE_TREES.contains(&t))
+        }
+    };
+    damage.then_some(w)
+}
+
+/// What an item's on-equip spells give a weapon damage dealer: hit and
+/// crit (per cent), attack power and ranged attack power.
+fn equip_bonuses(
+    data: &crate::game::data::GameData,
+    t: &crate::game::data::ItemTemplate,
+) -> (f32, f32, f32, f32) {
+    use crate::game::map::auras::{
+        AURA_MOD_ATTACK_POWER, AURA_MOD_CRIT_PERCENT, AURA_MOD_HIT_CHANCE,
+        AURA_MOD_RANGED_ATTACK_POWER,
+    };
+    const APPLY_AURA: u32 = 6;
+    let mut out = (0.0, 0.0, 0.0, 0.0);
+    for e in t
+        .spells
+        .iter()
+        .filter(|s| s.trigger == ON_EQUIP && s.id != 0)
+        .filter_map(|s| data.spells.get(s.id))
+        .flat_map(|s| s.effects.iter())
+        .filter(|e| e.effect == APPLY_AURA)
+    {
+        let v = (e.base_points + 1) as f32;
+        match e.aura {
+            AURA_MOD_HIT_CHANCE => out.0 += v,
+            AURA_MOD_CRIT_PERCENT => out.1 += v,
+            AURA_MOD_ATTACK_POWER => out.2 += v,
+            AURA_MOD_RANGED_ATTACK_POWER => out.3 += v,
+            _ => {}
+        }
     }
+    out
+}
+
+/// The hit an item gives, per cent.
+fn item_hit(data: &crate::game::data::GameData, t: &crate::game::data::ItemTemplate) -> f32 {
+    equip_bonuses(data, t).0
+}
+
+/// What item `t` is worth to a damage dealer of weights `w` with
+/// `hit_left` hit to go to the cap, in `slot`: its stats and its on-equip
+/// bonuses by their weights, its hit up to the cap, and a weapon's damage
+/// a second by where it is held.
+fn damage_score(
+    data: &crate::game::data::GameData,
+    w: &Weights,
+    t: &crate::game::data::ItemTemplate,
+    slot: u8,
+    hit_left: f32,
+) -> f32 {
+    let mut score = 0.0;
+    for (kind, value) in t.stats {
+        let v = value as f32;
+        score += v * match kind {
+            3 => w.agility,
+            4 => w.strength,
+            5 => w.intellect,
+            7 => w.stamina,
+            _ => 0.0,
+        };
+    }
+    let (hit, crit, ap, rap) = equip_bonuses(data, t);
+    score += hit.min(hit_left.max(0.0)) * w.hit
+        + crit * w.crit
+        + ap * w.attack_power
+        + rap * w.ranged_attack_power;
+    if t.class == ITEM_WEAPON && t.delay > 0 {
+        let dps = (t.damages[0].0 + t.damages[0].1) / 2.0 / (t.delay as f32 / 1000.0);
+        score += dps
+            * if slot == 17 {
+                w.ranged_dps
+            } else {
+                w.melee_dps
+            };
+    }
+    score
+}
+
+/// The hit a character's talents give, per cent: their passive auras'
+/// (Precision, Surefooted, Nature's Guidance), counted against the cap.
+fn talent_hit(data: &crate::game::data::GameData, p: &crate::game::map::player::Player) -> f32 {
+    use crate::game::map::auras::AURA_MOD_HIT_CHANCE;
+    data.spells
+        .talents
+        .values()
+        .filter_map(|t| {
+            t.ranks
+                .iter()
+                .rev()
+                .find(|r| **r != 0 && p.spells.contains(r))
+        })
+        .filter_map(|r| data.spells.get(*r))
+        .flat_map(|s| s.effects.iter())
+        .filter(|e| e.effect == 6 && e.aura == AURA_MOD_HIT_CHANCE)
+        .map(|e| (e.base_points + 1) as f32)
+        .sum()
+}
+
+/// `.gear raid`'s choices for a slot, for a damage dealer: those the tier
+/// drops (`loot`) first, the best by [`damage_score`] first; then the rest
+/// as they came, should the tier have none that fits.
+fn damage_order(
+    data: &crate::game::data::GameData,
+    w: &Weights,
+    loot: &ahash::AHashSet<u32>,
+    slot: u8,
+    hit_left: f32,
+    picks: Vec<u32>,
+) -> Vec<u32> {
+    let (dropped, rest): (Vec<u32>, Vec<u32>) = picks.into_iter().partition(|e| loot.contains(e));
+    let mut scored: Vec<(f32, u32)> = dropped
+        .into_iter()
+        .map(|e| {
+            (
+                data.item(e)
+                    .map_or(0.0, |t| damage_score(data, w, t, slot, hit_left)),
+                e,
+            )
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    scored.into_iter().map(|(_, e)| e).chain(rest).collect()
 }
 
 /// A class's tier sets (`ItemSet.dbc`): tier 1's, Molten Core's, and tier
 /// 2's, Blackwing Lair's (with Onyxia's and Ragnaros's helms and legs).
-fn tier_sets(class: u8) -> Option<(u32, u32)> {
+pub(crate) fn tier_sets(class: u8) -> Option<(u32, u32)> {
     Some(match class {
         1 => (209, 218),  // Battlegear of Might, of Wrath
         2 => (208, 217),  // Lawbringer, Judgement
@@ -839,7 +1045,15 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 ///
 /// `.gear raid` is a raider's gear instead (see [`Pick`]): at 60 their
 /// class's tier set, 1 or 2, where it goes, and everywhere else the best
-/// there is for them.
+/// there is for them. A weapon damage dealer ([`damage_weights`]: `dps`, a
+/// rogue or a hunter, or most talents in Arms, Fury, Retribution,
+/// Enhancement or Feral Combat) wears no tier set: every slot is the best
+/// of the tier's raid loot ([`GameData::raid_loot`]) by their class's
+/// weights ([`DAMAGE_WEIGHTS`]), hit counted up to [`HIT_CAP`] less their
+/// talents' (the user's call, 2026-10-24); a slot the loot has nothing for
+/// is filled as before.
+///
+/// [`GameData::raid_loot`]: crate::game::data::GameData::raid_loot
 ///
 /// After the quality may come what the hands are for ([`Wants`]): a role
 /// (`tank`, `healer` or `caster`, `dps`: [`role_ways`]), a way of holding
@@ -857,6 +1071,20 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
     let p = map.players.get(&to)?;
     let who = (p.row.class, p.row.race, p.level());
     let (class, _, level) = who;
+    // The tier, at random if not asked; a weapon damage dealer's weights
+    // and the hit their talents give.
+    let pick = match pick {
+        Pick::Raid { tier: None } => Pick::Raid {
+            tier: Some(rand::rng().random_range(1..=2)),
+        },
+        other => other,
+    };
+    let damage = match pick {
+        Pick::Raid { tier: Some(tier) } => {
+            damage_weights(&data, p, wants).map(|w| (w, tier, HIT_CAP - talent_hit(&data, p)))
+        }
+        _ => None,
+    };
     let kind = armour_of(class, level);
     let armour = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR && t.subclass == kind;
     let trinket = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR;
@@ -888,8 +1116,11 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
             }),
         ),
     ];
-    // A raider at 60: their tier set's pieces first where they go.
-    if let Pick::Raid { tier } = pick {
+    // A raider at 60: their tier set's pieces first where they go; but a
+    // weapon damage dealer's pieces are the tier's loot by their weights.
+    if let Pick::Raid { tier } = pick
+        && damage.is_none()
+    {
         for (slot, piece) in tier_pieces(&data, class, level, tier) {
             if let Some((_, picks)) = plan.iter_mut().find(|(s, _)| *s == slot) {
                 picks.insert(0, piece);
@@ -987,7 +1218,14 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
     }
     let mut names = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+    let mut hit_left = damage.map_or(0.0, |(_, _, cap)| cap);
     for (slot, picks) in plan {
+        let picks = match damage {
+            Some((w, tier, _)) => {
+                damage_order(&data, w, data.raid_loot(tier), slot, hit_left, picks)
+            }
+            None => picks,
+        };
         // A few tries: one may be unique and worn already, as the first
         // ring (the store refuses a second of it, `may_equip_new`), or a
         // unique one of the same name worn (the battlegrounds' rings are
@@ -1004,6 +1242,7 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
             }
             if inventory::add_item_to(map, to, entry, 1, Destination::Worn(slot)).is_ok() {
                 names.push(t.name.clone());
+                hit_left -= item_hit(&data, t);
                 if slot == 17 {
                     if t.subclass == WEAPON_WAND {
                         teach(map, to, SHOOT);
@@ -1024,6 +1263,12 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
     }
     if names.is_empty() {
         return Some("No gear to equip.".into());
+    }
+    if let Some((_, tier, cap)) = damage {
+        notes.push(format!(
+            "Damage pieces of raid tier {tier}, {:.0}% hit from gear.",
+            cap - hit_left
+        ));
     }
     // A GM's convenience, not 1.12's: the gear's stamina and intellect
     // raise their maximum health and mana, and they are left at it, not

@@ -508,6 +508,10 @@ pub struct GameData {
     /// bits: built at its first use (`.gear`'s choice of ammunition).
     #[cfg_attr(test, serde(skip))]
     pub ammo_sources: std::sync::OnceLock<AHashMap<u32, u8>>,
+    /// The items each raid tier drops ([`RAID_TIERS`]), built at their
+    /// first use (`.gear raid`'s damage pieces).
+    #[cfg_attr(test, serde(skip))]
+    pub raid_loot: std::sync::OnceLock<Vec<ahash::AHashSet<u32>>>,
     /// The class spells a quest or a book teaches and no trainer does
     /// ([`Self::quest_class_spells`]), built at their first use
     /// (`.character spells`).
@@ -1068,6 +1072,69 @@ impl GameData {
         sources.get(&entry).copied().unwrap_or(0)
     }
 
+    /// The items raid tier `tier` (1 or 2, [`RAID_TIERS`]) drops: the loot
+    /// of every boss (rank 3) and chest spawned in its maps and of the
+    /// bosses a script summons there, and the reference tables they roll,
+    /// however deep. Not the trash's, whose world drops (Sunscale Helmet)
+    /// are no tier's. Empty for another tier, or without the databases.
+    pub fn raid_loot(&self, tier: u8) -> &ahash::AHashSet<u32> {
+        const GO_CHEST: u8 = 3;
+        const RANK_BOSS: u32 = 3;
+        let tiers = self.raid_loot.get_or_init(|| {
+            RAID_TIERS
+                .iter()
+                .map(|t| {
+                    let mut out = ahash::AHashSet::new();
+                    let mut refs: Vec<u32> = Vec::new();
+                    let mut take = |entries: Option<&Vec<LootEntry>>, refs: &mut Vec<u32>| {
+                        for l in entries.into_iter().flatten() {
+                            if l.min < 0 {
+                                refs.push(l.min.unsigned_abs());
+                            } else {
+                                out.insert(l.item);
+                            }
+                        }
+                    };
+                    let mut creatures: ahash::AHashSet<u32> = t.summoned.iter().copied().collect();
+                    for m in t.maps {
+                        for s in self.creature_spawns.get(m).into_iter().flatten() {
+                            creatures.extend(s.entries.iter().copied().filter(|e| {
+                                self.creature_template(*e)
+                                    .is_some_and(|c| c.rank == RANK_BOSS)
+                            }));
+                        }
+                        for s in self.gameobject_spawns.get(m).into_iter().flatten() {
+                            if let Some(g) = self.gameobject_templates.get(&s.entry)
+                                && g.kind == GO_CHEST
+                            {
+                                take(self.loot.gameobject.get(&g.data[1]), &mut refs);
+                            }
+                        }
+                    }
+                    for c in creatures {
+                        if let Some(ct) = self.creature_template(c)
+                            && ct.loot_id != 0
+                        {
+                            take(self.loot.creature.get(&ct.loot_id), &mut refs);
+                        }
+                    }
+                    let mut seen = ahash::AHashSet::new();
+                    while let Some(r) = refs.pop() {
+                        if seen.insert(r) {
+                            take(self.loot.reference.get(&r), &mut refs);
+                        }
+                    }
+                    out
+                })
+                .collect()
+        });
+        static NONE: std::sync::OnceLock<ahash::AHashSet<u32>> = std::sync::OnceLock::new();
+        usize::from(tier)
+            .checked_sub(1)
+            .and_then(|i| tiers.get(i))
+            .unwrap_or_else(|| NONE.get_or_init(Default::default))
+    }
+
     /// What a vendor sells: its entry's list, then its template's.
     pub fn vendor_items(&self, entry: u32) -> Vec<VendorItem> {
         let mut items = self.vendors.get(&entry).cloned().unwrap_or_default();
@@ -1080,6 +1147,28 @@ impl GameData {
         items
     }
 }
+
+/// A raid tier's places, for [`GameData::raid_loot`]: its maps, and the
+/// bosses a script summons there (no spawn of theirs to find).
+pub struct RaidTier {
+    pub maps: &'static [u32],
+    pub summoned: &'static [u32],
+}
+
+/// The raid tiers `.gear raid 1` and `raid 2` dress from: tier 1, Molten
+/// Core (409, with Ragnaros, 11502) and Onyxia's Lair (249); tier 2, those
+/// and Blackwing Lair (469, with Nefarian, 11583), whose raiders wear the
+/// first tier's best too.
+pub const RAID_TIERS: [RaidTier; 2] = [
+    RaidTier {
+        maps: &[409, 249],
+        summoned: &[11502],
+    },
+    RaidTier {
+        maps: &[409, 249, 469],
+        summoned: &[11502, 11583],
+    },
+];
 
 /// Where a projectile comes from ([`GameData::ammo_source`]), as bits.
 pub mod ammo_source {

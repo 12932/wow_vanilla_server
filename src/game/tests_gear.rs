@@ -54,7 +54,12 @@ async fn geared_with(
 ) -> (Worn, Vec<u32>, u32, String) {
     let mut c = Client::connect(realm, account);
     let g: Guid = c.enter(name, race, class).await;
-    let map = realm.maps.get(realm, MapKey::world(0));
+    // Kalimdor's races start on map 1.
+    let continent = u32::from(matches!(
+        race,
+        Race::Orc | Race::Tauren | Race::Troll | Race::NightElf
+    ));
+    let map = realm.maps.get(realm, MapKey::world(continent));
     c.say(&format!(".character level {level}")).await;
     c.system_message(&format!("Level {level}")).await;
     c.say(command).await;
@@ -840,4 +845,157 @@ async fn a_hunters_quiver_and_its_ammunition_pass_the_client() {
         "updates captured"
     );
     crate::game::tests_client_emu::run_checker(&check_py, &wow_exe, &capture);
+}
+
+/// What a geared character's worn items give a damage dealer, per cent:
+/// hit and crit from their on-equip spells, and their strength and
+/// agility; and how many of the body's slots wear their class's tier set.
+fn damage_stats(realm: &Realm, worn: &Worn, class: u8) -> (f32, f32, i32, i32, usize) {
+    use crate::game::map::auras::{AURA_MOD_CRIT_PERCENT, AURA_MOD_HIT_CHANCE};
+    let data = &realm.data;
+    let (mut hit, mut crit, mut strength, mut agility, mut set) = (0.0, 0.0, 0, 0, 0);
+    let sets = crate::game::map::gm_dev::tier_sets(class).unwrap();
+    for (_, entry, _) in worn {
+        let t = data.item(*entry).unwrap();
+        set += usize::from(t.set_id != 0 && (t.set_id == sets.0 || t.set_id == sets.1));
+        for (k, v) in t.stats {
+            match k {
+                3 => agility += v,
+                4 => strength += v,
+                _ => {}
+            }
+        }
+        for e in t
+            .spells
+            .iter()
+            .filter(|s| s.trigger == 1 && s.id != 0)
+            .filter_map(|s| data.spells.get(s.id))
+            .flat_map(|s| s.effects.iter())
+            .filter(|e| e.effect == 6)
+        {
+            match e.aura {
+                AURA_MOD_HIT_CHANCE => hit += (e.base_points + 1) as f32,
+                AURA_MOD_CRIT_PERCENT => crit += (e.base_points + 1) as f32,
+                _ => {}
+            }
+        }
+    }
+    (hit, crit, strength, agility, set)
+}
+
+/// The user's call (2026-10-24): `.gear raid` dresses a weapon damage
+/// dealer (`dps`, or a rogue or hunter) in the tier's loot by their stat
+/// weights, strength, agility, crit and hit up to 1.12's 9% against a boss,
+/// not their tier set; a tank (`tank`) keeps their tier set. Each of the
+/// six classes with such builds, in both tiers: every body piece the
+/// tier's loot, and hit from gear near the cap (none of the tier sets
+/// reaches it).
+#[tokio::test]
+#[ignore = "extended"]
+async fn gear_raid_dresses_damage_dealers_in_the_tiers_loot_with_hit() {
+    if !have_data() {
+        return;
+    }
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let classes = [
+        (Race::Human, Class::Warrior, "dps"),
+        (Race::Human, Class::Paladin, "dps 2h"),
+        (Race::Dwarf, Class::Hunter, ""),
+        (Race::Human, Class::Rogue, ""),
+        (Race::Tauren, Class::Shaman, "dps 2h"),
+        (Race::Tauren, Class::Druid, "dps"),
+    ];
+    let mut report = Vec::new();
+    let mut hits = Vec::new();
+    for (n, (race, class, words)) in classes.into_iter().enumerate() {
+        for tier in [1u8, 2] {
+            let command = format!(".gear raid {tier} {words}");
+            let (worn, _, _, reply) = geared_with(
+                &realm,
+                (
+                    &format!("DPS{n}{tier}"),
+                    &format!(
+                        "Dps{}{}",
+                        b"abcdef"[n] as char,
+                        if tier == 1 { "one" } else { "two" }
+                    ),
+                ),
+                race,
+                class,
+                60,
+                command.trim(),
+            )
+            .await;
+            assert!(
+                reply.contains(&format!("Damage pieces of raid tier {tier}")),
+                "{reply}"
+            );
+            let loot = realm.data.raid_loot(tier);
+            for slot in BODY {
+                let (_, entry, usable) = worn
+                    .iter()
+                    .find(|(s, _, _)| *s == slot)
+                    .unwrap_or_else(|| panic!("{class:?} slot {slot}: {worn:?}"));
+                let t = realm.data.item(*entry).unwrap();
+                assert!(*usable, "{} may be used", t.name);
+                assert!(
+                    loot.contains(entry),
+                    "{class:?} tier {tier}: {} in slot {slot} drops in the tier",
+                    t.name
+                );
+            }
+            let (hit, crit, strength, agility, set) = damage_stats(&realm, &worn, class.as_int());
+            let names: Vec<String> = worn
+                .iter()
+                .filter(|(s, _, _)| !matches!(s, 3 | 18))
+                .map(|(_, e, _)| realm.data.item(*e).unwrap().name.clone())
+                .collect();
+            report.push(format!(
+                "{class:?} raid {tier}: {hit}% hit, {crit}% crit, {strength} str, {agility} agi, {set} tier pieces: {}",
+                names.join(", ")
+            ));
+            // The tier set's own hit, which `.gear raid` gave them before.
+            let set_id = {
+                let (one, two) = crate::game::map::gm_dev::tier_sets(class.as_int()).unwrap();
+                if tier == 1 { one } else { two }
+            };
+            let set_hit: f32 = realm
+                .data
+                .items
+                .values()
+                .filter(|t| t.set_id == set_id)
+                .map(|t| damage_stats(&realm, &vec![(0, t.entry, true)], class.as_int()).0)
+                .sum();
+            hits.push((class, tier, hit, set_hit));
+        }
+    }
+    eprintln!("{}", report.join("\n"));
+    for (class, tier, hit, set_hit) in hits {
+        eprintln!("{class:?} raid {tier}: the tier set {set_hit}% hit, now {hit}%");
+        assert!(
+            hit > set_hit,
+            "{class:?} tier {tier}: {hit}% hit, the set's {set_hit}%"
+        );
+        // Tier 2's loot has the hit to near the cap; tier 1's is short of it.
+        if tier == 2 {
+            assert!(
+                (6.0..=13.0).contains(&hit),
+                "{class:?} tier {tier}: {hit}% hit"
+            );
+        }
+    }
+
+    // A tank keeps their tier set.
+    let (worn, _, _, reply) = geared_with(
+        &realm,
+        ("TANKW", "Tankwar"),
+        Race::Human,
+        Class::Warrior,
+        60,
+        ".gear raid 2 tank",
+    )
+    .await;
+    assert!(!reply.contains("Damage pieces"), "{reply}");
+    let (_, _, _, _, set) = damage_stats(&realm, &worn, 1);
+    assert_eq!(set, 8, "Battlegear of Wrath from head to hands");
 }

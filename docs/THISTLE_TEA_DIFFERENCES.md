@@ -82,7 +82,16 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
   executioner stands over the cages; Thistle Tea and vmangos summon every troll at 0, so the whole wave faced due
   north, across the stairs.
 - **`.gear`** replaces what is worn, teaches the skills its items need and leaves its target at full health and
-  mana; Thistle Tea's `.debug random equipment` fills only empty slots.
+  mana; Thistle Tea's `.debug random equipment` fills only empty slots. `.gear raid [1|2]` dresses a tank, a healer
+  or a caster in their class's tier set and the best epics; a weapon damage dealer (`dps`, any rogue or hunter, or
+  most talents in Arms, Fury, Retribution, Enhancement or Feral Combat) in the best of that tier's raid loot (tier 1:
+  Molten Core and Onyxia; tier 2: those and Blackwing Lair) by a stat weight table per class (`DAMAGE_WEIGHTS` in
+  `gm_dev.rs`: strength, agility, attack power, crit, hit, a weapon's damage), hit counted up to 1.12's 9% against a
+  boss less what the talents give; no tier set for them (none reaches the cap). The user's call, 2026-10-24.
+- **Rage and refunds** (decision 98), as mangos-classic: an avoided white swing gives no rage (Thistle Tea: three
+  quarters on a dodge or parry), and an avoided ability that discounts its power on a miss gives back 80% of its
+  cost, truncated, on a miss, dodge, parry or deflect, in any power (Thistle Tea: 82%, rage on a dodge or parry,
+  energy also on a miss or an immunity).
 - **`.character spells`** teaches what the class's trainers would, rank by rank, prerequisites met, talent ranks only
   with the talent; Thistle Tea's `.debug spells` teaches every rank and the quest-given spells, ignoring prerequisites.
 - **The player's combat**, as mangos-classic's `CombatManager` has it: a player leaves combat once no creature holds
