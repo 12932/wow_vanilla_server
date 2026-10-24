@@ -2273,7 +2273,11 @@ fn land(
     let crit = deals
         && !unmodified
         && if outcome::physical(s) {
-            outcome::melee_roll(map, caster, aim, s, &l.m).1
+            // A hit's crit on a roll of its own, past the hit (the second
+            // of a special attack's two, `combat::roll_special`): a second
+            // roll of the whole table took its miss and dodge off the crit
+            // chance. A block (in part) doesn't crit.
+            hit == Hit::Hit && outcome::melee_crit(map, caster, aim, s, &l.m)
         } else {
             outcome::roll_crit(map, caster, aim, s, &l.m)
         };
