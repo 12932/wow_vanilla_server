@@ -399,6 +399,10 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   sooner. No game rule changed. **Left:** a charge's first seconds (p99 59 ms, single updates to 150–190 ms, from
   everyone's spells landing at once and 240 pets leaving stealth together); 800 a side not yet run in peon (this
   machine can't host the bots; Fargate would).
+- **Two more vmangos differences in Alterac, for you** (found with decision 103):
+  - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
+    eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
+  - Balinda and Galvangar notice players at 28 yd in vmangos's scripts; wvs uses the database's 21. I'd match vmangos.
 - **Two flaky tests seen** (pass when rerun): `an_abilitys_crit_is_its_crit_chance_of_its_hits` (a `.gear raid`
   weapon draw with a crit chance its count misreads) and `nefarians_lair_runs_as_mangos_classic` (under load).
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
