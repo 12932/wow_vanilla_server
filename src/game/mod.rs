@@ -116,6 +116,8 @@ mod tests_cooldowns;
 #[cfg(test)]
 mod tests_creatures4;
 #[cfg(test)]
+mod tests_crowd_values;
+#[cfg(test)]
 mod tests_dead_body;
 #[cfg(test)]
 mod tests_elites;

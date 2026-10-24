@@ -81,7 +81,8 @@ fn intern(s: &str) -> &'static str {
 
 /// Where a zone is: its name, function, file and line, NUL-terminated.
 pub struct Location {
-    /// The name, NUL-terminated (for the tests' recorder).
+    /// The name, NUL-terminated (for the tests' recorder and the world
+    /// benchmark's probe).
     #[cfg_attr(not(test), allow(dead_code))]
     name: &'static str,
     #[cfg(feature = "tracy")]
@@ -150,6 +151,10 @@ impl Location {
 pub struct Zone {
     #[cfg(feature = "tracy")]
     ctx: Option<tracy_client::sys::___tracy_c_zone_context>,
+    /// For the world benchmark's probe, while it records: the zone's name
+    /// and start (`map::bench_probe::zone_done`).
+    #[cfg(all(feature = "world-bench", unix))]
+    probe: Option<(&'static str, std::time::Instant)>,
     _not_send: std::marker::PhantomData<*const ()>,
 }
 
@@ -157,6 +162,8 @@ impl Zone {
     const OFF: Zone = Zone {
         #[cfg(feature = "tracy")]
         ctx: None,
+        #[cfg(all(feature = "world-bench", unix))]
+        probe: None,
         _not_send: std::marker::PhantomData,
     };
 
@@ -164,9 +171,23 @@ impl Zone {
     #[inline(always)]
     pub fn begin(loc: &'static Location) -> Zone {
         if !on() {
-            return Zone::OFF;
+            return Zone::probed(loc.name);
         }
         Zone::begin_on(loc)
+    }
+
+    /// Off, but timed for the world benchmark's probe while it records.
+    #[inline(always)]
+    fn probed(name: &'static str) -> Zone {
+        #[cfg(all(feature = "world-bench", unix))]
+        if crate::game::map::bench_probe::enabled() {
+            return Zone {
+                probe: Some((name, std::time::Instant::now())),
+                ..Zone::OFF
+            };
+        }
+        let _ = name;
+        Zone::OFF
     }
 
     #[inline(never)]
@@ -179,7 +200,7 @@ impl Zone {
             let ctx = unsafe { tracy_client::sys::___tracy_emit_zone_begin(&loc.data, 1) };
             return Zone {
                 ctx: Some(ctx),
-                _not_send: std::marker::PhantomData,
+                ..Zone::OFF
             };
         }
         let _ = loc;
@@ -192,7 +213,8 @@ impl Zone {
     #[track_caller]
     pub fn named(function: &'static str, name: &'static str) -> Zone {
         if !on() {
-            return Zone::OFF;
+            let _ = function;
+            return Zone::probed(name);
         }
         Zone::begin_on(Location::interned(
             name,
@@ -229,6 +251,10 @@ impl Zone {
 impl Drop for Zone {
     #[inline]
     fn drop(&mut self) {
+        #[cfg(all(feature = "world-bench", unix))]
+        if let Some((name, at)) = self.probe {
+            crate::game::map::bench_probe::zone_done(name, at.elapsed());
+        }
         #[cfg(feature = "tracy")]
         if let Some(ctx) = self.ctx {
             // SAFETY: a zone begun, ended once, on its thread.

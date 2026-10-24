@@ -3218,7 +3218,9 @@ pub fn update(map: &mut Map) {
         }
         // Crowd control that breaks now breaks before its ticks due now
         // (Thistle Tea's `Aura.Heartbeat` runs first).
+        let z = crate::zone!("auras: heartbeat");
         crate::game::map::spells::heartbeat::update(map, g);
+        drop(z);
         let ticks: Vec<(Holder, Aura)> = match auras(map, g) {
             Some(a) => ticks
                 .into_iter()
@@ -3234,8 +3236,11 @@ pub fn update(map: &mut Map) {
         // One tick an update, each on its aura's own cadence: an update
         // late by more than an interval leaves the next tick due at once,
         // for the next update (mangos's `Aura::Update`).
+        let z = crate::zone!("auras: ticks");
         run_ticks(map, g, ticks, now);
+        drop(z);
         if expired {
+            let _z = crate::zone!("auras: expired");
             remove_where(map, g, |h| h.expires.is_some_and(|t| t <= now));
         }
     }

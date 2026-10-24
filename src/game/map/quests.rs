@@ -543,14 +543,36 @@ pub fn update_objects(map: &mut Map) {
         return;
     }
     let data = map.realm.data.clone();
+    // Each player's known game objects, from the objects' observers: a
+    // look through every player's known set (each of a crowd's thousands
+    // of players knowing all the others) cost the square of the crowd
+    // every tenth update.
+    let mut objects_of: ahash::AHashMap<Guid, Vec<Guid>> = ahash::AHashMap::new();
+    for (_, o) in map.gameobjects.iter() {
+        for p in &o.observers {
+            objects_of.entry(*p).or_default().push(o.guid);
+        }
+    }
     let players: Vec<Guid> = map.players.keys().copied().collect();
     for g in players {
-        let known: Vec<Guid> = map.players[&g]
-            .known
-            .iter()
-            .copied()
-            .filter(|k| guid::is_game_object(*k))
-            .collect();
+        let known: Vec<Guid> = objects_of.remove(&g).unwrap_or_default();
+        #[cfg(debug_assertions)]
+        {
+            let mut by_known: Vec<Guid> = map.players[&g]
+                .known
+                .iter()
+                .copied()
+                .filter(|k| guid::is_game_object(*k) && map.gameobject(*k).is_some())
+                .collect();
+            by_known.sort_unstable();
+            let mut by_observers = known.clone();
+            by_observers.sort_unstable();
+            debug_assert_eq!(
+                by_known, by_observers,
+                "{}: a player's known game objects aren't those that have them as an observer",
+                map.key
+            );
+        }
         let mut changed = Vec::new();
         let mut wanted = None;
         for o in known {

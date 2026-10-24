@@ -261,6 +261,12 @@ impl ClientTable {
         lock(&self.inner).guids.get(i).copied().flatten()
     }
 
+    /// Every index's player, under one take of the lock: `None` for an
+    /// index free.
+    pub fn guids(&self) -> Vec<Option<Guid>> {
+        lock(&self.inner).guids.clone()
+    }
+
     /// `g` leaves the map: their index is free.
     pub fn release(&self, g: Guid) {
         let mut t = lock(&self.inner);

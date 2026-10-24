@@ -182,6 +182,40 @@ impl Crowd {
         }
     }
 
+    /// Every `every`th player's (from the `from`th) health changed, by
+    /// `step` (each to a value of its own): their fields dirty, as a
+    /// fight's blows leave them, for the values benchmark
+    /// (`benches/values.rs`).
+    pub fn hurt(&mut self, every: usize, from: usize, step: u32) {
+        use crate::game::fields::{UNIT_FIELD_HEALTH, UNIT_FIELD_MAXHEALTH};
+        for (k, &g) in self
+            .guids
+            .iter()
+            .enumerate()
+            .skip(from)
+            .step_by(every.max(1))
+        {
+            if let Some(p) = self.map.players.get_mut(&g) {
+                let max = p.fields.get_u32(UNIT_FIELD_MAXHEALTH).max(2);
+                let at = 1 + (k as u32 + step) % (max - 1);
+                p.fields.set_u32(UNIT_FIELD_HEALTH, at);
+            }
+        }
+    }
+
+    /// The update's values and batches: what [`Crowd::hurt`] changed told,
+    /// and sent.
+    pub fn flush_values(&mut self) {
+        self.map.flush_values();
+        self.map.flush_batches();
+    }
+
+    /// The values told alike each into their observers' batches, as before
+    /// they were shared (`values::Shared::one_by_one`).
+    pub fn values_one_by_one(&mut self, on: bool) {
+        self.map.shared_values.one_by_one = on;
+    }
+
     /// What the `i`th player's client has been sent since the last look,
     /// each frame's bytes.
     pub fn take_frames(&mut self, i: usize) -> Vec<Vec<u8>> {

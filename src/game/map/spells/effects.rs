@@ -2079,9 +2079,13 @@ pub fn run_untargeted(
 /// a helpful one, friend) inside.
 pub fn tick_areas(map: &mut Map) {
     let now = map.now;
-    map.spells
-        .area_ticked
-        .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
+    {
+        let z = crate::zone!("areas: ticked kept");
+        z.value(map.spells.area_ticked.len() as u64);
+        map.spells
+            .area_ticked
+            .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
+    }
     // The tick due as an area ends is had before it goes (mangos's
     // `Aura::Update` keeps the last tick): Blizzard's eighth wave.
     // Each found again by its object and effect as its turn comes: a tick
@@ -2114,6 +2118,7 @@ pub fn tick_areas(map: &mut Map) {
         }
         let helpful = auras::positive(s);
         let sees_through = super::targets::ignores_sight(s);
+        let z = crate::zone!("areas: who is inside");
         let inside: Vec<Guid> = map
             .grid
             .around(area.at.x, area.at.y, area.radius)
@@ -2140,6 +2145,9 @@ pub fn tick_areas(map: &mut Map) {
                 }
             })
             .collect();
+        z.value(inside.len() as u64);
+        drop(z);
+        let _z = crate::zone!("areas: a tick");
         let e = s.effects[area.index];
         // One caster's overlapping areas of a spell tick a unit once a
         // period between them (Thistle Tea's `AreaSources`: one holder,

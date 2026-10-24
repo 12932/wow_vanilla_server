@@ -110,12 +110,12 @@ pub fn remove(map: &mut Map, g: Guid) {
         crate::game::conn::encode(&wow_world_messages::vanilla::SMSG_GAMEOBJECT_DESPAWN_ANIM {
             guid: g,
         })
+        && !d.observers.is_empty()
     {
-        for o in &d.observers {
-            if let Some(p) = map.players.get(o) {
-                p.outbound.send_frame(frame.clone());
-            }
-        }
+        // Broadcast once, not sent to each (a crowd's area spells end
+        // every few updates, each seen by all of it).
+        let to = d.observers.clients(&map.clients);
+        map.broadcast(&frame, &to);
     }
     for o in d.observers.drain() {
         if let Some(p) = map.players.get_mut(&o) {

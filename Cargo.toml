@@ -149,6 +149,22 @@ name = "crowd"
 harness = false
 required-features = ["world-bench"]
 
+# The update's values in a crowd of 100 to 3,000 in sight of each other:
+# shared packets against each block into every observer's batch (`cargo
+# bench --bench values`, docs/PERFORMANCE.md).
+[[bench]]
+name = "values"
+harness = false
+
+# A faction battle in one spot, through the real sessions and map: N Horde
+# against N Alliance at level 60 in Hillsbrad, moving, casting and swinging,
+# the update's steps measured (`cargo bench --features world-bench --bench
+# battle`, docs/PERFORMANCE.md). Needs the real world (WVS_DATA).
+[[bench]]
+name = "battle"
+harness = false
+required-features = ["world-bench"]
+
 # Debug builds and the tests with their dependencies optimized (SQLite, tokio,
 # wow_messages, the navmesh, compression): the suite takes a third less time,
 # and the crate itself builds as quickly as before. See docs/PERFORMANCE.md.

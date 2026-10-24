@@ -104,6 +104,7 @@ pub mod trade;
 pub mod trade_spells;
 pub mod trinkets;
 pub mod ubrs_stadium;
+pub mod values;
 pub mod vendor;
 pub mod views;
 #[doc(hidden)]
@@ -570,6 +571,10 @@ pub struct Map {
     /// content: one sent alike to many (a crowd told of a newcomer, the
     /// crowd's creates for newcomers) is framed and compressed once.
     shared_frames: update::SharedFrames,
+    /// The update's values blocks told alike (`values`), and the packets
+    /// they were put in, to be sent after the batches.
+    pub(crate) shared_values: values::Shared,
+    shared_packets: values::Packets,
     pub stats: MapStats,
     /// How long the map keeps its players' movement before it sends it on
     /// ([`batch`]): its own, steered by its load.
@@ -1394,6 +1399,8 @@ impl Map {
             batches: AHashMap::new(),
             create_cache: AHashMap::new(),
             shared_frames: update::SharedFrames::default(),
+            shared_values: values::Shared::default(),
+            shared_packets: Vec::new(),
             stats: MapStats::default(),
             started: now,
             now,
@@ -2204,14 +2211,25 @@ impl Map {
             return;
         };
         // Each forget took it from `known`, each create put it there.
-        let mut counts: ahash::AHashMap<Guid, usize> = ahash::AHashMap::with_capacity(guids.len());
-        let mut forgets: Vec<(Guid, u32)> = Vec::with_capacity(guids.len());
-        for &g in guids {
-            let i = *counts.entry(g).or_insert_with(|| {
-                forgets.push((g, 0));
-                forgets.len() - 1
-            });
-            forgets[i].1 += 1;
+        let mut forgets: smallvec::SmallVec<[(Guid, u32); 4]> = smallvec::SmallVec::new();
+        if guids.len() <= 16 {
+            // Mostly one or two: by looks, without a map.
+            for &g in guids {
+                match forgets.iter_mut().find(|(f, _)| *f == g) {
+                    Some(f) => f.1 += 1,
+                    None => forgets.push((g, 1)),
+                }
+            }
+        } else {
+            let mut counts: ahash::AHashMap<Guid, usize> =
+                ahash::AHashMap::with_capacity(guids.len());
+            for &g in guids {
+                let i = *counts.entry(g).or_insert_with(|| {
+                    forgets.push((g, 0));
+                    forgets.len() - 1
+                });
+                forgets[i].1 += 1;
+            }
         }
         let batch = self.batches.entry(observer).or_default();
         batch.settle_forgets(&forgets, |g| p.known.contains(&g));
@@ -2300,6 +2318,8 @@ impl Map {
                 visibility::refresh(self, g);
             }
         }
+        let z = crate::zone!("after events: let go");
+        z.value(self.holding.len() as u64);
         let mut pending = Held(std::mem::take(&mut self.holding));
         while let Some((g, out)) = pending.0.pop() {
             if waiting.contains(&g) {
@@ -2331,7 +2351,11 @@ impl Map {
     }
 
     fn flush_values(&mut self) {
+        self.shared_values.clear();
+        self.shared_packets.clear();
         let batches = &mut self.batches;
+        let shared = &mut self.shared_values;
+        let table = &self.clients;
         let realm = &self.realm;
         let z = crate::zone!("values: players");
         for p in self.players.values_mut() {
@@ -2362,7 +2386,7 @@ impl Map {
                 } else {
                     Vec::new()
                 };
-                p.views_told = views::tell_player(batches, p, &mates);
+                p.views_told = views::tell_player(batches, shared, table, p, &mates);
             } else {
                 p.views_told = views::Viewers::of_player(p);
             }
@@ -2385,9 +2409,7 @@ impl Map {
             if !o.observers.is_empty()
                 && let Some(block) = update::values_block(o.guid, &o.fields, Visibility::Public)
             {
-                for p in &o.observers {
-                    batches.entry(*p).or_default().push(&block);
-                }
+                shared.tell(o.guid, None, o.cell, block, o.observers.clients(table));
             }
             o.fields.clear_dirty();
         }
@@ -2408,12 +2430,15 @@ impl Map {
             c.views_told = if c.observers.is_empty() {
                 views::Viewers::of_creature(c)
             } else {
-                views::tell_creature(realm, batches, c, tap_changed)
+                views::tell_creature(realm, batches, shared, table, c, tap_changed)
             };
             c.tap_told = c.tapped_by;
             c.fields.clear_dirty();
         }
         drop(z);
+        // The blocks told alike, in packets shared among their observers;
+        // the rest of them into batches, before those are framed.
+        self.shared_packets = self.shared_values.plan(&self.clients, &mut self.batches);
     }
 
     fn flush_batches(&mut self) {
@@ -2424,6 +2449,10 @@ impl Map {
             for frame in batch.finish_shared(&mut self.shared_frames) {
                 p.outbound.send_frame(frame);
             }
+        }
+        // After each client's own: what it has of the values told alike.
+        for (frame, to) in std::mem::take(&mut self.shared_packets) {
+            self.broadcast(&frame, &to);
         }
     }
 

@@ -57,6 +57,55 @@ static NAMES: Mutex<Option<ahash::AHashSet<&'static str>>> = Mutex::new(None);
 thread_local! {
     static STEPS: std::cell::RefCell<Vec<(&'static str, Duration)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// This thread's zones (`tracy::Zone`) since its last flush: their
+    /// count and wall time, by name.
+    static ZONES: std::cell::RefCell<Option<AHashMap<&'static str, (u64, Duration)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Every map thread's zones, flushed at each update's and event's end.
+static ZONE_TOTALS: Mutex<Option<AHashMap<&'static str, (u64, Duration)>>> = Mutex::new(None);
+
+/// A zone (`tracy::Zone`, Tracy off) has ended, `took` after it began.
+pub fn zone_done(name: &'static str, took: Duration) {
+    ZONES.with_borrow_mut(|z| {
+        let e = z.get_or_insert_with(AHashMap::new).entry(name).or_default();
+        e.0 += 1;
+        e.1 += took;
+    });
+}
+
+/// Whose zones are kept: one map's, or every map's.
+static ZONES_OF: Mutex<Option<MapKey>> = Mutex::new(None);
+
+/// Keep only `key`'s zones (`None`: every map's).
+pub fn zones_of(key: Option<MapKey>) {
+    *ZONES_OF.lock() = key;
+}
+
+fn flush_zones(key: MapKey) {
+    let Some(mine) = ZONES.with_borrow_mut(Option::take) else {
+        return;
+    };
+    if ZONES_OF.lock().is_some_and(|k| k != key) {
+        return;
+    }
+    let mut all = ZONE_TOTALS.lock();
+    let all = all.get_or_insert_with(AHashMap::new);
+    for (name, (n, d)) in mine {
+        let e = all.entry(name).or_default();
+        e.0 += n;
+        e.1 += d;
+    }
+}
+
+/// The map threads' zones since the last take: by name (its trailing NUL
+/// off), their count and wall time.
+pub fn take_zones() -> Vec<(&'static str, u64, Duration)> {
+    let all = ZONE_TOTALS.lock().take().unwrap_or_default();
+    all.into_iter()
+        .map(|(name, (n, d))| (name.trim_end_matches('\0'), n, d))
+        .collect()
 }
 
 /// Start recording.
@@ -150,6 +199,7 @@ pub(super) fn update_done(map: &Map, wall: Duration, start: Start) {
         })
         .count() as u32;
     let steps = STEPS.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    flush_zones(map.key);
     if wall >= SLOW_UPDATE {
         let mut top = steps.clone();
         top.sort_by_key(|s| std::cmp::Reverse(s.1));
@@ -189,6 +239,7 @@ pub(super) fn event_start() -> Start {
 
 pub(super) fn event_done(key: MapKey, start: &Start, wall: Duration, kind: &'static str) {
     let cpu = thread_cpu().saturating_sub(start.cpu);
+    flush_zones(key);
     if wall >= SLOW_EVENT {
         let (v, i) = thread_switches();
         eprintln!(

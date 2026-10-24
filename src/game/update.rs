@@ -441,7 +441,23 @@ fn empty_fields() -> &'static Fields {
 const COMPRESS_ABOVE: usize = 1024;
 /// A batch is cut into packets of at most this many bytes of blocks, so
 /// no packet needs a size the 1.12 client can't read.
-const PACKET_LIMIT: usize = 24 * 1024;
+pub const PACKET_LIMIT: usize = 24 * 1024;
+
+/// One packet of `blocks` (none a create of a transport, at most
+/// [`PACKET_LIMIT`] bytes of them), framed as a batch's packet is:
+/// compressed past [`COMPRESS_ABOVE`].
+pub fn frame_blocks<'a>(blocks: impl IntoIterator<Item = &'a [u8]>) -> Arc<[u8]> {
+    let mut payload = Vec::with_capacity(4 * 1024);
+    payload.extend_from_slice(&[0; 5]);
+    let mut count = 0u32;
+    for b in blocks {
+        payload.extend_from_slice(b);
+        count += 1;
+    }
+    payload[..4].copy_from_slice(&count.to_le_bytes());
+    debug_assert!(payload.len() <= PACKET_LIMIT + 5);
+    frame_update(&payload)
+}
 
 /// One observer's blocks for one update, framed into packets by
 /// [`Batch::finish`].
@@ -539,6 +555,9 @@ impl Batch {
     /// than three an object: a hearth within a continent forgets and
     /// creates a thousand or more).
     pub fn settle_forgets(&mut self, forgets: &[(Guid, u32)], known: impl Fn(Guid) -> bool) {
+        if forgets.len() <= SMALL_FORGETS && self.forget.len() <= SMALL_FORGETS * 4 {
+            return self.settle_few(forgets, known);
+        }
         let wanted: ahash::AHashSet<Guid> = forgets.iter().map(|(g, _)| *g).collect();
         let mut spans: ahash::AHashMap<Guid, smallvec::SmallVec<[usize; 2]>> =
             ahash::AHashMap::with_capacity(forgets.len());
@@ -556,6 +575,40 @@ impl Batch {
             let creates = of.iter().filter(|&&i| is_create(i)).count() as i64;
             let now = i64::from(known(g));
             if now + i64::from(n) - creates > 0 && queued.insert(g) {
+                self.forget.push(g);
+            }
+            let last = if now == 1 {
+                of.iter().rev().copied().find(|&i| is_create(i))
+            } else {
+                None
+            };
+            for &i in of {
+                if last.is_none_or(|l| i < l) {
+                    self.spans[i].live = false;
+                }
+            }
+        }
+    }
+
+    /// [`Batch::settle_forgets`] for a few forgets (an update's for one
+    /// observer are mostly one or two: a spell's area gone), by looks
+    /// through them rather than sets and maps made for each observer.
+    fn settle_few(&mut self, forgets: &[(Guid, u32)], known: impl Fn(Guid) -> bool) {
+        let mut spans: smallvec::SmallVec<[smallvec::SmallVec<[usize; 2]>; SMALL_FORGETS]> =
+            smallvec::smallvec![smallvec::SmallVec::new(); forgets.len()];
+        for (i, s) in self.spans.iter().enumerate() {
+            if let Some(o) = s.object
+                && let Some(k) = forgets.iter().position(|(g, _)| *g == o)
+            {
+                spans[k].push(i);
+            }
+        }
+        for (k, &(g, n)) in forgets.iter().enumerate() {
+            let of = spans[k].as_slice();
+            let is_create = |i: usize| self.spans[i].live && self.spans[i].create;
+            let creates = of.iter().filter(|&&i| is_create(i)).count() as i64;
+            let now = i64::from(known(g));
+            if now + i64::from(n) - creates > 0 && !self.forget.contains(&g) {
                 self.forget.push(g);
             }
             let last = if now == 1 {
@@ -656,6 +709,10 @@ impl Batch {
         packets
     }
 }
+
+/// At most this many forgets for an observer are settled by looks rather
+/// than sets ([`Batch::settle_few`]).
+const SMALL_FORGETS: usize = 8;
 
 /// Past this many bytes of blocks, a packet may end after any block
 /// ([`Batch::packets`]).
