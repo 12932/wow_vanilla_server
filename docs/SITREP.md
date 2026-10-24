@@ -324,6 +324,32 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - **Spirit of Redemption lasts the client's 10 s** (your call, 2026-10-24; decision 99), not Thistle Tea's 15.
   - **What's left:** the warmasters kill about twice as many raiders as Drek'Thar (Charges on healers, Whirlwinds
     in the melee); below 36 the fight from his 30% runs longer than his tanks live.
+- **Warriors' calls, done** (wvs 0.1.127, decision 98): no rage from a missed, dodged or parried swing; an avoided
+  ability gives back 80% of its cost, any power, as mangos-classic's `Spell::finish` (Overpower and Execute too;
+  Whirlwind and Cleave nothing). `.gear raid` dresses weapon damage dealers (warriors, rogues, hunters, Retribution,
+  Enhancement, Feral damage) in their tier's boss loot, weighted toward the 9% hit cap: tier 2 reaches 6–12% hit
+  against 0–3% from the tier sets. Tanks, healers and casters keep their sets.
+  - **Made without you:** damage dealers' `.gear raid` no longer takes AQ40 epics (the old fill took any epic to level
+    60); Execute's refund rolls with its strike, where mangos rolls its dummy separately.
+- **Rogues and the damage harness** (peon 0.1.28, wvs decision 100):
+  - **`peon run dps`:** any class and build on a tanked level 63 dummy, several side by side, with buffs, facing and
+    downtime options; reports dps with a 95% interval, each ability's outcomes, resource waste, uptimes, the hit table
+    against mangos-classic's. A new class is a data entry (`dps/dps.toml`), not code.
+  - **Single-target, rogues are fine:** about 260 dps in raid gear, second to Fire mages (about 300), ahead of Fury
+    (about 187), inside the expected range.
+  - **A server bug, for every class:** an ability rolled the whole hit table again for its crit, so miss and dodge
+    came off its crit chance twice (Sinister Strike crit 11.8% of hits for 13.6%). Now one roll past the hit, as
+    mangos-classic.
+  - **In AV they die to Whirlwinds:** Drek'Thar's and the warmasters' (tanked within 8 yd of his back), 40–55% of a
+    rogue's health a tick. Evasion and Vanish now fire in raids; the rest is tactics, passed to round five.
+  - **Calls for you:**
+    - Combat's weapon in default `.gear`: daggers or swords? Equal in raid gear; daggers won one run of two in
+      greens. I'd leave it as is (swords for Combat Swords, daggers for daggers builds).
+    - Combat never casts Eviscerate: Slice and Dice takes every combo point, worth the same per point (185 vs 188).
+      I'd keep it.
+    - Feint on cooldown in a 5-player party (about 5% of a rogue's damage), none in raids (it cut their damage there
+      with no fewer deaths). I'd keep it.
+    - The expected ranges are worked out from wvs's ideal rotation, not a real 1.12 log; a log would be better.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).
