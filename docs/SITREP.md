@@ -376,7 +376,29 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - Kills at 40 unchanged or better (9 to 10 in 10, within the noise). wvs relays movement correctly: no zips seen.
   - **Made without you:** hunters' reach marks (34 and 30 yd); routes under 15 yd go straight; an off-tank drags only
     an add within 8 yd that can move.
-- **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
+- **The Horde at Vanndar** (peon 0.1.31; 25 decisions in peon's BOT_AI):
+  - **Result:** from 0 kills in 10 to **8 in 10 at 40** from your start inside Dun Baldar; reliable down to **38**
+    (8 in 10); 36 isn't (4 in 10). Default gear and skill, your roster, round four's tuned mean held fixed. Per damage
+    dealer the Horde now matches the Alliance (hunters 11,000 on Vanndar, mages 10,200, warlocks 9,700).
+  - **Found:** Vanndar's resets were his 35 yd leash (as vmangos) with healers in his doorway, so the raid keeps within
+    24 yd of his spawn; healer shamans put no totems down; a walker bug stood up to 14 raiders still for whole attempts
+    (a long first leg over a rise read as "across a wall"); melee came back in for a double Whirlwind's second hit.
+  - **Made without you:** a "clear hold" on the march from the muster, with the tanks going in at 100 s at the latest
+    (from the muster the town's defenders kept the raid from ever clearing it); the raid keeps 24 yd of the general's
+    spawn.
+  - **Your calls (fidelity, small):** wvs lacks vmangos's 1 s global cooldown between Vanndar's three spells; and
+    vmangos's scripts notice players at 23 yd (Vanndar) and 22 yd (marshals, who also charge the first they notice)
+    where wvs uses the database's detection by level (22 and 20). I'd match vmangos in both.
+  - **Left:** healers are at 14–24% mana a minute in; the marshals do 122 of 146 deaths at 40.
+- **The server at 800 a side: yes (your call, 2026-10-24).** Done for the update (wvs 0.1.129, decision 102): with
+  1,600 in one spot the map update went from p50 48 ms / p99 125 ms (14.9 updates a second) to 14 / 33 ms (19.9),
+  once the fight settles. A values block many observers share is sent once to all of them; compression runs on the
+  visibility threads; visibility works in chunks sized to its budget; a crowd held for a pet's stealth is let go
+  sooner. No game rule changed. **Left:** a charge's first seconds (p99 59 ms, single updates to 150–190 ms, from
+  everyone's spells landing at once and 240 pets leaving stealth together); 800 a side not yet run in peon (this
+  machine can't host the bots; Fargate would).
+- **Two flaky tests seen** (pass when rerun): `an_abilitys_crit_is_its_crit_chance_of_its_hits` (a `.gear raid`
+  weapon draw with a crit chance its count misreads) and `nefarians_lair_runs_as_mangos_classic` (under load).
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).
 - **The talent plan, phase 4 (verified):**
