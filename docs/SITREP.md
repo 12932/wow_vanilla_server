@@ -406,8 +406,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     too close to make, or for Thunder Clap); fixed. A backup tank stands by the boss and taunts as the main tank is
     about to die; damage dealers respect a new tank's threat; the nearest healthy tank takes a loose boss.
   - **Made without you, for your review:** **your start spot moved** down the corridor, past his leash line and 25 yd
-    from every warmaster: with decision 103 they noticed the raid by the doors and charged it during its buffs. (Whether
-    vmangos's notice ignores walls is being checked again.)
+    from every warmaster: with decision 103 they noticed the raid by the doors and charged it during its buffs.
+  - **Your call: should walls block the AV scripts' notice?** Checked in vmangos's source: they don't. Its scripts
+    replace the default notice (which tests line of sight) with a bare distance test, and the visibility path tests
+    line of sight only for stealthed players. So vmangos's warmasters and generals notice through walls, as wvs now
+    does. The alternative is to add the line-of-sight test the default notice has (a small change), which would let
+    your start spot by the doors come back. I'd add it: it reads as a shortcut in the scripts, not a rule.
   - **Left:** the warmasters still come to the first tanks at the doors and Whirlwind about a fifth of the raid at
     18–22 s; at 30 two of the seven tanks are bears, and they die first.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
