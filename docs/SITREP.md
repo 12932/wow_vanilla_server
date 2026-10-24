@@ -302,6 +302,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     - **The raid tells its bots each other's parts** (tank, healer): a leader would, in 1.12. Without it, healers'
       rotation counted no healers and soulstones went to Balance druids.
     - **Five potions each**, topped up before every attempt.
+  - **Your answers (2026-10-24):** seven tanks, the moonkin's 12%, no buffing in a fight, parts told to bots and
+    five potions: kept. Damage dealers also get a level-appropriate healthstone (your ask; under way in round four).
+    Healing priests and soulstones, and leaving a boss fight to drink: explained, awaiting your answer.
+- **The server at 800 a side: yes (your call, 2026-10-24).** Under way, `perf/crowd-1600`.
+- **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
+  (your call, 2026-10-24).
 - **The talent plan, phase 4 (verified):**
   - every mode's results now count casts by spell, and `scripts/never_cast.py` gives a reason for each spell that
     never fires;
@@ -327,11 +333,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     weapons by build. Fury 170 to 210 dps and Arms 143 to 192 in raid gear.
   - Still mid-pack, from the setting, not bugs: rage-starved without raid buffs, and `.gear raid` gives warriors tank
     tier sets with no hit.
-  - **Your calls:**
-    - rage on a dodge or parry: wvs gives 75% as Thistle Tea does, mangos none;
-    - weapon skill above 300 against a boss's crit: wvs ignores it as vmangos does, mangos counts it;
-    - should Bloodthirst and Mortal Strike stay above Whirlwind? At this attack power Whirlwind does more per rage;
-    - should `.gear raid` pick damage pieces with hit for damage warriors?
+  - **Your calls (answered 2026-10-24):**
+    - rage on a dodge or parry: **none, as mangos** (was 75%, Thistle Tea's); under way, `fix/warrior-calls`;
+    - weapon skill above 300 against a boss's crit: explained, awaiting your answer;
+    - Bloodthirst and Mortal Strike stay above Whirlwind: **agreed**;
+    - `.gear raid` picks damage pieces with hit for damage warriors: **yes**; under way, `fix/warrior-calls`, with
+      the other damage specs checked for the same gap.
 - **Gear order:** a bot says `.gear` after its talents and trainers' spells, so the server's `.gear` gives a shield to a
   spec that holds one, by its talents.
 - **The orchestrator's first steps:** 400 a side on 16 one-core workers runs every tick. 800 a side still saturates
