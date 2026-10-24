@@ -388,7 +388,8 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     spawn.
   - **Your calls (fidelity, small):** wvs lacks vmangos's 1 s global cooldown between Vanndar's three spells; and
     vmangos's scripts notice players at 23 yd (Vanndar) and 22 yd (marshals, who also charge the first they notice)
-    where wvs uses the database's detection by level (22 and 20). I'd match vmangos in both.
+    where wvs uses the database's detection by level (22 and 20). **Both: match vmangos (your call, 2026-10-24)**;
+    under way, `fix/vanndar-fidelity`.
   - **Left:** healers are at 14–24% mana a minute in; the marshals do 122 of 146 deaths at 40.
 - **The server at 800 a side: yes (your call, 2026-10-24).** Done for the update (wvs 0.1.129, decision 102): with
   1,600 in one spot the map update went from p50 48 ms / p99 125 ms (14.9 updates a second) to 14 / 33 ms (19.9),
