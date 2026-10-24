@@ -598,6 +598,8 @@ pub fn melee_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &
     }
     let hand = if s.dmg_class == 3 {
         combat::Hand::Ranged
+    } else if s.attr(3, sd::ATTR_EX3_REQ_OFFHAND) {
+        combat::Hand::Off
     } else {
         combat::Hand::Main
     };
@@ -608,7 +610,8 @@ pub fn melee_crit(map: &Map, caster: Guid, target: Guid, s: &SpellTemplate, m: &
         r.attacker_skill = r.attacker_level * 5;
     }
     r.crit += m.flat[mods::OP_CRITICAL_CHANCE] as f32;
-    roll(map) < r.crit_bp()
+    // A sitting player is crit (the table's own rule, `roll_special`).
+    r.sitting_crit() || roll(map) < r.crit_bp()
 }
 
 /// Whether ability `s` rolls with its weapon's skill: one wanting a weapon,
