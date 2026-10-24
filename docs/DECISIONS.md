@@ -1627,4 +1627,28 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
     him (`redemption::aura_gone`). Now the load ends a spirit first (`redemption::end_without_death`, as leaving a
     battleground does), the talent kept. Test: `ready_load_ends_a_spirit_of_redemption`.
 
+98. **No rage from an avoided swing; an avoided ability's refund as mangos-classic** (your call, 2026-10-24;
+    `fix/warrior-calls`, from the warriors' damage round). Departs from Thistle Tea, which wvs followed until now.
+    - **White swings:** wvs gave a dodged or parried swing three quarters of the rage its damage would have given
+      (Thistle Tea), a miss none. mangos-classic gives rage only from damage dealt: `Unit::DealDamage` calls
+      `Player::RewardRage(damage, true)` with the damage done, which an avoided swing has none of. Your call was "give
+      none": now a miss, a dodge and a parry give the attacker no rage. A blocked swing still gives rage from what
+      got through, as before. The victim's side is unchanged: none from a blow it dodged or parried (mangos's
+      `hitOutCome != MELEE_HIT_DODGE && != MELEE_HIT_PARRY`), and none from nothing taken.
+    - **Abilities:** mangos-classic's `Spell::finish` gives back `int32(float(m_powerCost) * 0.8f)` of the spell's
+      own power for each target that a spell with `SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS` missed, or that dodged,
+      parried or deflected it (`SPELL_MISS_MISS`, `_DODGE`, `_PARRY`, `_DEFLECT`); nothing on an immunity, a block, a
+      resist, an evade or a reflect. wvs had Thistle Tea's: 82%, rounded; rage only on a dodge or a parry, energy also
+      on a miss and an immunity, mana never. Now mangos's: 80%, truncated (15 rage back 12, 40 energy back 32), on a
+      miss, dodge, parry or deflect, in whatever power the ability costs (no mana spell in 1.12's data has the
+      attribute). Overpower and Execute carry the attribute in `Spell.dbc`, so they are refunded too: Execute 80% of
+      its base cost, and the rest of the rage is kept (mangos's `WarriorExecuteDamage` empties it only on a hit).
+      Not followed: mangos rolls Execute twice, the dummy (5308, whose roll decides the refund) and the strike it
+      casts (20647, whose roll decides the damage); wvs rolls once, for both.
+      Whirlwind and Cleave have no attribute and get nothing back, as before.
+    - Tests: `a_swing_gives_rage_when_it_lands_and_none_when_missed_dodged_or_parried`, `a_dodged_swing_gives_no_rage`
+      (through the protocol), `avoided_blows_and_abilities_give_power_back`,
+      `an_avoided_ability_gives_back_its_rage_or_energy_as_its_outcome_allows` and
+      `a_dodged_rage_ability_gives_back_four_fifths_of_its_cost`.
+
 ## Left for later, and why

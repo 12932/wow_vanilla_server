@@ -1133,7 +1133,8 @@ The battlegrounds share one layer, `map/battleground/{mod,wsg,ab,av}.rs`:
 ### Phase 13: creature combat and class procs (2026-10-17)
 
 - **Refunds:** an avoided ability gives back most of its rage or energy, as Thistle Tea's. A dodged or parried white
-  swing gives three quarters of its rage.
+  swing gives three quarters of its rage. (Since decision 98, 2026-10-24: mangos-classic's, 80% back on a miss,
+  dodge, parry or deflect, and no rage from an avoided swing.)
 - **Thrown weapons and ammunition:** a ranged ability spends a round, and a thrown stack gets used up.
 - **Creatures:**
   - a creature's off-hand weapon swings;
