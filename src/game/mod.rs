@@ -146,6 +146,8 @@ mod tests_gm_ready;
 #[cfg(test)]
 mod tests_guards;
 #[cfg(test)]
+mod tests_held_steps;
+#[cfg(test)]
 mod tests_hyperspawn;
 #[cfg(test)]
 mod tests_immune_target;

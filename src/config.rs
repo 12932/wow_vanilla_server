@@ -366,11 +366,14 @@ settings! {
         /// How long a map's update may spend on visibility's refreshes, in
         /// milliseconds: past it the rest wait for the next update (20 a
         /// second), oldest first, so a crowd moving in step can't stall a
-        /// map. At least one chunk (128) is done each update.
+        /// map. A chunk of refreshes is sized to what is left of it, at what
+        /// a refresh cost in the last (16 to 128); at least one chunk is
+        /// done each update, and with 0 a whole one (128).
         refresh_budget_ms: u64 = 10, Clamp(0.0, 1000.0), Live, "";
         /// Threads that work out visibility's refreshes for the maps, read
-        /// only, before each map applies them; 1 works them out on the
-        /// map's own thread, 0 takes the machine's cores, up to 8.
+        /// only, before each map applies them, and compress the update's
+        /// packets no two clients share (a crowd's creates); 1 does both on
+        /// the map's own thread, 0 takes the machine's cores, up to 8.
         refresh_threads: usize = 0, Clamp(0.0, 64.0), Restart, "";
         /// Past these yards from a player who moves, those who see them
         /// get only every `distant_move_every`th of their heartbeats (a

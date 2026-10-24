@@ -685,6 +685,9 @@ pub struct Map {
     pub hyperspawn: hyperspawn::Hyperspawn,
     /// The clients held ([`Map::hold`]) until their creates go.
     pub holding: Vec<(Guid, crate::game::conn::Outbound)>,
+    /// In the update's steps before its visibility: those held that have
+    /// frames waiting are let go at each step's end ([`Map::let_go_waiting`]).
+    pub(crate) let_go_after_steps: bool,
     /// What came into the map (or was placed in it) since the update's
     /// visibility, near players ([`Map::hold_near`]).
     pub fresh: Vec<Guid>,
@@ -1444,6 +1447,7 @@ impl Map {
             objects: Default::default(),
             hyperspawn: Default::default(),
             holding: Vec::new(),
+            let_go_after_steps: false,
             fresh: Vec::new(),
             lost_sight: Vec::new(),
             trigger_cooldowns: AHashMap::new(),
@@ -2083,7 +2087,10 @@ impl Map {
         let probe = bench_probe::enabled().then(bench_probe::start);
 
         // Each step under its own guard: one that panics costs itself,
-        // this once, and the rest (the flushes most of all) go on.
+        // this once, and the rest (the flushes most of all) go on. Up to
+        // visibility's, each lets go of the clients it held that have
+        // frames waiting (`Map::let_go_waiting`).
+        self.let_go_after_steps = true;
         self.step("players", Map::update_players);
         // The tiles read since the last update, for all that follows.
         self.step("tiles", tiles::update);
@@ -2127,6 +2134,7 @@ impl Map {
         self.step("cheer speakers", crate::game::cheer_speakers::update);
         self.step("necrotic camps", necrotic_camps::update);
         self.step("the dead", ai::update_dead);
+        self.let_go_after_steps = false;
         self.step("visibility", visibility::refresh_dirty);
         self.step("quest objects", quests::update_objects);
         self.step("forgets", Map::flush_forgets);
@@ -2305,6 +2313,47 @@ impl Map {
     fn encode_pool(&self) -> Option<&'static rayon::ThreadPool> {
         let threads = self.cfg.visibility_threads;
         (threads != 1).then(|| visibility::pool(threads)).flatten()
+    }
+
+    /// After one of the update's steps before its visibility: a client the
+    /// step held (a stealthed pet striking from its prowl, seen by a crowd
+    /// at once) that has frames waiting gets its forgets and creates now,
+    /// then what waited, as it would at the "held" step, rather than
+    /// having every broadcast of the update's later steps copied into its
+    /// hold one by one (a crowd of 1,600 held through a pets' step: 50,000
+    /// frames, 40 ms each way). Each client's packets come in the same
+    /// order: its creates before anything naming what they create. One
+    /// with nothing waiting stays held, its blocks for the update's one
+    /// batch, as at the "held" step; and none goes while something put in
+    /// the map waits for the update's visibility (`fresh`), as those held
+    /// near it wait for its create.
+    pub(crate) fn let_go_waiting(&mut self) {
+        if self.holding.is_empty() || !self.fresh.is_empty() {
+            return;
+        }
+        let _z = crate::zone!("held after a step");
+        let mut kept = Vec::new();
+        let mut going = Held(Vec::new());
+        for (g, out) in std::mem::take(&mut self.holding) {
+            if out.has_held() {
+                going.0.push((g, out));
+            } else {
+                kept.push((g, out));
+            }
+        }
+        self.holding = kept;
+        let mut batches: Vec<Batch> = Vec::with_capacity(going.0.len());
+        for (g, _) in &going.0 {
+            if let Some(guids) = self.forget.remove(g) {
+                self.settle_forgets(*g, &guids);
+            }
+            batches.push(self.batches.remove(g).unwrap_or_default());
+        }
+        let pool = self.encode_pool();
+        let framed = self.shared_frames.finish_all(batches, pool);
+        for ((_, out), first) in going.0.drain(..).zip(framed) {
+            out.release(first);
+        }
     }
 
     /// After an event (a packet, a call) between updates: a client it held

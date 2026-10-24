@@ -626,6 +626,16 @@ fn drain(
     handles
 }
 
+/// The process's CPU seconds so far, every thread's.
+fn process_cpu() -> f64 {
+    // SAFETY: an all-zero rusage is valid, and getrusage writes into it.
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `ru` is a valid rusage to write to.
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
+    let secs = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+    secs(ru.ru_utime) + secs(ru.ru_stime)
+}
+
 fn pct(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -904,9 +914,15 @@ async fn battle(
     bench_probe::take_zones();
     bench_probe::zones_of(Some(key));
     let t0 = Instant::now();
+    let cpu0 = process_cpu();
     tokio::time::sleep(Duration::from_secs(secs)).await;
     let took = t0.elapsed().as_secs_f64();
+    let cpu = process_cpu() - cpu0;
     bench_probe::disable();
+    println!(
+        "  the process's CPU: {:.2} cores (the server and the bots, their queues drained)",
+        cpu / took
+    );
     let clients = guids.len() as f64;
     let c = &*COUNTS;
     let per_client = |a: &AtomicU64| a.load(Ordering::Relaxed) as f64 / took / clients;

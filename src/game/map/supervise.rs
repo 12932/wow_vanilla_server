@@ -127,7 +127,10 @@ impl Map {
             if self.faults.any() {
                 self.faults.check(name);
             }
-            f(self)
+            f(self);
+            if self.let_go_after_steps {
+                self.let_go_waiting();
+            }
         });
         if let Err(e) = result {
             update_panicked(self, name, &e);
