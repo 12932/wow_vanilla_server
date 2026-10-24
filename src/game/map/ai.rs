@@ -1111,6 +1111,10 @@ fn aggro_scan(map: &mut Map, g: Guid) {
         return;
     }
     let (pos, level) = (c.position, c.fields.get_u32(UNIT_FIELD_LEVEL));
+    if let Some(n) = data.scripts.notice.get(&c.entry).copied() {
+        script_notice(map, g, pos, n);
+        return;
+    }
     let detection = data
         .creature_template(c.entry)
         .map(|t| t.detection_range)
@@ -1155,6 +1159,74 @@ fn aggro_scan(map: &mut Map, g: Guid) {
             attacked(map, g, t);
             return;
         }
+    }
+}
+
+/// How far past a unit's centre its bounding radius reaches (none for one
+/// without: vmangos's `GetObjectBoundingRadius`).
+fn bounding_radius(map: &Map, u: Guid) -> f32 {
+    map.unit_fields(u)
+        .map_or(0.0, |f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS).max(0.0))
+}
+
+/// A unit's bounding radius this far past a creature's at most, for a
+/// script's notice: the grid is searched that much further.
+const NOTICE_SEARCH_MARGIN: f32 = 10.0;
+
+/// [`aggro_scan`] for a creature whose script notices units its own way
+/// ([`Notice`](crate::game::data::scripts::Notice): vmangos's
+/// `MoveInLineOfSight` overrides of `npc_Vanndar`, `npc_DrekThar` and
+/// `npc_WarMaster`): the nearest hostile unit it sees short of the
+/// script's yards past both bounding radii (`GetDistance(pWho) < 23`),
+/// at no level's difference or detect-range aura, with no look for a line
+/// of sight, a height or a way there; at the server's rate (`[creatures]
+/// aggro_rate`, which vmangos's scripts don't take: at its 1, the same).
+/// One with an opener casts it at them as it attacks (`npc_WarMaster`'s
+/// Charge), and if it goes the opener's event waits its time.
+fn script_notice(map: &mut Map, g: Guid, pos: Vector3d, n: crate::game::data::scripts::Notice) {
+    let yards = n.yards * map.cfg.creatures.aggro_rate;
+    if yards <= 0.0 {
+        return;
+    }
+    let own = bounding_radius(map, g);
+    let search = yards + own + NOTICE_SEARCH_MARGIN;
+    let mut near: Vec<(Guid, f32)> = map
+        .grid
+        .around(pos.x, pos.y, search)
+        .filter(|t| *t != g && (guid::is_player(*t) || guid::is_unit(*t)))
+        .filter_map(|t| {
+            map.position_of(t)
+                .map(|at| (t, (dist(at, pos) - own - bounding_radius(map, t)).max(0.0)))
+        })
+        .filter(|(_, d)| *d < yards)
+        .collect();
+    near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.guid().cmp(&b.0.guid())));
+    let Some(t) = near.into_iter().map(|(t, _)| t).find(|t| {
+        map.players.get(t).is_none_or(|pl| {
+            pl.death == Death::Alive
+                && !pl.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_GM)
+                && !pl.awaiting_worldport
+        }) && map.unit_view(*t).is_some_and(|u| u.alive)
+            && !fooled(map, g, *t)
+            && combat::hostile(map, g, *t)
+            && combat::can_attack(map, g, *t)
+            && crate::game::map::spells::stealth::sees(map, g, *t)
+    }) else {
+        return;
+    };
+    attacked(map, g, t);
+    if let Some(o) = n.opener
+        && map
+            .creature(g)
+            .is_some_and(|c| c.alive() && c.combat.victim == t)
+        && crate::game::map::scripts::cast(map, g, t, o.spell, 0)
+    {
+        crate::game::map::event_ai::due_in(
+            map,
+            g,
+            o.event,
+            Duration::from_millis(u64::from(o.repeat_ms)),
+        );
     }
 }
 

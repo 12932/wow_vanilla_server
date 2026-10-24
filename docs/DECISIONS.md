@@ -1725,4 +1725,44 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
       `update::batches_framed_across_a_pool_are_framed_as_one_by_one`, `visibility::a_chunk_is_sized_to_the_budget_left`,
       `tests_client_emu::a_crowds_shared_values_pass_the_client`; benches `battle` and `values`.
 
+103. **Vanndar's global cooldown, and the AV scripts' notice radii, as vmangos's C++** (your call, 2026-10-24;
+     `fix/vanndar-fidelity`, from the Horde at Vanndar: "Yes wait 1s between his three spells" and "Match vmangos
+     here, agreed"). vmangos's `src/scripts/battlegrounds/battleground_alterac.cpp` (development, `a9fa07aa`) is the
+     reference, followed:
+     - **A general's global cooldown** (`npc_VanndarAI::UpdateAI`): each of Avatar (19135), Storm Bolt (19136) and
+       Thunderclap (15588) is cast only with `m_uiGlobalCooldown` at 0, and a cast that goes (`DoCastSpellIfCan(..)
+       == CAST_OK`) starts its own timer over and sets the cooldown to 1 s; while he casts it is held
+       (`IsNonMeleeSpellCasted`). One due meanwhile stays due. wvs let all three go in the same EventAI tick. Now an
+       event may carry a C++ script's global cooldown (`AiEvent::gcd_ms`, wvs's own, set only by `av_scripts`): due,
+       it waits while the creature's (`Scripted::gcd_until`) runs or it casts; its cast that goes sets it; one
+       refused sets none and stays due (`EF_CHECK_RESULT`, the cast step `SF_ABORT_ON_FAILURE`). A fight's start
+       clears it, as `Reset`. Due together, they go in the script's order a second apart: Avatar, Storm Bolt,
+       Thunderclap. **Drek'Thar** (`npc_DrekTharAI`) has the same mechanism, so has it too: Whirlwind 2 s (its
+       whirl already held the others for its 2 s; decision 93), Knockdown and Frenzy 1 s. Not the marshals and
+       warmasters: their 1 s and Charge's 250 ms stay as decision 93 left them (not asked; EventAI looks once a
+       second, so a 250 ms cooldown would be a whole tick).
+     - **Notice radii** (`MoveInLineOfSight`): with no victim, `npc_Vanndar` attacks a hostile unit at
+       `pWho->GetDistance(m_creature) < 23.0f`, `npc_DrekThar` `< 22.0f`, and `npc_WarMaster` (all 16 marshals and
+       warmasters, 14762 to 14777) `< 22.0f` at a valid target, then casts Charge (22911) at it, its Charge timer 12 s
+       on if it goes. `GetDistance` is 3D past both bounding radii (`SizeFactor::BoundingRadius` by default,
+       `Object.cpp`), with no level difference, no detect-range aura, no line of sight, no height or way-there check
+       (those are `BasicAI::MoveInLineOfSight`'s, which the scripts replace; it measures between centres at
+       `GetAttackDistance`). The stealth check stays (`CallAIMoveLOS`'s `IsVisibleForOrDetect`). wvs used the
+       database's detection by level for all of them: 20 yards at an even level between centres, so 22 for the
+       level-62 generals at 60 and 20 for the marshals. Now `ScriptData::notice` (wvs's own, set by `av_scripts`)
+       gives an entry a radius of its script's, and `ai::script_notice` looks with it in place of `aggro_scan`'s
+       range; an `Opener` casts a spell at the one noticed and puts the event it names off. So **Drek'Thar** keeps
+       22 yards (vmangos's, the same as wvs had at 60, but now past both radii, so about a yard and a half further
+       between centres, at any level), and the warmasters by him and the marshals by Vanndar notice at 22 and charge.
+       One departure: `[creatures] aggro_rate` still scales the radius (vmangos's scripts don't take
+       `CONFIG_FLOAT_RATE_CREATURE_AGGRO`; at its 1, the same).
+     - **Not taken, found:** Balinda and Galvangar have the same override at `< 28.0f` (`npc_Balinda`,
+       `npc_Galvangar`); not asked, so they keep the database's (20, so 21 at 60); one line in `av_scripts::leaders`
+       each. And vmangos links Drek'Thar's guards as 12121, 12122 and 14772 to 14777 (`AddLinkedMob`), where wvs
+       (decision 85) has 14770 to 14777, two more warmasters.
+     - Tests: `vanndars_three_spells_are_at_least_a_second_apart`,
+       `vanndar_notices_a_player_at_twenty_two_and_a_half_yards_not_at_twenty_three_and_a_half` and
+       `a_marshal_notices_at_twenty_two_yards_and_charges_the_first_it_notices` (`tests_av_vanndar`, through the
+       protocol; the first skips the map's clock).
+
 ## Left for later, and why

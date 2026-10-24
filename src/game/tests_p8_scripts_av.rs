@@ -119,7 +119,7 @@ pub(super) fn all_of(m: &Map, entry: u32) -> Vec<Guid> {
 }
 
 /// The events of `entry` whose actions do `matches`: their ids.
-fn events_where(m: &Map, entry: u32, matches: impl Fn(&ScriptStep) -> bool) -> Vec<u32> {
+pub(super) fn events_where(m: &Map, entry: u32, matches: impl Fn(&ScriptStep) -> bool) -> Vec<u32> {
     let s = &m.realm.data.scripts;
     s.ai_events
         .get(&entry)
@@ -137,7 +137,7 @@ fn events_where(m: &Map, entry: u32, matches: impl Fn(&ScriptStep) -> bool) -> V
 }
 
 /// The event of `entry` that casts `spell`.
-fn casting(m: &Map, entry: u32, spell: u32) -> u32 {
+pub(super) fn casting(m: &Map, entry: u32, spell: u32) -> u32 {
     let found = events_where(m, entry, |s| s.command == 15 && s.datalong[0] == spell);
     *found
         .first()
@@ -146,9 +146,7 @@ fn casting(m: &Map, entry: u32, spell: u32) -> u32 {
 
 /// `g`'s event `id` due now with no global cooldown in the way.
 fn due_now(m: &mut Map, g: Guid, id: u32) {
-    if let Some(c) = m.caster_mut(g) {
-        c.gcd_until = None;
-    }
+    no_gcd(m, g);
     due(m, g, id);
 }
 
@@ -163,7 +161,7 @@ fn hold_at(m: &mut Map, g: Guid, at: Vector3d) {
     }
 }
 
-fn spells_of(casts: &[(u32, Guid)]) -> Vec<u32> {
+pub(super) fn spells_of(casts: &[(u32, Guid)]) -> Vec<u32> {
     casts.iter().map(|(s, _)| *s).collect()
 }
 
@@ -471,7 +469,7 @@ async fn a_warmaster_charges_from_range_and_whirlwinds_twice_in_a_row() {
 
 /// Charge as the data has it, for these tests: range 95, 8 to 25 yards,
 /// a charge at an enemy.
-fn real_shaped_charge(d: &mut GameData) {
+pub(super) fn real_shaped_charge(d: &mut GameData) {
     d.spells.ranges.insert(95, (8.0, 25.0));
     let mut s = SpellTemplate {
         id: av_scripts::CHARGE,
@@ -791,16 +789,19 @@ async fn a_ritual_raises_its_lord_only_through_her_waiting_summoner() {
 }
 
 /// `g` at `at`, standing, free to move as its fight takes it.
-fn place(m: &mut Map, g: Guid, at: Vector3d) {
+pub(super) fn place(m: &mut Map, g: Guid, at: Vector3d) {
     if let Some(c) = m.creature_mut(g) {
         c.position = at;
         c.motion = crate::game::map::creature::Motion::Idle { until: None };
     }
 }
 
-fn no_gcd(m: &mut Map, g: Guid) {
+pub(super) fn no_gcd(m: &mut Map, g: Guid) {
     if let Some(c) = m.caster_mut(g) {
         c.gcd_until = None;
+    }
+    if let Some(s) = event_ai::scripted_mut(m, g) {
+        s.gcd_until = None;
     }
 }
 

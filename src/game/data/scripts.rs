@@ -105,6 +105,36 @@ pub struct AiEvent {
     /// Without it, it looks again at its next tick.
     #[cfg_attr(test, serde(default))]
     pub miss_repeat: Option<(i32, i32)>,
+    /// wvs's own (none in a database's): a C++ script's global cooldown
+    /// (vmangos's `m_uiGlobalCooldown`, ms). An event with one waits, due,
+    /// while the creature casts or the cooldown that the last such event's
+    /// cast set runs; its own cast that goes sets it. Its timer starts over
+    /// as it fires, as any event's.
+    #[cfg_attr(test, serde(default))]
+    pub gcd_ms: Option<u32>,
+}
+
+/// wvs's own: a creature whose C++ script notices units its own way, in
+/// place of its detection range by level (vmangos's `MoveInLineOfSight`
+/// overrides in `battleground_alterac.cpp`): one with no victim attacks
+/// a hostile unit it sees short of `yards` past both bounding radii
+/// (`GetDistance`, 3D), with no look for a line of sight or a way there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+pub struct Notice {
+    pub yards: f32,
+    /// A spell it casts at the one it notices, as it attacks.
+    pub opener: Option<Opener>,
+}
+
+/// A [`Notice`]'s opening cast: `spell`, and, if it goes, the creature's
+/// EventAI event `event` (its id) is due `repeat_ms` on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+pub struct Opener {
+    pub spell: u32,
+    pub event: u32,
+    pub repeat_ms: u32,
 }
 
 /// `event_flags`.
@@ -328,6 +358,9 @@ pub struct ScriptData {
     /// object of no spawn.
     pub object_hello: AHashMap<u32, u32>,
     pub object_hello_entry: AHashMap<u32, u32>,
+    /// Code-built notice radii ([`Notice`]), by creature entry.
+    #[cfg_attr(test, serde(default))]
+    pub notice: AHashMap<u32, Notice>,
 }
 
 impl ScriptData {
