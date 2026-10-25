@@ -1340,6 +1340,8 @@ mod tests_robust;
 #[cfg(test)]
 mod tests_rogue_dps;
 #[cfg(test)]
+mod tests_record;
+#[cfg(test)]
 mod tests_rules;
 #[cfg(test)]
 mod tests_rules5;
@@ -1514,6 +1516,7 @@ pub struct RealmConfig {
     pub anticheat: crate::config::AnticheatConfig,
     pub gm: crate::config::GmConfig,
     pub hyperspawn: crate::config::HyperspawnConfig,
+    pub record: crate::config::RecordConfig,
     /// `[network] broadcast_batch_*`: each map's window.
     pub broadcast_batch: crate::game::map::batch::BatchConfig,
     /// `creatures.leash_timeout_by_level` parsed, when first asked
@@ -1619,6 +1622,7 @@ impl RealmConfig {
             anticheat: c.anticheat.clone(),
             gm: c.gm.clone(),
             hyperspawn: c.hyperspawn.clone(),
+            record: c.record.clone(),
             broadcast_batch: crate::game::map::batch::BatchConfig::from_config(&c.network),
             leash_brackets: LeashBrackets::default(),
         }

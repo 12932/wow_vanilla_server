@@ -135,6 +135,11 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let walk = Walk::new(points, speed, now, spline_id, true);
     let arrives_at = now + walk.duration.max(Duration::from_millis(1));
+    map.record(|| crate::game::map::record::Ev::Charge {
+        g: caster,
+        tg: target,
+        points: walk.points.clone(),
+    });
     let attack = attack.then_some(target);
     let frame = walk.frame(caster, from);
     let radius = |m: &Map, x: Guid| {
