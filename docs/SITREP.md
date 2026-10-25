@@ -474,17 +474,48 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     4 yd off it stepped in to melee, left its spot, and was sent back, about once a second. Now drag spots are only
     where a path ends; at its spot with its add in reach a tank stands and fights; a spot counts as reached until
     3.5 yd; a drag waits until the add has been on the tank 1.5 s (taunting it back first).
-  - **Warrior tanks get no fist weapons; paladins stop fighting over healers' blessings (your asks, 2026-10-25):**
-    under way, `fix/tank-gear-blessings`: each paladin takes one blessing for the raid by seat, a healer's chosen
-    by the situation, and none overwrites another paladin's.
+  - **Tank weapons and the paladins' blessings: done (your asks; wvs 0.1.137, decision 108; peon 0.1.39).**
+    - `.gear` gives a tank (by role, or Protection) no fist weapon or dagger, a tank's stats first: warriors a
+      sword, mace or axe and a shield; druids no caster's staff. An asked-for kind (`.gear tank fist`) still given.
+    - wvs's blessing rule already matched mangos-classic (one per paladin on a unit; another paladin's other kind
+      stands beside it). The war was peon's: a paladin's Greater blessing not known as its own across the class,
+      the tactics' Salvation over another's Greater Salvation, and no division of labour. Now one kind per paladin
+      by seat (Salvation, Might or Wisdom, Kings, Light), none cast over what a target has from anyone, its own of
+      another kind replaced only out of a fight. 20 attempts each: casts over another's 330 to 0; healers with
+      Salvation and Wisdom both 0% to 88%; kills 14 to 17 of 20.
+    - **Made without you:** a sole raid paladin gives a healer Salvation, Wisdom out of a raid (`[paladin]
+      healer_salvation`); idle paladins share Salvation; blessings before top-up heals out of a fight; a tank seen
+      tanking stays a tank 10 minutes. **Developer test items filtered from every `.gear` (your call, 2026-10-25;
+      wvs 0.1.138):** random greens and blues gave "90 Green Warrior Pauldrons", "(TEST)" staves.
+    - Its other 23 calls are in peon's BOT_AI.
   - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
     `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
     tank pulls only once the healers have sight of where he'll stand, and no heal starts on a tank out of sight.
-  - **Blink (your report, 2026-10-25):** never through terrain, buildings or doodads, never above; under way,
-    `fix/blink`, with mangos's and vmangos's rules traced, the mid-air case brought back to you, and a test for each
-    case plus random blinks over real cities and forest.
-  - **Drek'Thar at max skill (your ask, 2026-10-25):** 40 in default gear at max skill, aiming for 100 kills in 100
-    attempts, then the fastest, cheapest kill; the healers' clumping measured and spread. Under way, `feat/av-perfect`.
+  - **Blink: fixed (your report; wvs 0.1.139, decision 109).** The old leap took the floor nearest a point 20 yd on
+    and 2 yd up, stopped only by building faces turned toward it: 1,500 random blinks failed 398 times (onto Frostwolf
+    Keep 11.8 yd up, through Stormwind's walls, a tree, a shut Deadmines door, 38 yd up a Thunder Bluff cliff). Now
+    it walks its way a quarter yard at a time on the floor (a yard's climb at most, 1.6 yd of room above, no slope
+    over 50°), crossing no building, doodad, terrain or shut door at 1.0, 1.3 and 1.6 yd up, and ends half a yard
+    short of what stops it. Tests: each case at real places, your keep case (16 directions from your start spot, 16
+    from 25 spots in his room), 250 random blinks in each of seven places, the client's own parser on the packets.
+    - **Your call: Blink in mid-air.** mangos-classic: the mage goes 20 yd on, 2 yd lower, and keeps falling (lands
+      on ground only within 10 yd below). vmangos and Thistle Tea: from a fall it lands on the ground within 40 yd
+      below, no fall damage. I'd keep mangos-classic's (implemented): vmangos's makes Blink a free safe landing.
+    - **A correction:** in 1.12 Blink goes through roots and stuns (it removes them); only Polymorph refuses it.
+      wvs already did that.
+    - **Made without you:** quarter-yard steps, a yard's climb, the three heights, half a yard short; every
+      collidable object blocks a leap (not yet line of sight); teleport-to-front, summons and pet placement still use
+      the old test.
+  - **Drek'Thar at max skill (your ask; peon 0.1.40):** 40 in default gear at max skill, 5 tanks and 14 healers. Its
+    best measured build killed him 20 of 20 (60 s on average, 2.6 deaths a kill, his time on his tanks 98%), against
+    master's 17 of 20 (64 s, 8.9 deaths, 80%); 75 kills in 75 attempts over its last builds. The 100-attempt measure
+    is running now on both masters. Found and fixed: the boss loose and never taunted back (a stunned main tank took
+    a warmaster; damage forms counted as tanks; nothing held damage at the pull), the Whirlwind's warning never
+    learned (its strike's cast overwrote it), Charge-then-Whirlwind on a healer clump, a bear main tank dying, drag
+    spots out of the healers' sight, and a machine stall counted as a wipe. Healers within 3 yd of another 72% to
+    51%, each at a station in sight of its tank. Each bot's record has its tactics plan; `record.py fight` says why
+    an attempt wiped.
+    - **Your call:** the healers' stations: on (spread, kills and time within the noise) or off. I'd keep them on.
   - **The raid is 5 tanks, 14 healers, 21 damage dealers (your call, 2026-10-25: "I don't want to keep throwing
     tanks at the problem"),** and `peon run av`'s default becomes that (it was 3 and 10; the rounds ran 7 and 13).
     Your other agent's recording showed why the boss ran loose: a mage's Blast Wave 1.3 s into the pull, while the
@@ -495,14 +526,39 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     casting Holy Light as their routine, a damage warrior's 21 Piercing Howls at a boss, Fury warriors with no
     Bloodthirst dancing to Defensive Stance, low feral cats. Under way, `fix/damage-builds`: each bot's build
     recorded, parts matched to builds, rotations by part, measured on the dummy harness and the all-in.
-  - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
-    swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
-    measured on the dps harness, the all-in and a faction battle.
+  - **Melee reach: done (your call, 2026-10-25; peon 0.1.38).** The scenarios' model now carries the bot's own swing,
+    so a swinging melee holds at 4.5 yd; a melee behind its target and up to 2 yd past reach keeps its seat and steps
+    back in (it left for a new seat and stopped its swing). 40 attempts each at Drek'Thar: kills 34 to 36, deaths by
+    40 s 6.8 to 5.6, melee swing uptime 40% to 45%, rogues' damage on him +12%. The dps harness unchanged (18
+    seeds); Hillsbrad's melee still catch a player who runs (88–93% back in reach within 5 s), rogues' swings
+    12 to 20 a minute. Made without you: the 2 yd seat slack; the tank-drag stand-ins of the last round removed
+    (neither helped once the swing was in the model).
   - **Made without you (decision 107):** a dead body's landing taken within its jump's reach; every no-path walk
     grounded (further than mangos, whose `NormalizeZ` is off); path legs sampled every yard (grounding a path costs
     13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
     steep polygons left as they are (mangos lets walking creatures take them; the record counts them by the
     player's rule); a walk while its tile is still loading stays ungrounded.
+- **800 a side: the charge's spikes (your go, 2026-10-25):** under way, `perf/charge-spikes`: a charge at 1,600 with
+  p99 under 50 ms and no update over about 100 ms (now p99 59, single updates 150–190), without changing what any
+  client sees.
+- **Fargate, phase 1's tiles (peon 0.1.41; the plan in peon's docs/DEPLOY_PLAN.md):** `peon nav publish` writes a
+  bake with a manifest of hashes (Azeroth: 689 files, 2.7 GB, 7 s); a run's workers fetch only their battle's tiles
+  over HTTP (`--tiles-from`), checked by hash and cached, 12 tiles and 75 MB in under half a second; `--where` puts a
+  battle anywhere. A Hillsbrad 10-v-10 with workers holding no navmesh fought as one with it. Made without you: our
+  own manifest (not rustigator's), the bake's id from its inputs, an immutable prefix, ureq and sha2 added, `nav
+  serve` loopback-only; 20 calls in peon's notes. Then (peon 0.1.42) the images (peon 98 MB, wvs 101 MB, trixie-slim, read-only, unprivileged), a
+  local container battle with tiles over HTTP, the CDK app (private subnets only, no public IPs, S3 through a gateway
+  endpoint, least-privilege roles, the run's token as a secret), `--fargate` with a dry run and a `--user-approved`
+  gate, S3 presigning, and `deploy/first-run.sh`.
+  - **The first deploy didn't run:** Claude Code's permission check refused `cdk bootstrap` (an infrastructure apply),
+    and your go reached the agent through me, which the check doesn't take as yours. Nothing was created in the
+    account. To deploy: run `deploy/first-run.sh` yourself (`--print` shows each step), or add a permission rule.
+  - **Costs, estimated:** the 10-worker test about $0.54; an hour at 800 a side about $4; idle, about $29 a month
+    for the interface endpoints (destroy `PeonEndpoints` between campaigns), $0.40 for the secret, $0.21 for S3.
+  - **Your calls:** TLS for the orchestrator's control channel (the network is the boundary, the token travels in
+    the clear inside the VPC); narrowing CDK's bootstrap role (AdministratorAccess by default); keeping the
+    endpoints between campaigns; a bucket name and how long results stay (30 days by default). 47 more of its calls
+    in peon's notes.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.

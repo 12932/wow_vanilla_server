@@ -45,7 +45,10 @@ more detail: [COMBAT5_SWEEP.md](COMBAT5_SWEEP.md) (combat, items, loot, professi
 - **Honor inspection** answers within 28 yards, as mangos and the client have it; Thistle Tea's reach is 10.
 - **Every teleport stops a player's cast.** Thistle Tea spares its "combat teleports", which wvs doesn't tell apart.
 - **A guild charter** is sold by any petitioner; Thistle Tea also wants the tabard designer's flag.
-- **Blink's forward form** stops at the farthest point in sight; Thistle Tea walks the navmesh.
+- **Blink's way** walks the ground ahead a quarter of a yard at a time, by mangos-classic's rule (decision 109): it
+  stops short of a wall, a doodad, the terrain, a shut door or an edge, and never climbs onto what stands over its
+  way. Thistle Tea walks the navmesh (`walk_hit_position`), which stops at walls and edges but meets no door, and
+  grounds a falling leap within forty yards, where wvs's falls on, two yards lower (mangos-classic's).
 - **The tapped flag** follows the tapper's current group; Thistle Tea keeps the group as it was at the tap.
 - **Only damage taps a creature,** as mangos-classic's `Unit::DealDamage` sets the loot recipient: the first damage
   that gets through (a blow, a spell, a tick; not a miss or one absorbed whole) from a player, their pet or guardian

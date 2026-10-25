@@ -115,7 +115,7 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
   through); `SMSG_SPELLLOGMISS` (`spell_log_miss.py`, the handler `0x5E7E00`, which must read the packet
   exactly: a target is its GUID and a byte, two floats more when the packet's own byte is set); and `SMSG_ATTACKERSTATEUPDATE` (`attacker_state.py`, the
   melee handler `0x6255B0` up to the end of its parse, `0x625C60`: it must read the blow exactly, its hit info a set of
-  flags of which only 0x1 changes the layout, and hold at most five damage lines); and `SMSG_INITIAL_SPELLS` and `SMSG_ACTION_BUTTONS` (`initial_spells.py`, the handlers `0x5E6510` and `0x5E6680`: each read exactly, and the spell list and buttons the client keeps, which it builds its spellbook and bars from at each create of its own player, the packet's). Adding a check for another handler means finding its address (the registration table at `0x465140` /
+  flags of which only 0x1 changes the layout, and hold at most five damage lines); and `SMSG_INITIAL_SPELLS` and `SMSG_ACTION_BUTTONS` (`initial_spells.py`, the handlers `0x5E6510` and `0x5E6680`: each read exactly, and the spell list and buttons the client keeps, which it builds its spellbook and bars from at each create of its own player, the packet's); and `MSG_MOVE_TELEPORT` and `MSG_MOVE_TELEPORT_ACK` (`teleport.py`, a near teleport's, Blink's: the handlers `0x603BB0` and `0x603F90`, with the unit found, up to the movement's read, `0x47EBA0`, which must read the rest of the packet exactly, its blocks by the move flags: a transport's GUID and place, a swimmer's pitch, a jump's four floats, a spline's elevation; the GUID and the ACK's counter as the packet's bytes say, and the place a point of a map). Adding a check for another handler means finding its address (the registration table at `0x465140` /
   `0x6035C0`, or `tools/client_check` notes; each handler is registered as `mov edx, handler; mov ecx, opcode;
   call 0x5AB650`, so the opcode's `B9` and its four bytes find it), driving it from a `Client`, and stubbing what it
   reaches outside the parse.
@@ -139,6 +139,8 @@ sends through `WoW.exe`'s own parsing code, so such a packet fails a test before
 ```sh
 # Prove it against the spline crash (no outside files needed):
 uv run --python 3.14 --with unicorn --with pefile python -I tools/client_check/selftest.py
+# Prove the teleports' check on packets it builds (each flag's block; cut short, a byte long):
+uv run --python 3.14 --with unicorn --with pefile python -I tools/client_check/teleport.py
 
 # Check a frame capture, or a packet carved from a dump (opcode-first):
 uv run --python 3.14 --with unicorn --with pefile python -I tools/client_check/check.py capture.bin

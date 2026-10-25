@@ -122,29 +122,16 @@ async fn a_leap_while_falling_falls_on_and_one_under_water_keeps_its_depth() {
                 m.players.get_mut(&g).unwrap().movement.flags = flags;
             };
             set(m, MovementInfo_MovementFlags::empty().set_fallingfar());
-            let fell = crate::game::map::spells::leap_end(
-                m,
-                g,
-                v(-8949.95, -132.49, 113.53),
-                v(-8969.95, -132.49, 113.53),
-            );
+            let leap = crate::game::map::spells::leap::leap_end;
+            let (west, east) = (std::f32::consts::PI, 0.0);
+            let fell = leap(m, g, v(-8949.95, -132.49, 113.53), west, 20.0);
             set(m, MovementInfo_MovementFlags::empty());
-            let walked = crate::game::map::spells::leap_end(
-                m,
-                g,
-                v(-8949.95, -132.49, 83.53),
-                v(-8969.95, -132.49, 83.53),
-            );
+            let walked = leap(m, g, v(-8949.95, -132.49, 83.53), west, 20.0);
             set(
                 m,
                 MovementInfo_MovementFlags::empty().set_swimming(Default::default()),
             );
-            let swam = crate::game::map::spells::leap_end(
-                m,
-                g,
-                v(-2180.0, -1867.59, -5.0),
-                v(-2160.0, -1867.59, -5.0),
-            );
+            let swam = leap(m, g, v(-2180.0, -1867.59, -5.0), east, 20.0);
             (m.nav.is_some(), fell, walked, swam)
         })
         .await

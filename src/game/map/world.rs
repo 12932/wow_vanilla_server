@@ -130,6 +130,25 @@ pub fn populate(map: &mut Map) {
             }
         }
     }
+    // The collision models of the objects it shows, or will when they are
+    // back (`obstacles`).
+    if let Some(nav) = map.nav.as_mut() {
+        let displays: ahash::AHashSet<u32> = data
+            .gameobject_spawns
+            .get(&map.key.map)
+            .into_iter()
+            .flatten()
+            .filter_map(|s| data.gameobject_templates.get(&s.entry))
+            .map(|t| t.display_id)
+            .chain(
+                map.gameobjects
+                    .iter()
+                    .map(|(_, o)| o.fields.get_u32(crate::game::fields::GAMEOBJECT_DISPLAYID)),
+            )
+            .collect();
+        let dir = nav.dir().to_owned();
+        nav.obstacle_models = crate::game::map::obstacles::read(&dir, displays);
+    }
     crate::game::map::instance_script::settle_spawns(map);
     crate::game::map::bones::restore(map);
     // Nobody is here yet to see any of it.

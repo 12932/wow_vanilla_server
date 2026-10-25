@@ -62,6 +62,8 @@ mod tests_bg6;
 #[cfg(test)]
 mod tests_blessings;
 #[cfg(test)]
+mod tests_blink;
+#[cfg(test)]
 mod tests_body;
 #[cfg(test)]
 mod tests_booty;
@@ -137,6 +139,8 @@ mod tests_fan_out_arc;
 mod tests_gear;
 #[cfg(test)]
 mod tests_gear_quality;
+#[cfg(test)]
+mod tests_gear_tank;
 #[cfg(test)]
 mod tests_gear_unique;
 #[cfg(test)]

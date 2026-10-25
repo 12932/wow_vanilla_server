@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use wow_world_messages::Guid;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::*;
 
 use super::tests_p3_spells_kit::*;
@@ -301,4 +302,195 @@ async fn a_paladins_blessings_replace_one_another_but_freedom_and_another_paladi
 /// Let the spells cast go off.
 fn spells_done(m: &mut Map) {
     crate::game::map::spells::update(m);
+}
+
+const WISDOM: u32 = 25_290;
+const GREATER_WISDOM: u32 = 25_918;
+const GREATER_WISDOM_1: u32 = 25_894;
+const SALVATION: u32 = 1038;
+const GREATER_SALVATION: u32 = 25_895;
+const SYMBOL_OF_KINGS: u32 = 21_177;
+
+/// The blessings of Wisdom, Salvation and Kings on `g`, and who cast them.
+fn healers_blessings(m: &Map, g: Guid) -> Vec<(u32, Guid)> {
+    const KINDS: [u32; 6] = [
+        WISDOM,
+        GREATER_WISDOM,
+        GREATER_WISDOM_1,
+        SALVATION,
+        GREATER_SALVATION,
+        KINGS,
+    ];
+    let mut v: Vec<(u32, Guid)> = auras::auras(m, g)
+        .map(|a| {
+            a.holders
+                .iter()
+                .filter(|h| KINDS.contains(&h.spell))
+                .map(|h| (h.spell, h.caster))
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort_by_key(|(s, c)| (*s, c.guid()));
+    v
+}
+
+/// `leader` invites `other`, who accepts: in a party.
+async fn party(leader: &mut Client, other: &mut Client, name: &str, members: usize) {
+    leader.send(CMSG_GROUP_INVITE { name: name.into() }).await;
+    other
+        .wait_for("SMSG_GROUP_INVITE", |m| {
+            matches!(m, ServerOpcodeMessage::SMSG_GROUP_INVITE(_)).then_some(())
+        })
+        .await;
+    other.send(CMSG_GROUP_ACCEPT {}).await;
+    leader
+        .wait_for("SMSG_GROUP_LIST", |m| match m {
+            ServerOpcodeMessage::SMSG_GROUP_LIST(l) if l.members.len() >= members => Some(()),
+            _ => None,
+        })
+        .await;
+}
+
+/// The blessings of two paladins on two priests of their party, as
+/// mangos-classic's group 7 (`UNIQUE_PER_CASTER`) and its stacker have
+/// them: one blessing of each paladin's on a unit, so a paladin's new one
+/// takes the place of its own other there (Kings for its Wisdom, Greater
+/// Salvation for its Kings), and another paladin's of another kind stands
+/// beside it (Wisdom and Salvation together); a Greater Blessing goes on
+/// all of the target's class in the group; and a blessing and its Greater
+/// kind are one spell (one family and family flags: the stacker's
+/// "multirank", unstackable for helpful spells), whoever cast them, so the
+/// other paladin's as strong or stronger takes its place (a Wisdom for a
+/// Greater Wisdom of the same 33 mana, a Salvation for a Greater
+/// Salvation) and a weaker is refused (`IsSimilarExistingAuraStronger`: a
+/// Greater Wisdom of 30 under a Wisdom of 33).
+#[tokio::test]
+#[ignore = "extended"]
+async fn two_paladins_blessings_on_healers_stand_together_one_of_a_kind() {
+    if !have_data() {
+        return;
+    }
+    let realm = realm();
+    let (mut a, pa, map) = player(
+        &realm,
+        "BLESSHEAL1",
+        "Wisblessa",
+        Race::Human,
+        Class::Paladin,
+    )
+    .await;
+    let (mut b, pb, _) = player(
+        &realm,
+        "BLESSHEAL2",
+        "Wisblessb",
+        Race::Human,
+        Class::Paladin,
+    )
+    .await;
+    let (mut c, h1, _) = player(&realm, "BLESSHEAL3", "Wishealc", Race::Human, Class::Priest).await;
+    let (mut d, h2, _) = player(&realm, "BLESSHEAL4", "Wisheald", Race::Human, Class::Priest).await;
+    party(&mut a, &mut b, "Wisblessb", 1).await;
+    party(&mut a, &mut c, "Wishealc", 2).await;
+    party(&mut a, &mut d, "Wisheald", 3).await;
+    let seen = on(&map, move |m| {
+        let learn = [
+            WISDOM,
+            GREATER_WISDOM,
+            GREATER_WISDOM_1,
+            SALVATION,
+            GREATER_SALVATION,
+            KINGS,
+        ];
+        for p in [pa, pb] {
+            ready(m, p, 60, &learn);
+            crate::game::map::inventory::add_item(m, p, SYMBOL_OF_KINGS, 20, false)
+                .expect("the symbols in its bags");
+        }
+        ready(m, h1, 60, &[]);
+        ready(m, h2, 60, &[]);
+        beside(m, pa, pb);
+        beside(m, pa, h1);
+        beside(m, pa, h2);
+        let cast = |m: &mut Map, by: Guid, spell: u32, to: Guid| {
+            assert!(cast_fresh(m, by, spell, at(to)), "{spell} began");
+            spells_done(m);
+        };
+        let both = |m: &Map| (healers_blessings(m, h1), healers_blessings(m, h2));
+        let mut seen = Vec::new();
+        // A's Wisdom, B's Salvation: together.
+        cast(m, pa, WISDOM, h1);
+        cast(m, pb, SALVATION, h1);
+        seen.push(both(m));
+        // A's Kings takes its own Wisdom's place; B's Salvation stays.
+        cast(m, pa, KINGS, h1);
+        seen.push(both(m));
+        // B's Greater Wisdom on the priests takes its own Salvation's.
+        cast(m, pb, GREATER_WISDOM, h1);
+        seen.push(both(m));
+        // A's Wisdom on the second priest, as strong as B's Greater: A's.
+        cast(m, pa, WISDOM, h2);
+        seen.push(both(m));
+        // B's weaker Greater Wisdom: refused on both (its own stronger on
+        // the first, A's on the second).
+        fresh(m, pb);
+        crate::game::map::spells::cast(m, pb, GREATER_WISDOM_1, at(h1), None);
+        spells_done(m);
+        seen.push(both(m));
+        // A's Greater Salvation takes its own Kings' and Wisdom's places.
+        cast(m, pa, GREATER_SALVATION, h1);
+        seen.push(both(m));
+        // B's Salvation, as strong, takes A's Greater Salvation's place
+        // on the second priest.
+        cast(m, pb, SALVATION, h2);
+        seen.push(both(m));
+        seen
+    })
+    .await;
+    let sorted = |mut v: Vec<(u32, Guid)>| {
+        v.sort_by_key(|(s, c)| (*s, c.guid()));
+        v
+    };
+    assert_eq!(
+        seen[0],
+        (sorted(vec![(WISDOM, pa), (SALVATION, pb)]), vec![]),
+        "two paladins' Wisdom and Salvation"
+    );
+    assert_eq!(
+        seen[1],
+        (sorted(vec![(KINGS, pa), (SALVATION, pb)]), vec![]),
+        "A's Kings for its Wisdom"
+    );
+    assert_eq!(
+        seen[2],
+        (
+            sorted(vec![(KINGS, pa), (GREATER_WISDOM, pb)]),
+            vec![(GREATER_WISDOM, pb)]
+        ),
+        "B's Greater Wisdom for its Salvation, on both priests"
+    );
+    assert_eq!(
+        seen[3],
+        (
+            sorted(vec![(KINGS, pa), (GREATER_WISDOM, pb)]),
+            vec![(WISDOM, pa)]
+        ),
+        "A's Wisdom for B's Greater Wisdom of as much"
+    );
+    assert_eq!(seen[4], seen[3], "a weaker Greater Wisdom refused");
+    assert_eq!(
+        seen[5],
+        (
+            sorted(vec![(GREATER_SALVATION, pa), (GREATER_WISDOM, pb)]),
+            vec![(GREATER_SALVATION, pa)]
+        ),
+        "A's Greater Salvation for its Kings and its Wisdom"
+    );
+    assert_eq!(
+        seen[6],
+        (
+            sorted(vec![(GREATER_SALVATION, pa), (GREATER_WISDOM, pb)]),
+            vec![(SALVATION, pb)]
+        ),
+        "B's Salvation for A's Greater Salvation"
+    );
 }

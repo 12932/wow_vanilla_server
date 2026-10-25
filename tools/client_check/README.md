@@ -8,6 +8,9 @@ client's bytes are only ever executed inside the emulator.
 ```sh
 # Prove it against the spline crash and the frozen flier it was built for:
 uv run --python 3.14 --with unicorn --with pefile python -I selftest.py
+# Prove the teleports' check on packets it builds (each flag's block, and
+# packets cut short or a byte long):
+uv run --python 3.14 --with unicorn --with pefile python -I teleport.py
 
 # Check a frame capture (the format Client::captured writes), or one packet:
 uv run --python 3.14 --with unicorn --with pefile python -I check.py capture.bin
@@ -24,6 +27,7 @@ uv run ... python -I check.py --raw packet.bin        # opcode-first body
 | `spell_log_miss.py` | `SMSG_SPELLLOGMISS`: the handler, read exactly (a target is a GUID and a byte) |
 | `attacker_state.py` | `SMSG_ATTACKERSTATEUPDATE`: the melee handler's parse, read exactly (five damage lines at most) |
 | `initial_spells.py` | `SMSG_INITIAL_SPELLS` and `SMSG_ACTION_BUTTONS`: the handlers, read exactly, and the spell list and bars the client keeps to build its spellbook from at each create of its own player |
+| `teleport.py` | `MSG_MOVE_TELEPORT` and `MSG_MOVE_TELEPORT_ACK` (a near teleport: Blink's, to the others and to the player's own client): the handlers up to their movement's read, read exactly, the GUID and counter as sent, the place a point of a map; run alone, its proof |
 | `check.py` | the command line: route each frame of a capture to its check |
 | `selftest.py` | the proof against the spline crash and the frozen flier, with no outside files |
 
