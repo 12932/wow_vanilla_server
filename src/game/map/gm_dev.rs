@@ -1038,6 +1038,7 @@ fn gear_pool_of(
                 quality.map_or((UNCOMMON..=RARE).contains(&t.quality), |q| t.quality == q)
                     && t.required_level <= level
                     && t.required_level + 10 >= level
+                    && !unreal(&t.name)
             }
             Pick::Raid { .. } => {
                 (2..=4).contains(&t.quality) && t.required_level <= level && !unreal(&t.name)
@@ -2826,6 +2827,7 @@ fn random_equipment(map: &mut Map, g: Guid) -> Option<String> {
             .items
             .values()
             .filter(|t| t.required_level <= level && t.quality <= 4 && t.quality >= 1)
+            .filter(|t| !unreal(&t.name))
             .filter(|t| slots_for(t.inventory_type).first() == Some(&slot))
             .filter(|t| inventory::can_equip(p, &prof, t, slot).is_ok())
             .map(|t| t.entry)
