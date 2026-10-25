@@ -2102,9 +2102,11 @@ the round's fight, and over its first ten seconds (the charge from the lines and
 | 1 | after | 67 s, Alliance | 8.2 / 29.2 / 43.4 | 0% | 14.0 / 34.3 / 41.4 | 0% | auras 2.18, spells 1.67, values 1.29, pets 1.05, despawns 0.60 | 2.72 | 2,941,000 |
 | 2 | before | 54 s, Alliance | 9.2 / 45.0 / 78.1 | 0.6% | 17.2 / 62.8 / 78.1 | 3.0% | spells 2.61, auras 2.19, values 1.62, pets 1.24, visibility 0.84 | 2.75 | 3,275,000 |
 | 2 | after | 63 s, Alliance | 8.3 / 33.1 / 40.9 | 0% | 14.4 / 37.4 / 40.9 | 0% | auras 2.17, spells 1.89, values 1.35, pets 1.16, despawns 0.63 | 2.54 | 2,818,000 |
+| 3 | after (the branch's last commit) | 49 s, Alliance | 10.3 / 33.9 / 42.7 | 0% | 13.4 / 38.4 / 42.7 | 0% | spells 2.44, auras 2.30, values 1.52, pets 1.44, despawns 0.60 | 3.14 | 3,657,000 |
 
 (The fight's numbers are peon's summary's; the first ten seconds' are the stats file's updates in them. The fights
-differ: the bots act on what the server tells them.)
+differ: the bots act on what the server tells them. The two pairs ran at 16:23 to 16:32, the third at 17:16, each
+with nothing else of note on the machine.)
 
 ### What is left
 
