@@ -407,7 +407,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     about to die; damage dealers respect a new tank's threat; the nearest healthy tank takes a loose boss.
   - **Made without you, for your review:** **your start spot moved** down the corridor, past his leash line and 25 yd
     from every warmaster: with decision 103 they noticed the raid by the doors and charged it during its buffs.
-  - **Your call: should walls block the AV scripts' notice?** Checked in vmangos's source: they don't. Its scripts
+  - **Walls block the AV scripts' notice: yes (your call, 2026-10-25; decision 104, wvs 0.1.132).** Your start spot
+    by the doors is being put back.
+  - (was) **Your call: should walls block the AV scripts' notice?** Checked in vmangos's source: they don't. Its scripts
     replace the default notice (which tests line of sight) with a bare distance test, and the visibility path tests
     line of sight only for stealthed players. So vmangos's warmasters and generals notice through walls, as wvs now
     does. The alternative is to add the line-of-sight test the default notice has (a small change), which would let
@@ -420,6 +422,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   room (server-driven; for later). Fixed: corners and heartbeats are sent; a move is checked a yard at a time for
   walls, drops and the navmesh's edge (the old check missed half the keep's walls), on its whole first leg (the
   Horde round's 2-yard check), each tick and as a last guard before it's sent; the summary counts any it refuses.
+- **Drek'Thar's scenario bugs (your goal, 2026-10-25), under way:** bots through walls (still seen by you after peon
+  0.1.33), players floating a little above the floor in his room, a druid's jittery movement, pets falling through
+  his room's floor. A fight recorder is being built first (wvs and peon, `feat/fight-record`): every unit's position
+  as the server holds it, every client and server move, every ability and aura of players and NPCs, the AI's
+  notices, with a summary that counts wall crossings, floating, jitter and falls, and a replay to watch. The fixes
+  (`fix/av-bugs`) are proved on it.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
