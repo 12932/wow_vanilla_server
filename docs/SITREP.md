@@ -491,6 +491,10 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     druid tank on Drek'Thar was stunned, turned him and five guards onto the mage, and no tank ever taunted him back.
     Under way: the boss always held (a backup taunts him back, a stunned tank's boss taken by the backup), no AoE
     until the tanks hold, and each bot's record logging its tactics plan.
+  - **Damage dealers not pulling their weight (your other agent's finding, 2026-10-25):** damage-part paladins
+    casting Holy Light as their routine, a damage warrior's 21 Piercing Howls at a boss, Fury warriors with no
+    Bloodthirst dancing to Defensive Stance, low feral cats. Under way, `fix/damage-builds`: each bot's build
+    recorded, parts matched to builds, rotations by part, measured on the dummy harness and the all-in.
   - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
     swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
     measured on the dps harness, the all-in and a faction battle.
