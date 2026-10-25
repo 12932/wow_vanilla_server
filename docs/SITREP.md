@@ -488,9 +488,17 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
       tanking stays a tank 10 minutes. **Developer test items filtered from every `.gear` (your call, 2026-10-25;
       wvs 0.1.138):** random greens and blues gave "90 Green Warrior Pauldrons", "(TEST)" staves.
     - Its other 23 calls are in peon's BOT_AI.
-  - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
-    `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
-    tank pulls only once the healers have sight of where he'll stand, and no heal starts on a tank out of sight.
+  - **The "eating" tank and the pull (your reports; peon 0.1.43):** nobody ate: the tank *sat* (to rest) with a
+    warmaster on him, because the brain's rest ignored the server's combat flag, and raiders who lost his fight past
+    30 yd dropped their foes. Fixed: no rest in a fight or with a fight in sight; a raider keeps its foes on the way in
+    and its fight out to 50 yd. Sits in a fight 17 to 0. wvs already refuses food in combat (a test added). Healers no
+    longer start heals at friends out of sight (refusals 297 to 90), and hold a heal up to 2 s for a tank about to
+    come into sight. Kills within the noise (18 to 16 of 20 at 5t14h; 17 to 18 at 7t13h).
+    - **The pull's order kept** (tanks first, healers 1.5 s behind): every other order tried sent the general to a
+      healer first (9 of 10 with healers 0.5 s behind) or was slower. **Your call:** two orders not tried: healers
+      Shield and Renew each tank at the holds before they go in, or the tank walks in instead of Charging.
+    - **Made without you:** 45 yd, 100 ms and 2 s for the sight rules; 40 yd for "a fight in sight"; 50 yd for
+      "still in his fight".
   - **Blink: fixed (your report; wvs 0.1.139, decision 109).** The old leap took the floor nearest a point 20 yd on
     and 2 yd up, stopped only by building faces turned toward it: 1,500 random blinks failed 398 times (onto Frostwolf
     Keep 11.8 yd up, through Stormwind's walls, a tree, a shut Deadmines door, 38 yd up a Thunder Bluff cliff). Now
