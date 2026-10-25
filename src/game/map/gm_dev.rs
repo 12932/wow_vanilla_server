@@ -594,6 +594,70 @@ fn role_ways(class: u8, role: Role) -> Vec<Hands> {
 /// and those that don't: Arms, Fury, Retribution, Enhancement.
 const SHIELD_TREES: [u32; 5] = [163, 382, 383, 261, 262];
 const WEAPON_TREES: [u32; 4] = [161, 164, 381, 263];
+/// The talent trees of a tank: a warrior's and a paladin's Protection (a
+/// druid's Feral is a cat's as well as a bear's: a bear asks `tank`).
+const TANK_TREES: [u32; 2] = [163, 383];
+
+/// Weapon subclasses: fist weapons and daggers.
+const WEAPON_FIST: u32 = 13;
+const WEAPON_DAGGER: u32 = 15;
+
+/// Whether `.gear` dresses a character as a tank: one asked for `tank`, or
+/// asked for no role with most of their talents in Protection.
+fn dresses_a_tank(
+    data: &crate::game::data::GameData,
+    p: &crate::game::map::player::Player,
+    wants: Wants,
+) -> bool {
+    match wants.role {
+        Some(role) => role == Role::Tank,
+        None => best_tree(data, p).is_some_and(|t| TANK_TREES.contains(&t)),
+    }
+}
+
+/// Whether a tank holds a weapon of item subclass `subclass` when it isn't
+/// asked for a kind: not a fist weapon or a dagger, which 1.12's tanks
+/// didn't hold with a shield (a sword, a mace or an axe, as the class may;
+/// a druid's staff or two-handed mace).
+fn tanks_with(subclass: u32) -> bool {
+    !matches!(subclass, WEAPON_FIST | WEAPON_DAGGER)
+}
+
+/// How a tank's weapon ranks among those `.gear` may give it: one with a
+/// tank's stats (strength, agility or stamina, and no intellect or
+/// spirit) first, then one with none of its own (a random suffix's, "of
+/// the Bear" or "of the Owl", rolled as it is made), a caster's last.
+fn tank_rank(t: &crate::game::data::ItemTemplate) -> u8 {
+    const AGILITY: u32 = 3;
+    const STRENGTH: u32 = 4;
+    const INTELLECT: u32 = 5;
+    const SPIRIT: u32 = 6;
+    const STAMINA: u32 = 7;
+    let has = |want: &[u32]| t.stats.iter().any(|(s, v)| *v > 0 && want.contains(s));
+    match (
+        has(&[STRENGTH, AGILITY, STAMINA]),
+        has(&[INTELLECT, SPIRIT]),
+    ) {
+        (true, false) => 2,
+        (false, false) => 1,
+        _ => 0,
+    }
+}
+
+/// A tank's weapons in `picks` (as [`gear_pool`] ordered them) by
+/// [`tank_rank`], the best first: at random, the order kept within a rank;
+/// a raider's, within a quality, its best by item level kept within a
+/// rank.
+fn tank_order(data: &crate::game::data::GameData, pick: Pick, mut picks: Vec<u32>) -> Vec<u32> {
+    let key = |e: &u32| {
+        data.item(*e).map_or((0, 0), |t| match pick {
+            Pick::Random { .. } => (0, tank_rank(t)),
+            Pick::Raid { .. } => (t.quality, tank_rank(t)),
+        })
+    };
+    picks.sort_by_key(|e| std::cmp::Reverse(key(e)));
+    picks
+}
 
 /// The ways of holding a character's talents want: a shield for one with
 /// most of their points in a tree of [`SHIELD_TREES`], none for one with
@@ -1065,6 +1129,11 @@ fn teach(map: &mut Map, g: Guid, spell: u32) {
 /// class may; with neither a role nor a way, the talents spent say
 /// ([`spec_ways`]: a Protection warrior's or paladin's shield, a Holy
 /// paladin's, an Elemental or Restoration shaman's), else it is at random.
+/// A tank ([`dresses_a_tank`]: `tank`, or no role and most talents in
+/// Protection) not asked for a kind of weapon holds no fist weapon or
+/// dagger ([`tanks_with`]): a sword, a mace or an axe with its shield, a
+/// druid's staff or two-handed mace; one with a tank's stats first, a
+/// caster's last ([`tank_rank`]).
 fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
     use crate::game::map::inventory::{self, Destination, SLOT_MAIN_HAND, SLOT_OFF_HAND};
     use crate::game::store::BAG_PLAYER;
@@ -1088,15 +1157,25 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
         }
         _ => None,
     };
+    // A tank not asked for a kind of weapon: no fist weapon or dagger, a
+    // tank's stats first (the user's call, 2026-10-25).
+    let tank = wants.weapon.is_none() && dresses_a_tank(&data, p, wants);
     let kind = armour_of(class, level);
     let armour = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR && t.subclass == kind;
     let trinket = |t: &crate::game::data::ItemTemplate| t.class == ITEM_ARMOR;
     let one_hand = |t: &crate::game::data::ItemTemplate| {
         t.class == ITEM_WEAPON && weapon_for(&data, t.subclass, class)
     };
-    // The kind of weapon asked for, in the hands that hold one.
+    // The kind of weapon asked for, in the hands that hold one; a tank's.
     let of_kind = |t: &crate::game::data::ItemTemplate, kind: Option<WeaponKind>| {
-        one_hand(t) && kind.is_none_or(|k| k.fits(t.subclass))
+        one_hand(t) && kind.is_none_or(|k| k.fits(t.subclass)) && (!tank || tanks_with(t.subclass))
+    };
+    let tank_weapons = |picks: Vec<u32>| {
+        if tank {
+            tank_order(&data, pick, picks)
+        } else {
+            picks
+        }
     };
     let mut plan: Vec<(u8, Vec<u32>)> = vec![
         (0, gear_pool(&data, who, pick, &[1], armour)),
@@ -1157,10 +1236,10 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
     }
     let fill = |way: Hands| {
         let kind = kind.filter(|k| k.held(way));
-        let main = match way {
+        let main = tank_weapons(match way {
             Hands::TwoHanded => gear_pool(&data, who, pick, &[17], |t| of_kind(t, kind)),
             _ => gear_pool(&data, who, pick, &[13, 21], |t| of_kind(t, kind)),
-        };
+        });
         let off = match way {
             Hands::TwoHanded => Vec::new(),
             Hands::Shield => gear_pool(&data, who, pick, &[14], |t| {
@@ -1168,7 +1247,9 @@ fn gear(map: &mut Map, g: Guid, pick: Pick, wants: Wants) -> Option<String> {
                     && t.subclass == ARMOR_SHIELD
                     && class_gets(&data, 9116, class)
             }),
-            Hands::DualWield => gear_pool(&data, who, pick, &[13, 22], |t| of_kind(t, kind)),
+            Hands::DualWield => {
+                tank_weapons(gear_pool(&data, who, pick, &[13, 22], |t| of_kind(t, kind)))
+            }
             Hands::HeldInOffHand => gear_pool(&data, who, pick, &[23], trinket),
         };
         (way, main, off)
