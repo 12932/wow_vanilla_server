@@ -157,21 +157,18 @@ pub fn update_creatures(map: &mut Map) {
     if keys.is_empty() {
         return;
     }
-    let mut nav = map.nav.take();
     let mut rng = rand::rng();
     for key in keys {
-        step_creature(map, key, now, nav.as_mut(), &mut rng);
+        step_creature(map, key, now, &mut rng);
     }
-    map.nav = nav;
 }
 
-fn step_creature(
-    map: &mut Map,
-    key: usize,
-    now: Instant,
-    mut nav: Option<&mut Nav>,
-    rng: &mut impl rand::Rng,
-) {
+/// One creature's step along its spawn's movement. The navmesh stays in
+/// the map throughout: what its step sets off (its formation following it,
+/// a script at a waypoint) finds its way over it too. Taken out for the
+/// step, a formation's followers walked straight to their places at their
+/// leader's height, off the ground and off the navmesh's edge (decision 107).
+fn step_creature(map: &mut Map, key: usize, now: Instant, rng: &mut impl rand::Rng) {
     // A special path goes straight, at its points' own heights.
     let pathfind = map
         .creatures
@@ -230,6 +227,7 @@ fn step_creature(
     let Some(c) = map.creatures.get_mut(key) else {
         return;
     };
+    let mut nav = map.nav.as_mut();
     let guid = c.guid;
     let mut frame = None;
     match &c.motion {
@@ -631,10 +629,8 @@ pub fn step_creature_key(map: &mut Map, key: usize) {
         return;
     }
     let now = map.now;
-    let mut nav = map.nav.take();
     let mut rng = rand::rng();
-    step_creature(map, key, now, nav.as_mut(), &mut rng);
-    map.nav = nav;
+    step_creature(map, key, now, &mut rng);
 }
 
 /// Game object types.
