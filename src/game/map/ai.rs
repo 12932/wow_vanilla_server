@@ -1201,16 +1201,27 @@ fn script_notice(map: &mut Map, g: Guid, pos: Vector3d, n: crate::game::data::sc
         .filter(|(_, d)| *d < yards)
         .collect();
     near.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.guid().cmp(&b.0.guid())));
-    let Some(t) = near.into_iter().map(|(t, _)| t).find(|t| {
-        map.players.get(t).is_none_or(|pl| {
-            pl.death == Death::Alive
-                && !pl.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_GM)
-                && !pl.awaiting_worldport
-        }) && map.unit_view(*t).is_some_and(|u| u.alive)
-            && !fooled(map, g, *t)
-            && combat::hostile(map, g, *t)
-            && combat::can_attack(map, g, *t)
-            && crate::game::map::spells::stealth::sees(map, g, *t)
+    let fit: Vec<Guid> = near
+        .into_iter()
+        .map(|(t, _)| t)
+        .filter(|t| {
+            map.players.get(t).is_none_or(|pl| {
+                pl.death == Death::Alive
+                    && !pl.fields.has_flag(PLAYER_FLAGS, PLAYER_FLAGS_GM)
+                    && !pl.awaiting_worldport
+            }) && map.unit_view(*t).is_some_and(|u| u.alive)
+                && !fooled(map, g, *t)
+                && combat::hostile(map, g, *t)
+                && combat::can_attack(map, g, *t)
+                && crate::game::map::spells::stealth::sees(map, g, *t)
+        })
+        .collect();
+    // In sight, as every creature's notice: vmangos's scripts test the
+    // distance alone, so its warmasters notice through his hall's walls,
+    // which the user ruled out (decision 104).
+    let Some(t) = fit.into_iter().find(|t| {
+        map.position_of(*t)
+            .is_some_and(|to| crate::game::map::assistance::sees(map, pos, to))
     }) else {
         return;
     };

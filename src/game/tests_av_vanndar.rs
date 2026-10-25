@@ -367,3 +367,43 @@ async fn a_marshal_notices_at_twenty_two_yards_and_charges_the_first_it_notices(
     assert!(!later.contains(&(av_scripts::CHARGE, alice)), "{later:?}");
     assert!(!on_list, "Alice isn't noticed");
 }
+
+/// A scripted notice needs sight (decision 104, the user's call: "there's
+/// supposed to be line of sight"): Vanndar doesn't notice Grom 15 yards
+/// off behind a wall, and does once the wall is gone. vmangos's scripts
+/// test the distance alone, so its generals and their guards notice
+/// through walls; wvs's look as every creature's notice does.
+#[tokio::test]
+async fn vanndar_notices_no_one_behind_a_wall() {
+    let mut d = valley();
+    monsters(&mut d);
+    vanndar_at_home(&mut d);
+    av_scripts::install(&mut d);
+    let realm = harness::realm_with(d);
+    let (_a, _, mut b, grom, map) = pair(&realm).await;
+    map.query(move |m| {
+        if let Some(p) = m.players.get_mut(&grom) {
+            p.fields.set_u32(UNIT_FIELD_LEVEL, 60);
+        }
+    })
+    .await;
+    put(&map, &mut b, HOME.x + 60.0, HOME.y, HOME.z).await;
+    let v = map.query(|m| creature(m, VANNDAR)).await.flatten().unwrap();
+    b.sees_on(&map, v).await;
+    // A wall across the way between them, 7 yards from him.
+    map.query(|m| {
+        m.spells.walls.push((
+            Vector3d { x: HOME.x + 7.0, y: HOME.y - 20.0, z: HOME.z },
+            Vector3d { x: HOME.x + 7.0, y: HOME.y + 20.0, z: HOME.z },
+        ));
+    })
+    .await;
+    let behind = noticed_at(&map, &mut b, grom, v, HOME, 15.0).await;
+    map.query(|m| m.spells.walls.clear()).await;
+    let open = noticed_at(&map, &mut b, grom, v, HOME, 15.0).await;
+    assert_eq!(
+        (behind, open),
+        ((false, false), (true, true)),
+        "(went for him, his victim): behind the wall, then in the open"
+    );
+}
