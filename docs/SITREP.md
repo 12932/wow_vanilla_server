@@ -541,6 +541,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
 - **800 a side: the charge's spikes (your go, 2026-10-25):** under way, `perf/charge-spikes`: a charge at 1,600 with
   p99 under 50 ms and no update over about 100 ms (now p99 59, single updates 150–190), without changing what any
   client sees.
+- **Fargate, phase 1's tiles (peon 0.1.41; the plan in peon's docs/DEPLOY_PLAN.md):** `peon nav publish` writes a
+  bake with a manifest of hashes (Azeroth: 689 files, 2.7 GB, 7 s); a run's workers fetch only their battle's tiles
+  over HTTP (`--tiles-from`), checked by hash and cached, 12 tiles and 75 MB in under half a second; `--where` puts a
+  battle anywhere. A Hillsbrad 10-v-10 with workers holding no navmesh fought as one with it. Made without you: our
+  own manifest (not rustigator's), the bake's id from its inputs, an immutable prefix, ureq and sha2 added, `nav
+  serve` loopback-only; 20 calls in peon's notes. The image, the infrastructure and the first deploy are next.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
