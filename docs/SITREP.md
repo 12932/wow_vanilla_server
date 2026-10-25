@@ -462,8 +462,17 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - **Made without you:** turns of 20° told at once; a stop mid-air waits for the landing (a cast up to 0.8 s
     later); tanks wait 2.5 s at their spot for what they drag; melee keep 3 yd outside a due splash; healers hold
     their way 1.5 s.
-  - **Left:** a bot killed mid-jump lies in the air (about one death in fifty); outside his keep, some creatures
-    (Legionnaires, yetis, gnolls) still float up to a yard on the valley's slopes and walk off the navmesh's edge.
+  - **Then, floating everywhere else** (wvs 0.1.136, decision 107; peon 0.1.36), 20 attempts before and after:
+    creatures' moving time over 0.3 yd outside the keep 5.36% to 0.03%, in his room 0.92% to 0.44%; walk and chase
+    path points over 0.3 yd 201 to 0; bodies in the air a second after death 1 to 0 (11 killed in a jump, all
+    landed); kills 18 of 20 both. Causes: formation followers (Legionnaires, Bloodhounds) walked straight lines at
+    their leader's height (the navmesh was out of the map for the step); path corners kept the navmesh's height; a
+    walk with no path went straight through the ground; a body killed mid-jump had its landing refused.
+  - **Made without you (decision 107):** a dead body's landing taken within its jump's reach; every no-path walk
+    grounded (further than mangos, whose `NormalizeZ` is off); path legs sampled every yard (grounding a path costs
+    13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
+    steep polygons left as they are (mangos lets walking creatures take them; the record counts them by the
+    player's rule); a walk while its tile is still loading stays ungrounded.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
