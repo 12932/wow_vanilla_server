@@ -1200,3 +1200,26 @@ objects = true
 # comes back at its time, one no one loots after this.
 # Default 30. Range 0 to 3600, clamped. Changes at a reload.
 loot_wait_secs = 30
+
+# The fight record (docs/TESTING.md): a map copy's every unit's place
+# and state, sampled, and each move, cast, aura, blow, heal, death,
+# threat, victim and notice as it happens, a line of JSON each, in a
+# file per copy. Off unless a map is named here, or a GM says `.record
+# on` in it. Its writing is off the map's thread.
+[record]
+
+# The maps recorded from their start, by id (each copy of one, a
+# file each): `[30]` is Alterac Valley. A copy started after a
+# reload takes the new list; one running is left as it is.
+# Default []. Changes at a reload.
+maps = []
+
+# Milliseconds between the samples of every unit's place and
+# state (a unit's line only once it changed, or a second on).
+# Default 100. Range 20 to 60000, clamped. Changes at a reload.
+every_ms = 100
+
+# Where the records go: `map<id>-<copy>-<time>.jsonl`, or the
+# name `.record on <name>` gives.
+# Default "record". Changes at a reload.
+dir = "record"

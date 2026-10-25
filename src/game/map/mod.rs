@@ -85,6 +85,7 @@ pub mod quests;
 pub mod questshare;
 pub mod ranged;
 pub mod ready;
+pub mod record;
 pub mod reputation;
 pub mod rest;
 pub mod scripts;
@@ -703,6 +704,8 @@ pub struct Map {
     pub guards: guards::Guards,
     /// Who has panicked lately, and when the map has had enough.
     pub health: supervise::Health,
+    /// The fight record, while it is on (`record`, `[record]`).
+    pub record: Option<Box<record::Recorder>>,
     /// What Tracy shows of the map, while Tracy is on.
     profile: Option<MapProfile>,
     /// Panics a test arms.
@@ -1374,6 +1377,7 @@ impl Map {
         let instance = instance_script::State::for_map(&realm.data, key.map, key.instance);
         let profile = MapProfile::new(key, &realm);
         let outdoor = outdoor_pvp::for_map(key, &realm.config().outdoor_pvp);
+        let cfg_now = realm.config();
         Self {
             key,
             // The generation first: a reload in between is taken again.
@@ -1454,6 +1458,7 @@ impl Map {
             leashes: Default::default(),
             guards: Default::default(),
             health: Default::default(),
+            record: record::for_new_map(&cfg_now.record, key.map, key.instance),
             profile,
             #[cfg(test)]
             faults: Default::default(),
@@ -2047,6 +2052,12 @@ impl Map {
         let Some(p) = self.players.get(&guid) else {
             return;
         };
+        self.record(|| record::Ev::Tele {
+            g: guid,
+            from: p.position(),
+            to: position,
+            map: key.map,
+        });
         p.outbound
             .send(&wow_world_messages::vanilla::SMSG_TRANSFER_PENDING {
                 map: movement::map_enum(key.map),
@@ -2141,6 +2152,7 @@ impl Map {
         self.step("held", Map::release_held);
         self.step("values", Map::flush_values);
         self.step("batches", Map::flush_batches);
+        self.step("record", record::update);
         self.create_cache.clear();
         self.shared_frames.clear();
 
@@ -2812,6 +2824,16 @@ impl Map {
             self.casting.insert(guid);
         }
         let at = c.position;
+        if self.record.is_some() && c.spawn_guid.is_none() {
+            let by = c
+                .scripted
+                .as_deref()
+                .and_then(|s| s.summoner)
+                .or(c.owner)
+                .unwrap_or_else(|| c.fields.get_guid(crate::game::fields::UNIT_FIELD_SUMMONEDBY));
+            let entry = c.entry;
+            self.record(|| record::Ev::Summon { g: guid, by, entry });
+        }
         let key = self.creatures.insert(c);
         self.creature_by_guid.insert(guid, key);
         self.grid.insert(guid, cell);

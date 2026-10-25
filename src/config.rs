@@ -1052,6 +1052,26 @@ settings! {
     }
 }
 
+settings! {
+    /// The fight record (docs/TESTING.md): a map copy's every unit's place
+    /// and state, sampled, and each move, cast, aura, blow, heal, death,
+    /// threat, victim and notice as it happens, a line of JSON each, in a
+    /// file per copy. Off unless a map is named here, or a GM says `.record
+    /// on` in it. Its writing is off the map's thread.
+    pub struct RecordConfig in "record" {
+        /// The maps recorded from their start, by id (each copy of one, a
+        /// file each): `[30]` is Alterac Valley. A copy started after a
+        /// reload takes the new list; one running is left as it is.
+        maps: Vec<u32> = Vec::new(), Any, Live, "";
+        /// Milliseconds between the samples of every unit's place and
+        /// state (a unit's line only once it changed, or a second on).
+        every_ms: u64 = 100, Clamp(20.0, 60_000.0), Live, "";
+        /// Where the records go: `map<id>-<copy>-<time>.jsonl`, or the
+        /// name `.record on <name>` gives.
+        dir: PathBuf = PathBuf::from("record"), Any, Live, "";
+    }
+}
+
 /// `v` at `rate`, rounded down (as mangos scales); at 1, `v` itself.
 pub fn scaled(v: u32, rate: f32) -> u32 {
     if rate == 1.0 {
@@ -1101,6 +1121,7 @@ pub struct ServerConfig {
     pub spawn: SpawnConfig,
     pub arena: ArenaConfig,
     pub hyperspawn: HyperspawnConfig,
+    pub record: RecordConfig,
 }
 
 /// Every section, in the order they are printed.
@@ -1128,6 +1149,7 @@ pub const SECTIONS: &[&Section] = &[
     &SpawnConfig::SECTION,
     &ArenaConfig::SECTION,
     &HyperspawnConfig::SECTION,
+    &RecordConfig::SECTION,
 ];
 
 pub fn section(name: &str) -> Option<&'static Section> {
