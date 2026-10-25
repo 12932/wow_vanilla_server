@@ -194,7 +194,7 @@ pub fn sight(map: &Map, from: Vector3d, to: Vector3d) -> bool {
 }
 
 /// Whether segment p-q crosses segment a-b, on the ground.
-fn crosses(p: Vector3d, q: Vector3d, a: Vector3d, b: Vector3d) -> bool {
+pub(crate) fn crosses(p: Vector3d, q: Vector3d, a: Vector3d, b: Vector3d) -> bool {
     let side = |o: Vector3d, x: Vector3d, y: Vector3d| {
         (x.x - o.x) * (y.y - o.y) - (x.y - o.y) * (y.x - o.x)
     };

@@ -1150,12 +1150,7 @@ fn effect(
                 // `CasterLocation`): every leap of 1.12 has twenty yards.
                 let d = super::targets::radius(map, s, index, &l.mods);
                 let o = me.orientation + leap_angle(e.target_a, e.target_b);
-                let want = Vector3d {
-                    x: me.position.x + d * o.cos(),
-                    y: me.position.y + d * o.sin(),
-                    z: me.position.z,
-                };
-                let to = leap_end(map, caster, me.position, want);
+                let to = super::leap::leap_end(map, caster, me.position, o, d);
                 if map.players.contains_key(&caster) {
                     map.near_teleport(caster, to, me.orientation);
                 } else {
@@ -1611,73 +1606,14 @@ fn leap_angle(target_a: u32, target_b: u32) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Where a leap from `from` toward `to` ends, on the ground: `to` if it can
-/// be seen, else the farthest point toward it that can, found by halving
-/// the way ten times as Thistle Tea's `first_collision_position` does, and
-/// half a yard back from what stopped it (its `collision_position`).
+/// Where a teleport from `from` toward `to` ends, on the ground: `to` if it
+/// can be seen, else the farthest point toward it that can, found by
+/// halving the way ten times as Thistle Tea's `first_collision_position`
+/// does, and half a yard back from what stopped it (its
+/// `collision_position`). A leap's way is [`super::leap`]'s.
 pub(crate) fn first_clear(map: &mut Map, from: Vector3d, to: Vector3d) -> Vector3d {
-    first_clear_by(map, from, to, true)
-}
-
-/// Where a leap of `caster`, from `from` toward `want`, ends (mangos's
-/// `TARGET_LOCATION_CASTER_FRONT_LEAP`): one swimming keeps its depth,
-/// the floor if that is higher, short of what stops it; one falling with
-/// no ground within three yards under it falls on, two yards lower, on
-/// the ground there if that is within ten yards, short of what stops it
-/// (so a Blink while falling lands no one and spares no fall); else on
-/// the ground ahead ([`first_clear`]).
-pub(crate) fn leap_end(map: &mut Map, caster: Guid, from: Vector3d, want: Vector3d) -> Vector3d {
-    let flags = map.players.get(&caster).map(|p| &p.movement.flags);
-    let swim_flag = flags.is_some_and(|f| f.get_swimming().is_some());
-    let falling = flags.is_some_and(|f| f.get_jumping().is_some() || f.get_fallingfar());
-    // Swimming by the client's flag, or under the terrain's water (Thistle Tea's
-    // `swim_destination`), for a creature's leap too.
-    let swimming = swim_flag
-        || crate::game::map::creature_motion::water(map, from)
-            .is_some_and(|(surface, _)| from.z < surface);
-    if swimming {
-        let to = first_clear_by(map, from, want, false);
-        let floor = map
-            .nav
-            .as_mut()
-            .and_then(|n| n.floor_under(to.x, to.y, to.z + 2.0));
-        return Vector3d {
-            z: floor.map_or(to.z, |f| f.max(to.z)),
-            ..to
-        };
-    }
-    if falling {
-        let under = map
-            .nav
-            .as_mut()
-            .and_then(|n| n.floor_under(from.x, from.y, from.z + 0.5));
-        if under.is_none_or(|g| from.z - g > 3.0) {
-            let lower = Vector3d {
-                z: from.z - 2.0,
-                ..want
-            };
-            let ground = map
-                .nav
-                .as_mut()
-                .and_then(|n| n.ground(lower.x, lower.y, lower.z))
-                .filter(|g| (g - lower.z).abs() <= 10.0);
-            let next = Vector3d {
-                z: ground.unwrap_or(lower.z),
-                ..lower
-            };
-            return first_clear_by(map, from, next, false);
-        }
-    }
-    first_clear(map, from, want)
-}
-
-/// [`first_clear`], each point on the ground there if `grounded`, else at
-/// its height on the way.
-fn first_clear_by(map: &mut Map, from: Vector3d, to: Vector3d, grounded: bool) -> Vector3d {
     let ground = |map: &mut Map, p: Vector3d| {
-        let z = grounded
-            .then(|| map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z + 2.0)))
-            .flatten();
+        let z = map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, p.z + 2.0));
         Vector3d {
             z: z.unwrap_or(p.z),
             ..p

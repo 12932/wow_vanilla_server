@@ -34,6 +34,7 @@ from monster_move import SMSG_MONSTER_MOVE, MonsterMoveCheck
 from spell_log_miss import SMSG_SPELLLOGMISS, SpellLogMissCheck
 from attacker_state import SMSG_ATTACKERSTATEUPDATE, AttackerStateCheck
 from initial_spells import SMSG_ACTION_BUTTONS, SMSG_INITIAL_SPELLS, InitialSpellsCheck
+from teleport import MSG_MOVE_TELEPORT, MSG_MOVE_TELEPORT_ACK, TeleportCheck
 
 DEFAULT_EXE = Path(__file__).resolve().parent / "WoW.exe"
 
@@ -61,6 +62,8 @@ def run(paths, exe: Path, raw: bool, verbose: bool) -> int:
     checks[SMSG_COMPRESSED_UPDATE_OBJECT] = checks[SMSG_UPDATE_OBJECT]
     checks[SMSG_INITIAL_SPELLS] = InitialSpellsCheck(c)
     checks[SMSG_ACTION_BUTTONS] = checks[SMSG_INITIAL_SPELLS]
+    checks[MSG_MOVE_TELEPORT] = TeleportCheck(c)
+    checks[MSG_MOVE_TELEPORT_ACK] = checks[MSG_MOVE_TELEPORT]
 
     seen = {}
     bad = 0

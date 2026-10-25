@@ -52,6 +52,12 @@ const GROUND_SAMPLE: f32 = 1.0;
 const GROUND_REACH: f32 = 5.0;
 /// The most points a path is given so.
 const GROUND_POINTS: usize = 64;
+/// How often along a way its height is put to the terrain's
+/// ([`Nav::into_terrain`]): the terrain's triangles are 2 to 4 yards across.
+const TERRAIN_SAMPLE: f32 = 0.5;
+/// How far under the terrain's surface a point is still on it: a floor's
+/// own height, to the float.
+const TERRAIN_SLACK: f32 = 0.05;
 
 pub struct Nav {
     map: PathfindMap,
@@ -66,6 +72,14 @@ pub struct Nav {
     /// The map's time, as of its last update: when a tile was last used.
     now: Instant,
     heights: Vec<f32>,
+    /// Each tile's terrain, beside rustigator's own: its heights mix the
+    /// terrain's with the models' surfaces, and a way that goes into the
+    /// ground is found on the terrain's alone ([`Nav::into_terrain`]). A
+    /// tile's copy is about 150 KB.
+    terrain: AHashMap<(i32, i32), rustigator_pathfind::terrain::Terrain>,
+    /// The collision models of the map's game objects, by display
+    /// (`obstacles`), read at its start.
+    pub obstacle_models: AHashMap<u32, std::sync::Arc<crate::game::map::obstacles::Model>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +230,8 @@ impl Nav {
                     background: None,
                     now: Instant::now(),
                     heights: Vec::new(),
+                    terrain: AHashMap::new(),
+                    obstacle_models: AHashMap::new(),
                 })
             }
             Err(e) => {
@@ -223,6 +239,11 @@ impl Nav {
                 None
             }
         }
+    }
+
+    /// The bake's directory.
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// From now its tiles are read off the map's thread, and taken in at
@@ -314,8 +335,14 @@ impl Nav {
     }
 
     fn take(&mut self, t: (i32, i32), file: Option<NavFile>) {
+        let terrain = file.as_ref().map(|f| f.terrain.clone());
         let state = match file.map(|f| self.map.load_nav_file(f)) {
-            Some(Ok(_)) => State::In,
+            Some(Ok(_)) => {
+                if let Some(terrain) = terrain {
+                    self.terrain.insert(t, terrain);
+                }
+                State::In
+            }
             Some(Err(e)) => {
                 warn!("navmesh tile {}_{}_{}: {e}", self.name, t.0, t.1);
                 State::Absent
@@ -377,6 +404,7 @@ impl Nav {
         while let Some((x, y)) = idle.pop() {
             let _ = self.map.unload_adt(x, y);
             self.tiles.remove(&(x, y));
+            self.terrain.remove(&(x, y));
             n += 1;
             if started.elapsed() >= budget {
                 break;
@@ -633,6 +661,94 @@ impl Nav {
             return None;
         }
         self.map.liquid_surface(p.x, p.y, p.z).ok().flatten()
+    }
+
+    /// Every surface at `(x, y)`, top to bottom: the terrain's and the
+    /// upward faces of the bake's WMOs and doodads (rustigator's
+    /// `find_heights`, which leaves ceilings out). `None` while its tile is
+    /// loading, or where there is none.
+    pub fn surfaces(&mut self, x: f32, y: f32) -> Option<&[f32]> {
+        self.heights_at(x, y).then_some(&self.heights[..])
+    }
+
+    /// Whether the bake's WMOs or doodads (M2s: trees, rocks, fences)
+    /// stand across the segment from `from` to `to`, met from either side;
+    /// true while a tile under it is loading. rustigator's line of sight
+    /// takes a triangle that faces the ray alone (namigator's), so a wall
+    /// seen from behind, or a doodad's inside, hides nothing: a ray each way
+    /// meets every triangle the segment crosses, as mangos-classic's VMaps
+    /// do (`IntersectTriangle` takes either face). Terrain is no part of it.
+    pub fn crossed(&mut self, from: Vector3d, to: Vector3d) -> bool {
+        self.crossed_by(from, to, true)
+    }
+
+    /// [`Nav::crossed`] by the WMOs alone (`doodads` false), or by them and
+    /// the doodads.
+    pub fn crossed_by(&mut self, from: Vector3d, to: Vector3d, doodads: bool) -> bool {
+        let corners = [
+            from,
+            to,
+            Vector3d {
+                x: from.x,
+                y: to.y,
+                z: from.z,
+            },
+            Vector3d {
+                x: to.x,
+                y: from.y,
+                z: from.z,
+            },
+        ];
+        if !self.ready_at(&corners) {
+            return true;
+        }
+        let clear =
+            |a: Vector3d, b: Vector3d| self.map.line_of_sight(v(a), v(b), doodads).unwrap_or(true);
+        !(clear(from, to) && clear(to, from))
+    }
+
+    /// The terrain's height at `(x, y)`: `None` over a hole in it (a cave's
+    /// mouth, a building's cellar), where there is none, or while its tile
+    /// is loading.
+    pub fn terrain_height(&mut self, x: f32, y: f32) -> Option<f32> {
+        if !x.is_finite() || !y.is_finite() || !self.ready(x, y) {
+            return None;
+        }
+        let t = tile_of(x, y);
+        self.terrain.get(&t)?.height_at(t.0, t.1, x, y)
+    }
+
+    /// Whether the segment from `from` to `to` goes into the terrain or out
+    /// of it (a hill's face, a slope it cuts under), looked at every
+    /// [`TERRAIN_SAMPLE`]: from one side of the terrain's surface to the
+    /// other between two looks, both over the terrain and not a hole. A way
+    /// under the terrain all along (a cellar, a cave) crosses nothing, and
+    /// one through a hole (a cave's mouth) neither. True while a tile under
+    /// it is loading.
+    pub fn into_terrain(&mut self, from: Vector3d, to: Vector3d) -> bool {
+        if !self.ready_at(&[from, to]) {
+            return true;
+        }
+        let planar = (to.x - from.x).hypot(to.y - from.y);
+        let n = ((planar / TERRAIN_SAMPLE).ceil() as usize).max(1);
+        let mut last: Option<bool> = None;
+        for i in 0..=n {
+            let f = i as f32 / n as f32;
+            let p = Vector3d {
+                x: from.x + (to.x - from.x) * f,
+                y: from.y + (to.y - from.y) * f,
+                z: from.z + (to.z - from.z) * f,
+            };
+            let under = self
+                .terrain_height(p.x, p.y)
+                .map(|h| p.z < h - TERRAIN_SLACK);
+            match (last, under) {
+                (Some(a), Some(b)) if a != b => return true,
+                _ => {}
+            }
+            last = under;
+        }
+        false
     }
 
     /// Whether `to` can be seen from `from`; clear while a tile of its ends

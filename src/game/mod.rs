@@ -62,6 +62,8 @@ mod tests_bg6;
 #[cfg(test)]
 mod tests_blessings;
 #[cfg(test)]
+mod tests_blink;
+#[cfg(test)]
 mod tests_body;
 #[cfg(test)]
 mod tests_booty;

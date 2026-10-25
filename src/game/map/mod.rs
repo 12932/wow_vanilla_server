@@ -71,6 +71,7 @@ pub mod necrotic_camps;
 pub mod npc;
 pub mod objects;
 pub mod observers;
+pub mod obstacles;
 pub mod outdoor_pvp;
 pub mod pets;
 pub mod player;

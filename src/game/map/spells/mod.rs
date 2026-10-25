@@ -14,8 +14,7 @@ mod effects;
 
 pub(crate) use effects::dispellable;
 pub(crate) use effects::first_clear;
-#[cfg(test)]
-pub(crate) use effects::leap_end;
+pub mod leap;
 #[cfg(test)]
 pub(crate) use effects::{Dr, dr_group};
 pub use effects::{
