@@ -737,3 +737,47 @@ fn a_chunk_stops_where_the_budget_runs_out() {
     visibility::refresh_dirty(&mut at_once.map);
     assert_eq!(c.knowledge(), at_once.knowledge());
 }
+
+/// A client held for a create of its own when a crowd's create is shared
+/// gets that create in its batch, with the rest: its batch goes before
+/// what waits in its hold, so a forget of the object later in the update
+/// (the one gone back into its invisibility) would otherwise reach it
+/// before the create, and leave its client with an object its player
+/// doesn't know.
+#[test]
+fn a_held_client_gets_a_crowds_create_in_its_batch() {
+    let (rt, mut c, g) = settled();
+    let _in = rt.enter();
+    horde(&mut c.map, g);
+    hide(&mut c.map, g);
+    c.end_update();
+    c.drain();
+    let mut views: Vec<ClientView> = c
+        .guids
+        .iter()
+        .map(|&o| ClientView {
+            me: o,
+            has: c.map.players[&o].known.iter().copied().collect(),
+            wrong: Vec::new(),
+        })
+        .collect();
+    // One of the crowd held for a create one by one (another it lost sight
+    // of and has again, as a step before visibility would).
+    let (o, y) = (c.guids[3], c.guids[4]);
+    visibility::part(&mut c.map, o, y);
+    visibility::introduce(&mut c.map, o, y);
+    assert!(c.map.players[&o].outbound.is_holding());
+    // Seen by the crowd again, and gone again, in the one update.
+    unhide(&mut c.map, g);
+    assert!(knows(&c, o, g));
+    hide(&mut c.map, g);
+    assert!(!knows(&c, o, g));
+    c.end_update();
+    replay(&mut c, &mut views);
+    for (i, &p) in c.guids.iter().enumerate() {
+        assert!(views[i].wrong.is_empty(), "{p:?}: {:?}", views[i].wrong);
+        let known: std::collections::BTreeSet<Guid> =
+            c.map.players[&p].known.iter().copied().collect();
+        assert_eq!(views[i].has, known, "{p:?}'s client");
+    }
+}

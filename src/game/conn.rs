@@ -1416,6 +1416,12 @@ impl Outbound {
         fresh
     }
 
+    /// Whether the client is held ([`Outbound::hold`]), frames waiting or
+    /// not.
+    pub fn is_holding(&self) -> bool {
+        self.inner.holding.load(Ordering::Acquire)
+    }
+
     /// Whether frames are waiting on a hold.
     pub fn has_held(&self) -> bool {
         self.inner.holding.load(Ordering::Acquire) && !self.inner.held.lock().is_empty()

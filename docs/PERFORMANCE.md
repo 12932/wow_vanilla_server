@@ -2032,8 +2032,10 @@ The bench's probe now keeps each update's zones, and `BATTLE_SLOWEST_ZONES` show
    quests to show) are planned as the update's values are (`values::Shared::plan_with`: chunks with a core, a tree
    for the players among them, shares by pattern) and broadcast at the chunk's end, before anything else is sent,
    with no client held. The rest go into the batches, each client held until its batch goes, as before: one who
-   sees the object otherwise, one with a forget of it still to come this update, a passenger, a corpse, a game
-   object, a transport, and the shares only one client gets. Each client gets the same creates, each once, before
+   sees the object otherwise, one with a forget of it still to come this update, one held already (its batch goes
+   before what waits in its hold: `a_held_client_gets_a_crowds_create_in_its_batch`), a player to one who has the
+   player's corpse or is to forget it, a passenger, a corpse, a game object, a transport, and the shares only one
+   client gets. Each client gets the same creates, each once, before
    anything naming their objects (`tests_visibility::shared_creates_leave_each_client_as_one_by_one` replays each
    client's frames over a walk with every change of state; `a_crowds_shared_create_comes_before_what_names_its_object`;
    the client check, `tests_client_emu::a_crowds_shared_creates_pass_the_client`).

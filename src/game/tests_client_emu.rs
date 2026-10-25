@@ -1067,3 +1067,97 @@ async fn a_crowds_shared_creates_pass_the_client() {
     assert!(reached > 0, "a create packet reached more than one client");
     run_checker(&check_py, &wow_exe, &capture);
 }
+
+/// A crowd of ten sees one die, release and reclaim her corpse: her create
+/// to them as she rises goes after her corpse's forget (the corpse's
+/// owner and the corpse never both on a client), each client's view as the
+/// server's, and every packet passes the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_crowd_sees_one_rise_from_her_corpse_and_passes_the_client() {
+    use crate::game::map::death::{self, Death};
+    use std::collections::BTreeSet;
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let (mut a, ga) = enter(&realm, "RA", "Risen").await;
+    let mut crowd = Vec::new();
+    for i in 0..10u8 {
+        crowd.push(enter(&realm, &format!("RW{i}"), &format!("Watcher{}", (b'a' + i) as char)).await);
+    }
+    for (c, _) in &mut crowd {
+        c.sees(ga).await;
+    }
+    let from: Vec<usize> = crowd.iter_mut().map(|(c, _)| c.captured().len()).collect();
+    map.query(move |m| {
+        m.players
+            .get_mut(&ga)
+            .unwrap()
+            .fields
+            .set_u32(crate::game::fields::UNIT_FIELD_HEALTH, 0);
+        death::kill(m, ga);
+    })
+    .await
+    .unwrap();
+    a.send(CMSG_REPOP_REQUEST {}).await;
+    a.wait_for("the teleport to the graveyard", |m| {
+        matches!(m, ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_TELEPORT_ACK_Client {
+        guid: ga,
+        movement_counter: a.teleport_order(),
+        time: Default::default(),
+    })
+    .await;
+    let corpse = crate::game::guid::corpse(crate::game::guid::counter(ga));
+    for (c, _) in &mut crowd {
+        c.sees(corpse).await;
+    }
+    map.query(move |m| {
+        let since = m.now - Duration::from_secs(60);
+        m.players.get_mut(&ga).unwrap().death = Death::Ghost { since };
+    })
+    .await
+    .unwrap();
+    a.send(CMSG_RECLAIM_CORPSE { guid: corpse }).await;
+    for (c, _) in &mut crowd {
+        c.forgets(corpse).await;
+        c.sees(ga).await;
+    }
+    harness::an_update(&map).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut seen = AHashSet::new();
+    let mut capture = Vec::new();
+    for ((c, me), from) in crowd.iter_mut().zip(from) {
+        // Her and everyone else it knew before, from its own frames on.
+        let mut has: BTreeSet<Guid> = BTreeSet::new();
+        has.insert(ga);
+        let me = *me;
+        for frame in &c.captured()[from..] {
+            let opcode = u16::from_le_bytes([frame[2], frame[3]]);
+            if CHECKED.contains(&opcode) && seen.insert(frame.as_ptr() as usize) {
+                capture.extend_from_slice(&frame[..]);
+            }
+            let Ok(m) = ServerOpcodeMessage::read_unencrypted(&frame[..]) else {
+                continue;
+            };
+            for g in harness::forgotten(&m) {
+                has.remove(&g);
+            }
+            for g in harness::creates(&m) {
+                if g == ga || g == corpse {
+                    assert!(has.insert(g), "{me:?}: told of {g:?} again");
+                }
+            }
+            assert!(
+                !(has.contains(&ga) && has.contains(&corpse)),
+                "{me:?}: her and her corpse at once"
+            );
+        }
+        assert!(has.contains(&ga) && !has.contains(&corpse), "{me:?}: her, risen");
+    }
+    run_checker(&check_py, &wow_exe, &capture);
+}

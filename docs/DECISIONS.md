@@ -1910,8 +1910,9 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        object to those who see it as a stranger does go in packets planned as the values are (decision 102's
        planner) and broadcast at the chunk's end, before anything else is sent. The rest as before, each client held:
        one with a view of its own (a marker, a pet's master, a tap's outsider, a group shown quests), one with a
-       forget of the object still to come this update, a passenger, a corpse, a game object, a transport, a share one
-       client alone gets. Each client gets the same creates, each once, before anything naming their objects; a
+       forget of the object still to come this update, one held already (its batch goes before its hold), a player
+       to one who has the player's corpse or is to forget it, a passenger, a corpse, a game object, a transport, a
+       share one client alone gets. Each client gets the same creates, each once, before anything naming their objects; a
        client's creates may come in another order among themselves, and in a packet of their own rather than its
        batch. No key: no rule changes.
      - **A spell's area is seen as it is put down** (`spells::dynamic::spawn`), not at its event's end (or at the
@@ -1933,10 +1934,12 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        the areas' tick record pruned once a second (its gap capped at the 30 s kept, so what ticks is the same).
      - Tests: `tests_visibility::shared_creates_leave_each_client_as_one_by_one` (each client's frames replayed over a
        walk with every change of state, shared and one by one: the same views, update by update),
-       `a_crowds_shared_create_comes_before_what_names_its_object`, `a_spell_area_is_seen_at_once_its_create_shared`,
+       `a_crowds_shared_create_comes_before_what_names_its_object`, `a_held_client_gets_a_crowds_create_in_its_batch`,
+       `a_spell_area_is_seen_at_once_its_create_shared`,
        `a_chunk_stops_where_the_budget_runs_out`, `chunk_tests`, `social::spread_tests`,
        `tests_crowd_values::shared_values_are_the_blocks_each_client_had_one_by_one` (marks now), the client check
-       `tests_client_emu::a_crowds_shared_creates_pass_the_client`; benches `battle` (its new knobs) and `visibility`
+       `tests_client_emu::a_crowds_shared_creates_pass_the_client` and
+       `a_crowd_sees_one_rise_from_her_corpse_and_passes_the_client`; benches `battle` (its new knobs) and `visibility`
        (`whole`; it runs again: it lacked `harness = false`).
 
 ## Left for later, and why

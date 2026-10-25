@@ -1115,7 +1115,8 @@ fn apply(map: &mut Map, acts: &[Act], crowds: &mut Crowds) {
 /// this update (it lost sight of it and has it again) is told of it in its
 /// batch, as are those who see it otherwise (its tap's outsiders, its
 /// marker, a pet's master, a player's group with quests to show: `views`),
-/// and a passenger, a corpse, a game object and a transport are always.
+/// and a passenger, a corpse, a game object and a transport are always, and
+/// a player to one who has the player's corpse or is to forget it.
 /// Below [`values::SHARE_FROM`] of a crowd, the creates go into the
 /// batches; so do the shares of them that only one client gets.
 pub(crate) struct Crowds {
@@ -1131,8 +1132,9 @@ struct Crowd {
     object: Guid,
     block: std::sync::Arc<[u8]>,
     strangers: crate::game::map::views::Strangers,
+    /// Those told of it, and their clients.
+    told: Vec<Guid>,
     to: crate::game::conn::Clients,
-    told: usize,
 }
 
 impl Crowds {
@@ -1166,10 +1168,20 @@ impl Crowds {
             return false;
         };
         let crowd = &mut self.slots[s];
-        // Its own view, or a forget of it still to come: on its own.
+        // Its own view, or a forget of it still to come: on its own. So is a
+        // player whose corpse the client has, or is to forget: the corpse's
+        // forget goes first, in the batch, and the client never has both
+        // (a corpse's create before its owner's forget crashed it).
+        let forgets = |g: Guid| {
+            map.forget.get(&observer).is_some_and(|f| f.contains(&g))
+                || map.batches.get(&observer).is_some_and(|b| b.forgets(g))
+        };
+        let corpse = guid::is_player(object).then(|| guid::corpse(guid::counter(object)));
         if !crowd.strangers.includes(observer)
-            || map.forget.get(&observer).is_some_and(|f| f.contains(&object))
-            || map.batches.get(&observer).is_some_and(|b| b.forgets(object))
+            || forgets(object)
+            || corpse.is_some_and(|c| {
+                forgets(c) || map.players.get(&observer).is_some_and(|p| p.known.contains(&c))
+            })
         {
             return false;
         }
@@ -1188,8 +1200,8 @@ impl Crowds {
         // Made afresh: as no quest has it, until the next look.
         p.quest_objects.remove(&object);
         crowd.to.insert(map.clients.index_of(observer));
-        crowd.told += 1;
-        let first = crowd.told == 1;
+        crowd.told.push(observer);
+        let first = crowd.told.len() == 1;
         map.add_observer(object, observer);
         if first {
             if map.creature_by_guid.contains_key(&object) {
@@ -1221,8 +1233,8 @@ impl Crowds {
             object,
             block,
             strangers: crate::game::map::views::Strangers::of(map, object),
+            told: Vec::new(),
             to: Default::default(),
-            told: 0,
         })
     }
 
@@ -1230,17 +1242,32 @@ impl Crowds {
     /// broadcast; those for a few, or a share only one client gets, into
     /// the batches, those clients held.
     fn send(self, map: &mut Map) {
-        if self.slots.iter().all(|c| c.told == 0) {
+        if self.slots.iter().all(|c| c.told.is_empty()) {
             return;
         }
         let _z = crate::zone!("visibility: crowds' creates");
         let mut planner = crate::game::map::values::Shared::default();
         planner.one_by_one = map.shared_values.one_by_one;
-        for c in self.slots {
-            if c.told == 0 {
+        let mut rest: Vec<(Guid, Guid, Vec<u8>)> = Vec::new();
+        for mut c in self.slots {
+            if c.told.is_empty() {
                 continue;
             }
-            map.visibility_dirty.shared_creates += c.told as u64;
+            // One held already (for a create one by one, before or since its
+            // take): its batch goes before what waits in its hold, so the
+            // create goes into the batch with the rest, where a forget of it
+            // later this update drops it, as one by one.
+            let mut held = 0;
+            for &o in &c.told {
+                if map.players.get(&o).is_some_and(|p| p.outbound.is_holding()) {
+                    if let Some(i) = map.clients.get(o) {
+                        c.to.remove(i);
+                    }
+                    rest.push((o, c.object, c.block.to_vec()));
+                    held += 1;
+                }
+            }
+            map.visibility_dirty.shared_creates += (c.told.len() - held) as u64;
             let own = guid::is_player(c.object).then(|| map.clients.index_of(c.object));
             let cell = cell_of_object(map, c.object).unwrap_or_default();
             planner.tell(
@@ -1251,7 +1278,6 @@ impl Crowds {
                 std::sync::Arc::new(c.to),
             );
         }
-        let mut rest: Vec<(Guid, Guid, Vec<u8>)> = Vec::new();
         let pool = map.encode_pool();
         let packets = planner.plan_with(&map.clients, pool, |g, object, block: &[u8]| {
             rest.push((g, object, block.to_vec()));
