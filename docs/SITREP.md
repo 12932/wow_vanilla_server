@@ -474,9 +474,20 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     4 yd off it stepped in to melee, left its spot, and was sent back, about once a second. Now drag spots are only
     where a path ends; at its spot with its add in reach a tank stands and fights; a spot counts as reached until
     3.5 yd; a drag waits until the add has been on the tank 1.5 s (taunting it back first).
-  - **Warrior tanks get no fist weapons; paladins stop fighting over healers' blessings (your asks, 2026-10-25):**
-    under way, `fix/tank-gear-blessings`: each paladin takes one blessing for the raid by seat, a healer's chosen
-    by the situation, and none overwrites another paladin's.
+  - **Tank weapons and the paladins' blessings: done (your asks; wvs 0.1.137, decision 108; peon 0.1.39).**
+    - `.gear` gives a tank (by role, or Protection) no fist weapon or dagger, a tank's stats first: warriors a
+      sword, mace or axe and a shield; druids no caster's staff. An asked-for kind (`.gear tank fist`) still given.
+    - wvs's blessing rule already matched mangos-classic (one per paladin on a unit; another paladin's other kind
+      stands beside it). The war was peon's: a paladin's Greater blessing not known as its own across the class,
+      the tactics' Salvation over another's Greater Salvation, and no division of labour. Now one kind per paladin
+      by seat (Salvation, Might or Wisdom, Kings, Light), none cast over what a target has from anyone, its own of
+      another kind replaced only out of a fight. 20 attempts each: casts over another's 330 to 0; healers with
+      Salvation and Wisdom both 0% to 88%; kills 14 to 17 of 20.
+    - **Made without you:** a sole raid paladin gives a healer Salvation, Wisdom out of a raid (`[paladin]
+      healer_salvation`); idle paladins share Salvation; blessings before top-up heals out of a fight; a tank seen
+      tanking stays a tank 10 minutes. **Your call:** random `.gear` still hands out developer test items ("90
+      Green Rogue Dagger", "(TEST)" staves), which only `.gear raid` filters; I'd filter them.
+    - Its other 23 calls are in peon's BOT_AI.
   - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
     `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
     tank pulls only once the healers have sight of where he'll stand, and no heal starts on a tank out of sight.
