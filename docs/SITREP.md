@@ -485,6 +485,12 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     case plus random blinks over real cities and forest.
   - **Drek'Thar at max skill (your ask, 2026-10-25):** 40 in default gear at max skill, aiming for 100 kills in 100
     attempts, then the fastest, cheapest kill; the healers' clumping measured and spread. Under way, `feat/av-perfect`.
+  - **The raid is 5 tanks, 14 healers, 21 damage dealers (your call, 2026-10-25: "I don't want to keep throwing
+    tanks at the problem"),** and `peon run av`'s default becomes that (it was 3 and 10; the rounds ran 7 and 13).
+    Your other agent's recording showed why the boss ran loose: a mage's Blast Wave 1.3 s into the pull, while the
+    druid tank on Drek'Thar was stunned, turned him and five guards onto the mage, and no tank ever taunted him back.
+    Under way: the boss always held (a backup taunts him back, a stunned tank's boss taken by the backup), no AoE
+    until the tanks hold, and each bot's record logging its tactics plan.
   - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
     swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
     measured on the dps harness, the all-in and a faction battle.
