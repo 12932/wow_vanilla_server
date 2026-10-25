@@ -1790,9 +1790,10 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        terrain's, WMOs' and doodads' upward faces, not the navmesh's polygons), looked up again only once the unit
        moved, and for one on the move at most every 250 ms; `dz` is signed, so a unit sunk into a floor reads under it
        rather than over the floor below.
-     - **Server-driven moves** are found at the update's end by their spline's id (a creature's walk, a player's
-       charge or fear), not at each of the seven places that start one: two begun in one update show as the
-       second, and a halt is the spline's end before its time.
+     - **Server-driven moves** are found at each sample by their spline's id (a creature's walk, a player's
+       charge or fear), not at each of the seven places that start one, and stamped with when they began: two
+       begun within one sample's 100 ms show as the second, and a halt is the spline's end before its time. So are a
+       creature's victim and its evade, to the sample.
      - **Threat** is written for elites and above (`rank` 1 to 3), their highest ten, when it changed at a sample;
        every creature's victim as it changes, and every notice with how (`aggro`, `script`, `assist`) and how far.
      - **A GM's file name** is letters, digits, `-`, `_` and `.`, never starting with a dot: the record stays in its

@@ -411,8 +411,23 @@ impl Recorder {
     }
 }
 
+impl Recorder {
+    /// Stop now (`.record off`): its end written by its thread, which the map
+    /// doesn't wait for.
+    pub fn stop(mut self: Box<Self>) {
+        self.push(Ev::End);
+        self.flush();
+        drop(self.tx.take());
+        drop(self.writer.take());
+    }
+}
+
 impl Drop for Recorder {
     fn drop(&mut self) {
+        // Stopped already, its end sent.
+        if self.tx.is_none() {
+            return;
+        }
         self.push(Ev::End);
         self.flush();
         // The writer ends once it has written what was sent.
@@ -1056,65 +1071,168 @@ fn spline_kind(c: &crate::game::map::creature::Creature, w: &crate::game::map::c
     }
 }
 
-/// The update's look: each unit's spline, victim and evade as they change,
-/// its sample when due, those gone; then what was pushed sent to be
-/// written. Once an update, its last step.
+/// The look at every sample (`[record] every_ms`): each unit's spline (its
+/// start stamped when it began), victim and evade as they changed, its row
+/// if it changed or its keyframe is due, the elites' threat, those gone;
+/// then what was pushed sent to be written. Its update's last step.
 pub fn update(map: &mut Map) {
     let Some(mut r) = map.record.take() else {
         return;
     };
     let now = map.now;
-    let sample = now >= r.next_sample;
-    if sample {
+    if now >= r.next_sample {
         r.next_sample = (r.next_sample + r.every).max(now);
-    }
-    observe_players(map, &mut r, now, sample);
-    observe_creatures(map, &mut r, now, sample);
-    if now >= r.next_gone {
-        r.next_gone = now + GONE_EVERY;
-        let gone: Vec<Guid> = r
-            .seen
-            .keys()
-            .copied()
-            .filter(|g| !map.players.contains_key(g) && map.creature(*g).is_none())
-            .collect();
-        for g in gone {
-            r.seen.remove(&g);
-            r.push(Ev::Gone { g });
+        let t = r.ms(Instant::now());
+        let mut out = Vec::with_capacity(256);
+        observe_players(map, &mut r, now, t, &mut out);
+        observe_creatures(map, &mut r, now, t, &mut out);
+        if now >= r.next_gone {
+            r.next_gone = now + GONE_EVERY;
+            let gone: Vec<Guid> = r
+                .seen
+                .keys()
+                .copied()
+                .filter(|g| !map.players.contains_key(g) && map.creature(*g).is_none())
+                .collect();
+            for g in gone {
+                r.seen.remove(&g);
+                out.push((t, Ev::Gone { g }));
+            }
         }
+        r.events.lock().append(&mut out);
     }
     r.flush();
     map.record = Some(r);
 }
 
-/// A spline with each point's height over the ground under it.
-fn grounded(map: &mut Map, ev: Ev) -> Ev {
-    match ev {
-        Ev::Spline {
-            g,
-            id,
-            points,
-            speed,
-            ms,
-            run,
-            fly,
+/// A server-driven move's spline as the record has it.
+struct Way {
+    id: u32,
+    points: Vec<Vector3d>,
+    speed: f32,
+    ms: u32,
+    run: bool,
+    fly: bool,
+    kind: &'static str,
+    started: Instant,
+    ends: Instant,
+}
+
+impl Way {
+    fn of(w: &crate::game::map::creature::Walk, kind: &'static str) -> Self {
+        Self {
+            id: w.spline_id,
+            points: w.points.clone(),
+            speed: w.speed,
+            ms: w.duration.as_millis() as u32,
+            run: w.run,
+            fly: w.fly,
             kind,
-            ..
-        } => {
-            let dz = points.iter().map(|p| height_over_ground(map, *p)).collect();
+            started: w.started,
+            ends: w.started + w.duration,
+        }
+    }
+}
+
+/// A unit's look this sample, taken from the map before the record is told.
+struct Look {
+    g: Guid,
+    at: Vector3d,
+    spline: u32,
+    /// Its spline, if it is a new one.
+    way: Option<Way>,
+    victim: Guid,
+    evading: bool,
+    threat: Option<Vec<(Guid, f32)>>,
+    row: Row,
+}
+
+/// What changed since the record's last look at a unit, into `out`; its
+/// row (with the ground under it) if due. A new spline is stamped at its
+/// start, and each of its points has the ground's height under it.
+fn told(map: &mut Map, r: &mut Recorder, l: Look, now: Instant, t: u64, out: &mut Vec<(u64, Ev)>) {
+    let start_ms = l.way.as_ref().map(|w| r.ms(w.started));
+    let Some(seen) = r.seen.get_mut(&l.g) else {
+        return;
+    };
+    let g = l.g;
+    if l.spline != seen.spline {
+        if seen.spline != 0 {
+            let early = seen
+                .spline_ends
+                .is_some_and(|e| e > now + Duration::from_millis(60));
+            out.push((
+                t,
+                Ev::Halt {
+                    g,
+                    id: seen.spline,
+                    at: l.at,
+                    early,
+                },
+            ));
+        }
+        seen.spline = l.spline;
+        seen.spline_ends = l.way.as_ref().map(|w| w.ends);
+    }
+    if l.victim != seen.victim {
+        out.push((
+            t,
+            Ev::Victim {
+                g,
+                from: seen.victim,
+                to: l.victim,
+            },
+        ));
+        seen.victim = l.victim;
+    }
+    if l.evading != seen.evading {
+        out.push((
+            t,
+            Ev::Evade {
+                g,
+                on: l.evading,
+                at: l.at,
+            },
+        ));
+        seen.evading = l.evading;
+    }
+    if let Some(list) = l.threat {
+        let changed = list.len() != seen.threat.len()
+            || list.iter().zip(&seen.threat).any(|(a, b)| {
+                a.0 != b.0 || (a.1 - b.1).abs() > 0.01 * a.1.abs().max(1.0)
+            });
+        if changed {
+            seen.threat.clone_from(&list);
+            out.push((t, Ev::Threat { g, list }));
+        }
+    }
+    let mut row = l.row;
+    row.dz = dz_of(map, seen, row.at);
+    let changed = seen.row.as_ref().is_none_or(|o| !o.same(&row));
+    let due = seen
+        .written
+        .is_none_or(|w| now.saturating_duration_since(w) >= KEYFRAME);
+    if changed || due {
+        seen.written = Some(now);
+        seen.row = Some(row.clone());
+        out.push((t, Ev::Pos(Box::new(row))));
+    }
+    if let (Some(w), Some(at)) = (l.way, start_ms) {
+        let dz = w.points.iter().map(|p| height_over_ground(map, *p)).collect();
+        out.push((
+            at,
             Ev::Spline {
                 g,
-                id,
-                points,
+                id: w.id,
+                points: w.points,
                 dz,
-                speed,
-                ms,
-                run,
-                fly,
-                kind,
-            }
-        }
-        ev => ev,
+                speed: w.speed,
+                ms: w.ms,
+                run: w.run,
+                fly: w.fly,
+                kind: w.kind,
+            },
+        ));
     }
 }
 
@@ -1139,28 +1257,14 @@ fn dz_of(map: &mut Map, seen: &mut Seen, at: Vector3d) -> Option<f32> {
     dz
 }
 
-/// A row written if it changed, or its keyframe is due.
-fn write_row(r: &mut Recorder, row: Row, now: Instant) {
-    let seen = r.seen.entry(row.g).or_default();
-    let changed = seen.row.as_ref().is_none_or(|o| !o.same(&row));
-    let due = seen
-        .written
-        .is_none_or(|t| now.saturating_duration_since(t) >= KEYFRAME);
-    if changed || due {
-        seen.written = Some(now);
-        seen.row = Some(row.clone());
-        r.push(Ev::Pos(Box::new(row)));
-    }
-}
-
-fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) {
+fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, t: u64, out: &mut Vec<(u64, Ev)>) {
     let guids: Vec<Guid> = map.players.keys().copied().collect();
     for g in guids {
         let Some(p) = map.players.get(&g) else {
             continue;
         };
         if !r.seen.contains_key(&g) {
-            r.push(Ev::Unit(Box::new(player_intro(p))));
+            out.push((t, Ev::Unit(Box::new(player_intro(p)))));
             r.seen.insert(g, Seen::default());
         }
         // A server-driven run: a fear's, a charge's.
@@ -1172,88 +1276,49 @@ fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) 
             .or_else(|| p.driven.as_ref().and_then(|d| d.walk.as_ref()).map(|w| (w, "driven")))
             .filter(|(w, _)| !w.done(now));
         let spline = walk.map_or(0, |(w, _)| w.spline_id);
-        let mut pending = None;
-        let seen = r.seen.get(&g).map_or(0, |s| s.spline);
-        if spline != seen {
-            let at = p.position();
-            if seen != 0 {
-                let early = r
-                    .seen
-                    .get(&g)
-                    .and_then(|s| s.spline_ends)
-                    .is_some_and(|t| t > now + Duration::from_millis(60));
-                r.push(Ev::Halt {
-                    g,
-                    id: seen,
-                    at,
-                    early,
-                });
-            }
-            if let Some((w, kind)) = walk {
-                pending = Some(Ev::Spline {
-                    g,
-                    id: w.spline_id,
-                    points: w.points.clone(),
-                    dz: Vec::new(),
-                    speed: w.speed,
-                    ms: w.duration.as_millis() as u32,
-                    run: w.run,
-                    fly: w.fly,
-                    kind,
-                });
-            }
-            let ends = walk.map(|(w, _)| w.started + w.duration);
-            if let Some(s) = r.seen.get_mut(&g) {
-                s.spline = spline;
-                s.spline_ends = ends;
-            }
-        }
-        if let Some(ev) = pending {
-            r.push(grounded(map, ev));
-        }
-        if !sample {
-            continue;
-        }
-        let Some(p) = map.players.get(&g) else {
-            continue;
-        };
+        let new = r.seen.get(&g).is_some_and(|s| s.spline != spline);
         let (hp, max_hp, power, max_power, form, mounted, stand) = unit_row(g, &p.fields);
         let at = p.position();
-        let mut row = Row {
+        let look = Look {
             g,
             at,
-            o: p.movement.orientation,
-            flags: move_bits(&p.movement.flags),
-            speed: player_speed(p),
-            hp,
-            max_hp,
-            power,
-            max_power,
-            target: p.fields.get_guid(UNIT_FIELD_TARGET),
-            dead: !matches!(p.death, Death::Alive),
-            dz: None,
-            form,
-            mounted,
-            stand,
+            spline,
+            way: walk.filter(|_| new).map(|(w, kind)| Way::of(w, kind)),
+            victim: Guid::zero(),
             evading: false,
-            moving: spline,
+            threat: None,
+            row: Row {
+                g,
+                at,
+                o: p.movement.orientation,
+                flags: move_bits(&p.movement.flags),
+                speed: player_speed(p),
+                hp,
+                max_hp,
+                power,
+                max_power,
+                target: p.fields.get_guid(UNIT_FIELD_TARGET),
+                dead: !matches!(p.death, Death::Alive),
+                dz: None,
+                form,
+                mounted,
+                stand,
+                evading: false,
+                moving: spline,
+            },
         };
-        let mut seen = r.seen.remove(&g).unwrap_or_default();
-        row.dz = dz_of(map, &mut seen, at);
-        r.seen.insert(g, seen);
-        write_row(r, row, now);
+        told(map, r, look, now, t, out);
     }
 }
 
-fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) {
+fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, t: u64, out: &mut Vec<(u64, Ev)>) {
     let guids: Vec<Guid> = map.awake.iter().copied().collect();
     for g in guids {
         let Some(c) = map.creature(g) else {
             continue;
         };
         if !r.seen.contains_key(&g) {
-            let intro = creature_intro(map, c);
-            r.push(Ev::Unit(Box::new(intro)));
+            out.push((t, Ev::Unit(Box::new(creature_intro(map, c)))));
             r.seen.insert(g, Seen::default());
         }
         let walk = match &c.motion {
@@ -1262,79 +1327,39 @@ fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool
         };
         let spline = walk.map_or(0, |w| w.spline_id);
         let (at, o) = match walk {
+            Some(w) if w.falling => (w.position_at(now).0, c.orientation),
             Some(w) => w.position_at(now),
             None => (c.position, c.orientation),
         };
-        let o = if walk.is_some_and(|w| w.falling) {
-            c.orientation
-        } else {
-            o
-        };
-        let Some(seen) = r.seen.get(&g) else {
-            continue;
-        };
-        let (was_spline, was_victim, was_evading, ends) =
-            (seen.spline, seen.victim, seen.evading, seen.spline_ends);
-        let mut evs = Vec::new();
-        if spline != was_spline {
-            if was_spline != 0 {
-                evs.push(Ev::Halt {
-                    g,
-                    id: was_spline,
-                    at,
-                    early: ends.is_some_and(|t| t > now + Duration::from_millis(60)),
-                });
-            }
-            if let Some(w) = walk {
-                evs.push(Ev::Spline {
-                    g,
-                    id: w.spline_id,
-                    points: w.points.clone(),
-                    dz: Vec::new(),
-                    speed: w.speed,
-                    ms: w.duration.as_millis() as u32,
-                    run: w.run,
-                    fly: w.fly,
-                    kind: spline_kind(c, w),
-                });
-            }
-        }
+        let new = r.seen.get(&g).is_some_and(|s| s.spline != spline);
         let victim = if c.combat.attacking {
             c.combat.victim
         } else {
             Guid::zero()
         };
-        if victim != was_victim {
-            evs.push(Ev::Victim {
-                g,
-                from: was_victim,
-                to: victim,
-            });
-        }
-        if c.evading != was_evading {
-            evs.push(Ev::Evade {
-                g,
-                on: c.evading,
-                at,
-            });
-        }
-        // The elites' threat, at each sample, as it changes.
-        let elite = sample
-            && !c.threat.is_empty()
+        // The elites' threat, as it changes.
+        let threat = (!c.threat.is_empty()
             && map
                 .realm
                 .data
                 .creature_template(c.entry)
-                .is_some_and(|t| t.rank >= 1);
-        let threat = elite.then(|| {
+                .is_some_and(|t| t.rank >= 1))
+        .then(|| {
             let mut l = c.threat.clone();
             l.sort_by(|a, b| b.1.total_cmp(&a.1));
             l.truncate(THREAT_TOP);
             l
         });
-        let row = sample.then(|| {
-            let (hp, max_hp, power, max_power, form, mounted, stand) = unit_row(g, &c.fields);
-            Row {
+        let (hp, max_hp, power, max_power, form, mounted, stand) = unit_row(g, &c.fields);
+        let look = Look {
+            g,
+            at,
+            spline,
+            way: walk.filter(|_| new).map(|w| Way::of(w, spline_kind(c, w))),
+            victim,
+            evading: c.evading,
+            threat,
+            row: Row {
                 g,
                 at,
                 o,
@@ -1356,35 +1381,9 @@ fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool
                 stand,
                 evading: c.evading,
                 moving: spline,
-            }
-        });
-        let ends_now = walk.map(|w| w.started + w.duration);
-        let evading = c.evading;
-        for ev in evs {
-            r.push(grounded(map, ev));
-        }
-        let mut seen = r.seen.remove(&g).unwrap_or_default();
-        seen.spline = spline;
-        seen.spline_ends = ends_now;
-        seen.victim = victim;
-        seen.evading = evading;
-        if let Some(l) = threat {
-            let changed = l.len() != seen.threat.len()
-                || l.iter().zip(&seen.threat).any(|(a, b)| {
-                    a.0 != b.0 || (a.1 - b.1).abs() > 0.01 * a.1.abs().max(1.0)
-                });
-            if changed {
-                seen.threat = l.clone();
-                r.push(Ev::Threat { g, list: l });
-            }
-        }
-        if let Some(mut row) = row {
-            row.dz = dz_of(map, &mut seen, row.at);
-            r.seen.insert(g, seen);
-            write_row(r, row, now);
-        } else {
-            r.seen.insert(g, seen);
-        }
+            },
+        };
+        told(map, r, look, now, t, out);
     }
 }
 
@@ -1509,7 +1508,7 @@ pub fn command(map: &mut Map, g: Guid, args: &[&str]) -> String {
         ["off"] => match map.record.take() {
             Some(r) => {
                 let file = r.file.clone();
-                drop(r);
+                r.stop();
                 format!("Recorded to {file}.")
             }
             None => "Not recording.".into(),

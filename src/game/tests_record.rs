@@ -93,7 +93,9 @@ fn lines(dir: &Path) -> Vec<serde_json::Value> {
     };
     for f in files.flatten() {
         let text = std::fs::read_to_string(f.path()).expect("the record reads");
-        for l in text.lines() {
+        // A last line still being written (no newline yet) is left for later.
+        for l in text.split_inclusive('\n').filter(|l| l.ends_with('\n')) {
+            let l = l.trim_end();
             out.push(serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")));
         }
     }
@@ -255,7 +257,15 @@ async fn a_gm_starts_marks_and_stops_a_record() {
     updates(&map, 2).await;
     c.say(".record off").await;
     c.system_message("Recorded to attempts.jsonl").await;
-    let ls = lines(&d);
+    // Its end is written by its thread, which the map doesn't wait for.
+    let deadline = tokio::time::Instant::now() + harness::WAIT;
+    let ls = loop {
+        let ls = lines(&d);
+        if !of(&ls, "end").is_empty() || tokio::time::Instant::now() >= deadline {
+            break ls;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
     let _ = std::fs::remove_dir_all(&d);
     assert!(Path::new(&d).join("attempts.jsonl") != d);
     assert_eq!(of(&ls, "start")[0]["why"], "gm");

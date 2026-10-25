@@ -207,7 +207,8 @@ event, a file per copy. It is off unless asked for:
 - peon's `peon run <scenario> --record` sets the first for the scenario's map, its bots say the marks, and it writes
   each bot's own record beside it (peon's README, "Recording a run").
 
-Each line has `t`, the Unix time in milliseconds (the bots' records' clock, to join them by), and `e`, what it is. GUIDs
+Each line has `t`, the Unix time in milliseconds (the bots' records' clock, to join them by), and `e`, what it is. Lines
+come in the order written: a spline's `t` is when it began, up to a sample before the lines about it. GUIDs
 are hex (`g`, and `by`, `tg`, `who` for the others in it); places are `[x, y, z]`; `sp` a spell's id.
 
 | `e` | when | fields |
@@ -227,7 +228,8 @@ are hex (`g`, and `by`, `tg`, `who` for the others in it); places are `[x, y, z]
 | `summon`, `tele`, `mark` | a creature summoned (`by`, `entry`), a teleport (`from`, `to`, `map`), a run's mark (`by`, `text`) | |
 
 The map's thread pushes the events onto a list (`Map::record`, a closure not run while it is off), taken at the
-update's last step (`record`, in `WVS_STATS_FILE`'s step times) with the samples, and sent down a channel to a thread
+update's last step (`record`, in `WVS_STATS_FILE`'s step times) with the samples (a unit's spline, stamped with its
+start, its victim and its evade are looked at with its sample), and sent down a channel to a thread
 of the recorder's own, which writes the lines. A unit's sample is written once it changed or a second on (its
 keyframe); the ground under it is looked up again only once it moved, and for a unit on the move at most every
 250 ms (its rows between have no `dz`: a column's heights cost some 3 us). Off, it costs a field's test at each event.
