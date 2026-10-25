@@ -987,3 +987,83 @@ async fn a_crowds_shared_values_pass_the_client() {
     assert!(shared > 0, "some of the crowd's packets were shared");
     run_checker(&check_py, &wow_exe, &capture);
 }
+
+/// A crowd's creates in packets shared among it (`visibility::Crowds`): one
+/// of the other side coming out of an invisibility among a crowd of 12,
+/// and a spell's area put down among it, each told to the crowd in one
+/// packet broadcast to all of it, no client held. Every such packet passes
+/// the client.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_crowds_shared_creates_pass_the_client() {
+    use crate::game::map::auras;
+    use crate::game::map::spells::dynamic;
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
+    let realm = harness::realm();
+    let map = realm.maps.get(&realm, MapKey::world(0));
+    let mut crowd = Vec::new();
+    for i in 0..12u8 {
+        let name = format!("Seer{}", (b'a' + i) as char);
+        crowd.push(enter(&realm, &format!("CC{i}"), &name).await);
+    }
+    let guids: Vec<Guid> = crowd.iter().map(|(_, g)| *g).collect();
+    for (c, me) in &mut crowd {
+        for g in &guids {
+            if g != me {
+                c.sees(*g).await;
+            }
+        }
+    }
+    let hidden = guids[0];
+    // Of the other side, and hidden by an invisibility no one detects.
+    map.query(move |m| {
+        m.players.get_mut(&hidden).unwrap().team = crate::game::registry::Team::Horde;
+        crate::game::tests_p3_combat::aura_of(
+            m,
+            hidden,
+            95_400,
+            auras::AURA_MOD_INVISIBILITY,
+            9,
+            1,
+        );
+    })
+    .await
+    .unwrap();
+    harness::an_update(&map).await;
+    harness::an_update(&map).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let before: Vec<usize> = crowd.iter_mut().map(|(c, _)| c.captured().len()).collect();
+    let shared = map
+        .query(move |m| {
+            let from = m.visibility_dirty.shared_creates;
+            auras::remove_spell(m, hidden, 95_400, None);
+            let at = m.players[&hidden].position();
+            dynamic::spawn(m, hidden, 10, dynamic::KIND_AREA_SPELL, at, 8.0, Some(8000));
+            m.visibility_dirty.shared_creates - from
+        })
+        .await
+        .unwrap();
+    assert!(shared >= 2 * 10, "the creates were shared: {shared}");
+    harness::an_update(&map).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut seen = AHashSet::new();
+    let mut capture = Vec::new();
+    let mut reached = 0;
+    for ((c, _), from) in crowd.iter_mut().zip(before) {
+        for frame in &c.captured()[from..] {
+            let opcode = u16::from_le_bytes([frame[2], frame[3]]);
+            if !CHECKED.contains(&opcode) {
+                continue;
+            }
+            if !seen.insert(frame.as_ptr() as usize) {
+                reached += 1;
+                continue;
+            }
+            capture.extend_from_slice(&frame[..]);
+        }
+    }
+    assert!(reached > 0, "a create packet reached more than one client");
+    run_checker(&check_py, &wow_exe, &capture);
+}

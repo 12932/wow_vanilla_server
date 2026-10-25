@@ -305,6 +305,8 @@ pub struct MapSpells {
     pub health_seen: AHashMap<Guid, health_sync::State>,
     /// When each caster's ground spell (its effect) last ticked each unit.
     pub area_ticked: AHashMap<(Guid, u32, usize, Guid), Instant>,
+    /// When `area_ticked` was last cleared of what is past mattering.
+    pub area_ticked_pruned: Option<Instant>,
     /// Threat held for a while: (creature, unit) to its amount (taunts,
     /// Fade).
     pub temp_threat: AHashMap<(Guid, Guid), f32>,
