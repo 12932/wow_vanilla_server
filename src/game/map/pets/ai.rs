@@ -1106,17 +1106,31 @@ pub fn stop(map: &mut Map, g: Guid) {
 }
 
 /// Walk (run) to `goal`, by the navmesh where there is one: to the ground
-/// there (a spot beside a victim on a slope is at its height).
-fn walk(map: &mut Map, g: Guid, mut goal: Vector3d, now: Instant) {
+/// there (a spot beside a victim on a slope is at its height). With no way
+/// over the navmesh, a straight line only where nothing stands between and
+/// the ground is a step's climb or drop (open ground the bake has a gap
+/// in); else no walk, and false. Before, any goal the navmesh had no way to
+/// was walked straight: through the floor of Drek'Thar's room to the hall
+/// under it, and through his keep's walls (the watcher's `peon::seen`: 29
+/// pets' falls in 5 attempts).
+fn walk(map: &mut Map, g: Guid, mut goal: Vector3d, now: Instant) -> bool {
     let Some(from) = map.position_of(g) else {
-        return;
+        return false;
     };
     let path = match map.nav.as_mut() {
         Some(nav) => {
             if let Some(z) = nav.ground(goal.x, goal.y, goal.z) {
                 goal.z = z;
             }
-            nav.path(from, goal).unwrap_or_else(|| vec![from, goal])
+            match nav.path(from, goal) {
+                Some(path) => path,
+                None if (goal.z - from.z).abs() <= STRAIGHT_CLIMB
+                    && crate::game::map::spells::checks::line_of_sight(map, from, goal) =>
+                {
+                    vec![from, goal]
+                }
+                None => return false,
+            }
         }
         None => vec![from, goal],
     };
@@ -1127,6 +1141,50 @@ fn walk(map: &mut Map, g: Guid, mut goal: Vector3d, now: Instant) {
     {
         map.send_to_observers(g, &frame, false);
     }
+    true
+}
+
+/// The most a pet's straight walk, with no way over the navmesh, climbs or
+/// drops: a step's.
+const STRAIGHT_CLIMB: f32 = 2.5;
+
+/// Its spot at its master's side, as mangos-classic's follow picks one
+/// (`FollowMovementGenerator::_getLocation`, `WorldObject::GetNearPointAt`):
+/// [`FOLLOW_DISTANCE`] out at `angle`, on the ground there, no further above
+/// or below its master than that and both their radii, and in its master's
+/// sight; else the same at angles further round each way; none, its
+/// master's own spot. Before, the spot was taken where it fell, at its
+/// master's height: by a wall or a doorway, in the wall or past it, its
+/// ground the hall under Drek'Thar's room or the wall's top, and the pet
+/// went there.
+fn follow_spot(map: &mut Map, at: Vector3d, angle: f32, radii: f32) -> Vector3d {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+    let most = FOLLOW_DISTANCE + radii;
+    for turn in [
+        0.0,
+        FRAC_PI_4,
+        -FRAC_PI_4,
+        FRAC_PI_2,
+        -FRAC_PI_2,
+        3.0 * FRAC_PI_4,
+        -3.0 * FRAC_PI_4,
+        PI,
+    ] {
+        let a = angle + turn;
+        let mut p = Vector3d {
+            x: at.x + FOLLOW_DISTANCE * a.cos(),
+            y: at.y + FOLLOW_DISTANCE * a.sin(),
+            z: at.z,
+        };
+        if let Some(z) = map.nav.as_mut().and_then(|n| n.ground(p.x, p.y, at.z)) {
+            p.z = z;
+        }
+        if (p.z - at.z).abs() < most && crate::game::map::spells::checks::line_of_sight(map, at, p)
+        {
+            return p;
+        }
+    }
+    at
 }
 
 fn destination(map: &Map, g: Guid) -> Option<Vector3d> {
@@ -1160,12 +1218,14 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
     let Some(pos) = map.position_of(g) else {
         return;
     };
-    let a = o.orientation + angle;
-    let spot = Vector3d {
-        x: o.position.x + FOLLOW_DISTANCE * a.cos(),
-        y: o.position.y + FOLLOW_DISTANCE * a.sin(),
-        z: o.position.z,
+    let radius = |x: Guid| {
+        map.unit_fields(x)
+            .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
+            .filter(|r| *r > 0.0)
+            .unwrap_or(0.389)
     };
+    let radii = radius(g) + radius(owner);
+    let spot = follow_spot(map, o.position, o.orientation + angle, radii);
     let d = dist(pos, spot);
     if d > TELEPORT_DISTANCE {
         jump(map, g, spot, o.orientation);
@@ -1184,13 +1244,7 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
             .creature(owner)
             .is_some_and(|c| matches!(c.motion, Motion::Moving(_))),
     };
-    let radius = |x: Guid| {
-        map.unit_fields(x)
-            .map(|f| f.get_f32(UNIT_FIELD_BOUNDINGRADIUS))
-            .filter(|r| *r > 0.0)
-            .unwrap_or(0.389)
-    };
-    let slack = 1.4 * FOLLOW_DISTANCE + radius(g) + radius(owner);
+    let slack = 1.4 * FOLLOW_DISTANCE + radii;
     if !owner_moving && destination(map, g).is_none() && dist(pos, o.position) <= slack {
         back(map, g);
         return;
@@ -1208,7 +1262,13 @@ fn follow(map: &mut Map, g: Guid, now: Instant) {
         };
         c.speeds.run = own.max(owner_speed);
     }
-    walk(map, g, spot, now);
+    // No way there: put by its master at once, as mangos-classic's follow
+    // unsticks one (`FollowMovementGenerator::_setTargetLocation`: no path,
+    // relocated to its spot, which its master sees).
+    if !walk(map, g, spot, now) {
+        jump(map, g, spot, o.orientation);
+        back(map, g);
+    }
 }
 
 /// Back at its master's side: a recall is over.
