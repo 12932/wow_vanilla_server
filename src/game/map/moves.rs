@@ -416,6 +416,7 @@ fn step(
 /// What a taken packet tells the map, as [`movement::moved_self_as`] does
 /// after its mover's own changes.
 fn tell(map: &mut Map, g: Guid, t: Taken) {
+    crate::game::map::record::client_move(map, g, &t.info, t.frame.as_ref());
     map.grid.relocate(g, t.old_cell, t.new_cell);
     visibility::moved(map, g, t.anchor, t.info.position);
     if let Some(frame) = t.frame {

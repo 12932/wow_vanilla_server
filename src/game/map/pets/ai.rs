@@ -1220,6 +1220,15 @@ fn back(map: &mut Map, g: Guid) {
 
 /// Put the pet at `at` at once.
 fn jump(map: &mut Map, g: Guid, at: Vector3d, orientation: f32) {
+    if let Some(from) = map.recording().then(|| map.position_of(g)).flatten() {
+        let on = map.key.map;
+        map.record(|| crate::game::map::record::Ev::Tele {
+            g,
+            from,
+            to: at,
+            map: on,
+        });
+    }
     let spline = map.next_spline_id;
     map.next_spline_id = map.next_spline_id.wrapping_add(1);
     let Some(c) = map.creature_mut(g) else {

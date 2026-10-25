@@ -2137,6 +2137,16 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
             VICTIMSTATE_EVADES,
             0,
         );
+        map.record(|| crate::game::map::record::Ev::Out {
+            by: attacker,
+            g: victim,
+            sp: 0,
+            out: "evade",
+            n: 0,
+            absorbed: 0,
+            resisted: 0,
+            blocked: 0,
+        });
         map.send_to_observers(attacker, &frame, true);
         return;
     }
@@ -2219,6 +2229,16 @@ fn swing(map: &mut Map, attacker: Guid, victim: Guid, hand: Hand, extra: bool) {
         resisted,
         school.trailing_zeros(),
     );
+    map.record(|| crate::game::map::record::Ev::Out {
+        by: attacker,
+        g: victim,
+        sp: 0,
+        out: crate::game::map::record::swing_outcome(outcome, immune),
+        n: left,
+        absorbed,
+        resisted,
+        blocked,
+    });
     map.send_to_observers(attacker, &frame, true);
     // A creature's victim hears of the blow even if it doesn't see it yet.
     if !guid::is_player(attacker)
@@ -3213,7 +3233,7 @@ pub fn deal_damage_by(
     if map.unit_view(victim).is_some_and(|u| u.alive) {
         stand_struck(map, victim);
     }
-    deal_damage_with(map, attacker, victim, damage, school, spell, true);
+    deal_damage_with(map, attacker, victim, damage, school, spell, true, false);
 }
 
 /// A periodic aura's damage: [`deal_damage_by`], but only a channel's keeps
@@ -3227,9 +3247,10 @@ pub fn deal_periodic_damage(
     spell: Option<u32>,
     channel: bool,
 ) {
-    deal_damage_with(map, attacker, victim, damage, school, spell, channel);
+    deal_damage_with(map, attacker, victim, damage, school, spell, channel, true);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn deal_damage_with(
     map: &mut Map,
     attacker: Guid,
@@ -3238,6 +3259,7 @@ fn deal_damage_with(
     school: u32,
     spell: Option<u32>,
     extends: bool,
+    periodic: bool,
 ) {
     // A GM in god mode takes nothing, and the dead nothing more (mangos's
     // `DealMeleeDamage` and `DealSpellDamage`): a blow or a tick that gets
@@ -3348,6 +3370,15 @@ fn deal_damage_with(
         return;
     };
     f.set_u32(UNIT_FIELD_HEALTH, left);
+    map.record(|| crate::game::map::record::Ev::Dmg {
+        by: attacker,
+        g: victim,
+        sp: spell.unwrap_or(0),
+        school,
+        n: damage,
+        left,
+        periodic,
+    });
     sync_aura_state(map, victim);
     if left == 0 {
         kill_by(map, attacker, victim, spell);
@@ -3433,6 +3464,11 @@ pub fn kill_by(map: &mut Map, killer: Guid, victim: Guid, spell: Option<u32>) {
                     .is_some_and(|c| c.attacking && c.victim == victim)
         })
         .collect();
+    map.record(|| crate::game::map::record::Ev::Death {
+        g: victim,
+        by: killer,
+        sp: spell.unwrap_or(0),
+    });
     // Being killed, it isn't killed again meanwhile (by a kill's proc).
     {
         let _dying = Dying::enter(victim);

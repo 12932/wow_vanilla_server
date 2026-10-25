@@ -5,6 +5,20 @@ fix the kobold's reach; focus on performance and robustness; write down every de
 review the code. [STATE.md](STATE.md) describes where wvs stands now. [DECISIONS.md](DECISIONS.md) keeps every
 question and decision in full; this page is the index.
 
+## The fight record (2026-10-25): calls for you
+Decision 105 in [DECISIONS.md](DECISIONS.md) (`feat/fight-record`; peon's `--record`). Made without you; say which to
+change:
+- **JSON lines**, not a binary format with a converter: readable with `grep` and `jq`, formatted by the recorder's
+  thread, not the map's.
+- **Who is sampled:** every player and the creatures awake (seen or fighting), each only as it changes or a second
+  on, every `[record] every_ms` (100).
+- **The ground** is the bake's real geometry under a unit (the navmesh's nearest surface), worked out by the
+  recorder's thread on a navmesh of its own (memory for the tiles it reads), so the map looks up none.
+- **Server-driven moves, victims and evades** are seen at each sample (a spline stamped with when it began): two
+  splines begun within 100 ms show as the second.
+- **Threat** is written for elites and above only, their top ten, as it changes.
+- **Recording is a game master's**, and a GM's file name stays in `[record] dir` (letters, digits, `-_.`).
+
 ## Since round 11: calls for you (2026-10-22)
 What was decided without you since round 11, or left for you. Each has a recommendation; say which to change.
 Answered ones move to DECISIONS.

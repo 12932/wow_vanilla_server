@@ -1775,4 +1775,29 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
      raid standing outside his hall's wall. Now a scripted notice takes only one in sight, by the test every
      creature's aggro uses (`assistance::sees`). Departs from vmangos. Test: `vanndar_notices_no_one_behind_a_wall`.
 
+105. **The fight record** (2026-10-25; `feat/fight-record`, asked for: "record every character's position, every
+     ability ever used even by npcs and players, all positions, etc so it can be debugged and saved"; the calls in it
+     not yet yours). A map copy can write what it believes and tells its clients (`map/record.rs`, `[record] maps`,
+     `every_ms`, `dir`, a GM's `.record on|off|mark`; docs/TESTING.md, "The fight record"), and peon's `--record`
+     turns it on for a run. Mangos and Thistle Tea have nothing like it. The calls:
+     - **JSON lines, not a binary format.** A line an event, its time and kind first, readable with `grep` and `jq`
+       and by peon's script without a converter. Its cost is the writer thread's, not the map's: the map pushes the
+       events as they are (an enum's copy on a list), and the thread formats them.
+     - **Who is sampled:** every player, and the creatures awake (seen by a player or in a fight: a creature no one
+       sees doesn't move); a unit's line only once something in it changed, or a second on, so a still crowd costs
+       little. Between samples, a unit's moves and casts are the events'.
+     - **The ground** under a unit is the navmesh's surface nearest it (`Nav::ground`: the bake's real geometry, its
+       terrain's, WMOs' and doodads' upward faces, not the navmesh's polygons), worked out by the recorder's thread
+       on a navmesh of its own (the map's bake; memory for the tiles it reads), so the map's thread looks up none:
+       at 3 us a column, a moving crowd's grounds were most of the recorder's cost. `dz` is signed, so a unit sunk
+       into a floor reads under it rather than over the floor below.
+     - **Server-driven moves** are found at each sample by their spline's id (a creature's walk, a player's
+       charge or fear), not at each of the seven places that start one, and stamped with when they began: two
+       begun within one sample's 100 ms show as the second, and a halt is the spline's end before its time. So are a
+       creature's victim and its evade, to the sample.
+     - **Threat** is written for elites and above (`rank` 1 to 3), their highest ten, when it changed at a sample;
+       every creature's victim as it changes, and every notice with how (`aggro`, `script`, `assist`) and how far.
+     - **A GM's file name** is letters, digits, `-`, `_` and `.`, never starting with a dot: the record stays in its
+       directory. Recording is a game master's (`gm::needed_level`), as the other world-changing tools.
+
 ## Left for later, and why

@@ -488,6 +488,16 @@ Hyperspawn: in the races' starting areas, the faster creatures die in a pocket (
 | `objects` | Quest objects (the chests and plants a quest has gathered, and those a quest has used) come back faster too, by the rate they are used at in their pocket, on the same curve. | `true` |  | live |  |
 | `loot_wait_secs` | The longest, in seconds, a hastened creature's corpse with loot left on it (or a skin) holds its respawn back: one looted clean comes back at its time, one no one loots after this. | `30` | 0 to 3600, clamped | live |  |
 
+### `[record]`
+
+The fight record ([TESTING.md](TESTING.md#the-fight-record)): a map copy's every unit's place and state, sampled, and each move, cast, aura, blow, heal, death, threat, victim and notice as it happens, a line of JSON each, in a file per copy. Off unless a map is named here, or a GM says `.record on` in it (`.record mark <text>` marks it, `.record off` ends it). Its writing is off the map's thread. Decision 105 in [DECISIONS.md](DECISIONS.md).
+
+| Key | Meaning | Default | Range | Reload | mangos |
+|---|---|---|---|---|---|
+| `maps` | The maps recorded from their start, by id (each copy of one, a file each): `[30]` is Alterac Valley. A copy started after a reload takes the new list; one running is left as it is. | `[]` |  | live |  |
+| `every_ms` | Milliseconds between the samples of every unit's place and state (a unit's line only once it changed, or a second on). | `100` | 20 to 60000, clamped | live |  |
+| `dir` | Where the records go: `map<id>-<copy>-<time>.jsonl`, or the name `.record on <name>` gives. | `"record"` |  | live |  |
+
 
 ## What is configurable, and what is not
 

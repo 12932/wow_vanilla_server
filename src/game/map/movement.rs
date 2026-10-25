@@ -306,6 +306,7 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
     let z = crate::zone!("move: encode");
     let frame = relay(guid, info);
     drop(z);
+    crate::game::map::record::client_move(map, guid, &info, frame.as_ref());
     if let Some(frame) = frame {
         let _z = crate::zone!("move: broadcast");
         map.send_move(guid, &frame);
@@ -577,6 +578,15 @@ pub(crate) fn fall_damage(map: &mut Map, g: Guid, drop: f32) {
 /// ignored until it acknowledges.
 pub fn teleport_within(map: &mut Map, guid: Guid, position: Vector3d, orientation: f32) {
     let now = map.now;
+    if let Some(from) = map.recording().then(|| map.position_of(guid)).flatten() {
+        let at = map.key.map;
+        map.record(|| crate::game::map::record::Ev::Tele {
+            g: guid,
+            from,
+            to: position,
+            map: at,
+        });
+    }
     let Some(p) = map.players.get_mut(&guid) else {
         return;
     };

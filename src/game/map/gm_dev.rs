@@ -20,7 +20,7 @@ pub const HELP: &str = ".additem <item> [count], .addquest <quest>, .learn <spel
 .weather fine|rain|snow|storm [0..1] [permanent]|auto, .instance info|reset|switch <id>|raid-reset <map>|data [field], \
 .bg join <warsong|arathi|alterac>|start|info|leave, .mail <name> <text>, .debug cooldowns|durability <percent>|\
 events [start|stop <id>]|explore|position [guid]|professions|reputation [<faction>|add|set <faction> <n>|war <faction> on|off|find <name>]|\
-skill <id> <value>|skills|spells|taxi|transport|random equipment, .event list [all]|start <id>|stop <id>|<id>";
+skill <id> <value>|skills|spells|taxi|transport|random equipment, .event list [all]|start <id>|stop <id>|<id>, .record [on [name]|off|mark <text>]";
 
 /// The level a command here needs, if it is one of these: looking is for
 /// moderators, the rest for game masters.
@@ -31,7 +31,9 @@ pub fn needed_level(name: &str) -> Option<u8> {
         "additem" | "addquest" | "learn" | "unlearn" | "character" | "gear" | "pet" | "damage"
         | "kill" | "respawn" | "move" | "modify" | "rested" | "talents" | "tgm" | "god"
         | "weather" | "instance" | "bg" | "battleground" | "mail" | "debug" | "invasion"
-        | "event" | "durability" | "infinitemana" | "thereisnospoon" | "ready" => GAME_MASTER,
+        | "event" | "durability" | "infinitemana" | "thereisnospoon" | "ready" | "record" => {
+            GAME_MASTER
+        }
         _ => return None,
     })
 }
@@ -86,6 +88,7 @@ pub fn command(map: &mut Map, g: Guid, name: &str, args: &[&str]) -> Option<Opti
         "mail" => mail(map, g, args),
         "debug" => debug(map, g, args),
         "event" => event(map, args),
+        "record" => Some(crate::game::map::record::command(map, g, args)),
         _ => return None,
     })
 }

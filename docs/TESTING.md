@@ -192,3 +192,53 @@ there. So:
 - **A wait for what the server sends ends when it comes**: up to `harness::WAIT` (20 s), or, for what a map does at
   once, `Client::sees_on`, which waits for `harness::UPDATES` (400) of the map's updates as well. A wait for nothing
   keeps its short window.
+
+## The fight record
+
+A fight seen in game (bots through a wall, a unit afloat, a druid that can't keep still) is gone over afterwards from
+the **fight record** (`map/record.rs`, decision 105): what a map copy believes and tells its clients, a line of JSON an
+event, a file per copy. It is off unless asked for:
+
+- `[record] maps = [30]` records each copy of those maps from its start, into `[record] dir` (`record/`), as
+  `map<id>-<copy>-<time>.jsonl`, sampling every `[record] every_ms` (100);
+- `.record on [name]` (a game master's) records the copy they are in, `.record mark <text>` puts a mark in it (an
+  attempt's start, its pull, its end: the file splits into attempts by them), `.record` says how it goes, `.record
+  off` ends it;
+- peon's `peon run <scenario> --record` sets the first for the scenario's map, its bots say the marks, and it writes
+  each bot's own record beside it (peon's README, "Recording a run").
+
+Each line has `t`, the Unix time in milliseconds (the bots' records' clock, to join them by), and `e`, what it is. Lines
+come in the order written: a spline's `t` is when it began, up to a sample before the lines about it. GUIDs
+are hex (`g`, and `by`, `tg`, `who` for the others in it); places are `[x, y, z]`; `sp` a spell's id.
+
+| `e` | when | fields |
+|---|---|---|
+| `start`, `end` | the file's first and last | `map`, `instance`, `every_ms`, `why` (`config`, `gm`), `wvs` (its version) |
+| `unit` | a unit, the first time it is written | `kind` (`player`, `creature`, `pet`), `entry`, `name`, `class`, `race`, `level`, `rank`, `faction`, `owner` |
+| `pos` | each unit's sample (players, and the creatures awake), once it changed, or a second on | `p`, `o`, `fl` (its movement flags, every bit), `sp` (its speed as it moves now), `hp`, `mhp`, `pw`, `mpw` (its own power), `tg` (a player's selection, a creature's victim), `dead`, `dz` (its height over the ground: the navmesh's nearest surface under it, its real geometry's), `form`, `mount`, `stand`, `evade`, `spline` (the server's move under way) |
+| `gone` | a unit left the copy | |
+| `move` | a client's movement packet the server took | `op`, `p`, `o`, `fl`, `ct` (the client's time), `fall`, `dz` |
+| `spline`, `halt` | a server-driven move begun (a chase, a way home, a charge, a fear, a fall), and ended | `id`, `kind`, `pts` (its whole way), `sp`, `ms`, `run`, `fly`; `halt`'s `p` and `early` (before its spline's end) |
+| `cast`, `go`, `fail`, `channel`, `stop` | a cast begun, gone off, refused or failed (`why`, `why_s`), a channel begun, a cast or channel broken off (`how`) | `sp`, `tg`, `at`, `ms`, `trig` (a proc's or an aura's) |
+| `aura` | an aura on (`on` 1, `refresh`) or off (`expired`) | `g` (the bearer), `by`, `sp`, `n` (stacks) |
+| `dmg`, `out`, `heal` | damage to health (`n`, `left`, `sc`, `per`), how a blow or spell landed (`out`: hit, crit, miss, dodge, parry, block, glance, crush, resist, immune, evade, absorb, reflect; `sp` 0 a swing; `abs`, `res`, `blk`), healing (`n`, `over`, `crit`, `per`) | `by`, `g`, `sp` |
+| `death` | a unit killed | `g`, `by`, `sp` |
+| `threat` | an elite's threat list as it changed, at each sample | `l`: `[[guid, threat], ...]`, the highest ten |
+| `victim`, `evade`, `notice`, `charge` | a creature's victim changed (`from`, `to`), its evade began or ended (`on`, `p`), it noticed someone (`who`, `yd`, `how`: `aggro`, `script`, `assist`), a charge (`tg`, `pts`) | |
+| `summon`, `tele`, `mark` | a creature summoned (`by`, `entry`), a teleport (`from`, `to`, `map`), a run's mark (`by`, `text`) | |
+
+The map's thread pushes the events onto a list (`Map::record`, a closure not run while it is off), taken at the
+update's last step (`record`, in `WVS_STATS_FILE`'s step times) with the samples (a unit's spline, stamped with its
+start, its victim and its evade are looked at with its sample), and sent down a channel to a thread
+of the recorder's own, which writes the lines. A unit's sample is written once it changed or a second on (its
+keyframe). The ground under each line (`dz`) is the recorder thread's to work out, on a navmesh of its own (the
+map's bake, opened at its first line, its tiles read as they are needed: memory beside the map's), looked up again
+only once a unit moved; the map's thread looks up none (a column's heights cost some 3 us). Off, it costs a field's
+test at each event.
+
+Tests: `tests_record` (a recorded copy's moves, chase, cast, aura, blast, damage and death in its file with their
+fields; none written for a copy not recorded; a GM's `.record on`, `mark` and `off`; and, extended, the heights over
+the ground on the real bake: a player kept at the ring's height over Drek'Thar's sunken middle is a yard over its
+floor). peon's `scripts/record.py` goes
+over a run's record: its moves across walls (`peon record walls`, on the real navmesh), its units over and under the
+ground, their jitter, falls, abilities and deaths by attempt, and a timeline to watch.

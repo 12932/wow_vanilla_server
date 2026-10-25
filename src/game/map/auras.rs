@@ -1308,6 +1308,17 @@ pub fn apply_spell(
         }
     }
     let h = auras(map, target).map(|a| a.holders[index].clone());
+    if let Some(h) = &h {
+        map.record(|| crate::game::map::record::Ev::Aura {
+            g: target,
+            by: h.caster,
+            sp: h.spell,
+            stacks: h.stacks.max(1),
+            on: true,
+            refresh: refreshed.is_some(),
+            expired: false,
+        });
+    }
     // A refresh renews the children it links, or makes again one taken off
     // (Thistle Tea's `Linked`); not one a link made, so a link back to its
     // parent ends there rather than going round.
@@ -2587,6 +2598,15 @@ fn dummy_flags(map: &mut Map, target: Guid, spell: u32, on: bool) {
 
 /// A holder came off: what its going does.
 fn removed(map: &mut Map, target: Guid, h: &Holder) {
+    map.record(|| crate::game::map::record::Ev::Aura {
+        g: target,
+        by: h.caster,
+        sp: h.spell,
+        stacks: h.stacks.max(1),
+        on: false,
+        refresh: false,
+        expired: h.expires.is_some_and(|t| t <= map.now),
+    });
     // The lasting auras it triggered go with it, and theirs with them.
     let source = Some((h.spell, h.caster));
     if auras(map, target).is_some_and(|a| a.holders.iter().any(|x| x.source == source)) {
