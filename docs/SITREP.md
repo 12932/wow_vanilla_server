@@ -507,6 +507,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
     steep polygons left as they are (mangos lets walking creatures take them; the record counts them by the
     player's rule); a walk while its tile is still loading stays ungrounded.
+- **800 a side: the charge's spikes (your go, 2026-10-25):** under way, `perf/charge-spikes`: a charge at 1,600 with
+  p99 under 50 ms and no update over about 100 ms (now p99 59, single updates 150–190), without changing what any
+  client sees.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
