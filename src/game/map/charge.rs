@@ -69,6 +69,9 @@ pub fn approach(
     out
 }
 
+/// The most a charge's end is moved up or down onto the floor under it.
+const END_GROUND: f32 = 2.0;
+
 /// Whether a charge holds `g`'s movement: its client's is ignored.
 pub fn charging(map: &Map, g: Guid) -> bool {
     match map.players.get(&g) {
@@ -109,6 +112,16 @@ pub fn start(map: &mut Map, caster: Guid, target: Guid, attack: bool) {
     points.extend(approach(&path[1..], from, to, reach - 0.5));
     if points.len() < 2 {
         return;
+    }
+    // Its end on the floor there: the leg cut short of the target has the
+    // height between its ends, not the ground's (the ring round Drek'Thar's
+    // floor a yard over it, his charger left standing a third of a yard in
+    // the air, 3 in 12 charges).
+    if let Some(end) = points.last_mut()
+        && let Some(z) = map.nav.as_mut().and_then(|n| n.ground(end.x, end.y, end.z))
+        && (z - end.z).abs() <= END_GROUND
+    {
+        end.z = z;
     }
     let run = match map.players.get(&caster) {
         Some(p) => p.speeds.run,

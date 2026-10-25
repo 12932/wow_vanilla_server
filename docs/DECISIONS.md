@@ -1800,4 +1800,39 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
      - **A GM's file name** is letters, digits, `-`, `_` and `.`, never starting with a dot: the record stays in its
        directory. Recording is a game master's (`gm::needed_level`), as the other world-changing tools.
 
+106. **On their floors in Drek'Thar's keep: pets beside their masters, creatures' walks and a charge's end**
+     (2026-10-25; `fix/av-bugs`, from your reports at Drek'Thar: "some players are floating slightly elevated in
+     drek's room", and pets falling through his room's floor; found and proved with the fight record, decision 105,
+     and peon's watcher, `peon::seen`). Three rules, the calls in them mine:
+     - **A pet's place beside its master** is mangos-classic's (`FollowMovementGenerator::_getLocation`,
+       `WorldObject::GetNearPointAt`): two yards out at its angle, on the ground there, no further above or below
+       its master than that and both their radii, and in its master's sight; else the same at angles further round
+       each way (45° steps); none, its master's own spot. wvs took the place where it fell, at its master's height
+       onto the ground nearest that: by a wall or a doorway the ground was the terrain under the keep, 8 yards down,
+       or a wall's top, and the pet walked there, down through the floor and back up (29 times in 5 attempts of the
+       all-in, the record's "server splines" across a step). **And with no way over the navmesh** a pet walks
+       straight only where nothing stands between and the ground is a step's climb (2.5 yd); else a follower is
+       put at its place at once, as mangos-classic's follow unsticks one (`_setTargetLocation`: no path, relocated
+       to its place, which its master sees), and a chaser stands. wvs walked any such way straight: through the
+       keep's walls. Test: `a_pet_in_drek_thars_keep_keeps_to_its_masters_floor` (extended, the real valley).
+     - **A creature's walk is on the floor itself**: each point of its path (and the points put in where a leg
+       leaves the ground, every 2 yards) is at the bake's geometry's surface (terrain, WMOs', doodads' upward faces)
+       nearest the navmesh polygon's height within 1.5 yards, not at the polygon's height, and a leg may leave it
+       by 0.15 yards, not 0.5. The polygons are a quarter yard and more off the floor, and by a step the polygon
+       nearest a point is the one above (the ring round his room's sunken middle, a yard up): his guards walked the
+       middle at the ring's height, up to a yard in the air, standing there up to three quarters of a yard up (the
+       record: 134 of 505 walk points over a third of a yard). Grounding a path costs 7.2 to 7.8 µs against 3.7 to
+       3.8 µs before (`probe_path_on_the_ground`, 2,000 paths in Tanaris; 5,641 points against 4,550). Test:
+       `drek_thars_guards_walk_his_room_on_its_floor`.
+     - **A charge ends on the floor**: its last leg, cut short of its target, had the height between its ends; now
+       the floor's there (within 2 yards). A charger into his room's middle stood a third of a yard in the air
+       (peon now lands its raiders where the server leaves them, as a client drops onto its floor). Test:
+       `a_charge_down_into_drek_thars_room_ends_on_its_floor`.
+     - **The record, before and after** (ten attempts each of peon's all-in at 40, seeds 1 and 2; peon's own fixes
+       with them): server splines across a step or a wall 25 to 0; creatures in his room over the floor past a third
+       of a yard, of their time, 9.6% to 0.6% (moving, p90 +0.47 to +0.06 yd, p99 +0.77 to +0.29); their spline
+       points over a third of a yard 25% to 2% of walks', 14% to 0% of chases', 27% to 0% of charges'; pets in his
+       room moving, p99 +1.13 to +0.24 yd, the most +5.67 to +0.45; falls through a floor 5 to 1 (a Frostwolf
+       Legionnaire at the record's start, its spawn). Drek'Thar killed 10 of 10 both.
+
 ## Left for later, and why

@@ -34,7 +34,15 @@ const TAKE_BUDGET: Duration = Duration::from_millis(3);
 /// between them (or a goal taken at a victim's height down a slope) would
 /// have the creature walk through the ground. mangos's smooth path puts a
 /// point every 4 yards at its polygons' heights (`SMOOTH_PATH_STEP_SIZE`).
-const GROUND_TOLERANCE: f32 = 0.5;
+/// The ground is the floor itself (the bake's geometry), not the
+/// navmesh's polygons, which are a quarter yard and more off it; at half a
+/// yard, Drek'Thar and his guards walked from the ring of his room into its
+/// sunken middle a yard lower at the ring's height, and stood there up to
+/// three quarters of a yard in the air (the fight record, decision 106).
+const GROUND_TOLERANCE: f32 = 0.15;
+/// How far from the navmesh's height under a point its floor is looked
+/// for: the floor nearest the navmesh's within this, else the navmesh's.
+const SURFACE_SNAP: f32 = 1.5;
 const GROUND_SAMPLE: f32 = 2.0;
 /// How far over or under a point its ground is looked for: as far as a
 /// path's ends are taken to the navmesh from.
@@ -404,6 +412,25 @@ impl Nav {
         (points.0.len() >= 2).then_some(points.0)
     }
 
+    /// The floor under a point: the navmesh's polygon there, within
+    /// [`GROUND_REACH`] of it, and the surface of the bake's geometry (its
+    /// terrain's, WMOs' and doodads' upward faces) nearest that polygon's
+    /// height within [`SURFACE_SNAP`]; else the polygon's height.
+    fn floor_at(&mut self, p: Vector3d) -> Option<f32> {
+        let detail = self.ground_near(p)?;
+        if self.map.find_heights(p.x, p.y, &mut self.heights).is_ok()
+            && let Some(z) = self
+                .heights
+                .iter()
+                .copied()
+                .filter(|h| (h - detail).abs() <= SURFACE_SNAP)
+                .min_by(|a, b| (a - detail).abs().total_cmp(&(b - detail).abs()))
+        {
+            return Some(z);
+        }
+        Some(detail)
+    }
+
     /// The navmesh's ground under a point (its detail mesh's height),
     /// within [`GROUND_REACH`] of it.
     fn ground_near(&self, p: Vector3d) -> Option<f32> {
@@ -426,26 +453,35 @@ impl Nav {
     /// [`GROUND_TOLERANCE`] (one on the ground is left alone), and, where the line between two
     /// leaves the ground by more than [`GROUND_TOLERANCE`], a point on the
     /// ground put in where it leaves it most, until none does.
-    fn grounded(&self, path: &[Vector3d]) -> Vec<Vector3d> {
+    fn grounded(&mut self, path: &[Vector3d]) -> Vec<Vector3d> {
         let mut out = Vec::with_capacity(path.len());
         out.push(path[0]);
         let mut budget = GROUND_POINTS;
         for &p in &path[1..] {
             let mut b = p;
-            if let Some(z) = self.ground_near(b)
+            if let Some(z) = self.floor_at(b)
                 && (z - b.z).abs() > GROUND_TOLERANCE
             {
                 b.z = z;
             }
             let a = out[out.len() - 1];
+            // A point where the last is (the navmesh's corner at the walker,
+            // both now on the same floor) is left out: a walk's next point
+            // is somewhere to go.
+            if (a.x - b.x).hypot(a.y - b.y) < 0.01 && (a.z - b.z).abs() < 0.01 {
+                continue;
+            }
             self.fill(a, b, &mut out, &mut budget);
             out.push(b);
+        }
+        if out.len() < 2 {
+            out.push(path[path.len() - 1]);
         }
         out
     }
 
     /// The points on the ground between `a` and `b` their line needs.
-    fn fill(&self, a: Vector3d, b: Vector3d, out: &mut Vec<Vector3d>, budget: &mut usize) {
+    fn fill(&mut self, a: Vector3d, b: Vector3d, out: &mut Vec<Vector3d>, budget: &mut usize) {
         let planar = (b.x - a.x).hypot(b.y - a.y);
         let steps = (planar / GROUND_SAMPLE).ceil() as usize;
         if steps < 2 || *budget == 0 {
@@ -459,7 +495,7 @@ impl Nav {
                 y: a.y + (b.y - a.y) * f,
                 z: a.z + (b.z - a.z) * f,
             };
-            if let Some(z) = self.ground_near(p) {
+            if let Some(z) = self.floor_at(p) {
                 let off = (z - p.z).abs();
                 if off > GROUND_TOLERANCE && worst.is_none_or(|(o, _)| off > o) {
                     worst = Some((off, Vector3d { z, ..p }));

@@ -168,9 +168,12 @@ async fn a_flyer_doesnt_fly_through_the_abbeys_wall() {
     };
     let map = realm.maps.get(&realm, MapKey::world(0));
     let (from, to) = (v(-8930.0, -150.0, 84.0), v(-8910.0, -150.0, 84.0));
-    let ground = v(START.x - 6.0, START.y, START.z);
-    let (flight, walk) = map
+    let (flight, walk, ground) = map
         .query(move |m| {
+            // On the ground there (the terrain half a yard under the start's
+            // height, six yards west).
+            let (x, y) = (START.x - 6.0, START.y);
+            let ground = v(x, y, m.nav.as_mut().unwrap().ground(x, y, START.z).unwrap());
             let (flyer, walker) = (of(m, FLYER), of(m, WALKER));
             let flight = route(m, flyer, from, to).map(|(p, _, fly)| {
                 let n = m.nav.as_mut().unwrap();
@@ -178,7 +181,7 @@ async fn a_flyer_doesnt_fly_through_the_abbeys_wall() {
                 (p, clear, fly)
             });
             let walk = route(m, walker, START, ground).map(|(p, reached, _)| (p, reached));
-            (flight, walk)
+            (flight, walk, ground)
         })
         .await
         .unwrap();
