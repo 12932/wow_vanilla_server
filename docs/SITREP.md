@@ -546,7 +546,19 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   over HTTP (`--tiles-from`), checked by hash and cached, 12 tiles and 75 MB in under half a second; `--where` puts a
   battle anywhere. A Hillsbrad 10-v-10 with workers holding no navmesh fought as one with it. Made without you: our
   own manifest (not rustigator's), the bake's id from its inputs, an immutable prefix, ureq and sha2 added, `nav
-  serve` loopback-only; 20 calls in peon's notes. The image, the infrastructure and the first deploy are next.
+  serve` loopback-only; 20 calls in peon's notes. Then (peon 0.1.42) the images (peon 98 MB, wvs 101 MB, trixie-slim, read-only, unprivileged), a
+  local container battle with tiles over HTTP, the CDK app (private subnets only, no public IPs, S3 through a gateway
+  endpoint, least-privilege roles, the run's token as a secret), `--fargate` with a dry run and a `--user-approved`
+  gate, S3 presigning, and `deploy/first-run.sh`.
+  - **The first deploy didn't run:** Claude Code's permission check refused `cdk bootstrap` (an infrastructure apply),
+    and your go reached the agent through me, which the check doesn't take as yours. Nothing was created in the
+    account. To deploy: run `deploy/first-run.sh` yourself (`--print` shows each step), or add a permission rule.
+  - **Costs, estimated:** the 10-worker test about $0.54; an hour at 800 a side about $4; idle, about $29 a month
+    for the interface endpoints (destroy `PeonEndpoints` between campaigns), $0.40 for the secret, $0.21 for S3.
+  - **Your calls:** TLS for the orchestrator's control channel (the network is the boundary, the token travels in
+    the clear inside the VPC); narrowing CDK's bootstrap role (AdministratorAccess by default); keeping the
+    endpoints between campaigns; a bucket name and how long results stay (30 days by default). 47 more of its calls
+    in peon's notes.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
