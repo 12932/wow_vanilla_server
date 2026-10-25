@@ -115,10 +115,14 @@ async fn nefarians_lair_runs_as_mangos_classic() {
     let mut kinds = vec![left, right];
     kinds.sort();
     let want = kinds.clone();
+    // The chromatic ones' first, 7 to 9 s after his rising, is 1 to 3 s
+    // past the hurry, less the time since he rose: on a slow machine it
+    // comes with these.
     assert!(
         until(&map, 3000, move |m| living_drakonids(m)
             .iter()
             .map(|(e, _)| *e)
+            .filter(|e| *e != nf::NPC_CHROMATIC_DRAKONID)
             .collect::<Vec<_>>()
             == want)
         .await,
@@ -189,10 +193,13 @@ async fn nefarians_lair_runs_as_mangos_classic() {
         }
         g.expect("Nefarian comes")
     };
+    // He goes 2.5 s on, by the map's clock.
     assert!(
-        until(&map, 4000, move |m| m
-            .creature(nef)
-            .is_none_or(|c| !c.alive()))
+        until(
+            &map,
+            crate::game::harness::WAIT.as_millis() as u64,
+            move |m| m.creature(nef).is_none_or(|c| !c.alive())
+        )
         .await,
         "Nefarius blinks away"
     );
@@ -231,6 +238,10 @@ async fn nefarians_lair_runs_as_mangos_classic() {
     )
     .await;
     // A class call, on the warrior's or the mage's class: that class alone.
+    // Made due out of any cast of his: his own timed casts run on between
+    // the queries, and one with a cast time under way (Shadow Flame's two
+    // seconds, 12 s into the fight) put the call off a second at a time,
+    // on a busy machine past the wait.
     c.clear();
     map.query(move |m| {
         for (t, k, g) in m.instance.creature_timers.iter_mut() {
@@ -238,6 +249,7 @@ async fn nefarians_lair_runs_as_mangos_classic() {
                 *t = m.now;
             }
         }
+        crate::game::map::spells::interrupt(m, nefarian);
         if let Some(cr) = m.caster_mut(nefarian) {
             cr.gcd_until = None;
         }
