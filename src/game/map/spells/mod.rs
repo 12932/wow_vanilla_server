@@ -651,6 +651,13 @@ fn ranged_ammo(map: &Map, caster: Guid, s: &SpellTemplate) -> Option<(u32, u32)>
 }
 
 pub(crate) fn send_cast_result(map: &Map, caster: Guid, spell: u32, result: Option<u8>) {
+    if let Some(why) = result.filter(|r| *r != fail::INTERRUPTED) {
+        map.record(|| crate::game::map::record::Ev::Fail {
+            g: caster,
+            sp: spell,
+            why,
+        });
+    }
     let Some(p) = map.players.get(&caster) else {
         return;
     };
@@ -1096,6 +1103,13 @@ pub fn cast(
     }) {
         map.send_to_observers(caster, &frame, true);
     }
+    map.record(|| crate::game::map::record::Ev::Cast {
+        g: caster,
+        sp: spell,
+        tg: targets.unit.or(targets.object).unwrap_or_default(),
+        at: targets.dest,
+        ms: time,
+    });
     // The global cooldown is the spell's start time with its modifiers:
     // none for one without (vmangos, mangos's `Player::AddGCD`, Thistle
     // Tea's `Cooldowns.gcd_duration`).
@@ -1624,6 +1638,12 @@ fn execute(
     }) {
         map.send_to_observers(caster, &frame, true);
     }
+    map.record(|| crate::game::map::record::Ev::Go {
+        g: caster,
+        sp: s.id,
+        tg: targets.unit.or(targets.object).unwrap_or_default(),
+        triggered,
+    });
     if !triggered {
         // A heal cast: an Elite Guard's Charge looks for healers.
         if heals(s)
@@ -1673,6 +1693,11 @@ fn execute(
                 duration: ms,
             });
         }
+        map.record(|| crate::game::map::record::Ev::Channel {
+            g: caster,
+            sp: s.id,
+            ms,
+        });
         if s.mana_per_second > 0 || s.mana_per_second_per_level > 0 {
             map.spells
                 .channel_costs
@@ -2845,6 +2870,15 @@ fn heal_with(
     }
     let gained = amount.min(max.saturating_sub(now));
     f.set_u32(UNIT_FIELD_HEALTH, (now + amount).min(max));
+    map.record(|| crate::game::map::record::Ev::Heal {
+        by: caster,
+        g: target,
+        sp: spell,
+        n: amount,
+        over: amount - gained,
+        crit,
+        periodic,
+    });
     let frame = if periodic {
         crate::game::conn::encode(&SMSG_PERIODICAURALOG {
             target,
@@ -2904,6 +2938,11 @@ pub fn interrupt(map: &mut Map, g: Guid) {
     let Some(casting) = c.casting.take() else {
         return;
     };
+    map.record(|| crate::game::map::record::Ev::Stop {
+        g,
+        sp: casting.spell,
+        how: "interrupted",
+    });
     if casting.channel_until.is_none() {
         give_back_gcd(map, g, casting.spell);
     }
@@ -2966,6 +3005,11 @@ fn channel_object(
 /// at, on its channel object, on the caster), its areas go, and the
 /// channel fields clear.
 fn end_channel(map: &mut Map, g: Guid, casting: &Casting) {
+    map.record(|| crate::game::map::record::Ev::Stop {
+        g,
+        sp: casting.spell,
+        how: "channel end",
+    });
     let target = casting.targets.unit.unwrap_or(g);
     auras::remove_spell(map, target, casting.spell, Some(g));
     if target != g {
@@ -3429,6 +3473,11 @@ pub fn update(map: &mut Map) {
             });
         if let Some(code) = at_finish {
             if code == checks::fail::BAD_TARGETS {
+                map.record(|| crate::game::map::record::Ev::Fail {
+                    g,
+                    sp: casting.spell,
+                    why: code,
+                });
                 if let Some(p) = map.players.get(&g) {
                     p.outbound.send(&SMSG_SPELL_FAILURE {
                         guid: g,

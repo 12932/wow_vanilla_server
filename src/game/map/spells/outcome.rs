@@ -1248,6 +1248,16 @@ pub fn healing_taken(map: &Map, target: Guid, amount: f32) -> f32 {
 /// `SMSG_SPELLLOGMISS`: `s` missed `target`, and how, as Thistle Tea
 /// writes it for the 1.12 client.
 pub fn send_miss(map: &Map, caster: Guid, target: Guid, spell: u32, hit: Hit) {
+    map.record(|| crate::game::map::record::Ev::Out {
+        by: caster,
+        g: target,
+        sp: spell,
+        out: crate::game::map::record::spell_outcome(hit),
+        n: 0,
+        absorbed: 0,
+        resisted: 0,
+        blocked: 0,
+    });
     let mut b = Body::default();
     b.u32(spell)
         .u64(caster.guid())
@@ -1317,6 +1327,20 @@ pub fn deal(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate, d: Dam
     let frame = damage_log(
         caster, target, s.id, s.school, left, absorbed, d.resisted, d.blocked, l.crit,
     );
+    map.record(|| crate::game::map::record::Ev::Out {
+        by: caster,
+        g: target,
+        sp: s.id,
+        out: if l.crit {
+            "crit"
+        } else {
+            crate::game::map::record::spell_outcome(l.hit)
+        },
+        n: left,
+        absorbed,
+        resisted: d.resisted,
+        blocked: d.blocked,
+    });
     map.send_to_observers(caster, &frame, true);
     if let Some(p) = map.players.get(&target)
         && !p.known.contains(&caster)

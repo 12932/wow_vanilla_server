@@ -127,6 +127,15 @@ pub fn attacked(map: &mut Map, creature: Guid, attacker: Guid) {
 /// `creature` comes to another's help against `enemy`: it fights, calling
 /// no one itself.
 pub fn assist(map: &mut Map, creature: Guid, enemy: Guid) {
+    map.record(|| crate::game::map::record::Ev::Notice {
+        g: creature,
+        who: enemy,
+        yards: map
+            .position_of(creature)
+            .zip(map.position_of(enemy))
+            .map_or(0.0, |(a, b)| dist(a, b)),
+        how: "assist",
+    });
     engage(map, creature, enemy, false);
 }
 
@@ -1156,6 +1165,12 @@ fn aggro_scan(map: &mut Map, g: Guid) {
             continue;
         };
         if crate::game::map::assistance::sees(map, pos, to) {
+            map.record(|| crate::game::map::record::Ev::Notice {
+                g,
+                who: t,
+                yards: dist(to, pos),
+                how: "aggro",
+            });
             attacked(map, g, t);
             return;
         }
@@ -1225,6 +1240,12 @@ fn script_notice(map: &mut Map, g: Guid, pos: Vector3d, n: crate::game::data::sc
     }) else {
         return;
     };
+    map.record(|| crate::game::map::record::Ev::Notice {
+        g,
+        who: t,
+        yards: map.position_of(t).map_or(0.0, |to| dist(to, pos)),
+        how: "script",
+    });
     attacked(map, g, t);
     if let Some(o) = n.opener
         && map
