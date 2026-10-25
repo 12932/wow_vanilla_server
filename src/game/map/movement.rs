@@ -229,9 +229,10 @@ pub fn moved_self_as(map: &mut Map, guid: Guid, info: MovementInfo, relay: Relay
     }
     // The dead lie where they fell until they release or rise: a client
     // still sending moves (one that ignores its root, as a bot may) moves
-    // the body no further than straight down, as it lands.
+    // the body no further than straight down, as it lands; one killed in
+    // the air, as far as its fall carries it too.
     let dead = matches!(p.death, crate::game::map::death::Death::Dead { .. });
-    if dead && horizontal(p.position(), info.position) > 0.5 {
+    if dead && horizontal(p.position(), info.position) > dead_reach(p, &info) {
         return;
     }
     // What it says of its run (a client that hasn't yet heard of its
@@ -442,6 +443,28 @@ pub fn steered(f: &MovementInfo_MovementFlags) -> bool {
 /// power (mangos's `MoveSplineInit::Stop` takes `MOVEFLAG_FORWARD` off at
 /// death; Thistle Tea's death clears every flag), so no client moves it on
 /// by them.
+/// How far a dead body's client may move it on the ground, yards: none but
+/// straight down (half a yard's slack), or, while the fall it was in as it
+/// died goes on, as far as that fall carries it since the body's last move
+/// (its jump's speed over the ground, at most a run's, for the fall's time
+/// between). mangos-classic's `KillPlayer` leaves the body to its client,
+/// "player might be falling", and takes its landing where the client lands
+/// it; refused, the landing left the body in the air where its last jump's
+/// packet had it, for every watcher (decision 107).
+fn dead_reach(p: &crate::game::map::player::Player, info: &MovementInfo) -> f32 {
+    const STRAIGHT_DOWN: f32 = 0.5;
+    let Some(jump) = p.movement.flags.get_jumping() else {
+        return STRAIGHT_DOWN;
+    };
+    let secs = info.fall_time.saturating_sub(p.movement.fall_time) as f32 / 1000.0;
+    let speed = jump.xy_speed.abs().min(p.speeds.run.max(0.0));
+    STRAIGHT_DOWN + speed * secs.min(MAX_FALL_SECS)
+}
+
+/// The longest a fall's carry is taken for: a jump comes down in well under
+/// this, and a longer fall drops more than it goes on.
+const MAX_FALL_SECS: f32 = 3.0;
+
 pub fn unsteered(f: MovementInfo_MovementFlags) -> MovementInfo_MovementFlags {
     f.clear_forward()
         .clear_backward()
