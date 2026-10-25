@@ -474,9 +474,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     4 yd off it stepped in to melee, left its spot, and was sent back, about once a second. Now drag spots are only
     where a path ends; at its spot with its add in reach a tank stands and fights; a spot counts as reached until
     3.5 yd; a drag waits until the add has been on the tank 1.5 s (taunting it back first).
-  - **Your call:** the scenarios never tell the brain a melee bot is already swinging, so every melee bot closes on
-    a foe past 3.5 yd instead of 4.5. Setting it changes every melee's positioning everywhere; I'd set it, measured
-    first on the dps harness and the all-in.
+  - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
+    swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
+    measured on the dps harness, the all-in and a faction battle.
   - **Made without you (decision 107):** a dead body's landing taken within its jump's reach; every no-path walk
     grounded (further than mangos, whose `NormalizeZ` is off); path legs sampled every yard (grounding a path costs
     13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
