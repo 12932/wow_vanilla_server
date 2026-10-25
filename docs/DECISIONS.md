@@ -1767,4 +1767,12 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        now makes Alice a god before she lands in his hall: his warmasters charge her as she lands, as vmangos's
        would, and killed her (level 1) before the test's first look about 4 times in 5.
 
+104. **The AV scripts' notice needs sight** (2026-10-25; `fix/av-notice-los`, your call: "there's supposed to be line
+     of sight"). Decision 103 took vmangos's scripted notice for Vanndar, Drek'Thar and the marshals and warmasters
+     (23 and 22 yards past both radii), and with it its bare distance test: vmangos's scripts override the default
+     notice (`BasicAI::MoveInLineOfSight`, which tests `IsWithinLOSInMap`), and its visibility path tests line of
+     sight only for a stealthed unit, so there they notice and charge through walls. Drek'Thar's warmasters charged a
+     raid standing outside his hall's wall. Now a scripted notice takes only one in sight, by the test every
+     creature's aggro uses (`assistance::sees`). Departs from vmangos. Test: `vanndar_notices_no_one_behind_a_wall`.
+
 ## Left for later, and why
