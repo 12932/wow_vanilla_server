@@ -688,6 +688,7 @@ fn despawn_from_view(map: &mut Map, g: Guid) {
 
 /// Bring a dead creature back at its spawn, as new.
 fn respawn(map: &mut Map, g: Guid) {
+    map.record(|| crate::game::map::record::Ev::Respawn { g });
     let Some(old) = map.creature(g) else {
         return;
     };

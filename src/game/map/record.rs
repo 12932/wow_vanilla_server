@@ -74,11 +74,13 @@ pub enum Ev {
         fall_ms: u32,
         dz: Option<f32>,
     },
-    /// A server-driven move begun: its spline.
+    /// A server-driven move begun: its spline, and each point's height
+    /// over the ground under it.
     Spline {
         g: Guid,
         id: u32,
         points: Vec<Vector3d>,
+        dz: Vec<Option<f32>>,
         speed: f32,
         ms: u32,
         run: bool,
@@ -184,6 +186,8 @@ pub enum Ev {
     },
     /// A creature come into the map summoned (or a pet).
     Summon { g: Guid, by: Guid, entry: u32 },
+    /// A creature come back new, under its GUID (a respawn, `.respawn`).
+    Respawn { g: Guid },
     /// A teleport, within the map or out of it (`map` where to).
     Tele {
         g: Guid,
@@ -664,6 +668,7 @@ pub fn format(s: &mut String, t: u64, ev: &Ev) {
             g,
             id,
             points: ps,
+            dz,
             speed,
             ms,
             run,
@@ -678,6 +683,19 @@ pub fn format(s: &mut String, t: u64, ev: &Ev) {
             num(s, *speed, 2);
             let _ = write!(s, ",\"run\":{},\"fly\":{},\"pts\":", u8::from(*run), u8::from(*fly));
             points(s, ps);
+            if dz.iter().any(Option::is_some) {
+                s.push_str(",\"dz\":[");
+                for (i, d) in dz.iter().enumerate() {
+                    if i > 0 {
+                        s.push(',');
+                    }
+                    match d {
+                        Some(d) => num(s, *d, 2),
+                        None => s.push_str("null"),
+                    }
+                }
+                s.push(']');
+            }
         }
         Ev::Halt { g, id, at, early } => {
             let _ = write!(s, "\"e\":\"halt\",\"g\":\"{}\",\"id\":{id},\"p\":", guid(*g));
@@ -863,6 +881,9 @@ pub fn format(s: &mut String, t: u64, ev: &Ev) {
                 guid(*g),
                 guid(*by)
             );
+        }
+        Ev::Respawn { g } => {
+            let _ = write!(s, "\"e\":\"respawn\",\"g\":\"{}\"", guid(*g));
         }
         Ev::Tele { g, from, to, map } => {
             let _ = write!(s, "\"e\":\"tele\",\"g\":\"{}\",\"map\":{map},\"from\":", guid(*g));
@@ -1062,6 +1083,37 @@ pub fn update(map: &mut Map) {
     map.record = Some(r);
 }
 
+/// A spline with each point's height over the ground under it.
+fn grounded(map: &mut Map, ev: Ev) -> Ev {
+    match ev {
+        Ev::Spline {
+            g,
+            id,
+            points,
+            speed,
+            ms,
+            run,
+            fly,
+            kind,
+            ..
+        } => {
+            let dz = points.iter().map(|p| height_over_ground(map, *p)).collect();
+            Ev::Spline {
+                g,
+                id,
+                points,
+                dz,
+                speed,
+                ms,
+                run,
+                fly,
+                kind,
+            }
+        }
+        ev => ev,
+    }
+}
+
 /// A row's height over the ground, looked up again only once it has moved.
 fn dz_of(map: &mut Map, seen: &mut Seen, at: Vector3d) -> Option<f32> {
     if let Some((was, dz)) = seen.ground
@@ -1109,6 +1161,7 @@ fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) 
             .or_else(|| p.driven.as_ref().and_then(|d| d.walk.as_ref()).map(|w| (w, "driven")))
             .filter(|(w, _)| !w.done(now));
         let spline = walk.map_or(0, |(w, _)| w.spline_id);
+        let mut pending = None;
         let seen = r.seen.get(&g).map_or(0, |s| s.spline);
         if spline != seen {
             let at = p.position();
@@ -1126,10 +1179,11 @@ fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) 
                 });
             }
             if let Some((w, kind)) = walk {
-                r.push(Ev::Spline {
+                pending = Some(Ev::Spline {
                     g,
                     id: w.spline_id,
                     points: w.points.clone(),
+                    dz: Vec::new(),
                     speed: w.speed,
                     ms: w.duration.as_millis() as u32,
                     run: w.run,
@@ -1143,9 +1197,15 @@ fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) 
                 s.spline_ends = ends;
             }
         }
+        if let Some(ev) = pending {
+            r.push(grounded(map, ev));
+        }
         if !sample {
             continue;
         }
+        let Some(p) = map.players.get(&g) else {
+            continue;
+        };
         let (hp, max_hp, power, max_power, form, mounted, stand) = unit_row(g, &p.fields);
         let at = p.position();
         let mut row = Row {
@@ -1219,6 +1279,7 @@ fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool
                     g,
                     id: w.spline_id,
                     points: w.points.clone(),
+                    dz: Vec::new(),
                     speed: w.speed,
                     ms: w.duration.as_millis() as u32,
                     run: w.run,
@@ -1289,7 +1350,7 @@ fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool
         let ends_now = walk.map(|w| w.started + w.duration);
         let evading = c.evading;
         for ev in evs {
-            r.push(ev);
+            r.push(grounded(map, ev));
         }
         let mut seen = r.seen.remove(&g).unwrap_or_default();
         seen.spline = spline;
