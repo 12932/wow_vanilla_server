@@ -185,3 +185,32 @@ mod wide {
         wide(b, n, Way::Before);
     }
 }
+
+/// `whole`: one player's refresh worked out whole among the crowd, every
+/// pair it is in looked at, as a stealth's change or an arrival has it:
+/// across the threads in parts (`quick`), and on the map's thread alone.
+mod whole {
+    use super::*;
+    use wow_vanilla_server::game::map::visibility;
+
+    fn whole(b: Bencher, n: usize, way: Way) {
+        let (_rt, mut c) = crowd(n, way);
+        let mut i = 0;
+        b.bench_local(|| {
+            let g = c.guids[i % n];
+            i += 1;
+            visibility::refresh(&mut c.map, g);
+            c.drain();
+        });
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 200, sample_size = 1)]
+    fn quick(b: Bencher, n: usize) {
+        whole(b, n, Way::Quick);
+    }
+
+    #[divan::bench(args = SIZES, sample_count = 200, sample_size = 1)]
+    fn quick_one_thread(b: Bencher, n: usize) {
+        whole(b, n, Way::OneThread);
+    }
+}

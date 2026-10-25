@@ -203,6 +203,47 @@ impl Crowd {
         }
     }
 
+    /// Every `every`th player (from the `from`th) marked by the player
+    /// after it (a Hunter's Mark: `AURA_MOD_STALKED`), or the mark taken
+    /// off: who sees them otherwise changes, so their values go to each
+    /// observer by its view (`views::tell_player`).
+    pub fn mark(&mut self, every: usize, from: usize, on: bool) {
+        use crate::game::data::spells::{SpellEffect, SpellTemplate};
+        use crate::game::map::auras;
+        const MARK: u32 = 95_401;
+        let mut effects = [SpellEffect::default(); 3];
+        effects[0] = SpellEffect {
+            effect: 6,
+            aura: auras::AURA_MOD_STALKED,
+            base_dice: 1,
+            target_a: 6,
+            ..Default::default()
+        };
+        let s = SpellTemplate {
+            id: MARK,
+            name: "Bench Mark".into(),
+            equipped_item_class: -1,
+            effects,
+            ..Default::default()
+        };
+        let n = self.guids.len();
+        for k in (from..n).step_by(every.max(1)) {
+            let (target, caster) = (self.guids[k], self.guids[(k + 1) % n]);
+            if on {
+                let _ = auras::apply_spell(
+                    &mut self.map,
+                    caster,
+                    target,
+                    &s,
+                    &[(0, 1)],
+                    auras::Context::default(),
+                );
+            } else {
+                auras::remove_spell(&mut self.map, target, MARK, None);
+            }
+        }
+    }
+
     /// The update's values and batches: what [`Crowd::hurt`] changed told,
     /// and sent.
     pub fn flush_values(&mut self) {
@@ -214,6 +255,22 @@ impl Crowd {
     /// they were shared (`values::Shared::one_by_one`).
     pub fn values_one_by_one(&mut self, on: bool) {
         self.map.shared_values.one_by_one = on;
+    }
+
+    /// Every create into its observer's batch, none shared among a crowd
+    /// (`visibility::Crowds`).
+    pub fn creates_one_by_one(&mut self, on: bool) {
+        self.map.visibility_dirty.creates_one_by_one = on;
+    }
+
+    /// The update's end after its visibility, as `Map::update` has it: the
+    /// forgets settled, the held let go, the values told and the batches
+    /// sent. What was sent stays for [`Crowd::take_frames`].
+    pub fn end_update(&mut self) {
+        self.map.flush_forgets();
+        self.map.release_held();
+        self.map.flush_values();
+        self.map.flush_batches();
     }
 
     /// What the `i`th player's client has been sent since the last look,

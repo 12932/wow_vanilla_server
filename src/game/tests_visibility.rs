@@ -500,3 +500,240 @@ fn one_gone_past_its_drift_is_worked_out_whole() {
     let at = CENTRE;
     assert!((e.ax - c.map.players[&g].position().x).abs() < 0.01 && e.ax != at.0);
 }
+
+/// What a client has, from what it was sent: the objects it was told of
+/// and not told to forget, and what it was sent that it couldn't take (a
+/// create of one it has, a forget or values of one it hasn't: its own
+/// player it always has).
+#[derive(Debug, Default, Clone, PartialEq)]
+struct ClientView {
+    me: Guid,
+    has: std::collections::BTreeSet<Guid>,
+    wrong: Vec<String>,
+}
+
+/// Each client's frames since the last look, in order, onto its view.
+fn replay(c: &mut Crowd, views: &mut [ClientView]) {
+    use wow_world_messages::vanilla::Object_UpdateType;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    for (i, v) in views.iter_mut().enumerate() {
+        for f in c.take_frames(i) {
+            let Ok(m) = ServerOpcodeMessage::read_unencrypted(&f[..]) else {
+                v.wrong.push("a frame wow_messages can't read".into());
+                continue;
+            };
+            let objects = match &m {
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(u) => &u.objects,
+                ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(u) => &u.objects,
+                _ => continue,
+            };
+            for o in objects {
+                match &o.update_type {
+                    Object_UpdateType::OutOfRangeObjects { guids } => {
+                        for g in guids {
+                            if !v.has.remove(g) {
+                                v.wrong.push(format!("told to forget {g:?}, unknown"));
+                            }
+                        }
+                    }
+                    Object_UpdateType::CreateObject { guid3, .. }
+                    | Object_UpdateType::CreateObject2 { guid3, .. } => {
+                        if !v.has.insert(*guid3) {
+                            v.wrong.push(format!("told of {guid3:?} again"));
+                        }
+                    }
+                    Object_UpdateType::Values { guid1, .. }
+                        if *guid1 != v.me && !v.has.contains(guid1) =>
+                    {
+                        v.wrong.push(format!("values of {guid1:?}, unknown"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// A crowd's creates shared among it (`visibility::Crowds`) leave each
+/// client with what it had when each create went into its own batch: over
+/// a walk with every change of state in it (an invisibility on and off, a
+/// ghost, a game master's sight, a teleport out and back, a view from
+/// elsewhere), each client is told of what its player knows, each object
+/// once, and of nothing about an object before it has been told of it, the
+/// same in both, update by update.
+#[test]
+fn shared_creates_leave_each_client_as_one_by_one() {
+    for seed in [3, 77_777, 4_242_421] {
+        let (_rt, shared) = crowd_with(config(4), 160, 90.0);
+        let (_rt2, mut alone) = crowd_with(config(4), 160, 90.0);
+        let _in = _rt.enter();
+        alone.creates_one_by_one(true);
+        let mut crowds = [shared, alone];
+        // What making the crowd sent was dropped: each client has what its
+        // player knows.
+        let mut views: [Vec<ClientView>; 2] = [Vec::new(), Vec::new()];
+        for (c, v) in crowds.iter_mut().zip(views.iter_mut()) {
+            c.drain();
+            c.map.visibility_dirty.shared_creates = 0;
+            *v = c
+                .guids
+                .iter()
+                .map(|&g| ClientView {
+                    me: g,
+                    has: c.map.players[&g].known.iter().copied().collect(),
+                    wrong: Vec::new(),
+                })
+                .collect();
+        }
+        let mut told = 0usize;
+        walk(&mut crowds, seed, 60, 4.0, true, |u, c| {
+            for (c, v) in c.iter_mut().zip(views.iter_mut()) {
+                c.end_update();
+                replay(c, v);
+                for (i, &g) in c.guids.iter().enumerate() {
+                    assert!(
+                        v[i].wrong.is_empty(),
+                        "seed {seed}, update {u}: {g:?}'s client: {:?}",
+                        v[i].wrong
+                    );
+                    let known: std::collections::BTreeSet<Guid> =
+                        c.map.players[&g].known.iter().copied().collect();
+                    assert_eq!(v[i].has, known, "seed {seed}, update {u}: {g:?}'s client");
+                }
+            }
+            assert_eq!(views[0], views[1], "seed {seed}, update {u}");
+            told += views[0].iter().map(|v| v.has.len()).sum::<usize>();
+        });
+        assert!(told > 0);
+        let [shared, alone] = &crowds;
+        assert!(
+            shared.map.visibility_dirty.shared_creates > 1_000,
+            "shared: {}",
+            shared.map.visibility_dirty.shared_creates
+        );
+        assert_eq!(alone.map.visibility_dirty.shared_creates, 0);
+    }
+}
+
+/// One coming out of invisibility among a crowd is told to it in a packet
+/// shared among it, no client held for it; and what the map sends about it
+/// at once after reaches each of them after its create.
+#[test]
+fn a_crowds_shared_create_comes_before_what_names_its_object() {
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{Emote, SMSG_EMOTE};
+    let (rt, mut c, g) = settled();
+    let _in = rt.enter();
+    horde(&mut c.map, g);
+    hide(&mut c.map, g);
+    c.end_update();
+    c.drain();
+    let before = c.map.visibility_dirty.shared_creates;
+    unhide(&mut c.map, g);
+    assert_eq!(all_know(&c, g), (true, true), "seen again at once");
+    assert_eq!(
+        c.map.visibility_dirty.shared_creates - before,
+        c.guids.len() as u64 - 1,
+        "every create shared"
+    );
+    assert!(
+        c.map.holding.iter().all(|(o, _)| *o == g),
+        "no one but itself held for it"
+    );
+    let frame = crate::game::conn::encode(&SMSG_EMOTE {
+        emote: Emote::OneshotWave,
+        guid: g,
+    })
+    .expect("encoded");
+    c.map.send_to_observers(g, &frame, false);
+    c.end_update();
+    for (i, &o) in c.guids.clone().iter().enumerate() {
+        if o == g {
+            continue;
+        }
+        let mut created = None;
+        let mut waved = None;
+        for (k, f) in c.take_frames(i).iter().enumerate() {
+            match ServerOpcodeMessage::read_unencrypted(&f[..]) {
+                Ok(m @ ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_))
+                | Ok(m @ ServerOpcodeMessage::SMSG_COMPRESSED_UPDATE_OBJECT(_)) => {
+                    if harness::creates(&m).contains(&g) {
+                        created.get_or_insert(k);
+                    }
+                }
+                Ok(ServerOpcodeMessage::SMSG_EMOTE(e)) if e.guid == g => {
+                    waved.get_or_insert(k);
+                }
+                _ => {}
+            }
+        }
+        let (Some(created), Some(waved)) = (created, waved) else {
+            panic!("{o:?}: created {created:?}, waved {waved:?}");
+        };
+        assert!(created < waved, "{o:?}: the create first");
+    }
+}
+
+/// A spell's area put down among a crowd is seen by it at once, its create
+/// shared among it, no client held for it (it was every client near it,
+/// until the event's end or the update's visibility); and each is told of
+/// it once.
+#[test]
+fn a_spell_area_is_seen_at_once_its_create_shared() {
+    use crate::game::map::spells::dynamic;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    let (rt, mut c, g) = settled();
+    let _in = rt.enter();
+    c.end_update();
+    c.drain();
+    let at = c.map.players[&g].position();
+    let area = dynamic::spawn(&mut c.map, g, 10, dynamic::KIND_AREA_SPELL, at, 8.0, Some(8000));
+    for &o in &c.guids {
+        assert!(knows(&c, o, area), "{o:?} sees it");
+    }
+    assert!(c.map.holding.is_empty(), "no one held for it");
+    assert!(c.map.fresh.is_empty(), "nothing waits for the update");
+    c.end_update();
+    for i in 0..c.guids.len() {
+        let told = c
+            .take_frames(i)
+            .iter()
+            .filter_map(|f| ServerOpcodeMessage::read_unencrypted(&f[..]).ok())
+            .flat_map(|m| harness::creates(&m))
+            .filter(|o| *o == area)
+            .count();
+        assert_eq!(told, 1, "client {i} told of it once");
+    }
+}
+
+/// Past the budget a chunk stops after the refresh at hand (the update's
+/// first done whatever it costs), and the rest wait for the next update,
+/// first in line, as they were: everything is worked out in the end, as it
+/// would have been at once, and each update does at least one.
+#[test]
+fn a_chunk_stops_where_the_budget_runs_out() {
+    let budgeted = RealmConfig {
+        visibility_budget: Duration::from_nanos(1),
+        ..config(1)
+    };
+    let (_rt, mut c) = crowd_with(budgeted, 90, 60.0);
+    let (_rt2, mut at_once) = crowd_with(config(1), 90, 60.0);
+    let _in = _rt.enter();
+    for crowd in [&mut c, &mut at_once] {
+        crowd.shift(1, 0, 9.0);
+    }
+    let mut left = vec![c.map.visibility_dirty.len()];
+    while !c.map.visibility_dirty.is_empty() {
+        visibility::refresh_dirty(&mut c.map);
+        left.push(c.map.visibility_dirty.len());
+        c.drain();
+        assert!(left.len() < 200, "never done: {left:?}");
+    }
+    assert!(
+        left.windows(2).all(|w| w[1] < w[0]),
+        "at least one an update: {left:?}"
+    );
+    assert!(left.len() > 4, "spread over updates: {left:?}");
+    visibility::refresh_dirty(&mut at_once.map);
+    assert_eq!(c.knowledge(), at_once.knowledge());
+}

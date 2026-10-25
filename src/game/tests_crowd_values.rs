@@ -223,7 +223,21 @@ async fn shared_values_are_the_blocks_each_client_had_one_by_one() {
                 c.refresh();
             }
             c.hurt(1 + round as usize % 4, round as usize % 3, round * 7);
+            // Marks on and off: those players' values by each observer's
+            // view, the strangers' block shared.
+            if round % 4 == 1 {
+                c.mark(7, round as usize % 7, true);
+            } else if round % 4 == 3 {
+                c.mark(7, (round as usize - 2) % 7, false);
+            }
             c.flush_values();
+            if round % 4 == 1 {
+                let g = c.guids[round as usize % 7];
+                assert!(
+                    !c.map.players[&g].views_told.markers.is_empty(),
+                    "round {round}: a mark told by each one's view"
+                );
+            }
         }
         let (a, b) = (blocks_of(&mut before), blocks_of(&mut after));
         assert_eq!(a.len(), b.len());

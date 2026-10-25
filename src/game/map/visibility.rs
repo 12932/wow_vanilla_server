@@ -76,9 +76,13 @@ pub const DRIFT: f32 = 2.0 * MOVE_THRESHOLD;
 const CHUNK: usize = 128;
 /// ... and at least this many, a chunk being as many as what is left of
 /// the budget has room for at what a refresh cost in the last (a crowd
-/// coming into another's sight introduces hundreds of pairs a refresh,
-/// and a chunk of 128 such took 30 to 60 ms).
-const MIN_CHUNK: usize = 16;
+/// coming into another's sight introduces thousands of pairs a refresh,
+/// 2 to 4 ms each: a chunk of 16 such took 30 to 70 ms) ...
+const MIN_CHUNK: usize = 1;
+/// ... and at most twice the last chunk's worked out, or this many: one
+/// grows into a costlier crowd a chunk at a time, not from one refresh's
+/// cost to 128 refreshes' at once.
+const GROW_FROM: usize = 16;
 /// Fewer in a chunk than this are worked out on the map's thread alone.
 const PARALLEL_FROM: usize = 16;
 
@@ -106,13 +110,20 @@ pub struct Dirty {
     /// tests and the benchmark measure it against.
     #[doc(hidden)]
     pub one_by_one: bool,
-    /// What a refresh cost in the last chunk worked out: the next chunk's
-    /// size, against the budget.
+    /// Every create into its observer's batch, none shared among a crowd
+    /// ([`Crowds`]): what the tests compare the shared ones with.
+    #[doc(hidden)]
+    pub creates_one_by_one: bool,
+    /// What a refresh cost in the last chunk worked out, and how many were:
+    /// the next chunk's size, against the budget.
     per_refresh: Duration,
+    last_worked: usize,
     /// Since the map began: the pairs the quick path skipped without a
-    /// look, and those looked at.
+    /// look, and those looked at; and the creates shared among a crowd
+    /// ([`Crowds`]).
     pub skipped: u64,
     pub looked: u64,
+    pub shared_creates: u64,
 }
 
 impl Dirty {
@@ -162,8 +173,23 @@ impl Dirty {
         self.marked.len()
     }
 
+    /// Refreshes taken and not worked out (the budget ran out in their
+    /// chunk), back at the front in their order, as they were: before
+    /// anything marked since. One marked again meanwhile keeps the later
+    /// mark, and the greater kind.
+    fn put_back(&mut self, back: &[(Guid, Kind, u64)]) {
+        for &(g, kind, seq) in back.iter().rev() {
+            if let Some((k, _)) = self.marked.get_mut(&g) {
+                *k = (*k).max(kind);
+                continue;
+            }
+            self.marked.insert(g, (kind, seq));
+            self.order.push_front((g, seq));
+        }
+    }
+
     /// The oldest `n` marked by `last`, taken off.
-    fn take(&mut self, n: usize, last: u64) -> Vec<(Guid, Kind)> {
+    fn take(&mut self, n: usize, last: u64) -> Vec<(Guid, Kind, u64)> {
         let mut out = Vec::with_capacity(n.min(self.marked.len()));
         while out.len() < n {
             let Some(&(g, seq)) = self.order.front() else {
@@ -177,7 +203,7 @@ impl Dirty {
                 && s == seq
             {
                 self.marked.remove(&g);
-                out.push((g, kind));
+                out.push((g, kind, seq));
             }
         }
         out
@@ -341,6 +367,7 @@ pub fn moved(map: &mut Map, object: Guid, anchor: Vector3d, position: Vector3d) 
 /// A unit's stealth or invisibility changed: who sees it is worked out
 /// again.
 pub fn stealth_changed(map: &mut Map, g: Guid) {
+    let _z = crate::zone!("visibility: stealth");
     refresh(map, g);
 }
 
@@ -380,7 +407,13 @@ pub fn refresh_dirty(map: &mut Map) {
         let size = if one_by_one {
             1
         } else {
-            chunk_size(budget, started.elapsed(), map.visibility_dirty.per_refresh)
+            let v = &map.visibility_dirty;
+            let size = chunk_size(budget, started.elapsed(), v.per_refresh);
+            if budget.is_zero() {
+                size
+            } else {
+                size.min((2 * v.last_worked).max(GROW_FROM))
+            }
         };
         let mut chunk = map.visibility_dirty.take(size, last);
         if chunk.is_empty() {
@@ -389,10 +422,20 @@ pub fn refresh_dirty(map: &mut Map) {
         if one_by_one {
             chunk[0].1 = Kind::Full;
         }
-        done += chunk.len();
         let began = Instant::now();
-        run(map, &chunk);
-        map.visibility_dirty.per_refresh = began.elapsed() / chunk.len() as u32;
+        // Past the budget, a chunk stops after the refresh at hand, the
+        // update's first excepted, its rest waiting for the next update as
+        // a chunk not begun would: two sides coming into each other's sight
+        // make a refresh cost a hundred times what the last chunk's did.
+        let until = (!budget.is_zero() && !one_by_one).then(|| started + budget);
+        let first = done == 0;
+        let worked = run_until(map, &chunk, until, first);
+        done += worked;
+        if worked < chunk.len() {
+            map.visibility_dirty.put_back(&chunk[worked..]);
+        }
+        map.visibility_dirty.per_refresh = began.elapsed() / worked.max(1) as u32;
+        map.visibility_dirty.last_worked = worked;
         if started.elapsed() >= budget {
             break;
         }
@@ -416,13 +459,15 @@ fn chunk_size(budget: Duration, spent: Duration, per: Duration) -> usize {
 /// Who should know `object` now, and, if it is a player, what it should
 /// know: every pair it is in looked at.
 pub fn refresh(map: &mut Map, object: Guid) {
-    run(map, &[(object, Kind::Full)]);
+    run_until(map, &[(object, Kind::Full, 0)], None, true);
 }
 
 /// One of a chunk's refreshes.
 struct Item {
     g: Guid,
     full: bool,
+    /// Its anchor before its side work, for one not worked out after all.
+    anchor: Option<Vector3d>,
     /// Where it is, and how far from its anchor, once its side work is
     /// done; `None` if it has nothing to work out (gone, or between maps).
     at: Option<(Vector3d, f32)>,
@@ -436,18 +481,38 @@ pub enum Act {
 }
 
 /// A chunk of refreshes: which are whole, their side work, their decisions
-/// (read-only, across the threads), then the decisions applied in order.
-fn run(map: &mut Map, chunk: &[(Guid, Kind)]) {
+/// (read-only, across the threads), then the decisions applied in order,
+/// until `until` (after the first, if `first` is the update's first);
+/// how many were worked out. Those after it are as they were before the
+/// chunk (but one found to be taken whole, which stays so): a pair with
+/// one of them that an earlier one shared was the earlier's to decide,
+/// and was; the rest are theirs, when they are worked out.
+fn run_until(
+    map: &mut Map,
+    chunk: &[(Guid, Kind, u64)],
+    until: Option<Instant>,
+    first: bool,
+) -> usize {
     let mut items: Vec<Item> = Vec::with_capacity(chunk.len());
     {
         let _z = crate::zone!("visibility: side work");
-        for &(g, kind) in chunk {
+        for &(g, kind, _) in chunk {
             let full = kind == Kind::Full || !flagged_plain(map, g) || !plain_now(map, g);
             if full {
                 // The others look at it whole until it is worked out.
                 unflag(map, g);
             }
-            items.push(Item { g, full, at: None });
+            let anchor = if let Some(p) = map.players.get(&g) {
+                Some(p.vis_anchor)
+            } else {
+                map.creature(g).map(|c| c.vis_anchor)
+            };
+            items.push(Item {
+                g,
+                full,
+                anchor,
+                at: None,
+            });
         }
         for it in &mut items {
             it.at = prepare(map, it.g, it.full);
@@ -468,11 +533,17 @@ fn run(map: &mut Map, chunk: &[(Guid, Kind)]) {
         }
     }
     let decided = decide_all(map, &items);
-    let _z = crate::zone!("visibility: applied");
+    let z = crate::zone!("visibility: applied");
+    let mut crowds = Crowds::new(map);
+    let mut worked = 0;
     for (it, d) in items.iter().zip(decided) {
+        if until.is_some_and(|t| Instant::now() >= t) && (worked > 0 || !first) {
+            break;
+        }
+        worked += 1;
         map.visibility_dirty.skipped += d.skipped;
         map.visibility_dirty.looked += d.looked;
-        apply(map, &d.acts);
+        apply(map, &d.acts, &mut crowds);
         if let Some((pos, _)) = it.at
             && let Some(c) = cell_of_object(map, it.g)
         {
@@ -485,7 +556,26 @@ fn run(map: &mut Map, chunk: &[(Guid, Kind)]) {
             });
         }
     }
+    drop(z);
+    // Those not worked out: their anchors as before the chunk (one taken
+    // whole stays so, until it is worked out).
+    for it in &items[worked..] {
+        if let Some(c) = cell_of_object(map, it.g) {
+            map.grid.update(it.g, c, |e| e.batch = 0);
+        }
+        if let Some(a) = it.anchor {
+            if let Some(p) = map.players.get_mut(&it.g) {
+                p.vis_anchor = a;
+            } else if let Some(c) = map.creature_mut(it.g) {
+                c.vis_anchor = a;
+            }
+        }
+    }
+    // Before anything else is sent: the creates are due before what names
+    // their objects.
+    crowds.send(map);
     crate::game::map::creature_combat::out_of_sight(map);
+    worked
 }
 
 /// What a refresh does before its decisions: the tiles ahead, the zone,
@@ -618,28 +708,30 @@ fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
     // its own looks, which go as far as it sees.
     let nearby: Vec<Guid> = map.grid.around(pos.x, pos.y, keep).collect();
     let observers = map.observers(object);
-    for &g in &nearby {
-        if g == object || !guid::is_player(g) {
-            continue;
-        }
-        let Some(p) = map.players.get(&g) else {
-            continue;
-        };
-        if p.awaiting_worldport {
-            continue;
-        }
-        let (r2, keep2) = sight2(map, p);
-        let d2 = dist2(crate::game::map::cinematic::view_point(p), pos);
-        // Whether they may see it is asked only where it decides: not of
-        // one out of their sight, nor of one past their margin.
-        if !p.known.contains(&object) {
-            if d2 <= r2 && death::can_see(map, g, object) {
-                acts.push(Act::Introduce(g, object));
+    in_parts(map, &nearby, acts, |part, acts| {
+        for &g in part {
+            if g == object || !guid::is_player(g) {
+                continue;
             }
-        } else if d2 > keep2 || !death::can_see(map, g, object) {
-            acts.push(Act::Part(g, object));
+            let Some(p) = map.players.get(&g) else {
+                continue;
+            };
+            if p.awaiting_worldport {
+                continue;
+            }
+            let (r2, keep2) = sight2(map, p);
+            let d2 = dist2(crate::game::map::cinematic::view_point(p), pos);
+            // Whether they may see it is asked only where it decides: not
+            // of one out of their sight, nor of one past their margin.
+            if !p.known.contains(&object) {
+                if d2 <= r2 && death::can_see(map, g, object) {
+                    acts.push(Act::Introduce(g, object));
+                }
+            } else if d2 > keep2 || !death::can_see(map, g, object) {
+                acts.push(Act::Part(g, object));
+            }
         }
-    }
+    });
     // Observers that have gone out of the grid window, and past their
     // sight.
     if let Some(observers) = observers {
@@ -655,7 +747,7 @@ fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
     let view = crate::game::map::cinematic::view_point(me);
     let (r2, keep2) = sight2(map, me);
     let own = sight(map, me) + MARGIN;
-    let (pos, nearby) = if dist2(view, pos) > 0.01 || own > keep {
+    let (pos, nearby): (Vector3d, Vec<Guid>) = if dist2(view, pos) > 0.01 || own > keep {
         // The cells the disc touches, not its square's corners (a third of
         // a flier's window): past `own`, nothing is introduced, and all
         // that is known is parted below.
@@ -665,34 +757,82 @@ fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
     };
     // What the player knows, and what has come into their sight: the rest
     // of the window, unknown and out of sight, has nothing to tell them.
-    for g in nearby {
-        if g == object {
-            continue;
+    in_parts(map, &nearby, acts, |part, acts| {
+        for &g in part {
+            if g == object {
+                continue;
+            }
+            let knows = me.known.contains(&g);
+            if !map
+                .position_of(g)
+                .is_some_and(|other| knows || dist2(other, pos) <= r2)
+            {
+                continue;
+            }
+            if guid::is_player(g) && map.players.get(&g).is_some_and(|o| o.awaiting_worldport) {
+                continue;
+            }
+            // Not known, it is in sight: the filter let it through for that.
+            let sees = death::can_see(map, object, g);
+            if !knows && sees {
+                acts.push(Act::Introduce(object, g));
+            } else if knows && !sees {
+                acts.push(Act::Part(object, g));
+            }
         }
-        let knows = me.known.contains(&g);
-        if !map
-            .position_of(g)
-            .is_some_and(|other| knows || dist2(other, pos) <= r2)
-        {
-            continue;
-        }
-        if guid::is_player(g) && map.players.get(&g).is_some_and(|o| o.awaiting_worldport) {
-            continue;
-        }
-        // Not known, it is in sight: the filter let it through for that.
-        let sees = death::can_see(map, object, g);
-        if !knows && sees {
-            acts.push(Act::Introduce(object, g));
-        } else if knows && !sees {
-            acts.push(Act::Part(object, g));
-        }
-    }
+    });
     for &g in &map.globals {
         if !me.known.contains(&g) {
             acts.push(Act::Introduce(object, g));
         }
     }
     gone(map, me, pos, keep2, acts);
+}
+
+/// A whole refresh's looks over this many objects at least are split
+/// across the visibility threads ([`in_parts`]) ...
+const PARTS_FROM: usize = 512;
+/// ... in parts of this many.
+const PART: usize = 128;
+
+/// `look` over `all` in order, its decisions into `acts`: across the
+/// visibility threads, in parts, for many (a stealthed unit's whole
+/// refresh among a crowd of 1,600, every one of whom it is asked of, on
+/// the map's thread alone: 0.45 ms, and 240 pets going into Prowl at once
+/// 110 ms), each part's decisions after the last's, as in one pass; else
+/// here. Within a chunk worked out across the threads, its parts are those
+/// threads' too.
+fn in_parts(
+    map: &Map,
+    all: &[Guid],
+    acts: &mut Vec<Act>,
+    look: impl Fn(&[Guid], &mut Vec<Act>) + Sync,
+) {
+    let threads = map.cfg.visibility_threads;
+    if all.len() >= PARTS_FROM
+        && threads != 1
+        && let Some(pool) = pool(threads)
+    {
+        let parts = || -> Vec<Vec<Act>> {
+            all.par_chunks(PART)
+                .map(|part| {
+                    let mut acts = Vec::new();
+                    look(part, &mut acts);
+                    acts
+                })
+                .collect()
+        };
+        let parts = if pool.current_thread_index().is_some() {
+            parts()
+        } else {
+            pool.install(parts)
+        };
+        for mut p in parts {
+            acts.append(&mut p);
+        }
+        return;
+    }
+    look(all, acts);
 }
 
 /// Of `object`'s observers, those past their sight of it, parted.
@@ -887,16 +1027,191 @@ fn decide_moved(
 }
 
 /// The decisions, in order; each checked again as it is applied (an
-/// earlier one may have done it).
-fn apply(map: &mut Map, acts: &[Act]) {
+/// earlier one may have done it). An introduction a crowd shares goes with
+/// the chunk's ([`Crowds`]).
+fn apply(map: &mut Map, acts: &[Act], crowds: &mut Crowds) {
     for &act in acts {
         match act {
             Act::Introduce(o, x) => {
-                if map.players.get(&o).is_some_and(|p| !p.known.contains(&x)) {
+                if map.players.get(&o).is_some_and(|p| !p.known.contains(&x))
+                    && !crowds.take(map, o, x)
+                {
                     introduce(map, o, x);
                 }
             }
             Act::Part(o, x) => part(map, o, x),
+        }
+    }
+}
+
+/// A chunk's introductions of objects to those who see them as a stranger
+/// does, in packets shared among them (`values::Shared`'s planning, as the
+/// update's values are), broadcast at the chunk's end, before anything else
+/// is sent: no client is held for them. A unit coming out of stealth in a
+/// crowd of 1,600 had each of its observers' batches take its create and
+/// each of them held, every broadcast to them until the step's end copied
+/// into each hold (a volley's ticks: 30 ms), then each let go (20 ms); two
+/// sides coming into each other's sight, each player's create copied into
+/// a thousand batches.
+///
+/// Each client gets the same creates as one by one, each once, before
+/// anything about their objects, and only the packets differ: the one by
+/// one's go in its batch, after the update's forgets; these come where the
+/// chunk ends. So a client with a forget of the object still to come in
+/// this update (it lost sight of it and has it again) is told of it in its
+/// batch, as are those who see it otherwise (its tap's outsiders, its
+/// marker, a pet's master, a player's group with quests to show: `views`),
+/// and a passenger, a corpse, a game object and a transport are always.
+/// Below [`values::SHARE_FROM`] of a crowd, the creates go into the
+/// batches; so do the shares of them that only one client gets.
+pub(crate) struct Crowds {
+    on: bool,
+    slots: Vec<Crowd>,
+    /// Each object's slot, `None` if it is introduced one by one.
+    of: AHashMap<Guid, Option<usize>>,
+}
+
+/// One object's crowd: its create, who sees it as a stranger does, and
+/// those told of it.
+struct Crowd {
+    object: Guid,
+    block: std::sync::Arc<[u8]>,
+    strangers: crate::game::map::views::Strangers,
+    to: crate::game::conn::Clients,
+    told: usize,
+}
+
+impl Crowds {
+    fn new(map: &Map) -> Self {
+        Self {
+            on: !map.visibility_dirty.creates_one_by_one,
+            slots: Vec::new(),
+            of: AHashMap::new(),
+        }
+    }
+
+    /// `observer` is told of `object` with the rest of its crowd: known,
+    /// observing, its create to come. False if it is to be introduced on
+    /// its own ([`introduce`]).
+    fn take(&mut self, map: &mut Map, observer: Guid, object: Guid) -> bool {
+        if !self.on {
+            return false;
+        }
+        let slot = match self.of.get(&object) {
+            Some(&s) => s,
+            None => {
+                let s = Self::open(map, object).map(|c| {
+                    self.slots.push(c);
+                    self.slots.len() - 1
+                });
+                self.of.insert(object, s);
+                s
+            }
+        };
+        let Some(s) = slot else {
+            return false;
+        };
+        let crowd = &mut self.slots[s];
+        // Its own view, or a forget of it still to come: on its own.
+        if !crowd.strangers.includes(observer)
+            || map.forget.get(&observer).is_some_and(|f| f.contains(&object))
+            || map.batches.get(&observer).is_some_and(|b| b.forgets(object))
+        {
+            return false;
+        }
+        debug_assert!(
+            !(guid::is_unit(object) || guid::is_player(object))
+                || crate::game::map::views::view_of(map, observer, object)
+                    == crate::game::map::views::View::default(),
+            "{observer:?} sees {object:?} as a stranger"
+        );
+        let Some(p) = map.players.get_mut(&observer) else {
+            return false;
+        };
+        if p.awaiting_worldport || !p.known.insert(object) {
+            return false;
+        }
+        // Made afresh: as no quest has it, until the next look.
+        p.quest_objects.remove(&object);
+        crowd.to.insert(map.clients.index_of(observer));
+        crowd.told += 1;
+        let first = crowd.told == 1;
+        map.add_observer(object, observer);
+        if first {
+            if map.creature_by_guid.contains_key(&object) {
+                map.awake.insert(object);
+            }
+            crate::game::map::conditions::locate(map, object, false);
+        }
+        true
+    }
+
+    /// `object`'s crowd, if its create may be shared: a unit's, a player's
+    /// not aboard a transport, a spell's area.
+    fn open(map: &mut Map, object: Guid) -> Option<Crowd> {
+        let shareable = if guid::is_player(object) {
+            map.players
+                .get(&object)
+                .is_some_and(|p| p.movement.flags.get_on_transport().is_none())
+        } else if guid::is_unit(object) {
+            map.creature(object).is_some()
+        } else {
+            crate::game::map::spells::dynamic::is_dynamic_object(object)
+                && map.spells.dynamic.contains_key(&object)
+        };
+        if !shareable || map.globals.contains(&object) {
+            return None;
+        }
+        let block = map.public_create(object)?;
+        Some(Crowd {
+            object,
+            block,
+            strangers: crate::game::map::views::Strangers::of(map, object),
+            to: Default::default(),
+            told: 0,
+        })
+    }
+
+    /// The chunk's creates: in packets shared among their crowds,
+    /// broadcast; those for a few, or a share only one client gets, into
+    /// the batches, those clients held.
+    fn send(self, map: &mut Map) {
+        if self.slots.iter().all(|c| c.told == 0) {
+            return;
+        }
+        let _z = crate::zone!("visibility: crowds' creates");
+        let mut planner = crate::game::map::values::Shared::default();
+        planner.one_by_one = map.shared_values.one_by_one;
+        for c in self.slots {
+            if c.told == 0 {
+                continue;
+            }
+            map.visibility_dirty.shared_creates += c.told as u64;
+            let own = guid::is_player(c.object).then(|| map.clients.index_of(c.object));
+            let cell = cell_of_object(map, c.object).unwrap_or_default();
+            planner.tell(
+                c.object,
+                own,
+                cell,
+                c.block.to_vec(),
+                std::sync::Arc::new(c.to),
+            );
+        }
+        let mut rest: Vec<(Guid, Guid, Vec<u8>)> = Vec::new();
+        let pool = map.encode_pool();
+        let packets = planner.plan_with(&map.clients, pool, |g, object, block: &[u8]| {
+            rest.push((g, object, block.to_vec()));
+        });
+        for (frame, to) in &packets {
+            map.broadcast(frame, to);
+        }
+        for (g, object, block) in rest {
+            map.batches
+                .entry(g)
+                .or_default()
+                .push_for(object, &block);
+            // What the map sends it from now on follows the create.
+            map.hold(g);
         }
     }
 }
@@ -1033,7 +1348,8 @@ mod chunk_tests {
         assert_eq!(chunk_size(ms(10), ms(0), us(10)), CHUNK);
         assert_eq!(chunk_size(ms(10), ms(0), us(200)), 50);
         assert_eq!(chunk_size(ms(10), ms(6), us(100)), 40);
-        assert_eq!(chunk_size(ms(10), ms(0), ms(2)), MIN_CHUNK);
+        assert_eq!(chunk_size(ms(10), ms(0), ms(2)), 5);
+        assert_eq!(chunk_size(ms(10), ms(0), ms(30)), MIN_CHUNK);
         assert_eq!(chunk_size(ms(10), ms(12), us(100)), MIN_CHUNK);
     }
 }

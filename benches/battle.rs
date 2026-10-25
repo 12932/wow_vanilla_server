@@ -116,6 +116,9 @@ fn main() {
     cfg.spawn.z = CENTRE.2;
     cfg.world.save_interval_secs = 3600;
     cfg.world.data_dir = Some(data_dir.clone());
+    // The visibility threads (`[visibility] refresh_threads`): BATTLE_THREADS,
+    // 0 the machine's cores up to 8, 1 the map's thread alone.
+    cfg.visibility.refresh_threads = env("BATTLE_THREADS", cfg.visibility.refresh_threads);
     let cfg = wow_vanilla_server::config::install(cfg);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -718,6 +721,24 @@ fn report_map(key: MapKey, secs: f64) {
                 s.cpu.as_secs_f64() * 1e3,
                 top.join(", ")
             );
+            // Its dearest zones under the steps (BATTLE_SLOWEST_ZONES, 0 for
+            // none), each's count in brackets.
+            let shown: usize = env("BATTLE_SLOWEST_ZONES", 6);
+            if shown > 0 {
+                let names: ahash::AHashSet<&str> = s.steps.iter().map(|(n, _)| *n).collect();
+                let mut zones: Vec<_> = s
+                    .zones
+                    .iter()
+                    .filter(|(n, _, _)| *n != "update" && !names.contains(n))
+                    .collect();
+                zones.sort_by_key(|z| std::cmp::Reverse(z.2));
+                let top: Vec<String> = zones
+                    .iter()
+                    .take(shown)
+                    .map(|(n, c, d)| format!("{n} {:.1} [{c}]", d.as_secs_f64() * 1e3))
+                    .collect();
+                println!("      zones: {}", top.join(", "));
+            }
         }
     }
     println!("  steps, CPU ms an update (mean / p99):");

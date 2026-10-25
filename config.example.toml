@@ -280,8 +280,9 @@ flight_yards = 400.0
 # milliseconds: past it the rest wait for the next update (20 a
 # second), oldest first, so a crowd moving in step can't stall a
 # map. A chunk of refreshes is sized to what is left of it, at what
-# a refresh cost in the last (16 to 128); at least one chunk is
-# done each update, and with 0 a whole one (128).
+# a refresh cost in the last (16 to 128), and stops where the
+# budget runs out; at least one refresh is done each update, and
+# with 0 a whole chunk (128).
 # Default 10. Range 0 to 1000, clamped. Changes at a reload.
 refresh_budget_ms = 10
 
@@ -826,6 +827,15 @@ group_offline_leader_secs = 300
 # then keeps it.
 # Default 24. Range 1 to 87600, clamped. Changes at a reload.
 expire_offline_hours = 24
+
+# Each grouped player's stats go to the members who can't see
+# them once a second (`SMSG_PARTY_MEMBER_STATS`), each player's at
+# a moment of the second of their own, spread over the second's
+# updates, as each player's own update in mangos sends theirs.
+# Off, every player's at once, once a second: a battle of 1,600
+# grouped put 7 ms into that update.
+# Default true. Changes at a reload.
+member_stats_spread = true
 
 # Water and lava: how long a player has before they come to harm,
 # and lava's burn.

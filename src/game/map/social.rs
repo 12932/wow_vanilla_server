@@ -713,12 +713,54 @@ fn stats_of(map: &Map, p: &crate::game::map::player::Player) -> MemberStats {
 }
 
 /// Once a second: each grouped player's changed stats, to the members
-/// who can't see them.
+/// who can't see them. With `[groups] member_stats_spread`, each player's
+/// at a moment of the second of their own, over the second's updates (a
+/// crowd of 1,600 grouped: 7 ms in one update a second, else 0.4 in each);
+/// a whole round when a second has gone since the last look (the map held
+/// up) or one is asked for (`member_stats_at`).
 pub fn push_member_stats(map: &mut Map) {
-    if map.now < map.member_stats_at {
+    let now = map.now;
+    let whole = now >= map.member_stats_at;
+    if !map.cfg.groups.member_stats_spread {
+        if !whole {
+            return;
+        }
+        map.member_stats_at = now + STATS_EVERY;
+        push_stats_of(map, |_| true);
         return;
     }
-    map.member_stats_at = map.now + STATS_EVERY;
+    let from = std::mem::replace(&mut map.member_stats_last, now);
+    map.member_stats_at = now + STATS_EVERY;
+    if whole || now.saturating_duration_since(from) >= STATS_EVERY {
+        push_stats_of(map, |_| true);
+        return;
+    }
+    let (a, b) = (
+        moment(map.member_stats_epoch, from),
+        moment(map.member_stats_epoch, now),
+    );
+    push_stats_of(map, |g| in_window(a, b, moment_of(g)));
+}
+
+/// Whether the moment `m` of the second is in the window from `a` (not in
+/// it) to `b` (in it), round the second's end if `b` is before `a`.
+fn in_window(a: u64, b: u64, m: u64) -> bool {
+    if a <= b { a < m && m <= b } else { m > a || m <= b }
+}
+
+/// Where in the second `t` is, from `epoch`, in microseconds.
+fn moment(epoch: std::time::Instant, t: std::time::Instant) -> u64 {
+    (t.saturating_duration_since(epoch).as_micros() % STATS_EVERY.as_micros()) as u64
+}
+
+/// A player's moment of the second for their stats, in microseconds: their
+/// guid's, spread evenly.
+fn moment_of(g: Guid) -> u64 {
+    (g.guid().wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32) % STATS_EVERY.as_micros() as u64
+}
+
+/// [`push_member_stats`] for the grouped players `pick` takes.
+fn push_stats_of(map: &mut Map, pick: impl Fn(Guid) -> bool) {
     let realm = map.realm.clone();
     // The realm's groups lock is taken twice, briefly: for who is grouped,
     // and to keep the stats and who saw them. Their stats are read out of
@@ -729,6 +771,7 @@ pub fn push_member_stats(map: &mut Map) {
         let groups = realm.social.groups.lock();
         map.players
             .keys()
+            .filter(|&&g| pick(g))
             .filter_map(|&g| {
                 let others = groups.others(g);
                 (!others.is_empty()).then_some((g, others))
@@ -782,5 +825,46 @@ pub fn push_member_stats(map: &mut Map) {
                 crate::game::social::send_frame(&realm, *o, frame);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod spread_tests {
+    use super::*;
+
+    /// Windows that go round the second, end to end, of any lengths: each
+    /// player's moment is in one of each second's, once; so each player's
+    /// stats go once a second, however the updates fall.
+    #[test]
+    fn each_players_moment_is_in_one_window_a_second() {
+        let second = STATS_EVERY.as_micros() as u64;
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let players: Vec<Guid> = (1..=500).map(crate::game::guid::player).collect();
+        let mut hits = vec![0u32; players.len()];
+        // Updates 1 to 99 ms apart over ten seconds.
+        let (mut t, end) = (0u64, 10 * second);
+        while t < end {
+            let step = 1_000 + next() % 98_000;
+            let (a, b) = (t % second, (t + step) % second);
+            for (k, &g) in players.iter().enumerate() {
+                if in_window(a, b, moment_of(g)) {
+                    hits[k] += 1;
+                }
+            }
+            t += step;
+        }
+        assert!(hits.iter().all(|&h| (9..=11).contains(&h)), "{hits:?}");
+        // And spread: about as many in each tenth of the second.
+        let mut tenths = [0u32; 10];
+        for &g in &players {
+            tenths[(moment_of(g) * 10 / second) as usize] += 1;
+        }
+        assert!(tenths.iter().all(|&n| (30..=70).contains(&n)), "{tenths:?}");
     }
 }

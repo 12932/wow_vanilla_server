@@ -188,6 +188,72 @@ impl View {
     }
 }
 
+/// Who sees a unit or a player as a stranger does ([`view_of`] the default
+/// view, so their create is [`Map::public_create`]'s), worked out once for
+/// a crowd told of it at once (`visibility`'s shared creates): the players
+/// whose views are their own, as [`view_of`] finds them.
+#[derive(Debug, Clone)]
+pub enum Strangers {
+    /// A player: but its markers, and its group's members if it has quests
+    /// in its log to show them.
+    Player {
+        markers: Vec<Guid>,
+        group: Vec<Guid>,
+    },
+    /// A creature: but those outside its tap, and its own viewers.
+    Creature {
+        viewers: Viewers,
+        tap: Option<Vec<Guid>>,
+    },
+    /// Anything else: everyone.
+    All,
+}
+
+impl Strangers {
+    pub fn of(map: &Map, object: Guid) -> Self {
+        if let Some(p) = map.players.get(&object) {
+            let group = if has_group_only(&p.fields) {
+                let groups = map.realm.social.groups.lock();
+                let mut g: Vec<Guid> = groups
+                    .group_of(object)
+                    .map(|g| g.members.iter().map(|m| m.guid).collect())
+                    .unwrap_or_default();
+                g.push(object);
+                g
+            } else {
+                Vec::new()
+            };
+            return Self::Player {
+                markers: casters(&p.auras, AURA_MOD_STALKED),
+                group,
+            };
+        }
+        match map.creature(object) {
+            Some(c) => Self::Creature {
+                viewers: Viewers::of_creature(c),
+                tap: c
+                    .tapped_by
+                    .map(|t| crate::game::map::tap::recipients(&map.realm, t, c.tap_group)),
+            },
+            None => Self::All,
+        }
+    }
+
+    /// Whether `observer` sees it as a stranger does.
+    pub fn includes(&self, observer: Guid) -> bool {
+        match self {
+            Self::Player { markers, group } => {
+                !markers.contains(&observer) && !group.contains(&observer)
+            }
+            Self::Creature { viewers, tap } => {
+                tap.as_ref().is_none_or(|t| t.contains(&observer))
+                    && creature_view(viewers, observer) == View::default()
+            }
+            Self::All => true,
+        }
+    }
+}
+
 /// `observer`'s view of `object`, a unit or a player.
 pub fn view_of(map: &Map, observer: Guid, object: Guid) -> View {
     if let Some(p) = map.players.get(&object) {
@@ -309,8 +375,18 @@ fn block(guid: Guid, fields: &Fields, view: View, told: bool, fresh: bool) -> Op
 
 /// Each observer's block of `guid`'s `fields` this update, `view` giving
 /// each theirs (and whether they are `fresh` to it), built once a view.
+/// Each observer's block of `guid`'s `fields`, by its view. Those who see
+/// it as a stranger does get the one block alike, shared among them
+/// (`values`) as when no one sees it otherwise: a pet's master seeing its
+/// owner-only fields change needn't put the block its crowd of 1,600
+/// strangers gets into each of their batches (240 pets: 15 to 25 ms).
+#[allow(clippy::too_many_arguments)]
 fn tell_each(
     batches: &mut AHashMap<Guid, Batch>,
+    shared: &mut Shared,
+    table: &ClientTable,
+    own: Option<usize>,
+    cell: crate::game::map::grid::CellKey,
     guid: Guid,
     fields: &Fields,
     observers: impl Iterator<Item = Guid>,
@@ -319,8 +395,19 @@ fn tell_each(
 ) {
     type Built = ((View, bool), Option<Vec<u8>>);
     let mut built: Vec<Built> = Vec::new();
+    let stranger = (View::default(), false);
+    let mut strangers = crate::game::conn::Clients::default();
+    let mut any = false;
+    // One by one (`Shared::one_by_one`): the strangers' each into their
+    // batch too, as before they were shared.
+    let share = !shared.one_by_one;
     for o in observers {
         let key = view(o);
+        if share && key == stranger {
+            strangers.insert(table.index_of(o));
+            any = true;
+            continue;
+        }
         let i = match built.iter().position(|(k, _)| *k == key) {
             Some(i) => i,
             None => {
@@ -331,6 +418,9 @@ fn tell_each(
         if let Some(b) = &built[i].1 {
             batches.entry(o).or_default().push_for(guid, b);
         }
+    }
+    if any && let Some(b) = block(guid, fields, stranger.0, told, stranger.1) {
+        shared.tell(guid, own, cell, b, std::sync::Arc::new(strangers));
     }
 }
 
@@ -368,6 +458,10 @@ pub fn tell_creature(
     let was = &c.views_told;
     tell_each(
         batches,
+        shared,
+        table,
+        None,
+        c.cell,
         c.guid,
         &c.fields,
         c.observers.iter().copied(),
@@ -436,6 +530,10 @@ pub fn tell_player(
     }
     tell_each(
         batches,
+        shared,
+        table,
+        table.get(p.guid),
+        p.cell,
         p.guid,
         &p.fields,
         p.observers.iter().copied(),

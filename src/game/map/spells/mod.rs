@@ -2649,6 +2649,7 @@ pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
 /// resist (a tenth as likely as a direct hit's), absorbed, logged, dealt;
 /// a leech heals its caster by what it took.
 pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u32, leech: bool) {
+    let _z = crate::zone!("spells: periodic damage");
     periodic_damage_of(map, h, target, amount as f32, leech);
 }
 

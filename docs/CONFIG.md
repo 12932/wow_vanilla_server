@@ -176,7 +176,7 @@ How far players see, in yards (further costs the server more and the client more
 | `instances_yards` | In dungeons and raids. | `170.0` | 20 to 500, clamped | live | `Visibility.Distance.Instances` |
 | `battleground_yards` | In battlegrounds: further, so a battle's far side is in view. | `400.0` | 20 to 500, clamped | live | `Visibility.Distance.BGArenas` |
 | `flight_yards` | On a flight master's gryphon or wyvern: further, as the land goes by below. Back to the map's own on landing. | `400.0` | 20 to 500, clamped | live |  |
-| `refresh_budget_ms` | How long a map's update may spend on visibility's refreshes, in milliseconds: past it the rest wait for the next update (20 a second), oldest first, so a crowd moving in step can't stall a map. A chunk of refreshes is sized to what is left of it, at what a refresh cost in the last (16 to 128); at least one chunk is done each update, and with 0 a whole one (128). | `10` | 0 to 1000, clamped | live |  |
+| `refresh_budget_ms` | How long a map's update may spend on visibility's refreshes, in milliseconds: past it the rest wait for the next update (20 a second), oldest first, so a crowd moving in step can't stall a map. A chunk of refreshes is sized to what is left of it, at what a refresh cost in the last (16 to 128), and stops where the budget runs out; at least one refresh is done each update, and with 0 a whole chunk (128). | `10` | 0 to 1000, clamped | live |  |
 | `refresh_threads` | Threads that work out visibility's refreshes for the maps, read only, before each map applies them, and compress the update's packets no two clients share (a crowd's creates); 1 does both on the map's own thread, 0 takes the machine's cores, up to 8. | `0` | 0 to 64, clamped | restart |  |
 | `distant_move_yards` | Past these yards from a player who moves, those who see them get only every `distant_move_every`th of their heartbeats (a start, a stop, a jump, a turn or a landing always): fewer packets for a crowd's far side. 0 sends every heartbeat to everyone, as 1.12's servers do. | `0.0` | 0 to 500, clamped | live |  |
 | `distant_move_every` | Of a mover's heartbeats, the share an observer past `distant_move_yards` gets: one in this many. 1 is every one. | `1` | 1 to 100, clamped | live |  |
@@ -326,6 +326,7 @@ Groups kept across restarts.
 | Key | Meaning | Default | Range | Reload | mangos |
 |---|---|---|---|---|---|
 | `expire_offline_hours` | Hours a group may go with no member online before it is deleted, in memory and in the store; a member logging in before then keeps it. | `24` | 1 to 87600, clamped | live |  |
+| `member_stats_spread` | Each grouped player's stats go to the members who can't see them once a second (`SMSG_PARTY_MEMBER_STATS`), each player's at a moment of the second of their own, spread over the second's updates, as each player's own update in mangos sends theirs. Off, every player's at once, once a second: a battle of 1,600 grouped put 7 ms into that update. | `true` |  | live |  |
 
 ### `[environment]`
 

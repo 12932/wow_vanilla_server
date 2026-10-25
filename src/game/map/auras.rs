@@ -943,6 +943,7 @@ pub fn apply_spell(
     effects: &[(usize, i32)],
     ctx: Context,
 ) -> Result<(), Refused> {
+    let _z = crate::zone!("auras: put on");
     if crate::game::map::item_scripts::instead_of_aura(map, caster, spell) {
         return Ok(());
     }

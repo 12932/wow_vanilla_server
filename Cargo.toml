@@ -134,6 +134,7 @@ harness = false
 # docs/PERFORMANCE.md).
 [[bench]]
 name = "visibility"
+harness = false
 # The outbound path: the writer task, the map's fan-out to observers, and
 # both to loopback sockets (`cargo bench --bench outbound`,
 # docs/PERFORMANCE.md).

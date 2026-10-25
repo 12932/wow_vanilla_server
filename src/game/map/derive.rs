@@ -535,6 +535,7 @@ fn judgement_state(p: &mut Player) {
 
 /// Work a unit's stats out again.
 pub fn unit(map: &mut Map, g: Guid) {
+    let _z = crate::zone!("derive: a unit");
     let data = map.realm.data.clone();
     if let Some(p) = map.players.get_mut(&g) {
         player(p, &data);
