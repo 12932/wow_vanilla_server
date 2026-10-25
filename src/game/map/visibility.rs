@@ -43,7 +43,16 @@
 //! thread. A pair two of a chunk's refreshes share is decided by the
 //! earlier, both ways. Once the update's refreshes have taken
 //! `[visibility] refresh_budget_ms`, the rest wait for the next update,
-//! oldest first.
+//! oldest first: a chunk stops after the refresh at hand, and its rest go
+//! back to the front of the line (one refresh at least an update). A
+//! whole refresh asks [`death::can_see`] only of the pairs not both plain,
+//! as the quick path does; among a crowd its looks are split across the
+//! threads.
+//!
+//! **Its creates** for a crowd (an object coming into the sight of many,
+//! who see it as a stranger does) go in packets shared among them at the
+//! chunk's end, no client held for them ([`Crowds`]); the rest into each
+//! observer's batch, the client held until it goes.
 
 use std::collections::VecDeque;
 use std::sync::OnceLock;
@@ -82,9 +91,13 @@ const MIN_CHUNK: usize = 1;
 /// ... and at most twice the last chunk's worked out, or this many: one
 /// grows into a costlier crowd a chunk at a time, not from one refresh's
 /// cost to 128 refreshes' at once.
-const GROW_FROM: usize = 16;
-/// Fewer in a chunk than this are worked out on the map's thread alone.
+const GROW_FROM: usize = 4;
+/// Fewer in a chunk than this are worked out on the map's thread alone ...
 const PARALLEL_FROM: usize = 16;
+/// ... unless they are to cost this much at what a refresh cost in the
+/// last chunk (a charge's: a millisecond each among 1,600), when two or
+/// more are worked out across the threads.
+const PARALLEL_COST: Duration = Duration::from_micros(400);
 
 /// Why an object's visibility is to be worked out.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -429,7 +442,10 @@ pub fn refresh_dirty(map: &mut Map) {
         // make a refresh cost a hundred times what the last chunk's did.
         let until = (!budget.is_zero() && !one_by_one).then(|| started + budget);
         let first = done == 0;
-        let worked = run_until(map, &chunk, until, first);
+        let parallel = chunk.len() >= PARALLEL_FROM
+            || (chunk.len() >= 2
+                && map.visibility_dirty.per_refresh * chunk.len() as u32 >= PARALLEL_COST);
+        let worked = run_until(map, &chunk, until, first, parallel);
         done += worked;
         if worked < chunk.len() {
             map.visibility_dirty.put_back(&chunk[worked..]);
@@ -459,7 +475,7 @@ fn chunk_size(budget: Duration, spent: Duration, per: Duration) -> usize {
 /// Who should know `object` now, and, if it is a player, what it should
 /// know: every pair it is in looked at.
 pub fn refresh(map: &mut Map, object: Guid) {
-    run_until(map, &[(object, Kind::Full, 0)], None, true);
+    run_until(map, &[(object, Kind::Full, 0)], None, true, false);
 }
 
 /// One of a chunk's refreshes.
@@ -492,6 +508,7 @@ fn run_until(
     chunk: &[(Guid, Kind, u64)],
     until: Option<Instant>,
     first: bool,
+    parallel: bool,
 ) -> usize {
     let mut items: Vec<Item> = Vec::with_capacity(chunk.len());
     {
@@ -502,20 +519,15 @@ fn run_until(
                 // The others look at it whole until it is worked out.
                 unflag(map, g);
             }
-            let anchor = if let Some(p) = map.players.get(&g) {
-                Some(p.vis_anchor)
-            } else {
-                map.creature(g).map(|c| c.vis_anchor)
-            };
             items.push(Item {
                 g,
                 full,
-                anchor,
+                anchor: None,
                 at: None,
             });
         }
         for it in &mut items {
-            it.at = prepare(map, it.g, it.full);
+            it.at = prepare(map, it.g, it.full, &mut it.anchor);
             if !it.full && it.at.is_some_and(|(_, delta)| delta > DRIFT) {
                 it.full = true;
                 unflag(map, it.g);
@@ -532,7 +544,7 @@ fn run_until(
             }
         }
     }
-    let decided = decide_all(map, &items);
+    let decided = decide_all(map, &items, parallel);
     let z = crate::zone!("visibility: applied");
     let mut crowds = Crowds::new(map);
     let mut worked = 0;
@@ -582,8 +594,13 @@ fn run_until(
 /// the anchor; the zone and the tiles only when it has crossed a cell
 /// since they were last done (or it is worked out whole). Where it is,
 /// and how far it has gone from its anchor; `None` if it has nothing to
-/// work out.
-fn prepare(map: &mut Map, g: Guid, full: bool) -> Option<(Vector3d, f32)> {
+/// work out. A player's or creature's anchor before it, into `was`.
+fn prepare(
+    map: &mut Map,
+    g: Guid,
+    full: bool,
+    was: &mut Option<Vector3d>,
+) -> Option<(Vector3d, f32)> {
     let pos = map.position_of(g)?;
     let cell = cell_of_object(map, g);
     let anchor = cell
@@ -610,13 +627,13 @@ fn prepare(map: &mut Map, g: Guid, full: bool) -> Option<(Vector3d, f32)> {
         if p.awaiting_worldport {
             return None;
         }
-        p.vis_anchor = pos;
+        *was = Some(std::mem::replace(&mut p.vis_anchor, pos));
         if side(p.side_cell) {
             p.side_cell = cell;
             crate::game::map::world::update_zone(map, g);
         }
     } else if let Some(c) = map.creature_mut(g) {
-        c.vis_anchor = pos;
+        *was = Some(std::mem::replace(&mut c.vis_anchor, pos));
         if side(c.side_cell) {
             c.side_cell = cell;
             crate::game::map::conditions::locate(map, g, true);
@@ -650,10 +667,10 @@ pub(crate) fn pool(threads: usize) -> Option<&'static rayon::ThreadPool> {
 /// Each item's decisions, in order: across the pool for a big chunk, else
 /// here. The same either way: each is worked out from the map as the side
 /// work left it, and nothing is changed until all are.
-fn decide_all(map: &Map, items: &[Item]) -> Vec<Decided> {
+fn decide_all(map: &Map, items: &[Item], parallel: bool) -> Vec<Decided> {
     let _z = crate::zone!("visibility: decided");
     let threads = map.cfg.visibility_threads;
-    if items.len() >= PARALLEL_FROM
+    if parallel
         && threads != 1
         && let Some(pool) = pool(threads)
     {
@@ -700,16 +717,52 @@ fn decide(map: &Map, it: &Item, place: u32) -> Decided {
     d
 }
 
+/// For the benchmarks: `object`'s whole refresh decided (not applied),
+/// across the threads in parts or on this thread alone, as many decisions
+/// as it made.
+#[doc(hidden)]
+pub fn decide_whole_alone(map: &mut Map, object: Guid, parts: bool) -> usize {
+    let Some(pos) = map.position_of(object) else {
+        return 0;
+    };
+    let cfg = map.cfg.clone();
+    if !parts {
+        let mut alone = (*cfg).clone();
+        alone.visibility_threads = 1;
+        map.cfg = std::sync::Arc::new(alone);
+    }
+    let mut acts = Vec::new();
+    decide_whole(map, object, pos, &mut acts);
+    map.cfg = cfg;
+    acts.len()
+}
+
 /// Every pair `object` is in, looked at.
 fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
     let keep = radius(map) + MARGIN;
     // The players near the object: should they know it? Each by how far it
     // sees; one further off that sees further (a flier) is told of it by
     // its own looks, which go as far as it sees.
-    let nearby: Vec<Guid> = map.grid.around(pos.x, pos.y, keep).collect();
+    // Each with whether the grid takes it as plain: between it and the
+    // object, if that is plain now too, [`death::can_see`] is true both
+    // ways (the quick path's rule), and isn't asked.
+    let nearby: Vec<(Guid, bool)> = map
+        .grid
+        .around_entries(pos.x, pos.y, keep)
+        .map(|e| (e.guid, e.plain))
+        .collect();
+    let plain = plain_now(map, object);
+    let sees = |a: Guid, b: Guid, both: bool| {
+        debug_assert!(
+            !both || death::can_see(map, a, b),
+            "{a:?} and {b:?}, both plain, and one doesn't see the other"
+        );
+        both || death::can_see(map, a, b)
+    };
     let observers = map.observers(object);
     in_parts(map, &nearby, acts, |part, acts| {
-        for &g in part {
+        for &(g, also) in part {
+            let both = plain && also;
             if g == object || !guid::is_player(g) {
                 continue;
             }
@@ -724,10 +777,10 @@ fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
             // Whether they may see it is asked only where it decides: not
             // of one out of their sight, nor of one past their margin.
             if !p.known.contains(&object) {
-                if d2 <= r2 && death::can_see(map, g, object) {
+                if d2 <= r2 && sees(g, object, both) {
                     acts.push(Act::Introduce(g, object));
                 }
-            } else if d2 > keep2 || !death::can_see(map, g, object) {
+            } else if d2 > keep2 || !sees(g, object, both) {
                 acts.push(Act::Part(g, object));
             }
         }
@@ -747,18 +800,19 @@ fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
     let view = crate::game::map::cinematic::view_point(me);
     let (r2, keep2) = sight2(map, me);
     let own = sight(map, me) + MARGIN;
-    let (pos, nearby): (Vector3d, Vec<Guid>) = if dist2(view, pos) > 0.01 || own > keep {
+    let (pos, nearby): (Vector3d, Vec<(Guid, bool)>) = if dist2(view, pos) > 0.01 || own > keep {
         // The cells the disc touches, not its square's corners (a third of
         // a flier's window): past `own`, nothing is introduced, and all
         // that is known is parted below.
-        (view, map.grid.within(view.x, view.y, own).collect())
+        let within = map.grid.within_entries(view.x, view.y, own);
+        (view, within.map(|e| (e.guid, e.plain)).collect())
     } else {
         (pos, nearby)
     };
     // What the player knows, and what has come into their sight: the rest
     // of the window, unknown and out of sight, has nothing to tell them.
     in_parts(map, &nearby, acts, |part, acts| {
-        for &g in part {
+        for &(g, also) in part {
             if g == object {
                 continue;
             }
@@ -773,7 +827,7 @@ fn decide_whole(map: &Map, object: Guid, pos: Vector3d, acts: &mut Vec<Act>) {
                 continue;
             }
             // Not known, it is in sight: the filter let it through for that.
-            let sees = death::can_see(map, object, g);
+            let sees = sees(object, g, plain && also);
             if !knows && sees {
                 acts.push(Act::Introduce(object, g));
             } else if knows && !sees {
@@ -802,11 +856,11 @@ const PART: usize = 128;
 /// 110 ms), each part's decisions after the last's, as in one pass; else
 /// here. Within a chunk worked out across the threads, its parts are those
 /// threads' too.
-fn in_parts(
+fn in_parts<T: Sync>(
     map: &Map,
-    all: &[Guid],
+    all: &[T],
     acts: &mut Vec<Act>,
-    look: impl Fn(&[Guid], &mut Vec<Act>) + Sync,
+    look: impl Fn(&[T], &mut Vec<Act>) + Sync,
 ) {
     let threads = map.cfg.visibility_threads;
     if all.len() >= PARTS_FROM

@@ -119,6 +119,9 @@ fn main() {
     // The visibility threads (`[visibility] refresh_threads`): BATTLE_THREADS,
     // 0 the machine's cores up to 8, 1 the map's thread alone.
     cfg.visibility.refresh_threads = env("BATTLE_THREADS", cfg.visibility.refresh_threads);
+    // Visibility's budget an update (`[visibility] refresh_budget_ms`):
+    // BATTLE_BUDGET_MS.
+    cfg.visibility.refresh_budget_ms = env("BATTLE_BUDGET_MS", cfg.visibility.refresh_budget_ms);
     let cfg = wow_vanilla_server::config::install(cfg);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -881,6 +884,32 @@ async fn battle(
     let per = fighters.len().div_ceil(groups);
     let mut tasks = Vec::new();
     let started = Instant::now();
+    // With BATTLE_SIGHT_MS, the players' sight every so many ms from the
+    // start: the refreshes waiting and how many objects each knows, on
+    // average (cheap: no look into what they know).
+    let sight_every: u64 = env("BATTLE_SIGHT_MS", 0);
+    let sampler = (sight_every > 0).then(|| {
+        let (realm, stop) = (realm.clone(), stop.clone());
+        tokio::spawn(async move {
+            let mut out = Vec::new();
+            while !stop.load(Ordering::Relaxed) {
+                let t = started.elapsed().as_secs_f32();
+                if let Some((waiting, known)) = realm
+                    .maps
+                    .get(&realm, key)
+                    .query(|m| {
+                        let known: usize = m.players.values().map(|p| p.known.len()).sum();
+                        (m.visibility_dirty.len(), known / m.players.len().max(1))
+                    })
+                    .await
+                {
+                    out.push(format!("{t:.1}s {waiting}/{known}"));
+                }
+                tokio::time::sleep(Duration::from_millis(sight_every)).await;
+            }
+            out
+        })
+    });
     let mut fighters = fighters;
     let mut seed = 0u64;
     while !fighters.is_empty() {
@@ -911,6 +940,7 @@ async fn battle(
         bench_probe::disable();
         println!("  the charge ({:.0} s):", charge.as_secs_f32());
         report_map(key, charge.as_secs_f64());
+        sight(&realm, key).await;
         println!("  the fight:");
     }
     tokio::time::sleep(Duration::from_secs(warm)).await;
@@ -966,7 +996,42 @@ async fn battle(
         per_client(&c.cast_failed),
     );
     report_map(key, took);
+    sight(&realm, key).await;
+    // With BATTLE_DECIDE=n, n players' whole refreshes decided (not
+    // applied) in the battle as it stands, across the visibility threads
+    // and on the map's thread alone.
+    let decide: usize = env("BATTLE_DECIDE", 0);
+    if decide > 0 {
+        let probe: Vec<Guid> = guids.iter().take(decide).copied().collect();
+        let timed = realm
+            .maps
+            .get(&realm, key)
+            .query(move |m| {
+                use wow_vanilla_server::game::map::visibility::decide_whole_alone;
+                let mut out = Vec::new();
+                for parts in [true, false, true, false] {
+                    let t = Instant::now();
+                    let acts: usize = probe.iter().map(|&g| decide_whole_alone(m, g, parts)).sum();
+                    out.push((parts, t.elapsed(), acts));
+                }
+                out
+            })
+            .await
+            .unwrap_or_default();
+        for (parts, took, acts) in timed {
+            println!(
+                "  {decide} whole refreshes decided {}: {:.1} µs each ({acts} decisions)",
+                if parts { "in parts" } else { "alone" },
+                took.as_secs_f64() * 1e6 / decide as f64
+            );
+        }
+    }
     stop.store(true, Ordering::Relaxed);
+    if let Some(s) = sampler
+        && let Ok(series) = s.await
+    {
+        println!("  sight over time (waiting/known): {}", series.join(", "));
+    }
     let mut kept = Vec::new();
     for t in tasks {
         if let Ok(g) = t.await {
@@ -980,6 +1045,41 @@ async fn battle(
     drop(kept);
     realm.shutdown_within(Duration::from_secs(20)).await;
     drop(realm);
+}
+
+/// How far the players' sight has got: how many objects each knows, on
+/// average and at the least, and the refreshes waiting (a charge's sides
+/// coming into each other's sight are worked out over updates, within
+/// `[visibility] refresh_budget_ms`).
+async fn sight(realm: &Arc<Realm>, key: MapKey) {
+    let (known, least, players, waiting, of_players, units) = realm
+        .maps
+        .get(realm, key)
+        .query(|m| {
+            use wow_vanilla_server::game::guid;
+            let known: usize = m.players.values().map(|p| p.known.len()).sum();
+            let least = m.players.values().map(|p| p.known.len()).min().unwrap_or(0);
+            let of_players: usize = m
+                .players
+                .values()
+                .map(|p| p.known.iter().filter(|g| guid::is_player(**g)).count())
+                .sum();
+            let units: usize = m
+                .players
+                .values()
+                .map(|p| p.known.iter().filter(|g| guid::is_unit(**g)).count())
+                .sum();
+            (known, least, m.players.len(), m.visibility_dirty.len(), of_players, units)
+        })
+        .await
+        .unwrap_or_default();
+    let n = players.max(1) as f64;
+    println!(
+        "  sight: each player knows {:.0} objects ({least} at the least), {:.1} players and {:.1} creatures; {waiting} refreshes waiting",
+        known as f64 / n,
+        of_players as f64 / n,
+        units as f64 / n
+    );
 }
 
 /// Each hunter's pet out (`.pet`), and its guid.
