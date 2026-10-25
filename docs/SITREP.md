@@ -530,10 +530,16 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     druid tank on Drek'Thar was stunned, turned him and five guards onto the mage, and no tank ever taunted him back.
     Under way: the boss always held (a backup taunts him back, a stunned tank's boss taken by the backup), no AoE
     until the tanks hold, and each bot's record logging its tactics plan.
-  - **Damage dealers not pulling their weight (your other agent's finding, 2026-10-25):** damage-part paladins
-    casting Holy Light as their routine, a damage warrior's 21 Piercing Howls at a boss, Fury warriors with no
-    Bloodthirst dancing to Defensive Stance, low feral cats. Under way, `fix/damage-builds`: each bot's build
-    recorded, parts matched to builds, rotations by part, measured on the dummy harness and the all-in.
+  - **Damage dealers' builds and rotations (your other agent's finding; peon 0.1.44):** damage seats drew
+    Protection warriors (2 in 9) and Holy paladins (1 in 4): now a damage seat always gets a damage build, and a
+    raid's Arms takes Deep Wounds and Impale (`Arms (raid)`), PvP Arms kept for battles. Damage warriors: no Piercing
+    Howl at a boss, Disarm only players, Rend only short fights, tank tools left to tanks (Mortal Strike 1.0 to 2.2 an
+    attempt, Bloodthirst 1.4 to 2.3). Hybrids heal others only when the healing is left to them. Cats: Shred from
+    behind, Clearcasting, power-shifting (+11% on the dummy). Each bot's build, talents and weapons in the record. On
+    master the kill rate didn't move (23 of 30 both): round five's tactics had already taken part of the gain.
+    - **Your calls:** Disarm kept against players; no "about to die" Defensive Stance for Arms or Fury (no shield);
+      `Arms (raid)` as its own build or one Arms for raids and PvP; the knobs `heal.left_below` 0.25 and
+      `druid.powershift_top` 0.5.
   - **Melee reach: done (your call, 2026-10-25; peon 0.1.38).** The scenarios' model now carries the bot's own swing,
     so a swinging melee holds at 4.5 yd; a melee behind its target and up to 2 yd past reach keeps its seat and steps
     back in (it left for a new seat and stopped its swing). 40 attempts each at Drek'Thar: kills 34 to 36, deaths by
