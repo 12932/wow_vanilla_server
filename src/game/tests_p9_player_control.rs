@@ -180,6 +180,12 @@ async fn a_possessors_stop_ends_his_swings_and_leaves_his_cast() {
     let mut c = Client::connect(&realm, "C");
     c.enter("Other", Race::Human, Class::Priest).await;
     on(&map, move |m| {
+        // Unhurt: the brute he swings at hits back, and on a busy machine
+        // enough updates go by between the queries for it to kill him,
+        // which ends his swings before the test's stop does.
+        if let Some(p) = m.players.get_mut(&gb) {
+            p.misc.god = true;
+        }
         let brute = spawn(m, ga, BRUTE, 10, 3.0);
         crate::game::map::combat::start_attack(m, gb, brute);
         let ends = m.now + Duration::from_secs(10);
