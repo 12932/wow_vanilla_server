@@ -192,6 +192,15 @@ there. So:
 - **A wait for what the server sends ends when it comes**: up to `harness::WAIT` (20 s), or, for what a map does at
   once, `Client::sees_on`, which waits for `harness::UPDATES` (400) of the map's updates as well. A wait for nothing
   keeps its short window.
+- **What a look sets, the realm doesn't put back between looks**: the five-second event sweep works out again from the
+  calendar which events are on, beside the map, so a test's event turned on or off goes in the GM's override too
+  (`social.gm_events`, as `.event` keeps it): Riggle Bassbait's tournament.
+- **A creature's own timers run on between looks**: a look that makes one of its casts due takes it out of any cast
+  first (`spells::interrupt`), as `timed_cast` does: Nefarian's class call, put off behind his Shadow Flame.
+- **A count of chances comes out the same every run**: its outcome rolls are a fixed seed's (`MapSpells::queued_rolls`),
+  its bound some five standard deviations of the binomial spread, and nothing lands with what it counts: one tier's
+  gear (`.gear raid 2`, not `.gear raid`'s tier at random) and no weapon's procs (`enchant::FORCED_PROC_ROLL`): the
+  rogue's crits and the warrior's blows.
 
 ## The fight record
 

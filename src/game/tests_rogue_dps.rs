@@ -12,6 +12,7 @@ use crate::game::Realm;
 use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::creature::Creature;
+use crate::game::map::enchant::FORCED_PROC_ROLL;
 use crate::game::map::spells::{self, Targets};
 use crate::game::map::{Map, MapHandle, MapKey, combat};
 
@@ -94,6 +95,16 @@ const SINISTER_STRIKE_8: u32 = 11_294;
 const EVISCERATE_9: u32 = 31_016;
 const SLICE_AND_DICE_2: u32 = 6774;
 const ADRENALINE_RUSH: u32 = 13_750;
+
+/// A raid-geared rogue's damage pieces of tier 2, Chromatically Tempered
+/// Sword and Maladath in its hands: the same gear every run, and none of it
+/// procs on a hit. Tier 1's (drawn at random by a bare `.gear raid`) wield
+/// Vis'kag the Bloodletter, whose Fatal Wound (240) lands with the blow
+/// that sets it off: an Eviscerate dealt 856 for 1.12's 708 to 784, and
+/// the crit count by damage counted 55 bp of its hits for its 983. The
+/// weapons' procs are kept off besides (`FORCED_PROC_ROLL`), so that a
+/// proc of the gear to come doesn't do it again.
+const SWORDS: &[&str] = &["raid", "2", "sword"];
 
 fn energy(m: &Map, g: Guid) -> u32 {
     m.unit_fields(g).unwrap().get_u32(UNIT_FIELD_POWER1 + 3)
@@ -281,9 +292,10 @@ async fn a_rogues_blows_and_energy_are_1_12s() {
         .query(move |m| {
             let mut learn = COMBAT.to_vec();
             learn.extend([SINISTER_STRIKE_8, EVISCERATE_9, SLICE_AND_DICE_2]);
-            ready(m, g, &["raid", "sword"], &learn);
+            ready(m, g, SWORDS, &learn);
             let d = dummy_behind(m, g, 2.0);
             m.spells.rolls = Some(false);
+            FORCED_PROC_ROLL.with(|f| f.set(Some(100.0)));
             let f = m.unit_fields(g).unwrap();
             let ap = f.get_u32(UNIT_FIELD_ATTACK_POWER) + f.get_u32(UNIT_FIELD_ATTACK_POWER_MODS);
             // Sinister Strike is normalized in 1.12's data (effect 121): a
@@ -362,6 +374,7 @@ async fn a_rogues_blows_and_energy_are_1_12s() {
                 }
                 ticks.push(gaps[1..].to_vec());
             }
+            FORCED_PROC_ROLL.with(|f| f.set(None));
             (
                 ap,
                 weapon,
@@ -446,17 +459,26 @@ async fn a_rogues_blows_and_energy_are_1_12s() {
 /// second roll of the whole table, its miss and dodge (7% at a boss)
 /// taken off the crit chance: Sinister Strike crit 11.8% of its hits for
 /// its 13.6% (its hits 85%).
+///
+/// In [`SWORDS`] (a crit chance of 1,025 bp): no proc's damage lands with
+/// a strike's to spoil the count by damage. The table's and the crit's
+/// rolls are a fixed seed's, so the count is the same every run. For any
+/// seed: some 34,000 hits at 1,025 bp have a spread (one standard
+/// deviation) of 16 bp, so 80 bp is five of them; the old roll, the chance
+/// times the share of hits (85%, some 875 bp), is 150 bp off.
 #[tokio::test]
 #[ignore = "extended"]
 async fn an_abilitys_crit_is_its_crit_chance_of_its_hits() {
+    use rand::{RngExt, SeedableRng};
+    const CASTS: usize = 40_000;
     if !have_data() {
         return;
     }
     let realm = realm();
     let (_c, g, map) = enter(&realm, "RDPSC", "Rogcrit", Race::Gnome).await;
-    let (hits, crits, crit_bp) = map
+    let (hits, crits, crit_bp, rolls_left) = map
         .query(move |m| {
-            ready(m, g, &["raid", "sword"], &[SINISTER_STRIKE_8]);
+            ready(m, g, SWORDS, &[SINISTER_STRIKE_8]);
             let d = dummy_behind(m, g, 2.0);
             m.spells.rolls = Some(true);
             let crit_bp = {
@@ -464,14 +486,23 @@ async fn an_abilitys_crit_is_its_crit_chance_of_its_hits() {
                 r.special = true;
                 r.crit_bp()
             };
+            // More rolls than the casts take (three a hit, two a miss or
+            // a dodge).
+            let mut dice = rand::rngs::StdRng::seed_from_u64(100);
+            m.spells
+                .queued_rolls
+                .lock()
+                .unwrap()
+                .extend((0..CASTS * 5).map(|_| dice.random_range(0..10_000)));
+            FORCED_PROC_ROLL.with(|f| f.set(Some(100.0)));
             let max = m.unit_fields(d).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
             let (mut hits, mut crits) = (0u32, 0u32);
             // The most a strike deals that doesn't crit: the weapon's top
             // roll at 2.4 s and 68, less the armor; a crit is twice that or
             // more of its least, and its least is above 0.7 of its most.
             let mut most = 0u32;
-            let mut dealt = Vec::with_capacity(20_000);
-            for _ in 0..20_000 {
+            let mut dealt = Vec::with_capacity(CASTS);
+            for _ in 0..CASTS {
                 let before = m.unit_fields(d).unwrap().get_u32(UNIT_FIELD_HEALTH);
                 spells::cast_triggered(m, g, SINISTER_STRIKE_8, Some(d));
                 let got = before - m.unit_fields(d).unwrap().get_u32(UNIT_FIELD_HEALTH);
@@ -484,19 +515,29 @@ async fn an_abilitys_crit_is_its_crit_chance_of_its_hits() {
                 }
                 most = most.max(got);
             }
+            FORCED_PROC_ROLL.with(|f| f.set(None));
+            let rolls_left = {
+                let mut q = m.spells.queued_rolls.lock().unwrap();
+                let left = q.len();
+                q.clear();
+                left
+            };
             for got in dealt {
                 hits += 1;
                 if got as f32 > most as f32 / 2.24 * 1.35 {
                     crits += 1;
                 }
             }
-            (hits, crits, crit_bp)
+            (hits, crits, crit_bp, rolls_left)
         })
         .await
         .unwrap();
     let rate = f64::from(crits) / f64::from(hits) * 10_000.0;
-    eprintln!("{crits} crits of {hits} hits: {rate:.0} bp, the chance {crit_bp} bp");
-    assert!(hits > 15_000, "{hits} hits of 20,000");
+    eprintln!(
+        "{crits} crits of {hits} hits: {rate:.0} bp, the chance {crit_bp} bp; {rolls_left} rolls left"
+    );
+    assert!(rolls_left > 0, "every roll the seed's");
+    assert!(hits > 30_000, "{hits} hits of {CASTS}");
     assert!(
         (rate - f64::from(crit_bp)).abs() < 80.0,
         "{rate:.0} bp of its hits crit, its chance {crit_bp} bp"
