@@ -232,7 +232,7 @@ async fn drek_thars_guards_walk_his_room_on_its_floor() {
                 .filter(|(_, c)| crate::game::map::combat::dist(c.position, MIDDLE) <= 30.0)
                 .map(|(_, c)| c.guid)
                 .collect();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = ahash::AHashSet::new();
             let mut walks = 0;
             let (mut worst_point, mut worst_leg) = ((0.0f32, Vec::new()), (0.0f32, Vec::new()));
             // By the steps, on each side of the middle.
