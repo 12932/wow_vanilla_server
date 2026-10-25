@@ -773,3 +773,37 @@ async fn a_supervised_restart_keeps_the_maps_bones() {
     assert!(after.3 <= before.3 + Duration::from_secs(1));
     assert!(after.3 + Duration::from_secs(5) >= before.3);
 }
+
+/// Food and water in a fight, over the protocol: refused, as 1.12 has it
+/// (their spells' `SPELL_ATTR_CANT_USED_IN_COMBAT`, 0x1000_0000: mangos's
+/// `CheckCast`, `SPELL_FAILED_AFFECTING_COMBAT`), the eater left standing
+/// and unfed; the fight over, the same meal sits them down.
+#[tokio::test]
+async fn food_and_water_are_refused_in_a_fight_and_taken_after() {
+    let realm = harness::realm_with(data());
+    let mut a = Client::connect(&realm, "F");
+    let g = a.enter("Bodyf", Race::Human, Class::Mage).await;
+    let map = realm.registry.online(g).unwrap().map();
+    on(&map, move |m| crate::game::map::combat::enter(m, g, false)).await;
+    const MEALS: [(u32, &[u32]); 2] = [(JERKY, &[FOOD]), (CRYSTAL_WATER, &[DRINK])];
+    for (item, spells) in MEALS {
+        let spell = spells[0];
+        a.clear();
+        eat(&mut a, &map, item).await;
+        let refused = a
+            .wait_for("SMSG_CAST_RESULT", |m| match m {
+                S::SMSG_CAST_RESULT(r) => Some((r.spell, format!("{:?}", r.result))),
+                _ => None,
+            })
+            .await;
+        assert_eq!(refused.0, spell);
+        assert!(refused.1.contains("AffectingCombat"), "{}", refused.1);
+        settled(&mut a).await;
+        assert_eq!(state(&map, g, spells).await, (0, vec![false]), "{spell} in a fight");
+    }
+    on(&map, move |m| crate::game::map::combat::leave_combat(m, g)).await;
+    a.clear();
+    eat(&mut a, &map, JERKY).await;
+    posture(&mut a, UnitStandState::Sit).await;
+    assert_eq!(state(&map, g, &[FOOD]).await, (1, vec![true]), "the fight over");
+}
