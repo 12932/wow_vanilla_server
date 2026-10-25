@@ -439,10 +439,6 @@ pub fn steered(f: &MovementInfo_MovementFlags) -> bool {
         || f.get_turn_right()
 }
 
-/// `f` with no steering: a dead body's, which goes nowhere under its own
-/// power (mangos's `MoveSplineInit::Stop` takes `MOVEFLAG_FORWARD` off at
-/// death; Thistle Tea's death clears every flag), so no client moves it on
-/// by them.
 /// How far a dead body's client may move it on the ground, yards: none but
 /// straight down (half a yard's slack), or, while the fall it was in as it
 /// died goes on, as far as that fall carries it since the body's last move
@@ -465,6 +461,10 @@ fn dead_reach(p: &crate::game::map::player::Player, info: &MovementInfo) -> f32 
 /// this, and a longer fall drops more than it goes on.
 const MAX_FALL_SECS: f32 = 3.0;
 
+/// `f` with no steering: a dead body's, which goes nowhere under its own
+/// power (mangos's `MoveSplineInit::Stop` takes `MOVEFLAG_FORWARD` off at
+/// death; Thistle Tea's death clears every flag), so no client moves it on
+/// by them.
 pub fn unsteered(f: MovementInfo_MovementFlags) -> MovementInfo_MovementFlags {
     f.clear_forward()
         .clear_backward()
