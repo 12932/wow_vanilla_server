@@ -1835,4 +1835,69 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        room moving, p99 +1.13 to +0.24 yd, the most +5.67 to +0.45; falls through a floor 5 to 1 (a Frostwolf
        Legionnaire at the record's start, its spawn). Drek'Thar killed 10 of 10 both.
 
+107. **On the ground outside Drek'Thar's keep, and a body killed in the air** (2026-10-25; `fix/av-floating`, from
+     your report of floating at Drek'Thar: bots killed in a jump lying in the air, and the valley's creatures afloat
+     as they walk its slopes; found with the fight record, decision 105). The calls in it mine:
+     - **A formation's followers walk over the navmesh**: the navmesh stays in the map through a creature's step
+       (`world::step_creature`), so what the step sets off (its formation following it, a script at a waypoint)
+       finds its way over it too. It was taken out for the step, and a leader's followers (the Frostwolf Legionnaires
+       and their Bloodhounds behind a patrol's leader) walked straight to their places at their leader's height, up
+       to 1.5 yd in the air over the valley's slopes and 0.75 under them, and across what the navmesh doesn't join:
+       most of the creatures' time over the ground outside the keep. mangos-classic's followers path to each place
+       and put every point on the ground (`FormationMovementGenerator::BuildPath`: `PathFinder::calculate`,
+       `UpdateAllowedPositionZ`).
+     - **A path's corners on the ground**: a corner is on its polygon's edge, over none of them to the float, so its
+       ground was none and it kept the navmesh's own height (a yeti 1.17 yd over its cave's floor, round a rock); now
+       the ground of the nearest polygon's nearest edge, as Detour's `closestPointOnPoly` has it. A path's first point
+       is the walker's own place, as mangos-classic's `MoveSplineInit::Launch` puts it (`args.path[0] =
+       real_position`), not the navmesh's on its polygon's edge (a Legionnaire set off on a tile's edge 2.8 yd up). The
+       floor is looked for within a step's climb of the navmesh (2.5 yd, was 1.5: by Tower Point the detail mesh is
+       1.64 yd over the terrain), and a leg is looked at every yard, not two (at two, legs left the ground by up to
+       0.31 yd between their samples, at one and a half 0.44; at one, 0.20 at most). mangos-classic's smooth path has
+       a point every 4 yd at the detail mesh's height (`findSmoothPath`, `SMOOTH_PATH_STEP_SIZE`), on the ground only
+       with its `PathFinder.NormalizeZ`, off by default (`NormalizePath`, `UpdateAllowedPositionZ`); wvs's are on the
+       ground always, as decision 106 has them.
+     - **A walk the navmesh has no way for goes straight on the ground** (`Nav::straight`): its end on its floor and
+       points put in where the line leaves the ground, as a path's legs; a point off the navmesh takes the surface
+       nearest it. It was the line itself: a chase to a goal under a doodad's overhang on a Tanaris dune (two
+       surfaces 3 yd apart, its polygon joined to nothing) went through the dune and ended at its victim's height,
+       1.03 yd off the slope: the flaky `a_chase_down_a_slope_keeps_to_the_ground` (after its first chase, its
+       victim's earlier attackers spread its goal's side at random), neither a tile's loading nor a long leg.
+       mangos-classic's chase goal is on the ground (`GetNearPoint`'s `UpdateAllowedPositionZ`) and its shortcut its
+       two points (`BuildShortcut`); every straight walk of wvs's (a chase's, a way home, a script's move, a fear's or
+       a confusion's, a pet's, a waypoint the navmesh stops short of) is on the ground, out of the water.
+     - **A player killed in the air comes down where its client's fall lands it** (`movement::dead_reach`), as far as
+       its jump carries it on since its last move (its jump's speed over the ground, at most a run's, for the fall's
+       time between), and lies there; a landing further on is refused, as any run of the dead. wvs took only a move
+       straight down, so a client whose answer to its root, or its landing, came from where its jump had gone on
+       since its last heartbeat (the bot's, 1.4 yd on) was refused, and its body stayed where that heartbeat had it,
+       a yard and a half up, for every watcher. mangos-classic's `KillPlayer` leaves the body to its client ("don't
+       create corpse at this moment, player might be falling") and takes its landing (`VerifyMovementInfo`: a rooted
+       mover's packet with no run in it), the corpse made at the release where the body lies (`BuildPlayerRepop`,
+       `CreateCorpse`). peon's bot now falls as a client does (peon `fix/av-floating`): its root's answer where it is
+       in the air, its landing in its jump's time; before, its answer put it on the ground at once.
+     - **The navmesh's steep polygons are a creature's to walk**, as they were: the record's "edge" crossings left
+       are a Frostwolf Guardian's and an Alterac Yeti's walks over steep polygons (Ground and Steep both), which a
+       creature's path takes (rustigator's `find_path`, every polygon at unit cost; mangos-classic's `createFilter`:
+       `NAV_GROUND | NAV_GROUND_STEEP` for a creature that walks) and peon's check finds no way over, as it measures by
+       a player's (steep left out). On the navmesh, not off its edge; left so.
+     - **Cost**: grounding a path, 13.6 µs against 7.3 µs on master (`probe_path_on_the_ground`, 2,000 paths in
+       Tanaris, the same machine and load; 5,660 points against 5,641), from the samples every yard.
+     - **A path's end reaches its goal over the ground** (`nav::reaches`: within its yards over the ground and a
+       step's climb of its height), for Rexxar's start (`champions::out_of_sight`, as his run in counts its
+       arrival over the ground) and a guard's reachable point: with a path's end on the floor, Orgrimmar's square, a
+       platform 1.45 yd over the floor where the navmesh's way to it ends 2.7 yd off, was 3.05 yd from its path's
+       end, and Rexxar found no start (`each_citys_spots_are_on_the_navmesh`).
+     - **The record, before and after** (peon's all-in at 40, seeds 1 and 2, two runs of five attempts each way, 20
+       attempts in all; peon's fall with them): creatures' time over the ground past 0.3 yd outside the keep 1.07% to
+       0.01% (moving 5.36% to 0.03%, under it 3.17% to 0.00%), in the keep's yard moving 0.94% to 0.02% (under 5.20%
+       to 0.00%), in his room 0.91% to 0.18% (moving 0.92% to 0.44%); their height moving, p99 outside +0.92 to
+       +0.12 yd (the most +1.54 to +0.70), in the yard +0.30 to +0.10, in his room +0.30 to
+       +0.21; walks' spline points over 0.3 yd 191 of 10,702 to 0 of 12,686, chases' 10 of 5,001 to 0 of 6,428;
+       bodies over the ground a second after their death 1 of 341 (a pet) to 0 of 320, the players killed in a jump
+       2 and 11, each landed in its jump's time (one answered its root 1.4 yd on from its last heartbeat, which the
+       old rule refused); crossings 42 to 29, of them the steep polygons' "edge" 25 to 28 (a wall's 1 to 0), the
+       runs and snaps a watcher is shown across a step 14 to 1. Drek'Thar killed 18 of 20 both (9 and 9 before, 8
+       and 10 after).
+
 ## Left for later, and why
