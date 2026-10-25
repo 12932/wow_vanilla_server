@@ -469,6 +469,10 @@ async fn the_valleys_creatures_walk_its_slopes_on_the_ground() {
         })
         .await
         .unwrap();
+    println!(
+        "{walks} walks, {followed} a formation's; the worst point {:.2} yd off, leg {:.2}",
+        worst_point.0, worst_leg.0
+    );
     assert!(walks >= 40, "{walks} walks");
     assert!(followed >= 10, "{followed} of the walks a formation's");
     assert!(
