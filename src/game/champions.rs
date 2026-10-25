@@ -517,7 +517,7 @@ pub fn out_of_sight(map: &mut Map, at: Vector3d, yards: f32) -> Vector3d {
                 .sum();
             let reached = path
                 .last()
-                .is_some_and(|end| crate::game::map::combat::dist(*end, at) <= RUN_IN_DONE);
+                .is_some_and(|end| crate::game::map::nav::reaches(*end, at, RUN_IN_DONE));
             if reached && long <= START_DETOUR * r {
                 return p;
             }

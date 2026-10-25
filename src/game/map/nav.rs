@@ -110,6 +110,21 @@ pub fn tile_of(x: f32, y: f32) -> (i32, i32) {
     (tx.clamp(0, 63), ty.clamp(0, 63))
 }
 
+/// How far over or under a goal a path's end may be and still reach it:
+/// a step's climb.
+const REACH_RISE: f32 = 2.5;
+
+/// Whether a path's end at `end` reaches `goal`: within `yards` of it over
+/// the ground, and a step's climb of its height. A path's end is on the
+/// floor, and the goal may be at the navmesh's height, a yard and more
+/// over it, or on a ledge beside it: Orgrimmar's square is a platform 1.45
+/// yd over the floor where the navmesh's way to it ends, 2.7 yd off, so a
+/// path to it ended 3.05 yd from it, Rexxar's start found none (decision
+/// 107).
+pub fn reaches(end: Vector3d, goal: Vector3d, yards: f32) -> bool {
+    (end.x - goal.x).hypot(end.y - goal.y) <= yards && (end.z - goal.z).abs() <= REACH_RISE
+}
+
 /// A zone and area the bake names, if it names an area: 0 and the
 /// unsigned sentinel `u32::MAX` name none (Thistle Tea's
 /// `get_zone_and_area`, which rejects both on Programmer Isle).

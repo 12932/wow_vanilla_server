@@ -26,7 +26,6 @@ use wow_world_messages::vanilla::Vector3d;
 
 use crate::game::fields::*;
 use crate::game::map::Map;
-use crate::game::map::combat::dist;
 
 /// `static_flags1`: it calls the guards (mangos's
 /// `CreatureStaticFlags::CALLS_GUARDS`, the same bit of vmangos's
@@ -521,7 +520,7 @@ pub fn reachable_point(map: &mut Map, at: Vector3d, radius: f32) -> Option<Vecto
         let reached = nav
             .path(at, p)
             .and_then(|path| path.last().copied())
-            .is_some_and(|end| dist(end, p) <= 1.0);
+            .is_some_and(|end| crate::game::map::nav::reaches(end, p, 1.0));
         if reached {
             return Some(p);
         }
