@@ -2015,9 +2015,17 @@ pub fn run_untargeted(
 /// a helpful one, friend) inside.
 pub fn tick_areas(map: &mut Map) {
     let now = map.now;
+    // What is 30 s old ticks as what was never there (a tick's gap is a
+    // period at most): let go once a second, not looked through each update
+    // (a battle's thousands: 0.3 ms an update).
+    if map
+        .spells
+        .area_ticked_pruned
+        .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1))
     {
         let z = crate::zone!("areas: ticked kept");
         z.value(map.spells.area_ticked.len() as u64);
+        map.spells.area_ticked_pruned = Some(now);
         map.spells
             .area_ticked
             .retain(|_, t| now.saturating_duration_since(*t) < Duration::from_secs(30));
@@ -2064,21 +2072,22 @@ pub fn tick_areas(map: &mut Map) {
                     .is_some_and(|p| dist(p, area.at) <= area.radius)
             })
             .filter(|g| map.unit_view(*g).is_some_and(|u| u.alive))
-            // Only those the area sees (mangos's `DynamicObjectUpdater`
-            // tests sight from the dynamic object): a Blizzard doesn't
-            // reach through a wall.
-            .filter(|g| {
-                sees_through
-                    || map
-                        .position_of(*g)
-                        .is_some_and(|p| super::checks::sight(map, area.at, p))
-            })
             .filter(|g| {
                 if helpful {
                     !combat::can_attack(map, area.caster, *g)
                 } else {
                     *g != area.caster && combat::can_attack(map, area.caster, *g)
                 }
+            })
+            // Only those the area sees (mangos's `DynamicObjectUpdater`
+            // tests sight from the dynamic object): a Blizzard doesn't
+            // reach through a wall. Asked last, of those it would strike
+            // (a look through the navmesh costs more than the rest).
+            .filter(|g| {
+                sees_through
+                    || map
+                        .position_of(*g)
+                        .is_some_and(|p| super::checks::sight(map, area.at, p))
             })
             .collect();
         z.value(inside.len() as u64);
@@ -2088,7 +2097,11 @@ pub fn tick_areas(map: &mut Map) {
         // One caster's overlapping areas of a spell tick a unit once a
         // period between them (Thistle Tea's `AreaSources`: one holder,
         // shared).
-        let gap = area.period.saturating_sub(Duration::from_millis(100));
+        // What is 30 s old is as if never there (it was let go each update).
+        let gap = area
+            .period
+            .saturating_sub(Duration::from_millis(100))
+            .min(Duration::from_secs(30));
         let inside: Vec<Guid> = inside
             .into_iter()
             .filter(|g| {

@@ -34,7 +34,22 @@
 //! What it reports, over `BATTLE_SECS` (20) after `BATTLE_WARM` (5) s: the
 //! update's wall time (p50 / p99 / max), each step's CPU time an update
 //! (mean, p99), the events between updates by kind, and what the clients
-//! were sent a second, by kind.
+//! were sent a second, by kind; then the players' sight (how many objects
+//! each knows, the refreshes waiting).
+//!
+//! - `BATTLE_GAP` (0): each side starts so many yards back, out of the
+//!   other's sight, and charges to its spot; the charge is measured on its
+//!   own first (until the casters are at their spots and a second more).
+//!   `BATTLE_WARM=0 BATTLE_SECS=10` then measures its first seconds after.
+//! - `BATTLE_SLOWEST` (0): the slowest updates' dearest steps, and under
+//!   each its dearest zones (`BATTLE_SLOWEST_ZONES`, 6), each's count.
+//! - `BATTLE_ZONES` (0): the dearest zones on the map's thread over all.
+//! - `BATTLE_SIGHT_MS` (0): the sight every so many ms from the start.
+//! - `BATTLE_THREADS`, `BATTLE_BUDGET_MS`: `[visibility] refresh_threads`
+//!   and `refresh_budget_ms`.
+//! - `BATTLE_DECIDE` (0): at the end, so many players' whole refreshes
+//!   decided (not applied) across the visibility threads and on the map's
+//!   thread alone, timed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -116,6 +131,12 @@ fn main() {
     cfg.spawn.z = CENTRE.2;
     cfg.world.save_interval_secs = 3600;
     cfg.world.data_dir = Some(data_dir.clone());
+    // The visibility threads (`[visibility] refresh_threads`): BATTLE_THREADS,
+    // 0 the machine's cores up to 8, 1 the map's thread alone.
+    cfg.visibility.refresh_threads = env("BATTLE_THREADS", cfg.visibility.refresh_threads);
+    // Visibility's budget an update (`[visibility] refresh_budget_ms`):
+    // BATTLE_BUDGET_MS.
+    cfg.visibility.refresh_budget_ms = env("BATTLE_BUDGET_MS", cfg.visibility.refresh_budget_ms);
     let cfg = wow_vanilla_server::config::install(cfg);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -718,6 +739,24 @@ fn report_map(key: MapKey, secs: f64) {
                 s.cpu.as_secs_f64() * 1e3,
                 top.join(", ")
             );
+            // Its dearest zones under the steps (BATTLE_SLOWEST_ZONES, 0 for
+            // none), each's count in brackets.
+            let shown: usize = env("BATTLE_SLOWEST_ZONES", 6);
+            if shown > 0 {
+                let names: ahash::AHashSet<&str> = s.steps.iter().map(|(n, _)| *n).collect();
+                let mut zones: Vec<_> = s
+                    .zones
+                    .iter()
+                    .filter(|(n, _, _)| *n != "update" && !names.contains(n))
+                    .collect();
+                zones.sort_by_key(|z| std::cmp::Reverse(z.2));
+                let top: Vec<String> = zones
+                    .iter()
+                    .take(shown)
+                    .map(|(n, c, d)| format!("{n} {:.1} [{c}]", d.as_secs_f64() * 1e3))
+                    .collect();
+                println!("      zones: {}", top.join(", "));
+            }
         }
     }
     println!("  steps, CPU ms an update (mean / p99):");
@@ -860,6 +899,32 @@ async fn battle(
     let per = fighters.len().div_ceil(groups);
     let mut tasks = Vec::new();
     let started = Instant::now();
+    // With BATTLE_SIGHT_MS, the players' sight every so many ms from the
+    // start: the refreshes waiting and how many objects each knows, on
+    // average (cheap: no look into what they know).
+    let sight_every: u64 = env("BATTLE_SIGHT_MS", 0);
+    let sampler = (sight_every > 0).then(|| {
+        let (realm, stop) = (realm.clone(), stop.clone());
+        tokio::spawn(async move {
+            let mut out = Vec::new();
+            while !stop.load(Ordering::Relaxed) {
+                let t = started.elapsed().as_secs_f32();
+                if let Some((waiting, known)) = realm
+                    .maps
+                    .get(&realm, key)
+                    .query(|m| {
+                        let known: usize = m.players.values().map(|p| p.known.len()).sum();
+                        (m.visibility_dirty.len(), known / m.players.len().max(1))
+                    })
+                    .await
+                {
+                    out.push(format!("{t:.1}s {waiting}/{known}"));
+                }
+                tokio::time::sleep(Duration::from_millis(sight_every)).await;
+            }
+            out
+        })
+    });
     let mut fighters = fighters;
     let mut seed = 0u64;
     while !fighters.is_empty() {
@@ -890,6 +955,7 @@ async fn battle(
         bench_probe::disable();
         println!("  the charge ({:.0} s):", charge.as_secs_f32());
         report_map(key, charge.as_secs_f64());
+        sight(&realm, key).await;
         println!("  the fight:");
     }
     tokio::time::sleep(Duration::from_secs(warm)).await;
@@ -945,7 +1011,42 @@ async fn battle(
         per_client(&c.cast_failed),
     );
     report_map(key, took);
+    sight(&realm, key).await;
+    // With BATTLE_DECIDE=n, n players' whole refreshes decided (not
+    // applied) in the battle as it stands, across the visibility threads
+    // and on the map's thread alone.
+    let decide: usize = env("BATTLE_DECIDE", 0);
+    if decide > 0 {
+        let probe: Vec<Guid> = guids.iter().take(decide).copied().collect();
+        let timed = realm
+            .maps
+            .get(&realm, key)
+            .query(move |m| {
+                use wow_vanilla_server::game::map::visibility::decide_whole_alone;
+                let mut out = Vec::new();
+                for parts in [true, false, true, false] {
+                    let t = Instant::now();
+                    let acts: usize = probe.iter().map(|&g| decide_whole_alone(m, g, parts)).sum();
+                    out.push((parts, t.elapsed(), acts));
+                }
+                out
+            })
+            .await
+            .unwrap_or_default();
+        for (parts, took, acts) in timed {
+            println!(
+                "  {decide} whole refreshes decided {}: {:.1} µs each ({acts} decisions)",
+                if parts { "in parts" } else { "alone" },
+                took.as_secs_f64() * 1e6 / decide as f64
+            );
+        }
+    }
     stop.store(true, Ordering::Relaxed);
+    if let Some(s) = sampler
+        && let Ok(series) = s.await
+    {
+        println!("  sight over time (waiting/known): {}", series.join(", "));
+    }
     let mut kept = Vec::new();
     for t in tasks {
         if let Ok(g) = t.await {
@@ -959,6 +1060,41 @@ async fn battle(
     drop(kept);
     realm.shutdown_within(Duration::from_secs(20)).await;
     drop(realm);
+}
+
+/// How far the players' sight has got: how many objects each knows, on
+/// average and at the least, and the refreshes waiting (a charge's sides
+/// coming into each other's sight are worked out over updates, within
+/// `[visibility] refresh_budget_ms`).
+async fn sight(realm: &Arc<Realm>, key: MapKey) {
+    let (known, least, players, waiting, of_players, units) = realm
+        .maps
+        .get(realm, key)
+        .query(|m| {
+            use wow_vanilla_server::game::guid;
+            let known: usize = m.players.values().map(|p| p.known.len()).sum();
+            let least = m.players.values().map(|p| p.known.len()).min().unwrap_or(0);
+            let of_players: usize = m
+                .players
+                .values()
+                .map(|p| p.known.iter().filter(|g| guid::is_player(**g)).count())
+                .sum();
+            let units: usize = m
+                .players
+                .values()
+                .map(|p| p.known.iter().filter(|g| guid::is_unit(**g)).count())
+                .sum();
+            (known, least, m.players.len(), m.visibility_dirty.len(), of_players, units)
+        })
+        .await
+        .unwrap_or_default();
+    let n = players.max(1) as f64;
+    println!(
+        "  sight: each player knows {:.0} objects ({least} at the least), {:.1} players and {:.1} creatures; {waiting} refreshes waiting",
+        known as f64 / n,
+        of_players as f64 / n,
+        units as f64 / n
+    );
 }
 
 /// Each hunter's pet out (`.pet`), and its guid.

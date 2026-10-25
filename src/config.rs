@@ -367,8 +367,9 @@ settings! {
         /// milliseconds: past it the rest wait for the next update (20 a
         /// second), oldest first, so a crowd moving in step can't stall a
         /// map. A chunk of refreshes is sized to what is left of it, at what
-        /// a refresh cost in the last (16 to 128); at least one chunk is
-        /// done each update, and with 0 a whole one (128).
+        /// a refresh cost in the last (16 to 128), and stops where the
+        /// budget runs out; at least one refresh is done each update, and
+        /// with 0 a whole chunk (128).
         refresh_budget_ms: u64 = 10, Clamp(0.0, 1000.0), Live, "";
         /// Threads that work out visibility's refreshes for the maps, read
         /// only, before each map applies them, and compress the update's
@@ -745,6 +746,13 @@ settings! {
         /// deleted, in memory and in the store; a member logging in before
         /// then keeps it.
         expire_offline_hours: u64 = 24, Clamp(1.0, 87_600.0), Live, "";
+        /// Each grouped player's stats go to the members who can't see
+        /// them once a second (`SMSG_PARTY_MEMBER_STATS`), each player's at
+        /// a moment of the second of their own, spread over the second's
+        /// updates, as each player's own update in mangos sends theirs.
+        /// Off, every player's at once, once a second: a battle of 1,600
+        /// grouped put 7 ms into that update.
+        member_stats_spread: bool = true, Any, Live, "";
     }
 }
 

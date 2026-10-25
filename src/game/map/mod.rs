@@ -595,6 +595,10 @@ pub struct Map {
     pub next_spline_id: u32,
     /// When grouped players' stats next go out.
     pub member_stats_at: Instant,
+    /// Where the last look at the member stats left off, and what their
+    /// moments in the second are counted from (`social::push_member_stats`).
+    pub member_stats_last: Instant,
+    pub member_stats_epoch: Instant,
     /// Since when a copy has had no one in it.
     pub empty_since: Option<Instant>,
     /// The actor stops after this update.
@@ -1418,6 +1422,8 @@ impl Map {
             own_counters: ahash::AHashSet::new(),
             next_spline_id: 1,
             member_stats_at: Instant::now(),
+            member_stats_last: Instant::now(),
+            member_stats_epoch: Instant::now(),
             empty_since: None,
             stopping: false,
             battleground: battleground::for_map(key, Instant::now()),
@@ -2324,7 +2330,7 @@ impl Map {
 
     /// The threads a crowd's packets are compressed on: visibility's
     /// (`[visibility] refresh_threads`), or none.
-    fn encode_pool(&self) -> Option<&'static rayon::ThreadPool> {
+    pub(crate) fn encode_pool(&self) -> Option<&'static rayon::ThreadPool> {
         let threads = self.cfg.visibility_threads;
         (threads != 1).then(|| visibility::pool(threads)).flatten()
     }
@@ -2520,7 +2526,10 @@ impl Map {
         drop(z);
         // The blocks told alike, in packets shared among their observers;
         // the rest of them into batches, before those are framed.
-        self.shared_packets = self.shared_values.plan(&self.clients, &mut self.batches);
+        let pool = self.encode_pool();
+        self.shared_packets = self
+            .shared_values
+            .plan(&self.clients, pool, &mut self.batches);
     }
 
     fn flush_batches(&mut self) {

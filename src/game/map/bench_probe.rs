@@ -24,6 +24,9 @@ pub struct Sample {
     pub players: u32,
     /// Each step's CPU time.
     pub steps: Vec<(&'static str, Duration)>,
+    /// The update's zones (`tracy::Zone`, timed by the probe): by name,
+    /// their count and wall time.
+    pub zones: Vec<(&'static str, u64, Duration)>,
     /// The update thread's voluntary and involuntary context switches over
     /// the update.
     pub switches: (u64, u64),
@@ -83,13 +86,19 @@ pub fn zones_of(key: Option<MapKey>) {
     *ZONES_OF.lock() = key;
 }
 
-fn flush_zones(key: MapKey) {
+/// This thread's zones since its last flush, added to the totals; what
+/// they were, if they were kept.
+fn flush_zones(key: MapKey) -> Vec<(&'static str, u64, Duration)> {
     let Some(mine) = ZONES.with_borrow_mut(Option::take) else {
-        return;
+        return Vec::new();
     };
     if ZONES_OF.lock().is_some_and(|k| k != key) {
-        return;
+        return Vec::new();
     }
+    let these: Vec<_> = mine
+        .iter()
+        .map(|(name, (n, d))| (name.trim_end_matches('\0'), *n, *d))
+        .collect();
     let mut all = ZONE_TOTALS.lock();
     let all = all.get_or_insert_with(AHashMap::new);
     for (name, (n, d)) in mine {
@@ -97,6 +106,7 @@ fn flush_zones(key: MapKey) {
         e.0 += n;
         e.1 += d;
     }
+    these
 }
 
 /// The map threads' zones since the last take: by name (its trailing NUL
@@ -199,7 +209,7 @@ pub(super) fn update_done(map: &Map, wall: Duration, start: Start) {
         })
         .count() as u32;
     let steps = STEPS.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    flush_zones(map.key);
+    let zones = flush_zones(map.key);
     if wall >= SLOW_UPDATE {
         let mut top = steps.clone();
         top.sort_by_key(|s| std::cmp::Reverse(s.1));
@@ -221,6 +231,7 @@ pub(super) fn update_done(map: &Map, wall: Duration, start: Start) {
         awake,
         players: map.players.len() as u32,
         steps,
+        zones,
         switches,
     });
 }

@@ -121,12 +121,37 @@ impl Shared {
     /// The packets for what was told, and the blocks for those who get
     /// only some of a packet's into their batches (`batches`, by the guids
     /// of `table`'s clients). Empties what was told.
-    pub fn plan(&mut self, table: &ClientTable, batches: &mut AHashMap<Guid, Batch>) -> Packets {
+    pub fn plan(
+        &mut self,
+        table: &ClientTable,
+        pool: Option<&rayon::ThreadPool>,
+        batches: &mut AHashMap<Guid, Batch>,
+    ) -> Packets {
+        if self.told.is_empty() {
+            return Vec::new();
+        }
+        let _z = crate::zone!("values: shared");
+        self.plan_with(table, pool, |g, _, block| {
+            batches.entry(g).or_default().push(block)
+        })
+    }
+
+    /// [`Shared::plan`], what is for a client alone given to `rest` (the
+    /// client's guid, the block's object and the block) rather than put in
+    /// its batch: for a crowd's creates (`visibility`), which go in with
+    /// their objects, and hold their clients.
+    /// The packets are framed (and compressed) across `pool` if there are
+    /// enough: each from its own bytes, as on the map's thread.
+    pub fn plan_with(
+        &mut self,
+        table: &ClientTable,
+        pool: Option<&rayon::ThreadPool>,
+        mut rest: impl FnMut(Guid, Guid, &[u8]),
+    ) -> Packets {
         let mut told = std::mem::take(&mut self.told);
         if told.is_empty() {
             return Vec::new();
         }
-        let _z = crate::zone!("values: shared");
         told.sort_unstable_by_key(|t| t.key);
         #[cfg(debug_assertions)]
         {
@@ -147,12 +172,12 @@ impl Shared {
             }
             for i in t.to.iter() {
                 if let Some(g) = guid_of(i) {
-                    batches.entry(g).or_default().push(&t.block);
+                    rest(g, t.key.1, &t.block);
                 }
             }
             false
         });
-        let mut out = Vec::new();
+        let mut out: Payloads = Vec::new();
         let mut patterns = Patterns::new(guids.len());
         let mut start = 0;
         while start < told.len() {
@@ -171,16 +196,15 @@ impl Shared {
                         let blocks = (0..seg.len())
                             .filter(|k| pattern & (1 << k) != 0)
                             .map(|k| seg[k].block.as_slice());
-                        out.push((update::frame_blocks(blocks), Arc::new(to)));
+                        out.push((update::payload_of_blocks(blocks), Arc::new(to)));
                         continue;
                     }
                     let Some(g) = who.first().and_then(|&i| guid_of(i)) else {
                         continue;
                     };
-                    let batch = batches.entry(g).or_default();
                     for (k, t) in seg.iter().enumerate() {
                         if pattern & (1 << k) != 0 {
-                            batch.push(&t.block);
+                            rest(g, t.key.1, &t.block);
                         }
                     }
                 }
@@ -197,20 +221,28 @@ impl Shared {
             let mut outside = core.clone();
             outside.take_all(&inside);
             if !outside.is_empty() {
-                out.push((frame(chunk), Arc::new(outside)));
+                out.push((payload(chunk), Arc::new(outside)));
             }
             if !inside.is_empty() {
                 tree(chunk, &members, 0, chunk.len(), &mut out, &mut |m, t| {
                     if let Some(g) = guid_of(m) {
-                        batches.entry(g).or_default().push(&t.block);
+                        rest(g, t.key.1, &t.block);
                     }
                 });
             }
             start = end;
         }
-        out
+        let _z = crate::zone!("values: framed");
+        let (payloads, to): (Vec<Vec<u8>>, Vec<Arc<Clients>>) = out.into_iter().unzip();
+        update::frame_payloads(&payloads, pool)
+            .into_iter()
+            .zip(to)
+            .collect()
     }
 }
+
+/// Packets' payloads to frame, and who gets each.
+type Payloads = Vec<(Vec<u8>, Arc<Clients>)>;
 
 /// What of a chunk outside its core is shared by its pattern: this many
 /// blocks at a time, a bit each.
@@ -287,8 +319,8 @@ fn chunk(told: &[Told], start: usize) -> (usize, Clients) {
     (end, core)
 }
 
-fn frame(told: &[Told]) -> Arc<[u8]> {
-    update::frame_blocks(told.iter().map(|t| t.block.as_slice()))
+fn payload(told: &[Told]) -> Vec<u8> {
+    update::payload_of_blocks(told.iter().map(|t| t.block.as_slice()))
 }
 
 /// The members of `chunk[lo..hi]`, each sent what of it isn't theirs: at a
@@ -299,7 +331,7 @@ fn tree(
     members: &[Option<usize>],
     lo: usize,
     hi: usize,
-    out: &mut Packets,
+    out: &mut Payloads,
     leaf: &mut impl FnMut(usize, &Told),
 ) -> Clients {
     let mut under = Clients::default();
@@ -321,10 +353,10 @@ fn tree(
     let left = tree(chunk, members, lo, mid, out, leaf);
     let right = tree(chunk, members, mid, hi, out, leaf);
     if !right.is_empty() {
-        out.push((frame(&chunk[lo..mid]), Arc::new(right.clone())));
+        out.push((payload(&chunk[lo..mid]), Arc::new(right.clone())));
     }
     if !left.is_empty() {
-        out.push((frame(&chunk[mid..hi]), Arc::new(left.clone())));
+        out.push((payload(&chunk[mid..hi]), Arc::new(left.clone())));
     }
     under = left;
     under.add_all(&right);
@@ -365,7 +397,7 @@ mod tests {
             );
         }
         let mut batches = AHashMap::new();
-        let packets = shared.plan(&table, &mut batches);
+        let packets = shared.plan(&table, None, &mut batches);
         let mut got = vec![Vec::new(); clients];
         let mut in_packets = vec![Vec::new(); clients];
         for (frame, to) in &packets {

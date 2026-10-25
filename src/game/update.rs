@@ -447,6 +447,12 @@ pub const PACKET_LIMIT: usize = 24 * 1024;
 /// [`PACKET_LIMIT`] bytes of them), framed as a batch's packet is:
 /// compressed past [`COMPRESS_ABOVE`].
 pub fn frame_blocks<'a>(blocks: impl IntoIterator<Item = &'a [u8]>) -> Arc<[u8]> {
+    frame_payload(&payload_of_blocks(blocks))
+}
+
+/// [`frame_blocks`]'s payload, to frame later ([`frame_payload`]): its
+/// count, no transport, the blocks.
+pub fn payload_of_blocks<'a>(blocks: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
     let mut payload = Vec::with_capacity(4 * 1024);
     payload.extend_from_slice(&[0; 5]);
     let mut count = 0u32;
@@ -456,7 +462,26 @@ pub fn frame_blocks<'a>(blocks: impl IntoIterator<Item = &'a [u8]>) -> Arc<[u8]>
     }
     payload[..4].copy_from_slice(&count.to_le_bytes());
     debug_assert!(payload.len() <= PACKET_LIMIT + 5);
-    frame_update(&payload)
+    payload
+}
+
+/// A payload of [`payload_of_blocks`] framed, compressed past
+/// [`COMPRESS_ABOVE`]: from its own bytes alone, so the same on any
+/// thread.
+pub fn frame_payload(payload: &[u8]) -> Arc<[u8]> {
+    frame_update(payload)
+}
+
+/// [`frame_payload`] for each of `payloads`, in order, across `pool` if
+/// there are enough of them.
+pub fn frame_payloads(payloads: &[Vec<u8>], pool: Option<&rayon::ThreadPool>) -> Vec<Arc<[u8]>> {
+    match pool {
+        Some(pool) if payloads.len() >= PARALLEL_FRAMES => {
+            use rayon::prelude::*;
+            pool.install(|| payloads.par_iter().map(|p| frame_update(p)).collect())
+        }
+        _ => payloads.iter().map(|p| frame_update(p)).collect(),
+    }
 }
 
 /// One observer's blocks for one update, framed into packets by
@@ -536,6 +561,11 @@ impl Batch {
             .iter()
             .filter(|s| s.live && s.create && s.object == Some(object))
             .count()
+    }
+
+    /// Whether the client is to forget `object` first of all.
+    pub fn forgets(&self, object: Guid) -> bool {
+        self.forget.contains(&object)
     }
 
     /// The client forgets `object` first of all.

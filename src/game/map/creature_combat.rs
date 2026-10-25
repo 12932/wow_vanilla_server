@@ -744,6 +744,7 @@ pub fn gone_from_fight(map: &Map, g: Guid, t: Guid) -> bool {
 /// a script's concealment), not out of their sight, does too, as does one
 /// whose victim's camera, not the victim, went (a cinematic, Far Sight).
 pub fn out_of_sight(map: &mut Map) {
+    let _z = crate::zone!("visibility: out of sight");
     if map.lost_sight.is_empty() {
         return;
     }

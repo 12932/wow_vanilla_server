@@ -161,7 +161,9 @@ own. Without `tools/client_check/WoW.exe` or `uv` it fails loudly rather than pa
 `a_corpse_and_its_bones_pass_the_client` does the same for a corpse, the bones it turns to at a reclaim, and bones
 whose owner has logged out, told to a newcomer. `a_ghost_rising_before_a_stranger_passes_the_client` drives the
 create-then-values shape on its own: a living stranger loses sight of a player's ghost and is told of her afresh
-when she rises, her create and a values block for her in one packet. `tests_p8_movement_client::a_melee_blow_of_every_kind_passes_the_client`
+when she rises, her create and a values block for her in one packet. `a_crowds_shared_creates_pass_the_client` runs
+a crowd's shared creates (`visibility::Crowds`: one out of an invisibility among twelve, and a spell's area put
+down among them, each in one packet broadcast to all of them). `tests_p8_movement_client::a_melee_blow_of_every_kind_passes_the_client`
 runs a blow of each outcome both ways, and the flag combinations a fight can't make on its own (an off hand's, resisted,
 absorbed), through the melee parse; the harness's client reads each too, its hit info a set of flags as the fork has
 it.

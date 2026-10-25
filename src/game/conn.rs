@@ -61,8 +61,23 @@ enum Item {
 
 /// A set of a map's clients, by their index on the map (the map's own
 /// numbering, `map::ClientTable`): a bit each.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct Clients(Vec<u64>);
+
+/// The same clients, however many empty words either ends with (one taken
+/// out of a set leaves its word).
+impl PartialEq for Clients {
+    fn eq(&self, other: &Self) -> bool {
+        let (short, long) = if self.0.len() <= other.0.len() {
+            (&self.0, &other.0)
+        } else {
+            (&other.0, &self.0)
+        };
+        long[..short.len()] == short[..] && long[short.len()..].iter().all(|w| *w == 0)
+    }
+}
+
+impl Eq for Clients {}
 
 impl Clients {
     pub fn insert(&mut self, i: usize) {
@@ -768,8 +783,11 @@ pub fn broadcast(
             (to.clone(), Vec::new())
         }
     };
-    for inner in held {
-        Outbound { inner }.send_frame(frame.clone());
+    if !held.is_empty() {
+        let _z = crate::zone!("cork: into holds");
+        for inner in held {
+            Outbound { inner }.send_frame(frame.clone());
+        }
     }
     if to.is_empty() {
         return;
@@ -1396,6 +1414,12 @@ impl Outbound {
             s.feed.clients.lock().held.insert(s.me);
         }
         fresh
+    }
+
+    /// Whether the client is held ([`Outbound::hold`]), frames waiting or
+    /// not.
+    pub fn is_holding(&self) -> bool {
+        self.inner.holding.load(Ordering::Acquire)
     }
 
     /// Whether frames are waiting on a hold.

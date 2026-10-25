@@ -304,6 +304,8 @@ pub struct MapSpells {
     pub health_seen: AHashMap<Guid, health_sync::State>,
     /// When each caster's ground spell (its effect) last ticked each unit.
     pub area_ticked: AHashMap<(Guid, u32, usize, Guid), Instant>,
+    /// When `area_ticked` was last cleared of what is past mattering.
+    pub area_ticked_pruned: Option<Instant>,
     /// Threat held for a while: (creature, unit) to its amount (taunts,
     /// Fade).
     pub temp_threat: AHashMap<(Guid, Guid), f32>,
@@ -2648,6 +2650,7 @@ pub fn spell_damage(map: &mut Map, caster: Guid, target: Guid, s: &SpellTemplate
 /// resist (a tenth as likely as a direct hit's), absorbed, logged, dealt;
 /// a leech heals its caster by what it took.
 pub fn periodic_damage(map: &mut Map, h: &auras::Holder, target: Guid, amount: u32, leech: bool) {
+    let _z = crate::zone!("spells: periodic damage");
     periodic_damage_of(map, h, target, amount as f32, leech);
 }
 

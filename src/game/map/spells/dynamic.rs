@@ -93,8 +93,19 @@ pub fn spawn(
     };
     map.grid.insert(g, cell);
     map.spells.dynamic.insert(g, d);
-    map.visibility_dirty.insert(g);
-    map.hold_near(g, at);
+    if kind == KIND_AREA_SPELL {
+        // Seen at once, its create shared by the crowd near it
+        // (`visibility::Crowds`), as mangos-classic's `Map::Add` shows it
+        // to those in range: not every client near it held until the
+        // event's end or the update's visibility, each broadcast meanwhile
+        // copied into each hold (a volley's areas, each over a crowd of
+        // 1,600: 1.7 ms of the map's thread an area).
+        crate::game::map::visibility::refresh(map, g);
+    } else {
+        // A far sight's focus: worked out once its caster looks from it.
+        map.visibility_dirty.insert(g);
+        map.hold_near(g, at);
+    }
     g
 }
 

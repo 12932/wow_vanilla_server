@@ -200,6 +200,11 @@ impl Grid {
     /// Every object in the cells a disc of `radius` around `(x, y)`
     /// touches. Callers check the exact distance.
     pub fn around(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = Guid> + '_ {
+        self.around_entries(x, y, radius).map(|e| e.guid)
+    }
+
+    /// [`Grid::around`], each object's entry.
+    pub fn around_entries(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = &Entry> + '_ {
         let (cx, cy) = cell_of(x, y);
         let r = (radius / CELL_YARDS).ceil() as i32;
         (cx - r..=cx + r).flat_map(move |ix| {
@@ -207,7 +212,7 @@ impl Grid {
                 self.cells
                     .get(&(ix, iy))
                     .into_iter()
-                    .flat_map(|c| c.entries.iter().map(|e| e.guid))
+                    .flat_map(|c| c.entries.iter())
             })
         })
     }
@@ -217,6 +222,11 @@ impl Grid {
     /// Every object within `radius` is among them still; callers check the
     /// exact distance.
     pub fn within(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = Guid> + '_ {
+        self.within_entries(x, y, radius).map(|e| e.guid)
+    }
+
+    /// [`Grid::within`], each object's entry.
+    pub fn within_entries(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = &Entry> + '_ {
         let (cx, cy) = cell_of(x, y);
         let (x, y) = (clamp(x), clamp(y));
         let r = (radius / CELL_YARDS).ceil() as i32;
@@ -236,7 +246,7 @@ impl Grid {
                     self.cells
                         .get(&(ix, iy))
                         .into_iter()
-                        .flat_map(|c| c.entries.iter().map(|e| e.guid))
+                        .flat_map(|c| c.entries.iter())
                 })
         })
     }
