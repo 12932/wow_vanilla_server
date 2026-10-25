@@ -468,6 +468,15 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     landed); kills 18 of 20 both. Causes: formation followers (Legionnaires, Bloodhounds) walked straight lines at
     their leader's height (the navmesh was out of the map for the step); path corners kept the navmesh's height; a
     walk with no path went straight through the ground; a body killed mid-jump had its landing refused.
+  - **The last of the druid's jitter** (peon 0.1.37), 20 attempts before and after: tanks' reversals 5.7 to 2.4 a
+    minute, tanks over 10 a minute 16 of 140 to 1, kills 18 to 19 of 20. The tank's add was on it all along: its
+    drag spots were on a bench by the north wall, 3 yd up, that it couldn't stand on, and at its spot with the add
+    4 yd off it stepped in to melee, left its spot, and was sent back, about once a second. Now drag spots are only
+    where a path ends; at its spot with its add in reach a tank stands and fights; a spot counts as reached until
+    3.5 yd; a drag waits until the add has been on the tank 1.5 s (taunting it back first).
+  - **Your call:** the scenarios never tell the brain a melee bot is already swinging, so every melee bot closes on
+    a foe past 3.5 yd instead of 4.5. Setting it changes every melee's positioning everywhere; I'd set it, measured
+    first on the dps harness and the all-in.
   - **Made without you (decision 107):** a dead body's landing taken within its jump's reach; every no-path walk
     grounded (further than mangos, whose `NormalizeZ` is off); path legs sampled every yard (grounding a path costs
     13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
