@@ -218,9 +218,9 @@ pub fn route(
         Some(p) => p,
         // Off the navmesh (in open water): from the bottom under it, or
         // straight where the way is clear, on the ground out of the water
-        // (a goal on a dune's steep face, the navmesh's steep polygons left
-        // out of its paths, as mangos's chase goal is on the ground,
-        // `GetNearPoint`'s `UpdateAllowedPositionZ`).
+        // (a goal on a polygon the navmesh joins to nothing, under a
+        // doodad's overhang on a dune's face; mangos's chase goal is on the
+        // ground, `GetNearPoint`'s `UpdateAllowedPositionZ`).
         None => {
             let bottom = floor_under(map, from).map(|z| Vector3d { z, ..from });
             match bottom.and_then(|b| map.nav.as_mut()?.path(b, to)) {

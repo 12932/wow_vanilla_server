@@ -450,12 +450,13 @@ impl Nav {
     }
 
     /// The straight way from `from` to `to`, for a walk the navmesh has no
-    /// way for (a goal off it, or on its steep polygons): on the ground as
+    /// way for (a goal off it, or on a polygon it joins to nothing): on the ground as
     /// a path is ([`Nav::grounded`]), its end on its floor and points put
     /// in where the line leaves the ground; straight while a tile of its
     /// ends is loading. Before, it was the line itself: a chase down a
-    /// dune's steep face went through the dune and ended at its victim's
-    /// height, a yard off the slope (decision 107).
+    /// Tanaris dune's face, to a goal under a doodad's overhang, went
+    /// through the dune and ended at its victim's height, a yard off the
+    /// slope (decision 107).
     pub fn straight(&mut self, from: Vector3d, to: Vector3d) -> Vec<Vector3d> {
         if !self.ready_at(&[from, to]) {
             return vec![from, to];

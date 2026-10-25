@@ -146,9 +146,10 @@ fn off_ground(m: &mut Map, points: &[Vector3d]) -> (f32, f32) {
 /// within a fifth of a yard of the ground and the walk never goes a third
 /// of a yard under it. Each chase five times over: after the first, its
 /// victim's earlier attackers set its goal's side at random (a chase's
-/// spread), and one of those on the steeper dunes' face is off the
-/// navmesh's paths (its steep polygons): its walk went straight through the
-/// dune to its victim's height, 1.03 yards off the slope, once in a full
+/// spread), and one of those on the steeper dunes' face is under a
+/// doodad's overhang (two surfaces there, 3 yards apart), whose polygon the
+/// navmesh joins to nothing: with no path, its walk went straight through
+/// the dune to its victim's height, 1.03 yards off the slope, once in a full
 /// extended run (decision 107; now a straight walk is on the ground too,
 /// `Nav::straight`).
 #[tokio::test]
