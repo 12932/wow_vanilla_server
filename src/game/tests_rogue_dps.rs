@@ -486,7 +486,8 @@ async fn an_abilitys_crit_is_its_crit_chance_of_its_hits() {
                 r.special = true;
                 r.crit_bp()
             };
-            // More rolls than the casts take (three each).
+            // More rolls than the casts take (three a hit, two a miss or
+            // a dodge).
             let mut dice = rand::rngs::StdRng::seed_from_u64(100);
             m.spells
                 .queued_rolls
