@@ -1653,7 +1653,7 @@ pub fn follow_step(map: &mut Map, g: Guid) {
     };
     let from = c.position;
     let path = match map.nav.as_mut() {
-        Some(nav) => nav.path(from, spot).unwrap_or_else(|| vec![from, spot]),
+        Some(nav) => nav.path(from, spot).unwrap_or_else(|| nav.straight(from, spot)),
         None => vec![from, spot],
     };
     let now = map.now;

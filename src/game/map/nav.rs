@@ -427,20 +427,40 @@ impl Nav {
     /// The floor under a point: the navmesh's polygon there, within
     /// [`GROUND_REACH`] of it, and the surface of the bake's geometry (its
     /// terrain's, WMOs' and doodads' upward faces) nearest that polygon's
-    /// height within [`SURFACE_SNAP`]; else the polygon's height.
+    /// height within [`SURFACE_SNAP`]; else the polygon's height. Off the
+    /// navmesh (a straight walk where it has no way), the surface nearest
+    /// the point itself within [`SURFACE_SNAP`].
     fn floor_at(&mut self, p: Vector3d) -> Option<f32> {
-        let detail = self.ground_near(p)?;
+        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+            return None;
+        }
+        let detail = self.ground_near(p);
+        let near = detail.unwrap_or(p.z);
         if self.map.find_heights(p.x, p.y, &mut self.heights).is_ok()
             && let Some(z) = self
                 .heights
                 .iter()
                 .copied()
-                .filter(|h| (h - detail).abs() <= SURFACE_SNAP)
-                .min_by(|a, b| (a - detail).abs().total_cmp(&(b - detail).abs()))
+                .filter(|h| (h - near).abs() <= SURFACE_SNAP)
+                .min_by(|a, b| (a - near).abs().total_cmp(&(b - near).abs()))
         {
             return Some(z);
         }
-        Some(detail)
+        detail
+    }
+
+    /// The straight way from `from` to `to`, for a walk the navmesh has no
+    /// way for (a goal off it, or on its steep polygons): on the ground as
+    /// a path is ([`Nav::grounded`]), its end on its floor and points put
+    /// in where the line leaves the ground; straight while a tile of its
+    /// ends is loading. Before, it was the line itself: a chase down a
+    /// dune's steep face went through the dune and ended at its victim's
+    /// height, a yard off the slope (decision 107).
+    pub fn straight(&mut self, from: Vector3d, to: Vector3d) -> Vec<Vector3d> {
+        if !self.ready_at(&[from, to]) {
+            return vec![from, to];
+        }
+        self.grounded(&[from, to])
     }
 
     /// The navmesh's ground under a point (its detail mesh's height),

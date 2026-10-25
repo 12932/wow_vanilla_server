@@ -1127,7 +1127,9 @@ fn walk(map: &mut Map, g: Guid, mut goal: Vector3d, now: Instant) -> bool {
                 None if (goal.z - from.z).abs() <= STRAIGHT_CLIMB
                     && crate::game::map::spells::checks::line_of_sight(map, from, goal) =>
                 {
-                    vec![from, goal]
+                    map.nav
+                        .as_mut()
+                        .map_or_else(|| vec![from, goal], |n| n.straight(from, goal))
                 }
                 None => return false,
             }

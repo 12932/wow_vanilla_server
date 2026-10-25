@@ -320,7 +320,7 @@ fn step_creature(map: &mut Map, key: usize, now: Instant, rng: &mut impl rand::R
                             match n.path(from, target) {
                                 Some(p) => Some(p),
                                 None if wanders => None,
-                                None => Some(vec![from, target]),
+                                None => Some(n.straight(from, target)),
                             }
                         }
                         _ => Some(vec![from, target]),

@@ -1108,7 +1108,7 @@ pub fn controlled_step(map: &mut Map, g: Guid) -> bool {
         match map.position_of(helper) {
             Some(at) if dist(at, pos) > 3.0 => {
                 let path = match map.nav.as_mut() {
-                    Some(nav) => nav.path(pos, at).unwrap_or_else(|| vec![pos, at]),
+                    Some(nav) => nav.path(pos, at).unwrap_or_else(|| nav.straight(pos, at)),
                     None => vec![pos, at],
                 };
                 Ok((path, true, Duration::from_millis(500)))

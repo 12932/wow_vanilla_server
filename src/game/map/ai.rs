@@ -2562,7 +2562,7 @@ fn evade(map: &mut Map, g: Guid) {
         }
     } else {
         let path = match map.nav.as_mut() {
-            Some(nav) => nav.path(from, home).unwrap_or_else(|| vec![from, home]),
+            Some(nav) => nav.path(from, home).unwrap_or_else(|| nav.straight(from, home)),
             None => vec![from, home],
         };
         (path, false)

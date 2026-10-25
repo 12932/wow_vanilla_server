@@ -217,7 +217,10 @@ pub fn route(
     let path = match map.nav.as_mut()?.path(from, to) {
         Some(p) => p,
         // Off the navmesh (in open water): from the bottom under it, or
-        // straight where the way is clear.
+        // straight where the way is clear, on the ground out of the water
+        // (a goal on a dune's steep face, the navmesh's steep polygons left
+        // out of its paths, as mangos's chase goal is on the ground,
+        // `GetNearPoint`'s `UpdateAllowedPositionZ`).
         None => {
             let bottom = floor_under(map, from).map(|z| Vector3d { z, ..from });
             match bottom.and_then(|b| map.nav.as_mut()?.path(b, to)) {
@@ -225,7 +228,13 @@ pub fn route(
                     p[0] = from;
                     p
                 }
-                None if clear(map, from, to) => vec![from, to],
+                None if clear(map, from, to) => {
+                    if to_water.is_none() && !water_at(map, from) {
+                        map.nav.as_mut()?.straight(from, to)
+                    } else {
+                        vec![from, to]
+                    }
+                }
                 None => return None,
             }
         }
