@@ -999,3 +999,53 @@ async fn gear_raid_dresses_damage_dealers_in_the_tiers_loot_with_hit() {
     let (_, _, _, _, set) = damage_stats(&realm, &worn, 1);
     assert_eq!(set, 8, "Battlegear of Wrath from head to hands");
 }
+
+/// No `.gear` hands out a developer's item, whatever its quality (the
+/// user's call, 2026-10-25): random greens and blues had "90 Green Rogue
+/// Dagger", "1300 Test Dagger 63 blue" and "(TEST)" staves, which only
+/// `.gear raid` left out. Many draws of each class's greens, blues and
+/// mixed at 60, 45 and 20.
+#[tokio::test]
+#[ignore = "extended"]
+async fn no_gear_is_a_developers_item() {
+    let realm = harness::realm_with(harness::load_real(DB.as_path()));
+    let classes = [
+        (Race::Human, Class::Warrior),
+        (Race::Human, Class::Rogue),
+        (Race::Human, Class::Mage),
+        (Race::Human, Class::Priest),
+        (Race::Human, Class::Paladin),
+        (Race::Dwarf, Class::Hunter),
+        (Race::Gnome, Class::Warlock),
+        (Race::NightElf, Class::Druid),
+        (Race::Orc, Class::Shaman),
+    ];
+    let mut n = 0;
+    for (race, class) in classes {
+        for level in [60u8, 45, 20] {
+            for command in [".gear green", ".gear blue", ".gear", ".gear green tank", ".gear blue dps"] {
+                for _ in 0..3 {
+                    n += 1;
+                    let account = format!("DEV{n}");
+                    // Letters only: n in base 26.
+                    let mut name = String::from("Dev");
+                    let mut k = n;
+                    while k > 0 {
+                        name.push((b'a' + (k % 26) as u8) as char);
+                        k /= 26;
+                    }
+                    let (worn, _, _, _) =
+                        geared_with(&realm, (&account, &name), race, class, level, command).await;
+                    for (slot, entry, _) in &worn {
+                        let t = realm.data.item(*entry).unwrap();
+                        assert!(
+                            !crate::game::map::gm_dev::unreal(&t.name),
+                            "{class:?} at {level}, `{command}`, slot {slot}: {}",
+                            t.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
