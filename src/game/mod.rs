@@ -138,6 +138,8 @@ mod tests_gear;
 #[cfg(test)]
 mod tests_gear_quality;
 #[cfg(test)]
+mod tests_gear_tank;
+#[cfg(test)]
 mod tests_gear_unique;
 #[cfg(test)]
 mod tests_ghost;

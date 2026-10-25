@@ -1900,4 +1900,46 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        runs and snaps a watcher is shown across a step 14 to 1. Drek'Thar killed 18 of 20 both (9 and 9 before, 8
        and 10 after).
 
+108. **A tank's weapon from `.gear`, and the paladins' blessings checked, your asks** (2026-10-25;
+     `fix/tank-gear-blessings`; "Warrior tanks should not be getting fist weapons", and the war over Wisdom and
+     Salvation on peon's healers).
+     - **What a tank got** (`gear_gives_a_tank_a_tanks_weapon`, 25 draws of each of `.gear tank`, `.gear green tank
+       shield`, `.gear tank shield`, `.gear blue tank shield`, peon's words, at 60 and at 45): a warrior a dagger 4
+       to 6 times in 25 and a fist weapon up to 3 (Willey's Back Scratcher, Blood Talon, Rockfist), and `.gear raid
+       tank shield` Kingsfall, a dagger; a shaman daggers 6 to 12 in 25 and fist weapons up to 4, `raid` a dagger
+       too; a paladin always a sword, mace or axe (its class holds no other one-hander), some a caster's; a druid a
+       staff or a two-handed mace, but with a tank's stats in 0 to 7 of 25 (Magus Long Staff, Stoneflower Staff,
+       a caster's Whiteout Staff).
+     - **Now**, a tank (`tank`, or no role and most talents in a warrior's or paladin's Protection) not asked for a
+       kind of weapon holds no fist weapon or dagger (`tanks_with`): with its shield a sword, a mace or an axe as its
+       class may (a shaman an axe or a mace), a druid a staff or a two-handed mace; and of those, one with a tank's
+       stats first (strength, agility or stamina, no intellect or spirit), then one with none of its own (a random
+       suffix's, "of the Bear" as it is made), a caster's last (`tank_rank`): the random picks at random within a
+       rank, `.gear raid` the best by item level within its quality and rank. A kind asked for (`.gear tank fist`)
+       is given as before. In the same draws: every warrior, paladin and shaman tank a sword, mace or axe and a
+       shield, each with a tank's stats (`.gear raid` at 60 the Blessed Qiraji War Hammer, Gressil, The Castigator)
+       but `.gear raid` at 45's epics of no stats of their own (Bloodrazor, Flurry Axe); every druid a staff or a
+       two-handed mace, none a caster's (Skullcracking Mace, Force of Magma, Might of Menethil, the Warden Staff at
+       45), but at 45 the greens are staves of no stats of their own (Spellforce Rod), whose suffix, rolled as it is
+       made, may be a caster's.
+     - **Why in wvs, not peon**: `.gear tank` is the GM's command that dresses a tank, for anyone who asks it; peon
+       names no kind for a tank (`tank shield`), and naming one (`sword`) would narrow it to a kind, losing the
+       better mace or axe. My calls: only fist weapons and daggers are out (no polearm or staff is held with a
+       shield anyway); a cat's Feral spec isn't taken for a tank (a bear asks `tank`); the stats' rank is mine.
+     - **Not changed, for your call**: `.gear` at random (`green`, `blue`, mixed) takes developers' items that
+       `.gear raid` leaves out (`unreal`): "90 Green Rogue Dagger", "1300 Test Dagger 63 blue", "Staff of Spell
+       Penetration - Frost (TEST)", "Monster - Staff, Lord Valthalak". A tank no longer gets the daggers among them;
+       anyone else may.
+     - **The blessings, wvs against mangos-classic**: no change. A paladin's blessing is one of each paladin's on a
+       unit (`Exclusive::PaladinBlessing`, per caster), as mangos-classic's spell group 7 (`UNIQUE_PER_CASTER`,
+       `Unit::RemoveNoStackAurasDueToAuraHolder`): its new one takes its own old one's place; another paladin's of
+       another kind stands beside it. A blessing and its Greater kind are one spell, whoever cast them (one family
+       and family flags: `SpellStacker::IsStackableAuraEffect`'s "multirank", unstackable for helpful spells): the
+       other paladin's as strong or stronger takes its place, a weaker is refused (`IsSimilarExistingAuraStronger`).
+       A Greater one goes on all of the target's class in its group (`TARGET_UNIT_RAID_AND_CLASS`). Test:
+       `two_paladins_blessings_on_healers_stand_together_one_of_a_kind` (Wisdom and Salvation of two paladins
+       together; a paladin's Kings for its Wisdom, its Greater Salvation for its Kings and Wisdom; a Wisdom of 33 for
+       another's Greater Wisdom of 33, a Greater Wisdom of 30 refused under a Wisdom of 33; a Salvation for another's
+       Greater Salvation). The war was peon's (peon `fix/tank-gear-blessings`).
+
 ## Left for later, and why
