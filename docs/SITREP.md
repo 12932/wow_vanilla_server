@@ -436,12 +436,34 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   room (server-driven; for later). Fixed: corners and heartbeats are sent; a move is checked a yard at a time for
   walls, drops and the navmesh's edge (the old check missed half the keep's walls), on its whole first leg (the
   Horde round's 2-yard check), each tick and as a last guard before it's sent; the summary counts any it refuses.
-- **Drek'Thar's scenario bugs (your goal, 2026-10-25), under way:** bots through walls (still seen by you after peon
-  0.1.33), players floating a little above the floor in his room, a druid's jittery movement, pets falling through
-  his room's floor. A fight recorder is being built first (wvs and peon, `feat/fight-record`): every unit's position
-  as the server holds it, every client and server move, every ability and aura of players and NPCs, the AI's
-  notices, with a summary that counts wall crossings, floating, jitter and falls, and a replay to watch. The fixes
-  (`fix/av-bugs`) are proved on it.
+- **Drek'Thar's scenario bugs (your goal, 2026-10-25): fixed** (wvs 0.1.134, decision 106; peon 0.1.35). A fight
+  recorder came first (decision 105: `peon run … --record`, `scripts/record.py summary|query|timeline`), and each fix
+  is measured on it, 10 attempts at 40 before and after, from your start spot (put back by his doors):
+
+  | | before | after |
+  |---|---|---|
+  | kills | 10/10 | 10/10 |
+  | runs a watcher is shown into a wall | 99 | 2 |
+  | pets' paths through a floor or wall | 25 | 0 |
+  | creatures' time in his room over 0.3 yd up | 9.6% | 0.6% |
+  | players' highest moving / standing | +0.90 / +1.57 yd | +0.24 / 0.00 |
+  | the worst unit's reversals a minute | 60.7 | 32.5 |
+
+  - **Through walls:** no bot ever sent a move through one. A watcher's client runs a bot on along its heading
+    until its next packet; a corner told late (a step ending a hair short of it) or a bot left "running" on its
+    goal ran it through a door frame. Corners and turns of 20° are told at once; a bot on its goal stops.
+  - **Floating:** creatures' and pets' path points sat at the navmesh's height (by his room's steps, the ring's, a
+    yard up): now on the real floor. A bot stopped mid-jump stood in the air: a stop waits for the landing.
+  - **The druid's jitter:** a tank switched between its drag spot and closing to melee every tick (3,500 times in
+    10 attempts); it now leads what it drags and waits at its spot. Melee stay out of a due Whirlwind; healers keep
+    their way to their tank and out of reach.
+  - **Pets through his floor:** a pet's place beside its master landed on the terrain 8 yd under the keep; now on
+    its master's floor and in their sight, as mangos-classic.
+  - **Made without you:** turns of 20° told at once; a stop mid-air waits for the landing (a cast up to 0.8 s
+    later); tanks wait 2.5 s at their spot for what they drag; melee keep 3 yd outside a due splash; healers hold
+    their way 1.5 s.
+  - **Left:** a bot killed mid-jump lies in the air (about one death in fifty); outside his keep, some creatures
+    (Legionnaires, yetis, gnolls) still float up to a yard on the valley's slopes and walk off the navmesh's edge.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
