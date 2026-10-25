@@ -474,6 +474,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     4 yd off it stepped in to melee, left its spot, and was sent back, about once a second. Now drag spots are only
     where a path ends; at its spot with its add in reach a tank stands and fights; a spot counts as reached until
     3.5 yd; a drag waits until the add has been on the tank 1.5 s (taunting it back first).
+  - **Warrior tanks get no fist weapons; paladins stop fighting over healers' blessings (your asks, 2026-10-25):**
+    under way, `fix/tank-gear-blessings`: each paladin takes one blessing for the raid by seat, a healer's chosen
+    by the situation, and none overwrites another paladin's.
   - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
     swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
     measured on the dps harness, the all-in and a faction battle.
