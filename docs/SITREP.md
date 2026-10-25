@@ -485,8 +485,8 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
       Salvation and Wisdom both 0% to 88%; kills 14 to 17 of 20.
     - **Made without you:** a sole raid paladin gives a healer Salvation, Wisdom out of a raid (`[paladin]
       healer_salvation`); idle paladins share Salvation; blessings before top-up heals out of a fight; a tank seen
-      tanking stays a tank 10 minutes. **Your call:** random `.gear` still hands out developer test items ("90
-      Green Rogue Dagger", "(TEST)" staves), which only `.gear raid` filters; I'd filter them.
+      tanking stays a tank 10 minutes. **Developer test items filtered from every `.gear` (your call, 2026-10-25;
+      wvs 0.1.138):** random greens and blues gave "90 Green Warrior Pauldrons", "(TEST)" staves.
     - Its other 23 calls are in peon's BOT_AI.
   - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
     `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
