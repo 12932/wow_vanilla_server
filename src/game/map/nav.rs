@@ -465,8 +465,17 @@ impl Nav {
                 b.z = z;
             }
             let a = out[out.len() - 1];
+            // A point where the last is (the navmesh's corner at the walker,
+            // both now on the same floor) is left out: a walk's next point
+            // is somewhere to go.
+            if (a.x - b.x).hypot(a.y - b.y) < 0.01 && (a.z - b.z).abs() < 0.01 {
+                continue;
+            }
             self.fill(a, b, &mut out, &mut budget);
             out.push(b);
+        }
+        if out.len() < 2 {
+            out.push(path[path.len() - 1]);
         }
         out
     }
