@@ -481,6 +481,44 @@ fn text(s: &mut String, t: &str) {
     s.push_str(&serde_json::to_string(t).unwrap_or_else(|_| "\"\"".into()));
 }
 
+/// A client's movement flags, every bit of them, as 1.12 lays them out
+/// (`MovementFlags`): forward 0x1, backward 0x2, strafes 0x4 and 0x8, turns
+/// 0x10 and 0x20, walking 0x100, root 0x1000, jumping 0x2000, falling far
+/// 0x4000, swimming 0x200000, on a transport 0x2000000.
+pub fn move_bits(f: &wow_world_messages::vanilla::MovementInfo_MovementFlags) -> u32 {
+    let mut b = 0;
+    for (on, bit) in [
+        (f.get_forward(), 0x1),
+        (f.get_backward(), 0x2),
+        (f.get_strafe_left(), 0x4),
+        (f.get_strafe_right(), 0x8),
+        (f.get_turn_left(), 0x10),
+        (f.get_turn_right(), 0x20),
+        (f.get_pitch_up(), 0x40),
+        (f.get_pitch_down(), 0x80),
+        (f.get_walk_mode(), 0x100),
+        (f.get_levitating(), 0x400),
+        (f.get_fixed_z(), 0x800),
+        (f.get_root(), 0x1000),
+        (f.get_jumping().is_some(), 0x2000),
+        (f.get_fallingfar(), 0x4000),
+        (f.get_swimming().is_some(), 0x20_0000),
+        (f.get_spline_enabled(), 0x40_0000),
+        (f.get_can_fly(), 0x80_0000),
+        (f.get_flying(), 0x100_0000),
+        (f.get_on_transport().is_some(), 0x200_0000),
+        (f.get_spline_elevation().is_some(), 0x400_0000),
+        (f.get_waterwalking(), 0x1000_0000),
+        (f.get_safe_fall(), 0x2000_0000),
+        (f.get_hover(), 0x4000_0000),
+    ] {
+        if on {
+            b |= bit;
+        }
+    }
+    b
+}
+
 /// The name of a movement opcode the server takes from a client.
 pub fn opcode_name(op: u16) -> &'static str {
     match op {
@@ -1114,7 +1152,7 @@ fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, sample: bool) 
             g,
             at,
             o: p.movement.orientation,
-            flags: crate::game::map::player::movement_flags(&p.movement.flags),
+            flags: move_bits(&p.movement.flags),
             speed: player_speed(p),
             hp,
             max_hp,
@@ -1298,7 +1336,7 @@ pub fn client_move(
         op,
         at: info.position,
         o: info.orientation,
-        flags: crate::game::map::player::movement_flags(&info.flags),
+        flags: move_bits(&info.flags),
         client_ms: info.timestamp,
         fall_ms: info.fall_time,
         dz,
