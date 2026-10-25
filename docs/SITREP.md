@@ -480,6 +480,11 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
     `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
     tank pulls only once the healers have sight of where he'll stand, and no heal starts on a tank out of sight.
+  - **Blink (your report, 2026-10-25):** never through terrain, buildings or doodads, never above; under way,
+    `fix/blink`, with mangos's and vmangos's rules traced, the mid-air case brought back to you, and a test for each
+    case plus random blinks over real cities and forest.
+  - **Drek'Thar at max skill (your ask, 2026-10-25):** 40 in default gear at max skill, aiming for 100 kills in 100
+    attempts, then the fastest, cheapest kill; the healers' clumping measured and spread. Under way, `feat/av-perfect`.
   - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
     swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
     measured on the dps harness, the all-in and a faction battle.
