@@ -1295,7 +1295,7 @@ pub fn move_with(map: &mut Map, g: Guid, to: Vector3d, how: Move) -> bool {
     };
     let path = match map.nav.as_mut() {
         Some(nav) if how.pathfind && !how.fly => {
-            nav.path(from, to).unwrap_or_else(|| vec![from, to])
+            nav.path(from, to).unwrap_or_else(|| nav.straight(from, to))
         }
         _ => vec![from, to],
     };

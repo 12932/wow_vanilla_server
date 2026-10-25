@@ -143,34 +143,50 @@ fn off_ground(m: &mut Map, points: &[Vector3d]) -> (f32, f32) {
 /// put in wherever the line leaves it: in Waterspring Field, and on the
 /// dunes' steeper slopes south-west of it (the second was 3.6 yards under
 /// at its end, the first 0.7 under the dune it crossed), every point is
-/// within a yard of the ground and the walk never goes a yard under it.
+/// within a fifth of a yard of the ground and the walk never goes a third
+/// of a yard under it. Each chase five times over: after the first, its
+/// victim's earlier attackers set its goal's side at random (a chase's
+/// spread), and one of those on the steeper dunes' face is under a
+/// doodad's overhang (two surfaces there, 3 yards apart), whose polygon the
+/// navmesh joins to nothing: with no path, its walk went straight through
+/// the dune to its victim's height, 1.03 yards off the slope, once in a full
+/// extended run (decision 107; now a straight walk is on the ground too,
+/// `Nav::straight`).
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_chase_down_a_slope_keeps_to_the_ground() {
     let (_a, g, map) = in_tanaris(v((-7920.0, -4460.0, 9.0))).await;
     let out = on(&map, move |m| {
         let mut out = Vec::new();
-        for (from, to) in [
-            // Waterspring Field, two yards down a dune and over another.
-            ((-7955.0, -4455.0), (-7920.0, -4455.0)),
-            ((-7945.0, -4445.0), (-7935.0, -4440.0)),
-            // Four and eight yards down the steeper dunes.
-            ((-8040.0, -4500.0), (-8030.0, -4500.0)),
-            ((-8012.0, -4562.0), (-8000.0, -4555.0)),
-        ] {
-            let drop = ground(m, from.0, from.1, 10.0) - ground(m, to.0, to.1, 10.0);
-            let points = chase(m, g, from, to);
-            let (under, off) = off_ground(m, &points);
-            out.push((from, drop, points.len(), under, off));
+        for _ in 0..5 {
+            for (from, to) in [
+                // Waterspring Field, two yards down a dune and over another.
+                ((-7955.0, -4455.0), (-7920.0, -4455.0)),
+                ((-7945.0, -4445.0), (-7935.0, -4440.0)),
+                // Four and eight yards down the steeper dunes.
+                ((-8040.0, -4500.0), (-8030.0, -4500.0)),
+                ((-8012.0, -4562.0), (-8000.0, -4555.0)),
+            ] {
+                let drop = ground(m, from.0, from.1, 10.0) - ground(m, to.0, to.1, 10.0);
+                let points = chase(m, g, from, to);
+                let (under, off) = off_ground(m, &points);
+                out.push((from, drop, points, under, off));
+            }
         }
         out
     })
     .await;
-    for (from, drop, n, under, off) in out {
+    for (from, drop, points, under, off) in out {
         assert!(drop > 1.0, "{from:?}: the victim is below it ({drop})");
-        assert!(n >= 2, "{from:?}: a chase");
-        assert!(under < 1.0, "{from:?}: {under} yards under the ground");
-        assert!(off <= 1.0, "{from:?}: a point {off} yards off the ground");
+        assert!(points.len() >= 2, "{from:?}: a chase");
+        assert!(
+            under < 0.35,
+            "{from:?}: {under} yards under the ground: {points:?}"
+        );
+        assert!(
+            off <= 0.2,
+            "{from:?}: a point {off} yards off the ground: {points:?}"
+        );
     }
 }
 
@@ -232,4 +248,53 @@ async fn probe_path_on_the_ground() {
         }
     })
     .await;
+}
+
+/// The chases down the dunes, their walks on the ground with the points put
+/// in where a leg leaves it (decision 107: a leg is looked at every yard),
+/// as Alice's client is told them, pass the 1.12 client's spline reader.
+#[tokio::test]
+#[ignore = "extended"]
+async fn chases_down_the_dunes_pass_the_client() {
+    use crate::game::tests_client_emu::{capture, checker, run_checker};
+    let (check_py, wow_exe) = checker().expect(
+        "the client-emulation check needs tools/client_check/WoW.exe and `uv`: see docs/TESTING.md",
+    );
+    let (mut a, g, map) = in_tanaris(v((-7920.0, -4460.0, 9.0))).await;
+    for (from, to) in [
+        ((-7955.0, -4455.0), (-7920.0, -4455.0)),
+        ((-7945.0, -4445.0), (-7935.0, -4440.0)),
+        ((-8040.0, -4500.0), (-8030.0, -4500.0)),
+        ((-8012.0, -4562.0), (-8000.0, -4555.0)),
+    ] {
+        let brute = on(&map, move |m| {
+            let from = v((from.0, from.1, ground(m, from.0, from.1, 10.0)));
+            let to = v((to.0, to.1, ground(m, to.0, to.1, 10.0)));
+            put_player(m, g, to);
+            let brute = crate::game::tests_p3_combat::spawn(
+                m,
+                g,
+                crate::game::tests_p3_combat::BRUTE,
+                20,
+                3.0,
+            );
+            put_creature(m, brute, from);
+            brute
+        })
+        .await;
+        a.sees(brute).await;
+        on(&map, move |m| ai::attacked(m, brute, g)).await;
+        a.wait_for("the chase", |m| match m {
+            ServerOpcodeMessage::SMSG_MONSTER_MOVE(mv) if mv.guid == brute => Some(()),
+            _ => None,
+        })
+        .await;
+        on(&map, move |m| crate::game::map::objects::despawn(m, brute)).await;
+    }
+    let (capture, counts) = capture(vec![&mut a]);
+    assert!(
+        counts.get(&0x0DD).copied().unwrap_or(0) >= 4,
+        "the chases were captured: {counts:?}"
+    );
+    run_checker(&check_py, &wow_exe, &capture);
 }

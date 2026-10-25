@@ -406,7 +406,7 @@ pub fn immobilized(map: &mut Map, g: Guid) {
 
 fn path(map: &mut Map, from: Vector3d, to: Vector3d) -> Vec<Vector3d> {
     match map.nav.as_mut() {
-        Some(nav) => nav.path(from, to).unwrap_or_else(|| vec![from, to]),
+        Some(nav) => nav.path(from, to).unwrap_or_else(|| nav.straight(from, to)),
         None => vec![from, to],
     }
 }

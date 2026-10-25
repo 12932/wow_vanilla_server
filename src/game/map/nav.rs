@@ -42,8 +42,11 @@ const TAKE_BUDGET: Duration = Duration::from_millis(3);
 const GROUND_TOLERANCE: f32 = 0.15;
 /// How far from the navmesh's height under a point its floor is looked
 /// for: the floor nearest the navmesh's within this, else the navmesh's.
-const SURFACE_SNAP: f32 = 1.5;
-const GROUND_SAMPLE: f32 = 2.0;
+/// A step's climb: the detail mesh is up to 1.6 yd over the terrain on the
+/// valley's steeper slopes (by Tower Point), where at 1.5 a Frostwolf
+/// Guardian's walk ended on the navmesh, 1.64 yd in the air (decision 107).
+const SURFACE_SNAP: f32 = 2.5;
+const GROUND_SAMPLE: f32 = 1.0;
 /// How far over or under a point its ground is looked for: as far as a
 /// path's ends are taken to the navmesh from.
 const GROUND_REACH: f32 = 5.0;
@@ -105,6 +108,21 @@ pub fn tile_of(x: f32, y: f32) -> (i32, i32) {
     let tx = (32.0 - y / ADT_SIZE).floor() as i32;
     let ty = (32.0 - x / ADT_SIZE).floor() as i32;
     (tx.clamp(0, 63), ty.clamp(0, 63))
+}
+
+/// How far over or under a goal a path's end may be and still reach it:
+/// a step's climb.
+const REACH_RISE: f32 = 2.5;
+
+/// Whether a path's end at `end` reaches `goal`: within `yards` of it over
+/// the ground, and a step's climb of its height. A path's end is on the
+/// floor, and the goal may be at the navmesh's height, a yard and more
+/// over it, or on a ledge beside it: Orgrimmar's square is a platform 1.45
+/// yd over the floor where the navmesh's way to it ends, 2.7 yd off, so a
+/// path to it ended 3.05 yd from it, Rexxar's start found none (decision
+/// 107).
+pub fn reaches(end: Vector3d, goal: Vector3d, yards: f32) -> bool {
+    (end.x - goal.x).hypot(end.y - goal.y) <= yards && (end.z - goal.z).abs() <= REACH_RISE
 }
 
 /// A zone and area the bake names, if it names an area: 0 and the
@@ -389,7 +407,12 @@ impl Nav {
     }
 
     /// A walkable path from `from` to `to`, its first point `from`;
-    /// straight while a tile of its ends is loading.
+    /// straight while a tile of its ends is loading. The navmesh's first
+    /// point is `from` put on its polygon, which at a polygon's edge (a
+    /// tile's) is the edge's own height: it is `from` itself, where the
+    /// walker is, as mangos's `MoveSplineInit::Launch` puts its real
+    /// position first. Before, a Frostwolf Legionnaire set off on a tile's
+    /// edge from 2.8 yd in the air (decision 107).
     pub fn path(&mut self, from: Vector3d, to: Vector3d) -> Option<Vec<Vector3d>> {
         if !self.ready_at(&[from, to]) {
             return Some(vec![from, to]);
@@ -398,7 +421,11 @@ impl Nav {
         self.map
             .find_path(v(from), v(to), false, &mut points)
             .ok()?;
-        (points.0.len() >= 2).then(|| self.grounded(&points.0))
+        if points.0.len() < 2 {
+            return None;
+        }
+        points.0[0] = from;
+        Some(self.grounded(&points.0))
     }
 
     /// [`Nav::path`] as the navmesh answers it, not put on the ground: for
@@ -415,24 +442,50 @@ impl Nav {
     /// The floor under a point: the navmesh's polygon there, within
     /// [`GROUND_REACH`] of it, and the surface of the bake's geometry (its
     /// terrain's, WMOs' and doodads' upward faces) nearest that polygon's
-    /// height within [`SURFACE_SNAP`]; else the polygon's height.
+    /// height within [`SURFACE_SNAP`]; else the polygon's height. Off the
+    /// navmesh (a straight walk where it has no way), the surface nearest
+    /// the point itself within [`SURFACE_SNAP`].
     fn floor_at(&mut self, p: Vector3d) -> Option<f32> {
-        let detail = self.ground_near(p)?;
+        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+            return None;
+        }
+        let detail = self.ground_near(p);
+        let near = detail.unwrap_or(p.z);
         if self.map.find_heights(p.x, p.y, &mut self.heights).is_ok()
             && let Some(z) = self
                 .heights
                 .iter()
                 .copied()
-                .filter(|h| (h - detail).abs() <= SURFACE_SNAP)
-                .min_by(|a, b| (a - detail).abs().total_cmp(&(b - detail).abs()))
+                .filter(|h| (h - near).abs() <= SURFACE_SNAP)
+                .min_by(|a, b| (a - near).abs().total_cmp(&(b - near).abs()))
         {
             return Some(z);
         }
-        Some(detail)
+        detail
+    }
+
+    /// The straight way from `from` to `to`, for a walk the navmesh has no
+    /// way for (a goal off it, or on a polygon it joins to nothing): on the ground as
+    /// a path is ([`Nav::grounded`]), its end on its floor and points put
+    /// in where the line leaves the ground; straight while a tile of its
+    /// ends is loading. Before, it was the line itself: a chase down a
+    /// Tanaris dune's face, to a goal under a doodad's overhang, went
+    /// through the dune and ended at its victim's height, a yard off the
+    /// slope (decision 107).
+    pub fn straight(&mut self, from: Vector3d, to: Vector3d) -> Vec<Vector3d> {
+        if !self.ready_at(&[from, to]) {
+            return vec![from, to];
+        }
+        self.grounded(&[from, to])
     }
 
     /// The navmesh's ground under a point (its detail mesh's height),
-    /// within [`GROUND_REACH`] of it.
+    /// within [`GROUND_REACH`] of it. A point on a polygon's edge (a path's
+    /// corner always is) is over none of them, to the float: its ground is
+    /// that of the nearest point of the nearest polygon's edge, as
+    /// Detour's `closestPointOnPoly` has it. Before, a corner had none, and
+    /// kept the polygon's own height, up to 1.2 yd over the valley's slopes
+    /// and round its rocks (decision 107).
     fn ground_near(&self, p: Vector3d) -> Option<f32> {
         if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
             return None;
@@ -440,11 +493,12 @@ impl Nav {
         let nav = self.map.navmesh();
         let at = [-p.y, p.z, -p.x];
         let filter = rustigator_pathfind::navmesh::QueryFilter::any();
-        let (poly, _) = nav.find_nearest_poly(at, [0.25, GROUND_REACH, 0.25], &filter);
+        let (poly, nearest) = nav.find_nearest_poly(at, [0.25, GROUND_REACH, 0.25], &filter);
         if poly.is_null() {
             return None;
         }
         nav.poly_height(poly, at)
+            .or(Some(nearest[1]))
             .filter(|z| (z - p.z).abs() <= GROUND_REACH)
     }
 
