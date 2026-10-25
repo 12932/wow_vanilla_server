@@ -40,6 +40,9 @@ pub const VERSION: u32 = 1;
 const KEYFRAME: Duration = Duration::from_secs(1);
 /// How far a unit moves before the ground under it is looked up again.
 const GROUND_AGAIN: f32 = 0.05;
+/// How often a moving unit's ground is looked up: its rows between have no
+/// `dz` (a column's heights cost some 3 us, and a crowd moves).
+const GROUND_MOVING_EVERY: Duration = Duration::from_millis(250);
 /// How many on a threat list are written, the highest first.
 const THREAT_TOP: usize = 10;
 /// How often units gone from the map are looked for.
@@ -267,7 +270,8 @@ struct Seen {
     row: Option<Row>,
     written: Option<Instant>,
     /// Where the ground was last looked up, and its height there.
-    ground: Option<(Vector3d, Option<f32>)>,
+    /// (An unknown ground, a tile still loading, is asked again a second on.)
+    ground: Option<(Vector3d, Option<f32>, Instant)>,
     spline: u32,
     spline_ends: Option<Instant>,
     victim: Guid,
@@ -1114,17 +1118,24 @@ fn grounded(map: &mut Map, ev: Ev) -> Ev {
     }
 }
 
-/// A row's height over the ground, looked up again only once it has moved.
+/// A row's height over the ground, looked up again only once it has moved,
+/// and for one on the move at most every [`GROUND_MOVING_EVERY`] (none between).
 fn dz_of(map: &mut Map, seen: &mut Seen, at: Vector3d) -> Option<f32> {
-    if let Some((was, dz)) = seen.ground
-        && (was.x - at.x).abs() < GROUND_AGAIN
-        && (was.y - at.y).abs() < GROUND_AGAIN
-        && (was.z - at.z).abs() < GROUND_AGAIN
-    {
-        return dz;
+    let now = map.now;
+    if let Some((was, dz, when)) = seen.ground {
+        let still = (was.x - at.x).abs() < GROUND_AGAIN
+            && (was.y - at.y).abs() < GROUND_AGAIN
+            && (was.z - at.z).abs() < GROUND_AGAIN;
+        let since = now.saturating_duration_since(when);
+        if still && (dz.is_some() || since < KEYFRAME) {
+            return dz;
+        }
+        if !still && since < GROUND_MOVING_EVERY {
+            return None;
+        }
     }
     let dz = height_over_ground(map, at);
-    seen.ground = Some((at, dz));
+    seen.ground = Some((at, dz, now));
     dz
 }
 

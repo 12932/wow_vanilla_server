@@ -229,7 +229,8 @@ are hex (`g`, and `by`, `tg`, `who` for the others in it); places are `[x, y, z]
 The map's thread pushes the events onto a list (`Map::record`, a closure not run while it is off), taken at the
 update's last step (`record`, in `WVS_STATS_FILE`'s step times) with the samples, and sent down a channel to a thread
 of the recorder's own, which writes the lines. A unit's sample is written once it changed or a second on (its
-keyframe); the ground under it is looked up again only once it moved. Off, it costs a field's test at each event.
+keyframe); the ground under it is looked up again only once it moved, and for a unit on the move at most every
+250 ms (its rows between have no `dz`: a column's heights cost some 3 us). Off, it costs a field's test at each event.
 
 Tests: `tests_record` (a recorded copy's moves, chase, cast, aura, blast, damage and death in its file with their
 fields; none written for a copy not recorded; a GM's `.record on`, `mark` and `off`). peon's `scripts/record.py` goes
