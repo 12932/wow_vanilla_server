@@ -277,3 +277,78 @@ async fn a_gm_starts_marks_and_stops_a_record() {
     assert_eq!(of(&ls, "end").len(), 1);
     drop(c);
 }
+
+/// The record's heights over the ground are the bake's real geometry's, on
+/// the writer's own navmesh: in Drek'Thar's room (Alterac Valley's world
+/// copy, recorded) a player walking off the ring that runs round it at
+/// 99.37 over its sunken middle, at 98.42, keeping the ring's height, is a
+/// yard over the floor in its move and its sample, as he stood on it.
+#[tokio::test]
+#[ignore = "extended"]
+async fn a_recorded_height_over_the_ground_is_the_bakes() {
+    use crate::game::map::MapKey;
+    let d = dir("ground");
+    let mut cfg = harness::test_config();
+    cfg.nav_dir = Some(harness::real_data("nav"));
+    cfg.record = crate::config::RecordConfig {
+        maps: vec![30],
+        every_ms: 50,
+        dir: d.clone(),
+    };
+    let (store, startup) = Store::open(":memory:").expect("an in-memory store");
+    let realm = Realm::new(cfg, store, startup, crate::game::tests_p3_combat::data(), None);
+    let mut a = Client::connect(&realm, "REC4");
+    let g = a.enter("Grounded", Race::Human, Class::Warrior).await;
+    let ring = Vector3d {
+        x: -1365.6,
+        y: -216.0,
+        z: 99.37,
+    };
+    let home = realm.maps.get(&realm, MapKey::world(0));
+    home.call(move |m| m.teleport(g, MapKey::world(30), ring, 0.0));
+    a.wait_for("SMSG_NEW_WORLD", |m| {
+        matches!(m, wow_world_messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_NEW_WORLD(_)).then_some(())
+    })
+    .await;
+    a.send(MSG_MOVE_WORLDPORT_ACK {}).await;
+    a.sees(g).await;
+    let map = realm.maps.get(&realm, MapKey::world(30));
+    updates(&map, 3).await;
+    // Three yards on, over the sunken middle (two steps down), at the ring's
+    // height.
+    let over = Vector3d {
+        x: -1366.1,
+        y: -219.0,
+        z: 99.37,
+    };
+    a.heartbeat(over.x, over.y, over.z).await;
+    until(&map, "the heartbeat is taken", move |m| {
+        m.players
+            .get(&g)
+            .is_some_and(|p| (p.position().x - over.x).abs() < 0.01)
+    })
+    .await;
+    updates(&map, 3).await;
+    on(&map, |m| drop(m.record.take())).await;
+    let ls = lines(&d);
+    let _ = std::fs::remove_dir_all(&d);
+    let me = hex(g);
+    let floor = |l: &serde_json::Value| l["p"][2].as_f64().unwrap() - l["dz"].as_f64().unwrap();
+    let beat = of(&ls, "move")
+        .into_iter()
+        .find(|m| m["g"] == me.as_str() && m["op"] == "MSG_MOVE_HEARTBEAT")
+        .unwrap_or_else(|| panic!("no heartbeat in {ls:?}"));
+    assert!((floor(beat) - 98.42).abs() < 0.05, "{beat}");
+    let pos: Vec<_> = of(&ls, "pos")
+        .into_iter()
+        .filter(|p| p["g"] == me.as_str() && p.get("dz").is_some())
+        .collect();
+    assert!(
+        pos.iter().any(|p| (floor(p) - 99.37).abs() < 0.05),
+        "on the ring: {pos:?}"
+    );
+    assert!(
+        pos.iter().any(|p| (floor(p) - 98.42).abs() < 0.05 && p["dz"].as_f64().unwrap() > 0.9),
+        "a yard over the middle: {pos:?}"
+    );
+}

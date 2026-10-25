@@ -1378,6 +1378,7 @@ impl Map {
         let profile = MapProfile::new(key, &realm);
         let outdoor = outdoor_pvp::for_map(key, &realm.config().outdoor_pvp);
         let cfg_now = realm.config();
+        let record = record::for_new_map(&cfg_now, &realm.data, key.map, key.instance);
         Self {
             key,
             // The generation first: a reload in between is taken again.
@@ -1458,7 +1459,7 @@ impl Map {
             leashes: Default::default(),
             guards: Default::default(),
             health: Default::default(),
-            record: record::for_new_map(&cfg_now.record, key.map, key.instance),
+            record,
             profile,
             #[cfg(test)]
             faults: Default::default(),

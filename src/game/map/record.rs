@@ -15,8 +15,9 @@
 //!
 //! The map's thread only pushes events (`Map::record`): their times
 //! stamped, onto a list taken once an update and sent down a channel to a
-//! thread of the recorder's own, which writes them out. Nothing the map does
-//! waits on the file.
+//! thread of the recorder's own, which works out the ground under them (on a
+//! navmesh of its own) and writes them out. Nothing the map does waits on the
+//! file.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -40,9 +41,6 @@ pub const VERSION: u32 = 1;
 const KEYFRAME: Duration = Duration::from_secs(1);
 /// How far a unit moves before the ground under it is looked up again.
 const GROUND_AGAIN: f32 = 0.05;
-/// How often a moving unit's ground is looked up: its rows between have no
-/// `dz` (a column's heights cost some 3 us, and a crowd moves).
-const GROUND_MOVING_EVERY: Duration = Duration::from_millis(250);
 /// How many on a threat list are written, the highest first.
 const THREAT_TOP: usize = 10;
 /// How often units gone from the map are looked for.
@@ -269,9 +267,6 @@ impl Row {
 struct Seen {
     row: Option<Row>,
     written: Option<Instant>,
-    /// Where the ground was last looked up, and its height there.
-    /// (An unknown ground, a tile still loading, is asked again a second on.)
-    ground: Option<(Vector3d, Option<f32>, Instant)>,
     spline: u32,
     spline_ends: Option<Instant>,
     victim: Guid,
@@ -348,6 +343,7 @@ impl Recorder {
         instance: u32,
         every: Duration,
         why: &'static str,
+        ground: Option<(PathBuf, String)>,
     ) -> Result<Box<Self>, String> {
         let name = name.map_or_else(|| default_name(map, instance), str::to_owned);
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -360,7 +356,7 @@ impl Recorder {
         let (tx, rx) = mpsc::channel::<Vec<(u64, Ev)>>();
         let writer = std::thread::Builder::new()
             .name(format!("record {map}/{instance}"))
-            .spawn(move || write_all(file, rx))
+            .spawn(move || write_all(file, rx, ground))
             .map_err(|e| format!("the recorder's thread: {e}"))?;
         let now = Instant::now();
         let r = Box::new(Self {
@@ -439,17 +435,26 @@ impl Drop for Recorder {
 }
 
 /// The recorder's thread: each batch written as it comes, flushed once
-/// none is waiting.
-fn write_all(file: std::fs::File, rx: mpsc::Receiver<Vec<(u64, Ev)>>) {
+/// none is waiting. The ground under what it writes is its own navmesh's
+/// (`ground`: the bake's directory and the map's name), opened at its first
+/// line and its tiles read as they are needed, so the map's thread looks up
+/// none.
+fn write_all(
+    file: std::fs::File,
+    rx: mpsc::Receiver<Vec<(u64, Ev)>>,
+    ground: Option<(PathBuf, String)>,
+) {
     let mut out = std::io::BufWriter::with_capacity(256 * 1024, file);
     let mut line = String::with_capacity(512);
     let mut failed = false;
+    let mut ground = Ground::new(ground);
     while let Ok(batch) = rx.recv() {
         let mut batches = vec![batch];
         while let Ok(b) = rx.try_recv() {
             batches.push(b);
         }
-        for (t, ev) in batches.into_iter().flatten() {
+        for (t, mut ev) in batches.into_iter().flatten() {
+            ground.fill(&mut ev);
             line.clear();
             format(&mut line, t, &ev);
             line.push('\n');
@@ -464,6 +469,63 @@ fn write_all(file: std::fs::File, rx: mpsc::Receiver<Vec<(u64, Ev)>>) {
         }
     }
     let _ = out.flush();
+}
+
+/// The writer's own navmesh, for the ground under what it writes.
+struct Ground {
+    source: Option<(PathBuf, String)>,
+    nav: Option<crate::game::map::nav::Nav>,
+    /// Each unit's last place looked up, and its height over the ground.
+    last: AHashMap<Guid, (Vector3d, Option<f32>)>,
+}
+
+impl Ground {
+    fn new(source: Option<(PathBuf, String)>) -> Self {
+        Self {
+            source,
+            nav: None,
+            last: AHashMap::new(),
+        }
+    }
+
+    /// The height of `at` over the ground under it: the navmesh's surface
+    /// nearest it (its real geometry's), if known.
+    fn over(&mut self, at: Vector3d) -> Option<f32> {
+        if let Some((dir, name)) = self.source.take() {
+            self.nav = crate::game::map::nav::Nav::open(&dir, &name);
+        }
+        self.nav.as_mut()?.ground(at.x, at.y, at.z).map(|z| at.z - z)
+    }
+
+    /// `g`'s at `at`, looked up again only once it has moved.
+    fn of(&mut self, g: Guid, at: Vector3d) -> Option<f32> {
+        if let Some((was, dz)) = self.last.get(&g)
+            && (was.x - at.x).abs() < GROUND_AGAIN
+            && (was.y - at.y).abs() < GROUND_AGAIN
+            && (was.z - at.z).abs() < GROUND_AGAIN
+        {
+            return *dz;
+        }
+        let dz = self.over(at);
+        self.last.insert(g, (at, dz));
+        dz
+    }
+
+    /// The heights over the ground an event carries, filled in.
+    fn fill(&mut self, ev: &mut Ev) {
+        if self.source.is_none() && self.nav.is_none() {
+            return;
+        }
+        match ev {
+            Ev::Pos(r) => r.dz = self.of(r.g, r.at),
+            Ev::Move { g, at, dz, .. } => *dz = self.of(*g, *at),
+            Ev::Spline { points, dz, .. } => *dz = points.iter().map(|p| self.over(*p)).collect(),
+            Ev::Gone { g } => {
+                self.last.remove(g);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn guid(g: Guid) -> String {
@@ -937,7 +999,13 @@ impl Map {
 
 /// The recorder a new copy of `map` starts with: one if `[record] maps`
 /// names it.
-pub fn for_new_map(cfg: &crate::config::RecordConfig, map: u32, instance: u32) -> Option<Box<Recorder>> {
+pub fn for_new_map(
+    realm: &crate::game::RealmConfig,
+    data: &crate::game::data::GameData,
+    map: u32,
+    instance: u32,
+) -> Option<Box<Recorder>> {
+    let cfg = &realm.record;
     if !cfg.maps.contains(&map) {
         return None;
     }
@@ -948,6 +1016,7 @@ pub fn for_new_map(cfg: &crate::config::RecordConfig, map: u32, instance: u32) -
         instance,
         Duration::from_millis(cfg.every_ms),
         "config",
+        ground_source(realm, data, map),
     ) {
         Ok(r) => {
             tracing::info!("map {map} #{instance}: recording to {}", cfg.dir.join(&r.file).display());
@@ -960,14 +1029,25 @@ pub fn for_new_map(cfg: &crate::config::RecordConfig, map: u32, instance: u32) -
     }
 }
 
-/// The ground's height under `at`: the navmesh's surface nearest it.
-fn ground_under(map: &mut Map, at: Vector3d) -> Option<f32> {
-    map.nav.as_mut()?.ground(at.x, at.y, at.z)
-}
-
-/// The height of `at` over the ground under it, if the ground is known.
-pub fn height_over_ground(map: &mut Map, at: Vector3d) -> Option<f32> {
-    ground_under(map, at).map(|z| at.z - z)
+/// Where the writer's navmesh comes from: the map's bake, as the map's own
+/// (`world::populate`).
+fn ground_source(
+    cfg: &crate::game::RealmConfig,
+    data: &crate::game::data::GameData,
+    map: u32,
+) -> Option<(PathBuf, String)> {
+    let dir = cfg.nav_dir.clone()?;
+    let name = data
+        .maps
+        .get(&map)
+        .map(|m| m.internal_name.clone())
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            wow_world_messages::vanilla::Map::try_from(map)
+                .ok()
+                .map(|m| m.directory_name().to_owned())
+        })?;
+    Some((dir, name))
 }
 
 /// The speed a player moves at, by what its flags say it does.
@@ -1150,7 +1230,7 @@ struct Look {
 /// What changed since the record's last look at a unit, into `out`; its
 /// row (with the ground under it) if due. A new spline is stamped at its
 /// start, and each of its points has the ground's height under it.
-fn told(map: &mut Map, r: &mut Recorder, l: Look, now: Instant, t: u64, out: &mut Vec<(u64, Ev)>) {
+fn told(r: &mut Recorder, l: Look, now: Instant, t: u64, out: &mut Vec<(u64, Ev)>) {
     let start_ms = l.way.as_ref().map(|w| r.ms(w.started));
     let Some(seen) = r.seen.get_mut(&l.g) else {
         return;
@@ -1206,8 +1286,7 @@ fn told(map: &mut Map, r: &mut Recorder, l: Look, now: Instant, t: u64, out: &mu
             out.push((t, Ev::Threat { g, list }));
         }
     }
-    let mut row = l.row;
-    row.dz = dz_of(map, seen, row.at);
+    let row = l.row;
     let changed = seen.row.as_ref().is_none_or(|o| !o.same(&row));
     let due = seen
         .written
@@ -1218,14 +1297,13 @@ fn told(map: &mut Map, r: &mut Recorder, l: Look, now: Instant, t: u64, out: &mu
         out.push((t, Ev::Pos(Box::new(row))));
     }
     if let (Some(w), Some(at)) = (l.way, start_ms) {
-        let dz = w.points.iter().map(|p| height_over_ground(map, *p)).collect();
         out.push((
             at,
             Ev::Spline {
                 g,
                 id: w.id,
                 points: w.points,
-                dz,
+                dz: Vec::new(),
                 speed: w.speed,
                 ms: w.ms,
                 run: w.run,
@@ -1234,27 +1312,6 @@ fn told(map: &mut Map, r: &mut Recorder, l: Look, now: Instant, t: u64, out: &mu
             },
         ));
     }
-}
-
-/// A row's height over the ground, looked up again only once it has moved,
-/// and for one on the move at most every [`GROUND_MOVING_EVERY`] (none between).
-fn dz_of(map: &mut Map, seen: &mut Seen, at: Vector3d) -> Option<f32> {
-    let now = map.now;
-    if let Some((was, dz, when)) = seen.ground {
-        let still = (was.x - at.x).abs() < GROUND_AGAIN
-            && (was.y - at.y).abs() < GROUND_AGAIN
-            && (was.z - at.z).abs() < GROUND_AGAIN;
-        let since = now.saturating_duration_since(when);
-        if still && (dz.is_some() || since < KEYFRAME) {
-            return dz;
-        }
-        if !still && since < GROUND_MOVING_EVERY {
-            return None;
-        }
-    }
-    let dz = height_over_ground(map, at);
-    seen.ground = Some((at, dz, now));
-    dz
 }
 
 fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, t: u64, out: &mut Vec<(u64, Ev)>) {
@@ -1307,7 +1364,7 @@ fn observe_players(map: &mut Map, r: &mut Recorder, now: Instant, t: u64, out: &
                 moving: spline,
             },
         };
-        told(map, r, look, now, t, out);
+        told(r, look, now, t, out);
     }
 }
 
@@ -1383,7 +1440,7 @@ fn observe_creatures(map: &mut Map, r: &mut Recorder, now: Instant, t: u64, out:
                 moving: spline,
             },
         };
-        told(map, r, look, now, t, out);
+        told(r, look, now, t, out);
     }
 }
 
@@ -1401,7 +1458,6 @@ pub fn client_move(
     let op = frame
         .filter(|f| f.len() >= 4)
         .map_or(0, |f| u16::from_le_bytes([f[2], f[3]]));
-    let dz = height_over_ground(map, info.position);
     map.record(|| Ev::Move {
         g,
         op,
@@ -1410,7 +1466,7 @@ pub fn client_move(
         flags: move_bits(&info.flags),
         client_ms: info.timestamp,
         fall_ms: info.fall_time,
-        dz,
+        dz: None,
     });
 }
 
@@ -1487,6 +1543,7 @@ pub fn command(map: &mut Map, g: Guid, args: &[&str]) -> String {
                 map.key.instance,
                 Duration::from_millis(cfg.every_ms),
                 "gm",
+                ground_source(&map.cfg, &map.realm.data, map.key.map),
             ) {
                 Ok(r) => {
                     let file = r.file.clone();

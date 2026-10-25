@@ -1787,9 +1787,10 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        sees doesn't move); a unit's line only once something in it changed, or a second on, so a still crowd costs
        little. Between samples, a unit's moves and casts are the events'.
      - **The ground** under a unit is the navmesh's surface nearest it (`Nav::ground`: the bake's real geometry, its
-       terrain's, WMOs' and doodads' upward faces, not the navmesh's polygons), looked up again only once the unit
-       moved, and for one on the move at most every 250 ms; `dz` is signed, so a unit sunk into a floor reads under it
-       rather than over the floor below.
+       terrain's, WMOs' and doodads' upward faces, not the navmesh's polygons), worked out by the recorder's thread
+       on a navmesh of its own (the map's bake; memory for the tiles it reads), so the map's thread looks up none:
+       at 3 us a column, a moving crowd's grounds were most of the recorder's cost. `dz` is signed, so a unit sunk
+       into a floor reads under it rather than over the floor below.
      - **Server-driven moves** are found at each sample by their spline's id (a creature's walk, a player's
        charge or fear), not at each of the seven places that start one, and stamped with when they began: two
        begun within one sample's 100 ms show as the second, and a halt is the spline's end before its time. So are a
