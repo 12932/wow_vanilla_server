@@ -468,8 +468,13 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
   - Balinda and Galvangar notice players at 28 yd in vmangos's scripts; wvs uses the database's 21. I'd match vmangos.
-- **Two flaky tests seen** (pass when rerun): `an_abilitys_crit_is_its_crit_chance_of_its_hits` (a `.gear raid`
-  weapon draw with a crit chance its count misreads) and `nefarians_lair_runs_as_mangos_classic` (under load).
+- **Flaky tests fixed** (wvs 0.1.135): the rogue and warrior damage tests drew tier 1 or 2 at random, and tier 1's
+  weapons proc (Vis'kag's Fatal Wound, Bonereaver's Edge's armor cut) and skewed their counts: now tier 2, no weapon
+  procs, seeded rolls (decision 100's crit roll checked right: 1,007 bp of hits crit for 983). Riggle's tournament
+  is held through the GM override against the five-second event sweep; Nefarian's class call waits for no cast of
+  his, and his test's mage is in god mode. Each passed 30 in a row under a 24-thread CPU hog. Seen once each under
+  load, not yet looked at: a whirlwinding warmaster's timing, a possessor's stop, and a chase down a slope 1 yd off
+  the ground (passed 8 of 8 alone).
 - **Decisions 89 to 92** (Improved Scorpid Sting, Improved Firestone, Improved Drain Mana, Divine Favor): **kept**
   (your call, 2026-10-24).
 - **The talent plan, phase 4 (verified):**

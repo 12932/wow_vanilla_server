@@ -338,7 +338,17 @@ fn set_week(has_winner: u32, over: u32, begin: u32) {
     set(ANNOUNCE_BEGIN, begin);
 }
 
+/// The tournament on or off, and kept so, as a GM's `.event` keeps it. The
+/// five-second event sweep, beside the map, works out again from the
+/// calendar which events are on (the tournament is Sunday afternoon's): a
+/// set changed under it alone was put back between the test's queries, or
+/// within one, and Riggle no longer took Master Angler in.
 fn tournament(m: &Map, on: bool) {
+    m.realm
+        .social
+        .gm_events
+        .lock()
+        .insert(EXTRAVAGANZA, (on, i64::MAX));
     let mut e = m.realm.social.events.lock();
     if on {
         e.insert(EXTRAVAGANZA);
@@ -449,6 +459,8 @@ async fn riggle_bassbait_judges_the_fishing_extravaganza_once_a_week() {
     })
     .await;
     c.clear();
+    // The event sweep, as it may come between: the tournament stays on.
+    crate::game::events::sweep(&realm);
     map.query(move |m| quests::choose_reward(m, me, riggle, MASTER_ANGLER, 0))
         .await;
     assert!(

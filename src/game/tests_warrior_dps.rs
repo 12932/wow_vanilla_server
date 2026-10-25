@@ -13,6 +13,7 @@ use crate::game::fields::*;
 use crate::game::harness::{self, Client};
 use crate::game::map::combat;
 use crate::game::map::creature::Creature;
+use crate::game::map::enchant::FORCED_PROC_ROLL;
 use crate::game::map::{Map, MapHandle, MapKey};
 
 static DB: std::sync::LazyLock<std::path::PathBuf> =
@@ -198,6 +199,8 @@ async fn probe_white_damage() {
 /// Strike's 160 more), Heroic Strike the swing and 157, Execute 600 and 15
 /// a rage point (cast here without its cost), each less the dummy's armor
 /// (mangos-classic's `CalcArmorReducedDamage`).
+///
+/// [`TIER_2`]'s two-hander, no weapon's chance on hit.
 #[tokio::test]
 #[ignore = "extended"]
 async fn a_warriors_blows_deal_their_1_12_damage() {
@@ -208,12 +211,8 @@ async fn a_warriors_blows_deal_their_1_12_damage() {
     let (_c, g, map) = enter(&realm, "WDPSB", "Blowsa").await;
     let (ap, weapon, speed, armor, dealt) = map
         .query(move |m| {
-            ready(
-                m,
-                g,
-                &["raid", "dps", "2h"],
-                &[23_894, 21_553, 1680, 25_286, EXECUTE_5],
-            );
+            ready(m, g, TIER_2, &[23_894, 21_553, 1680, 25_286, EXECUTE_5]);
+            FORCED_PROC_ROLL.with(|f| f.set(Some(100.0)));
             let d = dummy_behind(m, g, 2.0);
             let f = m.unit_fields(g).unwrap();
             let ap = f.get_u32(UNIT_FIELD_ATTACK_POWER) + f.get_u32(UNIT_FIELD_ATTACK_POWER_MODS);
@@ -254,6 +253,7 @@ async fn a_warriors_blows_deal_their_1_12_damage() {
             combat::try_swing(m, g);
             dealt.push(before - health(m));
             combat::stop_attack(m, g);
+            FORCED_PROC_ROLL.with(|f| f.set(None));
             (ap, weapon, speed, armor, dealt)
         })
         .await
@@ -288,6 +288,16 @@ async fn a_warriors_blows_deal_their_1_12_damage() {
 
 const EXECUTE_5: u32 = 20_662;
 
+/// A raid-geared warrior's damage pieces of tier 2, Ashkandi in his hands:
+/// the same gear every run, and none of it procs on a hit. Tier 1's (drawn
+/// at random by a bare `.gear raid`) wield Bonereaver's Edge, whose proc
+/// takes 700 off the dummy's armor: a blow after it dealt more than its
+/// armor read at the start allows (Whirlwind 273 for 251.5, Execute 823
+/// for 759.7), and Execute's crit more than twice the plain strike before
+/// it. The weapons' procs are kept off besides (`FORCED_PROC_ROLL`), so
+/// that a proc of the gear to come doesn't do it again.
+const TIER_2: &[&str] = &["raid", "2", "dps", "2h"];
+
 /// Execute's strike crits as a blow does: its own roll on the warrior's
 /// crit (mangos-classic's `WarriorExecute` casts the strike, 20647, a spell
 /// of its own). Before, the strike took the dummy spell's landing, which
@@ -302,7 +312,8 @@ async fn executes_strike_crits_on_its_own_roll() {
     let (_c, g, map) = enter(&realm, "WDPSX", "Executa").await;
     let (plain, crit) = map
         .query(move |m| {
-            ready(m, g, &["raid", "dps", "2h"], &[EXECUTE_5]);
+            ready(m, g, TIER_2, &[EXECUTE_5]);
+            FORCED_PROC_ROLL.with(|f| f.set(Some(100.0)));
             let d = dummy_behind(m, g, 2.0);
             let max = m.unit_fields(d).unwrap().get_u32(UNIT_FIELD_MAXHEALTH);
             let strike = |m: &mut Map, rolls: &[i32]| {
@@ -322,7 +333,9 @@ async fn executes_strike_crits_on_its_own_roll() {
                 max / 10 - m.unit_fields(d).unwrap().get_u32(UNIT_FIELD_HEALTH)
             };
             // Hit, no crit on the dummy's roll; the strike's own roll 0.
-            (strike(m, &[]), strike(m, &[9_999, 9_999, 0]))
+            let struck = (strike(m, &[]), strike(m, &[9_999, 9_999, 0]));
+            FORCED_PROC_ROLL.with(|f| f.set(None));
+            struck
         })
         .await
         .unwrap();
