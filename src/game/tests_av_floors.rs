@@ -367,7 +367,9 @@ fn leg_off(m: &mut Map, points: &[Vector3d]) -> f32 {
     let nav = m.nav.as_mut().expect("the navmesh");
     let mut worst = 0.0f32;
     for w in points.windows(2) {
-        let n = (crate::game::map::combat::dist(w[0], w[1]) / 0.5).ceil().max(1.0) as usize;
+        let n = (crate::game::map::combat::dist(w[0], w[1]) / 0.5)
+            .ceil()
+            .max(1.0) as usize;
         let mut offs = Vec::with_capacity(n + 1);
         let mut last: Option<f32> = None;
         let mut step = false;
