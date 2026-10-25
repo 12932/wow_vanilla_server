@@ -1828,5 +1828,11 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        the floor's there (within 2 yards). A charger into his room's middle stood a third of a yard in the air
        (peon now lands its raiders where the server leaves them, as a client drops onto its floor). Test:
        `a_charge_down_into_drek_thars_room_ends_on_its_floor`.
+     - **The record, before and after** (ten attempts each of peon's all-in at 40, seeds 1 and 2; peon's own fixes
+       with them): server splines across a step or a wall 25 to 0; creatures in his room over the floor past a third
+       of a yard, of their time, 9.6% to 0.6% (moving, p90 +0.47 to +0.06 yd, p99 +0.77 to +0.29); their spline
+       points over a third of a yard 25% to 2% of walks', 14% to 0% of chases', 27% to 0% of charges'; pets in his
+       room moving, p99 +1.13 to +0.24 yd, the most +5.67 to +0.45; falls through a floor 5 to 1 (a Frostwolf
+       Legionnaire at the record's start, its spawn). Drek'Thar killed 10 of 10 both.
 
 ## Left for later, and why
