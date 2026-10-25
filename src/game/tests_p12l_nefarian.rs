@@ -104,6 +104,12 @@ async fn nefarians_lair_runs_as_mangos_classic() {
     let (mut c, me, map) = hero_in(&realm, "Nefslayer", BWL, TABLE, 0.0, &[]).await;
     not_gm(&map, me).await;
     let (_mc, mage) = joins_as(&realm, "Nefmage", Class::Mage, &map, TABLE).await;
+    // The mage kept alive between looks, as the hero is (TESTING.md, "Under
+    // load"): the toughness `joins_as` writes in its fields goes at the
+    // next change to its stats, an aura's (Wild Magic's own), and the
+    // next of Nefarian's blows killed it, taking its call off with it.
+    map.query(move |m| m.players.get_mut(&mage).unwrap().misc.god = true)
+        .await;
     let nef = start_the_game(&realm, &mut c, &map).await;
     let (left, right) = map
         .query(|m| (field(m, bwl::NEFA_LTUNNEL), field(m, bwl::NEFA_RTUNNEL)))
