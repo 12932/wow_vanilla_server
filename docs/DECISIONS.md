@@ -1942,4 +1942,115 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        another's Greater Wisdom of 33, a Greater Wisdom of 30 refused under a Wisdom of 33; a Salvation for another's
        Greater Salvation). The war was peon's (peon `fix/tank-gear-blessings`).
 
+109. **Blink's way: on the ground, never through, never above** (2026-10-25; `fix/blink`, your report: "it should
+     never teleport a player through terrain, m2, or wmo, and absolutely never ABOVE"; the mid-air case yours, below).
+     - **What was wrong.** A leap (`EFFECT_LEAP`, 29: Blink, 1953, its target 55 `TARGET_LOCATION_CASTER_FRONT_LEAP`
+       and radius 9, twenty yards; the four directional Blinks; creatures' leaps) took the ground nearest two yards
+       over the caster's height twenty yards ahead, and stopped short of what a line of sight met: rustigator's,
+       which meets only WMO faces turned toward it (namigator's), no doodad, no terrain, no door. So it went through
+       a wall seen from behind (Stormwind, 0.4 yd off one: 5.4 yd through it), through trees and rocks (a tree west of
+       Goldshire: the whole twenty), through cliffs and hills (Thunder Bluff: to a cliff's top 38.3 yd up), through
+       shut doors (the Deadmines' Heavy Door), off edges (a mesa's, 30.9 yd down), and onto whatever stood over its
+       end: Frostwolf Keep's wall and roof (the bot mage in the Drek'Thar all-in; from the corridor by his doors 5.9,
+       4.4 and 11.8 yd up; into a corner of the keep 11.1 up), Ironforge's balconies (7.2 up, and 12.2 and 12.4 up at
+       one of its walls and a corner). Of 1,500 Blinks at random over six places (below), the old way went wrong in
+       398: 162
+       through something, 173 up a wall or off a ledge, 29 on another floor, 34 where there's no room to stand.
+     - **mangos-classic's rule** (`Spell::SetTargetMap`, `case TARGET_LOCATION_CASTER_FRONT_LEAP`, Spell.cpp:1850;
+       `EffectLeapForward`, SpellEffects.cpp:4894, a `NearTeleportTo` there): a walk ahead "step length before next
+       check slope/edge/water" `step = 2.0f` (:1903): each step's height by `GetHeightInRange` (Map.cpp:2703: the VMaps'
+       height from two yards over the guess down, the terrain's within four, the higher of the two), none and no
+       water "not in water and cannot get correct height, maybe flying?" (:1931): it stops at the step before (an
+       edge, a cliff's face); "50(degree) max seem best value for walkable slope" (:1904; `atan(dz / step) >
+       MAX_SLOPE_IN_RADIAN` stops it, :1988); and `GetHitPosition(prevPos.x, prevPos.y, prevPos.z + 1.5f, ...)`
+       (:1972: the VMaps' WMOs and M2s, either face of a triangle, `IntersectTriangle`'s `fabs(a) < EPS`, WorldModel.cpp
+       :46, and the dynamic tree's game objects) stops it at the step before what it meets 1.5 yd up. Into water
+       "on edge of water with difference a bit to high to continue" (:1946, two yards); in it, `level - 0.8`
+       (`IN_OR_UNDER_LIQUID_RANGE`, :1853) or "we are under water so next z equal prev z" (:1953). Jumping close over
+       the ground: "fix origin position if player was jumping and near of the ground" (:1897, the ground within three
+       yards). A shut door is in the dynamic tree (`GameObject::IsCollisionEnabled`, GameObject.cpp:1317: every
+       spawned object with a model but a trap; a door while `GO_STATE_READY`), turned by its facing alone
+       (`GameObjectModel::initialize`, GameObjectModel.cpp:102).
+     - **vmangos's rule** (vmangos/core `a9fa07aa`, Spell.cpp:3220): "Underwater blink case" (:3234, the caster's
+       depth, no higher than the surface, `GetLosHitPosition(..., -0.5f)`); "Falling blink case" (:3259); then
+       `GetWalkHitPosition` (:3272; Map.cpp:3176): the navmesh's raycast from the caster's polygon (Map.cpp:3231, no
+       steep ones), the dynamic objects' hits along its corners a yard up (:3277, `-0.1f`), the end's height from the
+       VMaps (:3292), and "should never go backwards or sideways" (Spell.cpp:3274). The navmesh stops it at a wall,
+       an edge and a ledge as mangos-classic's walk does, its polygons a step's climb apart; it knows no doodad's top
+       or a roof over the way, as its polygons don't join them.
+     - **Mid-air** (your call). mangos-classic (:1866): `if (!GetHeightInRange(prevPos.x, prevPos.y, groundZ, 3.0f)
+       && HasMovementFlag(MOVEFLAG_JUMPING))` -- no ground within three yards, in a jump or a fall --
+       `nextPos.z = prevPos.z - 2.0f; // little hack to avoid the impression to go up when teleporting instead of
+       continue to fall` (:1870), on the ground only within ten yards of that (`GetHeightInRange(..., 10.0f)`, :1882),
+       short of what `GetHitPosition(prevPos.x, prevPos.y, prevPos.z + 0.5f, ..., -0.5f)` meets (:1892): it goes on in
+       the air, and as a teleport clears its client's movement ("reset movement flags at teleport", Player.cpp:1968),
+       its client falls again from there. vmangos (:3259): `else if (m_casterUnit &&
+       m_casterUnit->HasUnitMovementFlag(MOVEFLAG_FALLINGFAR))`, the ground under the caster within forty yards
+       (`std::abs(groundWithVmap - src.z) <= 40.0f`, :3265) becomes the walk's start (`src.z = groundWithVmap; dest.z
+       = groundWithVmap;`): it lands on the ground twenty yards on, the fall over. Thistle Tea is vmangos's
+       (`SpellMovement.leap_position`: `falling? and is_number(ground) and sz - ground <= 40.0`). wvs keeps
+       mangos-classic's, as round 10 took it (the matrix's "grounds falling leaps within forty yards",
+       `wrong-for-1.12`): a mage Blinking at the top of a fall goes on falling, and one Blinking just before the ground
+       is spared most of it (the fall starts again at the teleport, `movement::teleport_within`). What a player sees:
+       mangos-classic's, the mage carried twenty yards on, still in the air, landing where the fall takes it;
+       vmangos's, the mage on the ground twenty yards on and below at once, from as high as forty yards, no fall
+       damage. A mere jump (`MOVEFLAG_JUMPING` alone) vmangos walks from the navmesh's polygon within twenty yards
+       under it, onto the ground; mangos-classic and wvs from the ground within three yards, else as a fall. In the
+       air with no flag at all, mangos-classic finds no height ahead and leaves it; so does wvs.
+     - **Roots, stuns and Polymorph**, as 1.12 has them and wvs had already: Blink is cast through a stun or a root
+       its own immunities cancel, and takes it off (mangos-classic's `CheckCasterAuras`, Spell.cpp:6078,
+       `CheckSpellCancelsStun`; vmangos's :6607, "Mages can blink out of stun even when silenced", :6615); Polymorph
+       holds it (`SPELL_FAILED_CONFUSED`).
+     - **Now** (`spells::leap`): a leap walks its way a quarter of a yard at a time. Each look takes the floor there
+       (the bake's surfaces, `Nav::surfaces`, and the game objects' upward faces) no higher than a step's climb over
+       the last (a yard, the bake's walkable climb) and no lower than a step's drop, with room to stand over it
+       (nothing facing up within 1.6 yd over it, there or half a look back: a parapet's top, a table's, a shelf's), no
+       steeper than 50° over a yard; and the way between two looks a yard, 1.3 and 1.6 yd up clear of the bake's
+       WMOs and doodads met from either side (`Nav::crossed`: rustigator's line of sight each way, so every triangle
+       the segment crosses, as the VMaps), of the terrain (`Nav::into_terrain`, on a copy of each tile's heightmap
+       that the navmesh keeps beside its own, about 150 KB a tile) and of the game objects in the way (`obstacles`).
+       A crack a look wide (between a floor's planks) is stepped over. Where a look fails it is narrowed to a 64th
+       of a yard, and the leap ends half a yard short of the farthest that held (mangos-classic's other hit tests
+       take half a yard off, `GetHitPosition(..., -0.5f)`). Into deep water it swims on, 0.8 under the surface, from a bank no more than two yards over it; out of
+       it onto a bank a step over where it swims; under water at its depth. Jumping within three yards of the ground,
+       it leaps from the ground; falling, as above, its way checked for the terrain too, and never ending higher
+       than it was. With no navmesh (the fast suite's maps), the way is level at the caster's height and only a
+       test's walls stop it. Every leap goes so, a creature's too.
+     - **The game objects in the way** (`map::obstacles`), mangos's dynamic tree: every spawned object whose display
+       has a collision model in the bake (`models/`, rustigator's `build_bvh`, read at the map's start for the
+       displays its spawns show, once a process), at its place, turned by its facing and scaled by its size; a door
+       only while shut, no trap, no transport (a ship's and an elevator's place is the transports' own). They stand
+       in a leap's way alone, not yet in a spell's line of sight or a creature's, where mangos-classic's stand too.
+     - **Where wvs departs from mangos-classic, and why.** Looks a quarter of a yard apart, not two: at two a crate's
+       side, a bench, a pillar or a door's frame is stepped across between looks. A step's climb of a yard and the
+       slope over a yard, not 2.38 yd up in one step of two (mangos's 50°, `atan(dz / 2)`): a crate or a parapet is
+       not walked onto. Three heights, not 1.5 alone (at 1.5, a rock or a crate under it is walked through, its top
+       above the slope test's reach). The terrain met (mangos leaves it to the heights, two yards apart). Half a yard
+       short of what stopped it, not anywhere up to two. A floor needs room over it (mangos stands one under a table).
+       Every leap walks so, where mangos-classic's directional ones (47 to 50) take `GetFirstCollisionPosition`, its
+       pathfinder's way: one rule for all of them.
+     - **Not done**: the teleports to the caster's front (`EFFECT_TELEPORT_UNITS_FACE_CASTER`) and a summon's or a
+       pet's place (`first_clear`) still take the old line of sight; a Blink on a ship's deck stays put (no static
+       floor under it; vmangos walks the ship's own navmesh).
+     - **Cost**: 0.4 to 1.8 ms a Blink in release, by place (Thunder Bluff's open ground least, Elwynn's woods most;
+       250 each), most of it rustigator's ray casts; read at the map's start, the objects' models of a continent's
+       spawns take 15 ms, once a process.
+     - **Tests** (`tests_blink`, extended, the real world, each through the protocol: `CMSG_CAST_SPELL` and the
+       `MSG_MOVE_TELEPORT_ACK` its client answers): a wall five and fifteen yards ahead (Ironforge), a corner
+       (Drek'Thar's keep), the Deadmines' Heavy Door shut and open, a tree (Elwynn) and a doodad (Orgrimmar), a hill
+       (Thunder Bluff, 25°), a cliff's face and its edge, stairs up and down (Ironforge), the Great Forge's balcony
+       over the way, an overhang (Stormwind), water in, out and under, open ground, a wall half a yard off, a jump, a
+       fall (in the air, near the ground, at a wall), roots, stuns and Polymorph, Frostwolf Keep's walls from the
+       corridor by his doors (each of sixteen ways) and across his room (25 spots, sixteen ways each), and a
+       Blink's packets read by the 1.12.1 client (`a_blink_passes_the_client`; the client check now reads
+       `MSG_MOVE_TELEPORT` and `MSG_MOVE_TELEPORT_ACK`, `tools/client_check/teleport.py`). The property
+       (`blinks_*_hold`): 250 Blinks at random spots and facings over each of Stormwind's Trade District, the Great
+       Forge, Orgrimmar's Valley of Strength, Elwynn's woods, Thunder Bluff, Frostwolf Keep and the Deadmines, each
+       held to an oracle that walks its way twice as finely by the same rules, a hair more lenient: at most twenty
+       yards ahead along its facing, on a floor, reached over the ground (no wall climbed, no roof or ledge taken, no
+       edge gone off), the way clear a yard, 1.3 and 1.6 yd up of the WMOs, the doodads, the terrain and the
+       objects, and, where the way stays level, the straight segment from start to end clear too; ways into deep
+       water left to the water's tests. By hand (`BLINK_N`, `BLINK_SEED`), 1,500 each at two other seeds pass, and the
+       old way (`BLINK_OLD`) fails 398 of 1,500 over the first six places.
+
 ## Left for later, and why
