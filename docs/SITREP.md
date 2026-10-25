@@ -491,11 +491,31 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
     `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
     tank pulls only once the healers have sight of where he'll stand, and no heal starts on a tank out of sight.
-  - **Blink (your report, 2026-10-25):** never through terrain, buildings or doodads, never above; under way,
-    `fix/blink`, with mangos's and vmangos's rules traced, the mid-air case brought back to you, and a test for each
-    case plus random blinks over real cities and forest.
-  - **Drek'Thar at max skill (your ask, 2026-10-25):** 40 in default gear at max skill, aiming for 100 kills in 100
-    attempts, then the fastest, cheapest kill; the healers' clumping measured and spread. Under way, `feat/av-perfect`.
+  - **Blink: fixed (your report; wvs 0.1.139, decision 109).** The old leap took the floor nearest a point 20 yd on
+    and 2 yd up, stopped only by building faces turned toward it: 1,500 random blinks failed 398 times (onto Frostwolf
+    Keep 11.8 yd up, through Stormwind's walls, a tree, a shut Deadmines door, 38 yd up a Thunder Bluff cliff). Now
+    it walks its way a quarter yard at a time on the floor (a yard's climb at most, 1.6 yd of room above, no slope
+    over 50°), crossing no building, doodad, terrain or shut door at 1.0, 1.3 and 1.6 yd up, and ends half a yard
+    short of what stops it. Tests: each case at real places, your keep case (16 directions from your start spot, 16
+    from 25 spots in his room), 250 random blinks in each of seven places, the client's own parser on the packets.
+    - **Your call: Blink in mid-air.** mangos-classic: the mage goes 20 yd on, 2 yd lower, and keeps falling (lands
+      on ground only within 10 yd below). vmangos and Thistle Tea: from a fall it lands on the ground within 40 yd
+      below, no fall damage. I'd keep mangos-classic's (implemented): vmangos's makes Blink a free safe landing.
+    - **A correction:** in 1.12 Blink goes through roots and stuns (it removes them); only Polymorph refuses it.
+      wvs already did that.
+    - **Made without you:** quarter-yard steps, a yard's climb, the three heights, half a yard short; every
+      collidable object blocks a leap (not yet line of sight); teleport-to-front, summons and pet placement still use
+      the old test.
+  - **Drek'Thar at max skill (your ask; peon 0.1.40):** 40 in default gear at max skill, 5 tanks and 14 healers. Its
+    best measured build killed him 20 of 20 (60 s on average, 2.6 deaths a kill, his time on his tanks 98%), against
+    master's 17 of 20 (64 s, 8.9 deaths, 80%); 75 kills in 75 attempts over its last builds. The 100-attempt measure
+    is running now on both masters. Found and fixed: the boss loose and never taunted back (a stunned main tank took
+    a warmaster; damage forms counted as tanks; nothing held damage at the pull), the Whirlwind's warning never
+    learned (its strike's cast overwrote it), Charge-then-Whirlwind on a healer clump, a bear main tank dying, drag
+    spots out of the healers' sight, and a machine stall counted as a wipe. Healers within 3 yd of another 72% to
+    51%, each at a station in sight of its tank. Each bot's record has its tactics plan; `record.py fight` says why
+    an attempt wiped.
+    - **Your call:** the healers' stations: on (spread, kills and time within the noise) or off. I'd keep them on.
   - **The raid is 5 tanks, 14 healers, 21 damage dealers (your call, 2026-10-25: "I don't want to keep throwing
     tanks at the problem"),** and `peon run av`'s default becomes that (it was 3 and 10; the rounds ran 7 and 13).
     Your other agent's recording showed why the boss ran loose: a mage's Blast Wave 1.3 s into the pull, while the
