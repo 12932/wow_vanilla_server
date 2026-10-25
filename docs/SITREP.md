@@ -495,9 +495,13 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     casting Holy Light as their routine, a damage warrior's 21 Piercing Howls at a boss, Fury warriors with no
     Bloodthirst dancing to Defensive Stance, low feral cats. Under way, `fix/damage-builds`: each bot's build
     recorded, parts matched to builds, rotations by part, measured on the dummy harness and the all-in.
-  - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
-    swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
-    measured on the dps harness, the all-in and a faction battle.
+  - **Melee reach: done (your call, 2026-10-25; peon 0.1.38).** The scenarios' model now carries the bot's own swing,
+    so a swinging melee holds at 4.5 yd; a melee behind its target and up to 2 yd past reach keeps its seat and steps
+    back in (it left for a new seat and stopped its swing). 40 attempts each at Drek'Thar: kills 34 to 36, deaths by
+    40 s 6.8 to 5.6, melee swing uptime 40% to 45%, rogues' damage on him +12%. The dps harness unchanged (18
+    seeds); Hillsbrad's melee still catch a player who runs (88–93% back in reach within 5 s), rogues' swings
+    12 to 20 a minute. Made without you: the 2 yd seat slack; the tank-drag stand-ins of the last round removed
+    (neither helped once the swing was in the model).
   - **Made without you (decision 107):** a dead body's landing taken within its jump's reach; every no-path walk
     grounded (further than mangos, whose `NormalizeZ` is off); path legs sampled every yard (grounding a path costs
     13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
