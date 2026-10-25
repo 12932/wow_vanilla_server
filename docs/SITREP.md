@@ -477,6 +477,9 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
   - **Warrior tanks get no fist weapons; paladins stop fighting over healers' blessings (your asks, 2026-10-25):**
     under way, `fix/tank-gear-blessings`: each paladin takes one blessing for the raid by seat, a healer's chosen
     by the situation, and none overwrites another paladin's.
+  - **A tank eating with a warmaster on him, and the pull's timing (your reports, 2026-10-25):** under way,
+    `fix/pull-and-food`: no food or drink with a foe on a bot (and the server refusing it in combat, as 1.12); the
+    tank pulls only once the healers have sight of where he'll stand, and no heal starts on a tank out of sight.
   - **Melee reach: set it (your call, 2026-10-25).** The scenarios never told the brain a melee bot was already
     swinging, so every melee bot closed on a foe past 3.5 yd instead of 4.5; under way, `fix/melee-swinging`,
     measured on the dps harness, the all-in and a faction battle.
