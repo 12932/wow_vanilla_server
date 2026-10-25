@@ -1900,4 +1900,43 @@ the answers, with mangos's functions, are in SITREP.md's **Answered**. The text 
        runs and snaps a watcher is shown across a step 14 to 1. Drek'Thar killed 18 of 20 both (9 and 9 before, 8
        and 10 after).
 
+110. **A charge's spikes** (2026-10-25; `perf/charge-spikes`, your go: "remove the map update's spikes in a charge's
+     first seconds", a charge at 1,600 with p99 under 50 ms and no update over about 100 ms, each client seeing what
+     1.12 would show it; numbered after master's 109). docs/PERFORMANCE.md, "A charge of 1,600". Two of these are
+     changes of timing, said so here; the rest change only which packets carry what.
+     - **A crowd's creates in packets shared among it, no client held for them** (`visibility::Crowds`). mangos-classic
+       builds each player's creates into its own `UpdateData`; wvs put each create into its observer's batch and held
+       the client until it went, every broadcast meanwhile copied into its hold. Now a chunk's introductions of an
+       object to those who see it as a stranger does go in packets planned as the values are (decision 102's
+       planner) and broadcast at the chunk's end, before anything else is sent. The rest as before, each client held:
+       one with a view of its own (a marker, a pet's master, a tap's outsider, a group shown quests), one with a
+       forget of the object still to come this update, a passenger, a corpse, a game object, a transport, a share one
+       client alone gets. Each client gets the same creates, each once, before anything naming their objects; a
+       client's creates may come in another order among themselves, and in a packet of their own rather than its
+       batch. No key: no rule changes.
+     - **A spell's area is seen as it is put down** (`spells::dynamic::spawn`), not at its event's end (or at the
+       update's visibility, for one put down in an update): the timing of its create, now after the cast's go and
+       before the rest of the event's packets, as mangos-classic's `Map::Add` shows a dynamic object to those in
+       range at once. No one is held for it. A far sight's focus is as before.
+     - **Visibility's budget holds** (`[visibility] refresh_budget_ms`, the key it was; its meaning written again): a
+       chunk stops where the budget is spent, its rest first next update, one refresh at least an update; a chunk is 1
+       to twice the last's (at least 4), where it was 16 at least and ran 10 to 60 ms over the budget in a charge.
+       A change of timing: a charge's sides are in each other's sight about 0.4 s later at 1,600 (each player's
+       sight whole at 9.2 s from the charge's start, where it was 8.8 s). The budget is yours to raise; I kept 10.
+     - **Member stats spread over the second** (`[groups] member_stats_spread`, new, on): each grouped player's sent
+       to the members out of their sight once a second, as before, each at a moment of the second of their own (its
+       guid's) rather than all at one update (a battle of 1,600: 7 ms in it); as each player's own update in mangos
+       sends theirs. Off is the old timing.
+     - **Not changes of rule**: a whole refresh asks `death::can_see` only of pairs not both plain (the quick path's
+       rule); its looks over a crowd across the visibility threads; a unit's values by view share the strangers'
+       block; the planners' packets framed across the threads; an area's navmesh sight asked last of its filters;
+       the areas' tick record pruned once a second (its gap capped at the 30 s kept, so what ticks is the same).
+     - Tests: `tests_visibility::shared_creates_leave_each_client_as_one_by_one` (each client's frames replayed over a
+       walk with every change of state, shared and one by one: the same views, update by update),
+       `a_crowds_shared_create_comes_before_what_names_its_object`, `a_spell_area_is_seen_at_once_its_create_shared`,
+       `a_chunk_stops_where_the_budget_runs_out`, `chunk_tests`, `social::spread_tests`,
+       `tests_crowd_values::shared_values_are_the_blocks_each_client_had_one_by_one` (marks now), the client check
+       `tests_client_emu::a_crowds_shared_creates_pass_the_client`; benches `battle` (its new knobs) and `visibility`
+       (`whole`; it runs again: it lacked `harness = false`).
+
 ## Left for later, and why

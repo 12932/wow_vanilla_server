@@ -1993,3 +1993,128 @@ At 1,600 in one spot the update fits at p99 (33 ms) once the fight has settled. 
 - **Held clients between updates**: a broadcast while clients are held still goes into each one's hold; the
   update's steps now let theirs go (4. above), an event's end does, but a crowd held through a long event pays it.
 - **Member stats**: a raid's member stats are looked at once a second, 7 ms at 1,600 in that update.
+
+## A charge of 1,600 (2026-10-25)
+
+The goal: 800 Horde charging 800 Alliance in Hillsbrad, the two sides coming into each other's sight, with the
+update's p99 under 50 ms and no update over about 100 ms, each client still seeing what 1.12 would show it, in
+order (decision 110). Where the last round left it (`benches/battle.rs`, `BATTLE_GAP=60`): the charge p99 42 to 63
+ms, its dearest update 134 to 136 ms; its first ten seconds after (`BATTLE_WARM=0 BATTLE_SECS=10`), when the
+casters reach their spots together, p99 70 to 133 and single updates of 94 to 260 ms.
+
+### What the spikes were
+
+The bench's probe now keeps each update's zones, and `BATTLE_SLOWEST_ZONES` shows the slowest updates' dearest
+(`map/bench_probe.rs`): that is how each of these was found.
+
+- **The pets' Prowl.** The 240 hunters' cats, out at once, go into Prowl in the same update as the charge starts.
+  Each is a whole visibility refresh on the map's thread among 1,600 (0.45 ms: `death::can_see` for each of the
+  pet's 800 friends, `stealth::sees`'s `friendly` most of it): 85 to 115 ms in one update. Their values that
+  update went into each observer's batch one by one (a pet's master sees its owner-only fields, so its values are
+  told by view, and the 1,599 strangers' blocks went the same way): 15 to 25 ms more.
+- **A pet coming out of Prowl among a crowd.** Each Prowl broken (an area's tick, the pet's first blow) introduced
+  the pet to its 350 or so foes at once: each foe's batch took its create and each foe's client was held; every
+  broadcast of the rest of the step (a volley's ticks: 900 to 1,900 of them) was copied into each held client's hold
+  one by one (40 µs a broadcast), and each was let go at the step's end (20 to 35 ms). These were the volley's
+  150 to 260 ms updates.
+- **Spell areas.** Each Blizzard, Rain of Fire, Volley or Consecration held every client near it until its event's
+  end, then introduced the area to 1,600 and let them go one by one: 1.7 to 2.2 ms of the map's thread an area, 47
+  to 74 a second (83 to 161 ms a second).
+- **Visibility in the charge.** A chunk of refreshes was 16 at least, and two sides coming into each other's sight
+  make a refresh cost 2 to 4 ms (thousands of introductions, each a create copied into a batch, a hold, an
+  observer): a chunk took 25 to 70 ms against the 10 ms budget.
+- **Member stats**: 7 to 8 ms in one update a second.
+
+### What changed
+
+1. **A crowd's creates shared** (`visibility::Crowds`). A chunk's introductions of an object to those who see it as
+   a stranger does (`views::Strangers`: not its marker, a pet's master, its tap's outsiders, a player's group with
+   quests to show) are planned as the update's values are (`values::Shared::plan_with`: chunks with a core, a tree
+   for the players among them, shares by pattern) and broadcast at the chunk's end, before anything else is sent,
+   with no client held. The rest go into the batches, each client held until its batch goes, as before: one who
+   sees the object otherwise, one with a forget of it still to come this update, a passenger, a corpse, a game
+   object, a transport, and the shares only one client gets. Each client gets the same creates, each once, before
+   anything naming their objects (`tests_visibility::shared_creates_leave_each_client_as_one_by_one` replays each
+   client's frames over a walk with every change of state; `a_crowds_shared_create_comes_before_what_names_its_object`;
+   the client check, `tests_client_emu::a_crowds_shared_creates_pass_the_client`).
+2. **A spell's area is seen at once** (`spells::dynamic::spawn`): refreshed as it is put down, its create shared
+   among the crowd, as mangos-classic's `Map::Add` shows a dynamic object to those in range; no one is held for it
+   (`a_spell_area_is_seen_at_once_its_create_shared`). A far sight's focus is as before.
+3. **A whole refresh asks less.** It asks `death::can_see` only of pairs not both plain (the quick path's rule,
+   asserted in debug builds): among 1,600 in battle a whole refresh's decisions took 1 ms on one thread, now 0.25
+   (`BATTLE_DECIDE`); and its looks over a crowd of 512 or more go across the visibility threads in parts of 128
+   (a stealthed pet's among 1,600: 0.45 ms to about 0.15 of the map's thread).
+4. **Visibility's budget holds** (`[visibility] refresh_budget_ms`). A chunk stops after the refresh at hand once
+   the budget is spent, its rest first in line at the next update, as they were (`Dirty::put_back`; one refresh at
+   least an update; `a_chunk_stops_where_the_budget_runs_out`). A chunk is from 1 refresh to twice the last's (at
+   least 4), so little of what is decided is thrown away, and one that would cost 400 µs at the last chunk's rate is
+   decided across the threads from two refreshes.
+5. **The strangers' values block shared** (`views::tell_each`). When a unit's or player's values go by view (a
+   pet's owner-only fields, a mark), the block of those who see it as a stranger does is shared among them through
+   the values' planner, the rest by view as before (`shared_values_are_the_blocks_each_client_had_one_by_one` now
+   marks some of its players).
+6. **The planners' packets framed across the visibility threads** (`update::frame_payloads`): each from its own
+   bytes, as on the map's thread.
+7. **Member stats spread over the second** (`[groups] member_stats_spread`, on): each grouped player's at a moment
+   of the second of their own, once a second as before (`spread_tests::each_players_moment_is_in_one_window_a_second`).
+8. **Smaller**: an area asks its sight through the navmesh last of its filters (the same filters); what its ticks
+   keep is pruned once a second, not every update (a tick's gap capped at the 30 s it was kept); `conn::Clients`
+   compare equal whatever empty words they end with (a debug assertion's false alarm past 128 clients).
+
+### Measured
+
+`benches/battle.rs` at 1,600 on this 32-core machine, the branch's start (`36990d7`) and its end alternated, three
+rounds each, load average 2.5 to 3.5; the update's wall time (the mean of the rounds' p50, p99 and max), the map
+thread's share of the second in updates and events, and each step's CPU time an update, mean / p99, ms:
+
+| 1,600 | | Updates/s | Update p50 / p99 / max ms | Busy | `visibility` | `spells` | `auras` | `values` | `pets` | `batches` | `member stats` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| The charge | before | 19.6 | 19.3 / 52.7 / 135.6 | 28% | 5.1 / 18.9 | 0.1 / 1.2 | 1.4 / 1.9 | 1.2 / 6.4 | 1.0 / 1.2 | 1.0 / 3.9 | 0.4 / 7.6 |
+| The charge | after | 19.9 | 18.2 / 25.4 / 62.7 | 25% | 5.1 / 10.8 | 0.0 / 0.5 | 1.4 / 1.8 | 1.0 / 1.5 | 0.7 / 1.1 | 0.3 / 0.9 | 0.4 / 0.8 |
+| Its first 10 s after | before | 18.6 | 20.4 / 105.1 / 197.0 | 54% | 0.8 / 12.4 | 7.2 / 56.7 | 1.9 / 5.4 | 3.5 / 9.3 | 3.2 / 25.0 | 0.9 / 2.6 | 0.4 / 7.6 |
+| Its first 10 s after | after | 19.8 | 18.1 / 32.8 / 39.4 | 41% | 0.4 / 4.2 | 5.3 / 18.4 | 1.9 / 6.1 | 2.2 / 5.3 | 1.6 / 6.2 | 0.7 / 1.7 | 0.4 / 0.9 |
+| Settled | before | 19.9 | 14.5 / 31.3 / 36.0 | 41% | | 5.4 / 16.0 | 2.4 / 4.1 | 2.0 / 5.1 | 0.7 / 2.0 | 0.7 / 2.0 | 0.4 / 7.9 |
+| Settled | after | 20.0 | 11.8 / 34.6 / 39.2 | 35% | | 5.3 / 20.5 | 2.5 / 4.1 | 1.5 / 3.1 | 0.7 / 1.8 | 0.5 / 1.5 | 0.4 / 0.9 |
+
+The rounds' p99 and max: the charge before 41.6, 62.9, 53.5 and 134.5, 136.3, 136.1 ms, after 27.4, 23.3, 25.6 and
+64.6, 60.5, 63.1; its first ten seconds after it before 111.7, 133.4, 70.3 and 260.5, 236.6, 94.0, after 33.1,
+30.6, 34.6 and 38.8, 43.5, 36.1; settled before 29.9, 35.3, 28.8 and 31.7, 42.8, 33.6, after 35.5, 33.6, 34.9 and
+41.4, 36.8, 39.3. The charge's dearest update after is the Prowl's: 31 ms of the map's CPU, 60 to 65 of wall (the
+map's thread waits on the visibility threads for each pet's looks). The process's CPU (the server and the bots)
+settled: 3.10 to 3.16 cores before, 3.24 to 3.25 after.
+
+**The players' sight in the charge** (`BATTLE_SIGHT_MS=500`): the sides come into each other's sight about 3 s in.
+Before, each player knew 1,700 objects on average (every player and pet near) at 8.8 s, the visibility over its
+budget by 10 to 25 ms an update; after, with the budget kept, at 9.2 s (two runs; in the three rounds above, as the
+charge's window ended at 10 s, each knew 1,528 to 1,560 of the 1,562 players it ends knowing, before 1,561 to
+1,564, all of them a second or two later). Before the whole refreshes asked less (3. above) it was 10.1 s.
+
+peon's faction battle (`peon run battle --side 600 --rounds 1 --round-secs 90 --buff-secs 10 --workers 24
+--cores-per-worker 1 --server-cores 0-7 --peon-cores 8-31`, peon `37377a9`), the branch's start and its end one after
+the other, twice, the same seed, load average 2 to 11 (the run's own): the server's stats (`WVS_STATS_FILE`) over
+the round's fight, and over its first ten seconds (the charge from the lines and its first volleys):
+
+| A side of 600 | | Fight | Update p50 / p99 / max ms (fight) | Over 50 ms | First 10 s p50 / p99 / max | Over 50 ms | Dearest steps, ms an update | wvs CPU | Packets out/s |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | before | 64 s, Horde | 8.2 / 43.6 / 68.3 | 0.7% | 15.7 / 59.5 / 68.3 | 3.9% | spells 2.27, auras 2.13, values 1.51, pets 1.14, visibility 0.69 | 2.44 | 2,718,000 |
+| 1 | after | 67 s, Alliance | 8.2 / 29.2 / 43.4 | 0% | 14.0 / 34.3 / 41.4 | 0% | auras 2.18, spells 1.67, values 1.29, pets 1.05, despawns 0.60 | 2.72 | 2,941,000 |
+| 2 | before | 54 s, Alliance | 9.2 / 45.0 / 78.1 | 0.6% | 17.2 / 62.8 / 78.1 | 3.0% | spells 2.61, auras 2.19, values 1.62, pets 1.24, visibility 0.84 | 2.75 | 3,275,000 |
+| 2 | after | 63 s, Alliance | 8.3 / 33.1 / 40.9 | 0% | 14.4 / 37.4 / 40.9 | 0% | auras 2.17, spells 1.89, values 1.35, pets 1.16, despawns 0.63 | 2.54 | 2,818,000 |
+
+(The fight's numbers are peon's summary's; the first ten seconds' are the stats file's updates in them. The fights
+differ: the bots act on what the server tells them.)
+
+### What is left
+
+- **The Prowl update**: 240 pets into Prowl in one update (the bench's and peon's pets all come out at once) is still
+  31 ms of the map's thread and 60 to 65 ms of wall, the map's thread waiting on the visibility threads' waking for
+  each pet's looks. `stealth::sees`'s `friendly` (a `can_attack` and a `hostile` a friend) is most of each look.
+- **Volleys in step**: an update in which 50 to 77 areas tick together is 35 to 41 ms (about 200 µs a tick, 4 µs a
+  hit: its roll, modifiers, absorbs, the log, the damage, threat, procs). The bench's casters keep their rotations
+  in step, and served promptly they stay in step more than before: the settled p99 is these (31 to 35 ms, max 36 to
+  39); peon's bots, not in step, show none.
+- **Sight in a charge** is whole about 0.4 s later than before at the default budget (above): the budget now holds
+  where it was overrun by 10 to 25 ms an update. `[visibility] refresh_budget_ms` is the knob.
+- **CPU**: the visibility threads' hand-offs (each whole refresh's looks, each planner's framing) cost 0.1 to 0.3
+  cores more in the bench, the server's own 2.4 to 2.8 cores in peon's either way.
+- **The game's own work**: an aura put on is 40 to 46 µs, `derive::unit` 20 µs; neither is a spike now.

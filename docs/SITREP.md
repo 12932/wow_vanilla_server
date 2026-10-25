@@ -507,9 +507,19 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     13.6 µs, was 7.3); a path's end reaches its goal measured over the ground plus a step; creatures' walks over
     steep polygons left as they are (mangos lets walking creatures take them; the record counts them by the
     player's rule); a walk while its tile is still loading stays ungrounded.
-- **800 a side: the charge's spikes (your go, 2026-10-25):** under way, `perf/charge-spikes`: a charge at 1,600 with
-  p99 under 50 ms and no update over about 100 ms (now p99 59, single updates 150–190), without changing what any
-  client sees.
+- **800 a side: the charge's spikes (your go, 2026-10-25):** done, `perf/charge-spikes`, decision 110
+  (docs/PERFORMANCE.md, "A charge of 1,600"). In the bench at 1,600 the charge's p99 53 → 25 ms and its dearest update
+  136 → 63 (the 240 pets going into Prowl at once); its first ten seconds after p99 105 → 33, max 197 → 39; settled
+  p50 14.5 → 11.8, p99 31 → 35 (volleys in step, below). peon's 600 a side: the fight's p99 44–45 → 29–33, max
+  68–78 → 41–43, nothing over 50 ms (was 0.6–0.7%); its first ten seconds p99 60–63 → 34–37. What a client is sent
+  is the same objects in other packets: a crowd's creates shared among it with no one held, a spell's area seen
+  as it is put down.
+  - **Your calls:** visibility's budget (`[visibility] refresh_budget_ms`, 10) now holds, so a charge's sides are in
+    full sight of each other about 0.4 s later (9.2 s against 8.8 in the bench); raise it if you'd rather have the
+    old timing at a dearer update. Member stats spread over the second (`[groups] member_stats_spread`, on): each
+    player's once a second still, at a moment of their own.
+  - **Left:** 240 pets into Prowl in one update is still 31 ms of the map's thread (60–65 of wall); 50–77 areas
+    ticking in one update 35–41 ms (the settled p99; the bench's casters are in step, peon's aren't).
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.

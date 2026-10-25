@@ -34,7 +34,22 @@
 //! What it reports, over `BATTLE_SECS` (20) after `BATTLE_WARM` (5) s: the
 //! update's wall time (p50 / p99 / max), each step's CPU time an update
 //! (mean, p99), the events between updates by kind, and what the clients
-//! were sent a second, by kind.
+//! were sent a second, by kind; then the players' sight (how many objects
+//! each knows, the refreshes waiting).
+//!
+//! - `BATTLE_GAP` (0): each side starts so many yards back, out of the
+//!   other's sight, and charges to its spot; the charge is measured on its
+//!   own first (until the casters are at their spots and a second more).
+//!   `BATTLE_WARM=0 BATTLE_SECS=10` then measures its first seconds after.
+//! - `BATTLE_SLOWEST` (0): the slowest updates' dearest steps, and under
+//!   each its dearest zones (`BATTLE_SLOWEST_ZONES`, 6), each's count.
+//! - `BATTLE_ZONES` (0): the dearest zones on the map's thread over all.
+//! - `BATTLE_SIGHT_MS` (0): the sight every so many ms from the start.
+//! - `BATTLE_THREADS`, `BATTLE_BUDGET_MS`: `[visibility] refresh_threads`
+//!   and `refresh_budget_ms`.
+//! - `BATTLE_DECIDE` (0): at the end, so many players' whole refreshes
+//!   decided (not applied) across the visibility threads and on the map's
+//!   thread alone, timed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
