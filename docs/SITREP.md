@@ -524,6 +524,11 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     51%, each at a station in sight of its tank. Each bot's record has its tactics plan; `record.py fight` says why
     an attempt wiped.
     - **Your call:** the healers' stations: on (spread, kills and time within the noise) or off. I'd keep them on.
+    - **The 100 attempts** (peon 0.1.40, wvs 0.1.139, 20 seeds × 5, recorded): **97 kills in 100**. Kill time from
+      the charge: mean 61.0 s, median 58.6, p90 71.7, slowest 102. The three wipes (seeds 5, 6, 7) went the same
+      way: the main tank died (at 22 to 82 s), Drek'Thar was off his tanks 26–46 s in stretches, the warmasters did
+      most of the killing, and the healers were at 12–15% mana by 90 s. One pulled late (21 s) and lost its main
+      tank a second later. Not yet re-run on peon 0.1.44 (the pull, the damage builds).
   - **The raid is 5 tanks, 14 healers, 21 damage dealers (your call, 2026-10-25: "I don't want to keep throwing
     tanks at the problem"),** and `peon run av`'s default becomes that (it was 3 and 10; the rounds ran 7 and 13).
     Your other agent's recording showed why the boss ran loose: a mage's Blast Wave 1.3 s into the pull, while the
