@@ -341,3 +341,144 @@ async fn a_charge_down_into_drek_thars_room_ends_on_its_floor() {
     let off = map.query(move |m| off_floor(m, &[end])).await.unwrap();
     assert!(off <= 0.05, "the charge ends {off:.2} yd off the floor at {end:?}");
 }
+
+/// The valley's creatures that walk its slopes outside the keep: the
+/// Frostwolf Legionnaires' patrols and the formations behind them
+/// (Legionnaires and Frostwolf Bloodhounds), the Alterac Yetis' and the
+/// Wildpaw gnolls' wanders.
+const OUTDOOR_WALKERS: [u32; 9] = [
+    12051, // Frostwolf Legionnaire
+    14282, // Frostwolf Bloodhound
+    13959, // Alterac Yeti
+    10991, // Wildpaw Gnoll
+    11837, // Wildpaw Shaman
+    11838, // Wildpaw Mystic
+    11839, // Wildpaw Brute
+    11840, // Wildpaw Alpha
+    12053, // Frostwolf Guardian
+];
+
+/// How far each leg of `points` (as a client runs it, straight, looked at
+/// every half yard) is off the ground under it at most, over or under it.
+/// A leg across a step (a rock's or a ledge's edge, the ground a half yard
+/// and more higher a half yard on) is left out: a walk climbs it as the
+/// navmesh does, in its stride, and the line can't keep to both levels.
+fn leg_off(m: &mut Map, points: &[Vector3d]) -> f32 {
+    let nav = m.nav.as_mut().expect("the navmesh");
+    let mut worst = 0.0f32;
+    for w in points.windows(2) {
+        let n = (crate::game::map::combat::dist(w[0], w[1]) / 0.5).ceil().max(1.0) as usize;
+        let mut offs = Vec::with_capacity(n + 1);
+        let mut last: Option<f32> = None;
+        let mut step = false;
+        for i in 0..=n {
+            let f = i as f32 / n as f32;
+            let p = Vector3d {
+                x: w[0].x + (w[1].x - w[0].x) * f,
+                y: w[0].y + (w[1].y - w[0].y) * f,
+                z: w[0].z + (w[1].z - w[0].z) * f,
+            };
+            let Some(z) = nav.ground(p.x, p.y, p.z) else {
+                continue;
+            };
+            step |= last.is_some_and(|l| (z - l).abs() > 0.5);
+            last = Some(z);
+            offs.push((p.z - z).abs());
+        }
+        if !step {
+            worst = offs.into_iter().fold(worst, f32::max);
+        }
+    }
+    worst
+}
+
+/// The valley's walkers outside Frostwolf Keep, awake a minute of the map's
+/// time (none sees them; they move as if one did), walk on the ground: each
+/// point of each walk a fifth of a yard off it at most, each leg (a client
+/// runs it straight) 0.3 yd, the formations' followers as their leaders. Before
+/// (decision 107), a follower walked straight to its place by where its leader
+/// was bound, at its leader's height, over a slope and under the next (the
+/// navmesh was out of the map while it stepped): a Legionnaire up to 1.5 yd in
+/// the air, its Bloodhounds up to 0.75 under; and a path's corners kept the
+/// navmesh's height (the corner of a polygon is over none of them, to the
+/// float), a yeti 1.17 yd over its cave's floor.
+#[tokio::test]
+#[ignore = "extended"]
+async fn the_valleys_creatures_walk_its_slopes_on_the_ground() {
+    let (_c, _g, map) = by_the_door().await;
+    let (walks, followed, worst_point, worst_leg) = map
+        .query(move |m| {
+            let drek = m
+                .creatures
+                .iter()
+                .find(|(_, c)| c.entry == 11946)
+                .map(|(_, c)| c.position)
+                .expect("Drek'Thar");
+            let walkers: Vec<Guid> = m
+                .creatures
+                .iter()
+                .filter(|(_, c)| OUTDOOR_WALKERS.contains(&c.entry))
+                .filter(|(_, c)| crate::game::map::combat::dist(c.position, drek) > 40.0)
+                .map(|(_, c)| c.guid)
+                .collect();
+            for g in &walkers {
+                m.keep_awake(*g, true);
+            }
+            let mut seen = ahash::AHashSet::new();
+            let mut last: ahash::AHashMap<Guid, String> = ahash::AHashMap::new();
+            let (mut walks, mut followed) = (0, 0);
+            let mut worst_point = (0.0f32, String::new());
+            let mut worst_leg = (0.0f32, String::new());
+            for _ in 0..1200 {
+                turn(m);
+                for g in &walkers {
+                    let Some(c) = m.creature(*g) else { continue };
+                    let crate::game::map::creature::Motion::Moving(w) = &c.motion else {
+                        continue;
+                    };
+                    if !seen.insert(w.spline_id) || w.points.len() < 2 {
+                        continue;
+                    }
+                    let (points, name) = (w.points.clone(), c.entry);
+                    let follows = crate::game::map::creature_groups::following(m, *g);
+                    walks += 1;
+                    followed += usize::from(follows);
+                    let off = off_floor(m, &points[1..]);
+                    if off > worst_point.0 {
+                        worst_point = (off, format!("{name} (following {follows}): {points:?}"));
+                    }
+                    let leg = leg_off(m, &points);
+                    if leg > worst_leg.0 {
+                        let nav = m.nav.as_mut().unwrap();
+                        let grounds: Vec<Option<f32>> =
+                            points.iter().map(|p| nav.ground(p.x, p.y, p.z)).collect();
+                        worst_leg = (
+                            leg,
+                            format!(
+                                "{name} (following {follows}): {points:?} grounds {grounds:?}; before: {:?}",
+                                last.get(g)
+                            ),
+                        );
+                    }
+                    last.insert(*g, format!("{points:?}"));
+                }
+            }
+            (walks, followed, worst_point, worst_leg)
+        })
+        .await
+        .unwrap();
+    assert!(walks >= 40, "{walks} walks");
+    assert!(followed >= 10, "{followed} of the walks a formation's");
+    assert!(
+        worst_point.0 <= 0.2,
+        "a point {:.2} yd off the ground: {}",
+        worst_point.0,
+        worst_point.1
+    );
+    assert!(
+        worst_leg.0 <= 0.3,
+        "a leg {:.2} yd off the ground: {}",
+        worst_leg.0,
+        worst_leg.1
+    );
+}

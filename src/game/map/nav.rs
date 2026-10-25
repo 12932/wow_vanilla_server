@@ -42,8 +42,11 @@ const TAKE_BUDGET: Duration = Duration::from_millis(3);
 const GROUND_TOLERANCE: f32 = 0.15;
 /// How far from the navmesh's height under a point its floor is looked
 /// for: the floor nearest the navmesh's within this, else the navmesh's.
-const SURFACE_SNAP: f32 = 1.5;
-const GROUND_SAMPLE: f32 = 2.0;
+/// A step's climb: the detail mesh is up to 1.6 yd over the terrain on the
+/// valley's steeper slopes (by Tower Point), where at 1.5 a Frostwolf
+/// Guardian's walk ended on the navmesh, 1.64 yd in the air (decision 107).
+const SURFACE_SNAP: f32 = 2.5;
+const GROUND_SAMPLE: f32 = 1.0;
 /// How far over or under a point its ground is looked for: as far as a
 /// path's ends are taken to the navmesh from.
 const GROUND_REACH: f32 = 5.0;
@@ -389,7 +392,12 @@ impl Nav {
     }
 
     /// A walkable path from `from` to `to`, its first point `from`;
-    /// straight while a tile of its ends is loading.
+    /// straight while a tile of its ends is loading. The navmesh's first
+    /// point is `from` put on its polygon, which at a polygon's edge (a
+    /// tile's) is the edge's own height: it is `from` itself, where the
+    /// walker is, as mangos's `MoveSplineInit::Launch` puts its real
+    /// position first. Before, a Frostwolf Legionnaire set off on a tile's
+    /// edge from 2.8 yd in the air (decision 107).
     pub fn path(&mut self, from: Vector3d, to: Vector3d) -> Option<Vec<Vector3d>> {
         if !self.ready_at(&[from, to]) {
             return Some(vec![from, to]);
@@ -398,7 +406,11 @@ impl Nav {
         self.map
             .find_path(v(from), v(to), false, &mut points)
             .ok()?;
-        (points.0.len() >= 2).then(|| self.grounded(&points.0))
+        if points.0.len() < 2 {
+            return None;
+        }
+        points.0[0] = from;
+        Some(self.grounded(&points.0))
     }
 
     /// [`Nav::path`] as the navmesh answers it, not put on the ground: for
@@ -432,7 +444,12 @@ impl Nav {
     }
 
     /// The navmesh's ground under a point (its detail mesh's height),
-    /// within [`GROUND_REACH`] of it.
+    /// within [`GROUND_REACH`] of it. A point on a polygon's edge (a path's
+    /// corner always is) is over none of them, to the float: its ground is
+    /// that of the nearest point of the nearest polygon's edge, as
+    /// Detour's `closestPointOnPoly` has it. Before, a corner had none, and
+    /// kept the polygon's own height, up to 1.2 yd over the valley's slopes
+    /// and round its rocks (decision 107).
     fn ground_near(&self, p: Vector3d) -> Option<f32> {
         if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
             return None;
@@ -440,11 +457,12 @@ impl Nav {
         let nav = self.map.navmesh();
         let at = [-p.y, p.z, -p.x];
         let filter = rustigator_pathfind::navmesh::QueryFilter::any();
-        let (poly, _) = nav.find_nearest_poly(at, [0.25, GROUND_REACH, 0.25], &filter);
+        let (poly, nearest) = nav.find_nearest_poly(at, [0.25, GROUND_REACH, 0.25], &filter);
         if poly.is_null() {
             return None;
         }
         nav.poly_height(poly, at)
+            .or(Some(nearest[1]))
             .filter(|z| (z - p.z).abs() <= GROUND_REACH)
     }
 
