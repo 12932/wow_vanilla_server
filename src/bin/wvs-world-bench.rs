@@ -668,6 +668,30 @@ impl Report {
                 .map(|(k, v)| format!("{k} {v:.2} ({:.0}%)", v / total.max(1e-9) * 100.0))
                 .collect();
             let _ = writeln!(text, "    steps, CPU ms an update: {}", top.join(", "));
+            // The zones (`zone!`), by their wall time in all: how many, the
+            // mean of one, and the most an update spent in them.
+            let mut zones: AHashMap<&'static str, (u64, f64, f64)> = AHashMap::new();
+            for s in &mine {
+                for (name, n, d) in &s.zones {
+                    let e = zones.entry(name).or_default();
+                    e.0 += n;
+                    e.1 += ms(*d);
+                    e.2 = e.2.max(ms(*d));
+                }
+            }
+            let mut zones: Vec<(&str, (u64, f64, f64))> = zones.into_iter().collect();
+            zones.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+            let shown: Vec<String> = zones
+                .iter()
+                .take(10)
+                .map(|(k, (n, total, most))| {
+                    format!(
+                        "{k} {n} ({:.3} ms each, at most {most:.2} an update)",
+                        total / (*n).max(1) as f64
+                    )
+                })
+                .collect();
+            let _ = writeln!(text, "    zones, wall: {}", shown.join(", "));
             // Where an update's wall time off the CPU went: waits (the disk,
             // a lock) or preemption (the machine busy).
             let waits = mine.iter().map(|s| s.switches.0).sum::<u64>() as f64 / mine.len() as f64;
@@ -709,6 +733,7 @@ impl Report {
                 "waits_per_update": waits,
                 "preemptions_per_update": preempted,
                 "steps_ms": steps.iter().map(|(k, v)| (k.to_string(), *v)).collect::<std::collections::BTreeMap<_, _>>(),
+                "zones": zones.iter().map(|(k, (n, total, most))| (k.to_string(), serde_json::json!({"count": n, "total_ms": total, "most_in_an_update_ms": most}))).collect::<std::collections::BTreeMap<_, _>>(),
                 // Each update in turn: its CPU ms, and its three dearest
                 // steps' (for what comes and goes with time).
                 "series": mine.iter().map(|s| {
