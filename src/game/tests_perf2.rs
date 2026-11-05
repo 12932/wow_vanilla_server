@@ -257,11 +257,36 @@ fn a_navmesh_tile_read_off_the_maps_thread_answers_as_no_navmesh_until_it_is_in(
         },
     );
     let mut at_once = Nav::open(&BAKE, "Azeroth").expect("the bake");
-    let (path, ground) = (
-        at_once.path(from, to),
-        at_once.ground(from.x, from.y, from.z),
-    );
+    // What the map asks of a tile: read at once, its collision is built at
+    // the first query; off the map's thread, on the reader
+    // (`PreparedCell::new`), and the answers are the same.
+    let up = |p: Vector3d| Vector3d { z: p.z + 1.7, ..p };
+    let far = Vector3d {
+        x: GOLDSHIRE.x - 25.0,
+        y: GOLDSHIRE.y + 20.0,
+        ..GOLDSHIRE
+    };
+    let asks = |nav: &mut Nav| {
+        (
+            nav.path(from, to),
+            nav.ground(from.x, from.y, from.z),
+            nav.straight(from, far),
+            nav.surfaces(far.x, far.y).map(<[f32]>::to_vec),
+            nav.terrain_height(far.x, far.y),
+            (
+                nav.crossed(up(from), up(far)),
+                nav.crossed_by(up(from), up(far), false),
+            ),
+            nav.zone_and_area(far),
+        )
+    };
+    let all = asks(&mut at_once);
+    let (path, ground) = (all.0.clone(), all.1);
     assert!(path.as_ref().is_some_and(|p| p.len() >= 2) && ground.is_some());
+    assert!(
+        all.3.is_some() && all.4.is_some() && all.6.is_some(),
+        "{all:?}"
+    );
     let mut nav = Nav::open(&BAKE, "Azeroth").unwrap();
     nav.in_background();
     // Asked for, it is read meanwhile: a path is straight, a height
@@ -277,6 +302,7 @@ fn a_navmesh_tile_read_off_the_maps_thread_answers_as_no_navmesh_until_it_is_in(
     // In, it answers as the tile read at once does.
     assert_eq!(nav.path(from, to), path);
     assert_eq!(nav.ground(from.x, from.y, from.z), ground);
+    assert_eq!(asks(&mut nav), all);
 }
 
 #[test]

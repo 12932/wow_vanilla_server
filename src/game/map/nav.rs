@@ -6,7 +6,10 @@
 //! server they are read off the map's thread (`map/tiles.rs`): until a
 //! tile is in, a query over it answers as a map with no navmesh would (a
 //! path is straight, a line of sight clear, a height unknown), so the map
-//! never waits on the disk. Tests load them at once, as they are asked for.
+//! never waits on the disk. A tile is made ready there too (rustigator's
+//! `PreparedCell`: its navmesh linked within, its collision built), so the
+//! map only links it to its neighbours, and one let go is freed there.
+//! Tests load them at once, as they are asked for.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -14,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use ahash::AHashMap;
 use glam::Vec3;
-use rustigator_pathfind::PathfindMap;
 use rustigator_pathfind::format::NavFile;
+use rustigator_pathfind::{GroundOptions, PathfindMap, PreparedCell, QueryFilter, UnloadedCell};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use wow_world_messages::vanilla::Vector3d;
@@ -24,9 +27,11 @@ use wow_world_messages::vanilla::Vector3d;
 pub const ADT_SIZE: f32 = 533.333_3;
 /// How far under a floor its area is asked for.
 const AREA_FLOOR_TOLERANCE: f32 = 0.1;
-/// How long an update spends taking in tiles read: a busy tile's
-/// navmesh takes milliseconds to join the rest, and many may arrive at
-/// once (a player logging in, a populated map).
+/// How long an update spends taking in tiles read (at least one): many may
+/// arrive at once (a player logging in, a populated map). Prepared on the
+/// readers, a city's tile takes about 0.3 ms to join the rest (at most
+/// 0.5), an ordinary one 0.05, so this is about ten cities' tiles; before
+/// round two of rustigator's performance it was one, at 3.5 ms.
 const TAKE_BUDGET: Duration = Duration::from_millis(3);
 /// How far a path's line may leave the ground under it before a point on
 /// the ground is put in, and how often along it that is looked at: a path
@@ -39,6 +44,8 @@ const TAKE_BUDGET: Duration = Duration::from_millis(3);
 /// yard, Drek'Thar and his guards walked from the ring of his room into its
 /// sunken middle a yard lower at the ring's height, and stood there up to
 /// three quarters of a yard in the air (the fight record, decision 106).
+/// rustigator's `put_on_ground` does the work, with these
+/// ([`ground_options`]).
 const GROUND_TOLERANCE: f32 = 0.15;
 /// How far from the navmesh's height under a point its floor is looked
 /// for: the floor nearest the navmesh's within this, else the navmesh's.
@@ -50,8 +57,26 @@ const GROUND_SAMPLE: f32 = 1.0;
 /// How far over or under a point its ground is looked for: as far as a
 /// path's ends are taken to the navmesh from.
 const GROUND_REACH: f32 = 5.0;
+/// How far across a point its navmesh polygon is looked for.
+const GROUND_ACROSS: f32 = 0.25;
 /// The most points a path is given so.
 const GROUND_POINTS: usize = 64;
+
+/// How a path is put on the ground: the constants above, each half of a
+/// line looked at again after a point is put in (`sample_once` off: on, a
+/// winding chase's line is off the ground at up to a tenth of its looks).
+fn ground_options() -> GroundOptions {
+    GroundOptions {
+        tolerance: GROUND_TOLERANCE,
+        sample: GROUND_SAMPLE,
+        reach: GROUND_REACH,
+        across: GROUND_ACROSS,
+        snap: SURFACE_SNAP,
+        max_points: GROUND_POINTS,
+        filter: QueryFilter::any(),
+        sample_once: false,
+    }
+}
 /// How often along a way its height is put to the terrain's
 /// ([`Nav::into_terrain`]): the terrain's triangles are 2 to 4 yards across.
 const TERRAIN_SAMPLE: f32 = 0.5;
@@ -72,11 +97,10 @@ pub struct Nav {
     /// The map's time, as of its last update: when a tile was last used.
     now: Instant,
     heights: Vec<f32>,
-    /// Each tile's terrain, beside rustigator's own: its heights mix the
-    /// terrain's with the models' surfaces, and a way that goes into the
-    /// ground is found on the terrain's alone ([`Nav::into_terrain`]). A
-    /// tile's copy is about 150 KB.
-    terrain: AHashMap<(i32, i32), rustigator_pathfind::terrain::Terrain>,
+    /// A path as the navmesh finds it, and on the ground: kept, so a path
+    /// allocates only its answer.
+    found: Vec<Vec3>,
+    grounded: Vec<Vec3>,
     /// The collision models of the map's game objects, by display
     /// (`obstacles`), read at its start.
     pub obstacle_models: AHashMap<u32, std::sync::Arc<crate::game::map::obstacles::Model>>,
@@ -95,8 +119,9 @@ struct Tile {
     used: Instant,
 }
 
-/// A tile read: its indices, and its file (`None` if it wasn't to be had).
-type Arrival = ((i32, i32), Option<NavFile>);
+/// A tile read and made ready: its indices, and the cell (`None` if it
+/// wasn't to be had).
+type Arrival = ((i32, i32), Option<PreparedCell>);
 
 struct Background {
     tx: mpsc::UnboundedSender<Arrival>,
@@ -155,15 +180,6 @@ fn d(p: Vec3) -> Vector3d {
         x: p.x,
         y: p.y,
         z: p.z,
-    }
-}
-
-/// A path's points, as the client's vectors.
-struct Points(Vec<Vector3d>);
-
-impl Extend<Vec3> for Points {
-    fn extend<I: IntoIterator<Item = Vec3>>(&mut self, iter: I) {
-        self.0.extend(iter.into_iter().map(d));
     }
 }
 
@@ -230,7 +246,8 @@ impl Nav {
                     background: None,
                     now: Instant::now(),
                     heights: Vec::new(),
-                    terrain: AHashMap::new(),
+                    found: Vec::new(),
+                    grounded: Vec::new(),
                     obstacle_models: AHashMap::new(),
                 })
             }
@@ -291,7 +308,12 @@ impl Nav {
         match &self.background {
             Some(b) => {
                 let (tx, dir, name) = (b.tx.clone(), self.dir.clone(), self.name.clone());
-                crate::game::map::tiles::read_into(tx, t, None, move || read(&dir, &name, t));
+                // Its collision is built here too: a city's takes up to 70
+                // ms, which the map's thread paid at the first query
+                // over it.
+                crate::game::map::tiles::read_into(tx, t, None, move || {
+                    read(&dir, &name, t).map(PreparedCell::new)
+                });
                 self.tiles.insert(
                     t,
                     Tile {
@@ -302,8 +324,10 @@ impl Nav {
                 false
             }
             None => {
-                let file = read(&self.dir, &self.name, t);
-                self.take(t, file);
+                // At once, its collision is built as it is first needed,
+                // as rustigator's `load_nav_file` leaves it.
+                let cell = read(&self.dir, &self.name, t).map(PreparedCell::without_collision);
+                self.take(t, cell);
                 true
             }
         }
@@ -334,15 +358,10 @@ impl Nav {
         }
     }
 
-    fn take(&mut self, t: (i32, i32), file: Option<NavFile>) {
-        let terrain = file.as_ref().map(|f| f.terrain.clone());
-        let state = match file.map(|f| self.map.load_nav_file(f)) {
-            Some(Ok(_)) => {
-                if let Some(terrain) = terrain {
-                    self.terrain.insert(t, terrain);
-                }
-                State::In
-            }
+    fn take(&mut self, t: (i32, i32), cell: Option<PreparedCell>) {
+        let _z = crate::zone!("navmesh take");
+        let state = match cell.map(|c| self.map.load_prepared(c)) {
+            Some(Ok(_)) => State::In,
             Some(Err(e)) => {
                 warn!("navmesh tile {}_{}_{}: {e}", self.name, t.0, t.1);
                 State::Absent
@@ -388,9 +407,11 @@ impl Nav {
     }
 
     /// [`Nav::unload_idle`], as many as `budget` allows (at least one):
-    /// how many, and whether idle ones are left. A busy tile takes
-    /// milliseconds to drop (and the disk's time, where its idle pages were
-    /// swapped out), so the map spreads a sweep over its updates.
+    /// how many, and whether idle ones are left. Taking a tile out of the
+    /// navmesh is about 0.02 ms; what it held is freed on a reader
+    /// ([`Nav::free`]), where a busy one's thousands of allocations (and
+    /// the disk's time, where its idle pages were swapped out) cost the map
+    /// nothing.
     pub fn unload_idle_within(&mut self, idle: Duration, budget: Duration) -> (usize, bool) {
         let now = self.now;
         let mut idle: Vec<(i32, i32)> = self
@@ -402,15 +423,30 @@ impl Nav {
         let started = Instant::now();
         let mut n = 0;
         while let Some((x, y)) = idle.pop() {
-            let _ = self.map.unload_adt(x, y);
+            let held = {
+                let _z = crate::zone!("navmesh unload");
+                self.map.take_adt(x, y)
+            };
+            if let Some(held) = held {
+                self.free(held);
+            }
             self.tiles.remove(&(x, y));
-            self.terrain.remove(&(x, y));
             n += 1;
             if started.elapsed() >= budget {
                 break;
             }
         }
         (n, !idle.is_empty())
+    }
+
+    /// What a tile let go held, freed: on a reader, where tiles are read
+    /// off the map's thread; else here.
+    fn free(&self, held: UnloadedCell) {
+        if self.background.is_some() {
+            crate::game::map::tiles::read(move || drop(held));
+        } else {
+            drop(held);
+        }
     }
 
     /// The zone and area at a point; where the point says nothing, those
@@ -423,12 +459,13 @@ impl Nav {
             return Some(ids);
         }
         self.map.find_heights(p.x, p.y, &mut self.heights).ok()?;
-        let mut floors = self.heights.clone();
-        floors.sort_by(|a, b| (a - p.z).abs().total_cmp(&(b - p.z).abs()));
-        floors.into_iter().find_map(|h| {
+        // Nearest first; of two as near, the higher (the sort is stable).
+        self.heights
+            .sort_by(|a, b| (a - p.z).abs().total_cmp(&(b - p.z).abs()));
+        let map = &self.map;
+        self.heights.iter().find_map(|&h| {
             known(
-                self.map
-                    .get_zone_and_area(p.x, p.y, h - AREA_FLOOR_TOLERANCE)
+                map.get_zone_and_area(p.x, p.y, h - AREA_FLOOR_TOLERANCE)
                     .ok(),
             )
         })
@@ -445,51 +482,30 @@ impl Nav {
         if !self.ready_at(&[from, to]) {
             return Some(vec![from, to]);
         }
-        let mut points = Points(Vec::new());
-        self.map
-            .find_path(v(from), v(to), false, &mut points)
-            .ok()?;
-        if points.0.len() < 2 {
-            return None;
-        }
-        points.0[0] = from;
-        Some(self.grounded(&points.0))
+        let mut found = std::mem::take(&mut self.found);
+        found.clear();
+        let ok = self
+            .map
+            .find_path(v(from), v(to), false, &mut found)
+            .is_ok()
+            && found.len() >= 2;
+        let path = ok.then(|| {
+            found[0] = v(from);
+            self.grounded(&found)
+        });
+        self.found = found;
+        path
     }
 
     /// [`Nav::path`] as the navmesh answers it, not put on the ground: for
     /// the probe of what that costs.
     #[cfg(test)]
     pub fn path_as_found(&mut self, from: Vector3d, to: Vector3d) -> Option<Vec<Vector3d>> {
-        let mut points = Points(Vec::new());
+        let mut points = Vec::new();
         self.map
             .find_path(v(from), v(to), false, &mut points)
             .ok()?;
-        (points.0.len() >= 2).then_some(points.0)
-    }
-
-    /// The floor under a point: the navmesh's polygon there, within
-    /// [`GROUND_REACH`] of it, and the surface of the bake's geometry (its
-    /// terrain's, WMOs' and doodads' upward faces) nearest that polygon's
-    /// height within [`SURFACE_SNAP`]; else the polygon's height. Off the
-    /// navmesh (a straight walk where it has no way), the surface nearest
-    /// the point itself within [`SURFACE_SNAP`].
-    fn floor_at(&mut self, p: Vector3d) -> Option<f32> {
-        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
-            return None;
-        }
-        let detail = self.ground_near(p);
-        let near = detail.unwrap_or(p.z);
-        if self.map.find_heights(p.x, p.y, &mut self.heights).is_ok()
-            && let Some(z) = self
-                .heights
-                .iter()
-                .copied()
-                .filter(|h| (h - near).abs() <= SURFACE_SNAP)
-                .min_by(|a, b| (a - near).abs().total_cmp(&(b - near).abs()))
-        {
-            return Some(z);
-        }
-        detail
+        (points.len() >= 2).then(|| points.into_iter().map(d).collect())
     }
 
     /// The straight way from `from` to `to`, for a walk the navmesh has no
@@ -504,92 +520,32 @@ impl Nav {
         if !self.ready_at(&[from, to]) {
             return vec![from, to];
         }
-        self.grounded(&[from, to])
+        self.grounded(&[v(from), v(to)])
     }
 
-    /// The navmesh's ground under a point (its detail mesh's height),
-    /// within [`GROUND_REACH`] of it. A point on a polygon's edge (a path's
-    /// corner always is) is over none of them, to the float: its ground is
-    /// that of the nearest point of the nearest polygon's edge, as
-    /// Detour's `closestPointOnPoly` has it. Before, a corner had none, and
-    /// kept the polygon's own height, up to 1.2 yd over the valley's slopes
-    /// and round its rocks (decision 107).
-    fn ground_near(&self, p: Vector3d) -> Option<f32> {
-        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
-            return None;
-        }
-        let nav = self.map.navmesh();
-        let at = [-p.y, p.z, -p.x];
-        let filter = rustigator_pathfind::navmesh::QueryFilter::any();
-        let (poly, nearest) = nav.find_nearest_poly(at, [0.25, GROUND_REACH, 0.25], &filter);
-        if poly.is_null() {
-            return None;
-        }
-        nav.poly_height(poly, at)
-            .or(Some(nearest[1]))
-            .filter(|z| (z - p.z).abs() <= GROUND_REACH)
-    }
-
-    /// A path's points on the ground: each after the first (where the
-    /// walker is) at the ground under it if it is farther from it than
-    /// [`GROUND_TOLERANCE`] (one on the ground is left alone), and, where the line between two
-    /// leaves the ground by more than [`GROUND_TOLERANCE`], a point on the
-    /// ground put in where it leaves it most, until none does.
-    fn grounded(&mut self, path: &[Vector3d]) -> Vec<Vector3d> {
-        let mut out = Vec::with_capacity(path.len());
-        out.push(path[0]);
-        let mut budget = GROUND_POINTS;
-        for &p in &path[1..] {
-            let mut b = p;
-            if let Some(z) = self.floor_at(b)
-                && (z - b.z).abs() > GROUND_TOLERANCE
-            {
-                b.z = z;
-            }
-            let a = out[out.len() - 1];
-            // A point where the last is (the navmesh's corner at the walker,
-            // both now on the same floor) is left out: a walk's next point
-            // is somewhere to go.
-            if (a.x - b.x).hypot(a.y - b.y) < 0.01 && (a.z - b.z).abs() < 0.01 {
-                continue;
-            }
-            self.fill(a, b, &mut out, &mut budget);
-            out.push(b);
-        }
-        if out.len() < 2 {
-            out.push(path[path.len() - 1]);
-        }
-        out
-    }
-
-    /// The points on the ground between `a` and `b` their line needs.
-    fn fill(&mut self, a: Vector3d, b: Vector3d, out: &mut Vec<Vector3d>, budget: &mut usize) {
-        let planar = (b.x - a.x).hypot(b.y - a.y);
-        let steps = (planar / GROUND_SAMPLE).ceil() as usize;
-        if steps < 2 || *budget == 0 {
-            return;
-        }
-        let mut worst: Option<(f32, Vector3d)> = None;
-        for i in 1..steps {
-            let f = i as f32 / steps as f32;
-            let p = Vector3d {
-                x: a.x + (b.x - a.x) * f,
-                y: a.y + (b.y - a.y) * f,
-                z: a.z + (b.z - a.z) * f,
-            };
-            if let Some(z) = self.floor_at(p) {
-                let off = (z - p.z).abs();
-                if off > GROUND_TOLERANCE && worst.is_none_or(|(o, _)| off > o) {
-                    worst = Some((off, Vector3d { z, ..p }));
-                }
-            }
-        }
-        if let Some((_, m)) = worst {
-            *budget -= 1;
-            self.fill(a, m, out, budget);
-            out.push(m);
-            self.fill(m, b, out, budget);
-        }
+    /// A path's points on the ground (rustigator's `put_on_ground`, with
+    /// [`ground_options`]): the first as it is (where the walker is); each
+    /// other at the floor under it if it is farther from it than
+    /// [`GROUND_TOLERANCE`] (one on the ground is left alone), one where the
+    /// last is left out (a walk's next point is somewhere to go); and, where
+    /// the line between two leaves the ground by more than
+    /// [`GROUND_TOLERANCE`], a point on the ground put in where it leaves it
+    /// most, until none does.
+    ///
+    /// The floor under a point is the navmesh's polygon there, within
+    /// [`GROUND_REACH`] of it (a point on a polygon's edge, as a path's
+    /// corner always is, takes the nearest point of the nearest polygon's
+    /// edge, as Detour's `closestPointOnPoly` has it: before, a corner kept
+    /// the polygon's own height, up to 1.2 yd over the valley's slopes and
+    /// round its rocks, decision 107), and the surface of the bake's
+    /// geometry (its terrain's, WMOs' and doodads' upward faces) nearest
+    /// that polygon's height within [`SURFACE_SNAP`]; else the polygon's
+    /// height. Off the navmesh (a straight walk where it has no way), the
+    /// surface nearest the point itself within [`SURFACE_SNAP`].
+    fn grounded(&mut self, path: &[Vec3]) -> Vec<Vector3d> {
+        self.map
+            .put_on_ground(path, &ground_options(), &mut self.grounded);
+        self.grounded.iter().copied().map(d).collect()
     }
 
     /// A random walkable point within `radius` of `center`.
@@ -621,15 +577,15 @@ impl Nav {
         self.ready(x, y) && self.map.find_heights(x, y, &mut self.heights).is_ok()
     }
 
-    /// The ground nearest `z_hint` at `(x, y)`.
+    /// The ground nearest `z_hint` at `(x, y)` (of two as near, the
+    /// higher), of the [`Nav::surfaces`] there: looked for within a few
+    /// yards of the hint first, so a column's other floors aren't walked
+    /// (rustigator's `nearest_height`).
     pub fn ground(&mut self, x: f32, y: f32, z_hint: f32) -> Option<f32> {
-        if !self.heights_at(x, y) {
+        if !self.ready(x, y) {
             return None;
         }
-        self.heights
-            .iter()
-            .copied()
-            .min_by(|a, b| (a - z_hint).abs().total_cmp(&(b - z_hint).abs()))
+        self.map.nearest_height(x, y, z_hint).ok().flatten()
     }
 
     /// The highest ground at `(x, y)` no higher than `z`.
@@ -702,20 +658,24 @@ impl Nav {
         if !self.ready_at(&corners) {
             return true;
         }
-        let clear =
-            |a: Vector3d, b: Vector3d| self.map.line_of_sight(v(a), v(b), doodads).unwrap_or(true);
-        !(clear(from, to) && clear(to, from))
+        // One walk of the models, a triangle of either facing in the way.
+        !self
+            .map
+            .line_of_sight_two_sided(v(from), v(to), doodads)
+            .unwrap_or(true)
     }
 
-    /// The terrain's height at `(x, y)`: `None` over a hole in it (a cave's
-    /// mouth, a building's cellar), where there is none, or while its tile
-    /// is loading.
+    /// The terrain's height at `(x, y)`, its heightmap's alone (the
+    /// navmesh's heights mix the terrain's with the models' surfaces, and a
+    /// way that goes into the ground is found on the terrain's alone,
+    /// [`Nav::into_terrain`]): `None` over a hole in it (a cave's mouth, a
+    /// building's cellar), where there is none, or while its tile is
+    /// loading.
     pub fn terrain_height(&mut self, x: f32, y: f32) -> Option<f32> {
         if !x.is_finite() || !y.is_finite() || !self.ready(x, y) {
             return None;
         }
-        let t = tile_of(x, y);
-        self.terrain.get(&t)?.height_at(t.0, t.1, x, y)
+        self.map.terrain_height(x, y)
     }
 
     /// Whether the segment from `from` to `to` goes into the terrain or out
@@ -829,5 +789,144 @@ mod tests {
         let part = PathfindMap::new(&dir, name).unwrap();
         assert_eq!(missing_tiles(&part, &dir, name), (listed, listed - 2));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The terrain's height is rustigator's heightmap's, where wvs kept a
+    /// copy of each tile's terrain beside it (150 KB a tile): to the bit
+    /// the copy's, at once and read off the map's thread, over Stormwind's,
+    /// Elwynn's and Undercity's tiles and their holes.
+    #[test]
+    #[ignore = "extended"]
+    fn the_terrain_height_is_the_tiles_own() {
+        let real = crate::game::harness::real_data("nav");
+        let tiles = [(30, 48), (31, 48), (32, 49), (31, 29)];
+        let mut at_once = Nav::open(&real, "Azeroth").unwrap();
+        let mut off = Nav::open(&real, "Azeroth").unwrap();
+        off.in_background();
+        for &t in &tiles {
+            off.want(t);
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while off.tiles_in() < tiles.len() {
+            assert!(Instant::now() < deadline, "the tiles within 60 s");
+            std::thread::sleep(Duration::from_millis(10));
+            off.receive(Instant::now());
+        }
+        const N: usize = 300;
+        let (mut heights, mut holes) = (0, 0);
+        for &t in &tiles {
+            let file = read(&real, "Azeroth", t).expect("the tile");
+            let ylo = (31 - t.0) as f32 * ADT_SIZE;
+            let xlo = (31 - t.1) as f32 * ADT_SIZE;
+            for i in 0..N {
+                for j in 0..N {
+                    let x = xlo + (i as f32 + 0.5) * ADT_SIZE / N as f32;
+                    let y = ylo + (j as f32 + 0.5) * ADT_SIZE / N as f32;
+                    let copy = file.terrain.height_at(t.0, t.1, x, y).map(f32::to_bits);
+                    assert_eq!(
+                        at_once.terrain_height(x, y).map(f32::to_bits),
+                        copy,
+                        "{x} {y}"
+                    );
+                    assert_eq!(off.terrain_height(x, y).map(f32::to_bits), copy, "{x} {y}");
+                    if copy.is_some() {
+                        heights += 1;
+                    } else {
+                        holes += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            heights > 300_000 && holes > 100,
+            "{heights} heights, {holes} holes"
+        );
+    }
+
+    /// What a tile costs the map's thread, taking it in and letting it go,
+    /// and the reader preparing it: each of 11 busy tiles (the cities,
+    /// rustigator's sample) with its eight neighbours in, and the memory of
+    /// the 99, their collision built. Run by hand (the extended suite's
+    /// filter leaves the probes out):
+    /// `cargo nextest run --lib --profile extended --run-ignored all
+    /// --ignore-default-filter probe_a_tiles_cost --no-capture`.
+    #[test]
+    #[ignore = "a probe, run by hand"]
+    fn probe_a_tiles_cost() {
+        let real = crate::game::harness::real_data("nav");
+        let rss = || {
+            let s = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
+            let pages: f64 = s
+                .split_whitespace()
+                .nth(1)
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(0.0);
+            pages * 4096.0 / 1e6
+        };
+        let busy: [(&str, (i32, i32)); 11] = [
+            ("Azeroth", (30, 48)),
+            ("Azeroth", (33, 41)),
+            ("Azeroth", (31, 29)),
+            ("Azeroth", (31, 28)),
+            ("Kalimdor", (40, 28)),
+            ("Kalimdor", (40, 29)),
+            ("Kalimdor", (31, 34)),
+            ("Kalimdor", (27, 13)),
+            ("Azeroth", (35, 52)),
+            ("Azeroth", (34, 44)),
+            ("Kalimdor", (28, 47)),
+        ];
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let (mut take, mut take_near, mut prepare) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut unload, mut free) = (Vec::new(), Vec::new());
+        let before = rss();
+        let mut navs = Vec::new();
+        for (name, (cx, cy)) in busy {
+            let mut nav = Nav::open(&real, name).expect("the bake");
+            for x in cx - 1..=cx + 1 {
+                for y in cy - 1..=cy + 1 {
+                    if (x, y) != (cx, cy) && nav.map.has_adt(x, y) {
+                        let cell = read(&nav.dir, &nav.name, (x, y)).map(PreparedCell::new);
+                        let t = Instant::now();
+                        nav.take((x, y), cell);
+                        take_near.push(ms(t.elapsed()));
+                    }
+                }
+            }
+            let t = Instant::now();
+            let cell = read(&nav.dir, &nav.name, (cx, cy)).map(PreparedCell::new);
+            prepare.push(ms(t.elapsed()));
+            let t = Instant::now();
+            nav.take((cx, cy), cell);
+            take.push(ms(t.elapsed()));
+            navs.push(nav);
+        }
+        let held = rss() - before;
+        for ((_, (cx, cy)), nav) in busy.iter().zip(&mut navs) {
+            let t = Instant::now();
+            let cell = nav.map.take_adt(*cx, *cy);
+            unload.push(ms(t.elapsed()));
+            let t = Instant::now();
+            drop(cell);
+            free.push(ms(t.elapsed()));
+        }
+        let q = |v: &mut Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            format!(
+                "p50 {:.3} max {:.3} ms (of {})",
+                v[v.len() / 2],
+                v[v.len() - 1],
+                v.len()
+            )
+        };
+        println!("taken in, a busy tile: {}", q(&mut take));
+        println!("taken in, its neighbours: {}", q(&mut take_near));
+        println!("let go, a busy tile: {}", q(&mut unload));
+        println!(
+            "read and prepared on a reader, a busy tile: {}",
+            q(&mut prepare)
+        );
+        println!("freed on a reader, a busy tile: {}", q(&mut free));
+        println!("the 99 tiles in, their collision built: {held:.0} MB");
     }
 }
