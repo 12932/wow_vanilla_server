@@ -1,8 +1,10 @@
 //! The navmesh's and the terrain's tiles, read off the map's thread.
 //!
 //! A tile is read and decoded by a small pool of threads of its own
-//! ([`read`]), and handed to its map, which takes it in at its next update
-//! ([`update`]): the map never waits on the disk. The tiles around each
+//! ([`read`]), a navmesh tile made ready there (linked within, its
+//! collision built), and handed to its map, which takes it in at its next
+//! update ([`update`]): the map never waits on the disk. What a tile let go
+//! held is freed there too. The tiles around each
 //! player are asked for ahead ([`ahead`]), as they arrive and as they
 //! move, so that most are in before anything there needs them; those no
 //! one has been near for `[world] tile_unload_secs` are let go, and read
@@ -32,12 +34,15 @@ const READERS: usize = 4;
 const AHEAD_OF_PLAYERS: f32 = 20.0;
 /// How often, in updates, idle tiles are looked for (ten seconds).
 const UNLOAD_EVERY: u64 = 200;
-/// How long an update spends letting go of idle tiles, once some are found.
+/// How long an update spends letting go of idle tiles, once some are found
+/// (at least one): a navmesh tile is about 0.2 ms at most, its freeing on a
+/// reader, so a sweep rarely takes more than one update.
 const UNLOAD_BUDGET: Duration = Duration::from_millis(2);
 
 type Job = Box<dyn FnOnce() + Send>;
 
-/// Read a tile on the readers' threads (started at the first read).
+/// Read a tile on the readers' threads (started at the first read), or
+/// free what one held.
 pub fn read(job: impl FnOnce() + Send + 'static) {
     static READERS_TX: OnceLock<mpsc::UnboundedSender<Job>> = OnceLock::new();
     let tx = READERS_TX.get_or_init(|| {

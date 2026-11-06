@@ -141,11 +141,15 @@ pub fn water(map: &mut Map, p: Vector3d) -> Option<(f32, f32)> {
 
 /// The highest ground at or under a point.
 fn floor_under(map: &mut Map, p: Vector3d) -> Option<f32> {
-    let nav = map.nav.as_mut()?;
+    let surfaces = map.nav.as_mut()?.surfaces(p.x, p.y)?;
     let mut best: Option<f32> = None;
-    // The navmesh's heights at a column, as the ground nearest each guess.
+    // The navmesh's heights at a column, as the surface nearest each guess
+    // (of two as near, the higher): the column taken once.
     for hint in [p.z, p.z - 5.0, p.z - 20.0, p.z - 60.0] {
-        if let Some(h) = nav.ground(p.x, p.y, hint)
+        if let Some(h) = surfaces
+            .iter()
+            .copied()
+            .min_by(|a, b| (a - hint).abs().total_cmp(&(b - hint).abs()))
             && h <= p.z + FLOOR_TOLERANCE
         {
             best = Some(best.map_or(h, |b: f32| b.max(h)));

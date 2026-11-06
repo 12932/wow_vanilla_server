@@ -2122,3 +2122,72 @@ with nothing else of note on the machine.)
 - **CPU**: the visibility threads' hand-offs (each whole refresh's looks, each planner's framing) cost 0.1 to 0.3
   cores more in the bench, the server's own 2.4 to 2.8 cores in peon's either way.
 - **The game's own work**: an aura put on is 40 to 46 µs, `derive::unit` 20 µs; neither is a spike now.
+
+## rustigator's performance round two (2026-11-05)
+
+rustigator `71b06a3` (from `ba150fe`): its navmesh holds about half the memory (links within a tile not stored, its
+search trees built at a tile's first query), a cell can be made ready off the thread that owns the map, and it has
+the ground and sight queries wvs made itself. Its existing queries answer as before, bit for bit.
+
+### What changed for wvs
+
+- **A tile made ready on the readers** (`PreparedCell::new`): its navmesh linked within itself and its collision
+  built there; the map takes it in with `load_prepared`, which links its edge alone. A tile let go is taken out with
+  `take_adt` and freed on a reader. Read at once (the tests), a tile's collision is left to its first query, as
+  before.
+- **The terrain's height is rustigator's** (`terrain_height`): wvs's copy of each tile's terrain (150 KB) and its
+  clone at every take are gone. The same function on the same heights, to the bit
+  (`the_terrain_height_is_the_tiles_own`, four tiles and their holes).
+- **A path on the ground by `put_on_ground`**, wvs's `grounded` moved into rustigator, with wvs's constants and
+  `sample_once` off. `ground` is `nearest_height` (a short ray near the hint, then the column); `crossed_by` one walk
+  that a triangle of either facing blocks (`line_of_sight_two_sided`); a creature's floor under it takes the column
+  once, not four times; `zone_and_area` sorts its scratch rather than a clone.
+- **The budgets kept:** 3 ms an update for taking tiles in, 2 ms for letting them go (each at least one); each is
+  now several busy tiles, where it was one.
+
+**`put_on_ground` against wvs's own grounding.** rustigator's `wvs check` over Stormwind and Orgrimmar had 12 and 32
+paths of 3,000 differ, one by 27.7 yd. Run in lockstep, wvs's and rustigator's floors taken at every look, and each
+grounding apart with its decisions logged (15,000 paths at five sites, 45 apart): every one parts at a threshold tie,
+a look 0.15 yd off the ground by one's float and not the other's (13), or two looks as far off within 5e-4 yd of
+each other (32). No look takes another floor: the two floors agree within 6e-4 yd at every look. The 27.7 yd is
+by index: wvs put in a point at a tie early, rustigator didn't, and so had one point of the 64 left for Stormwind's
+stairs at the path's end, where wvs's line stayed 1.3 yd over them. No path is farther than 0.15 yd from the
+other's line elsewhere.
+
+### Measured
+
+A tile's cost to the map's thread (`probe_a_tiles_cost`; each of the 11 busy tiles of rustigator's sample, the
+cities, with its 8 neighbours in; the test profile, its dependencies optimized):
+
+| | Before | After |
+|---|---|---|
+| Taking in a busy tile, p50 / max | 3.6 / 10.4 ms | **0.42 / 1.05 ms** |
+| Taking in its neighbours | 2.1 / 8.9 ms | **0.09 / 0.37 ms** |
+| Its collision, at the first query over it | 23 / 77 ms (neighbours 5.3 / 34) | **none** (on the reader) |
+| Letting go of a busy tile | 2.2 / 3.2 ms | **0.16 / 0.26 ms** |
+| The 99 tiles in, their collision built | 1,597 MB | **920 MB** |
+
+On the reader, reading and preparing a busy tile takes 35 ms (up to 97); freeing what it held, 0.44 ms.
+
+The world bench, alternated, 194 observers walking for 150 s with the navmesh, `tile_unload_secs` at 30 (the
+`navmesh take` and `navmesh unload` zones; the build before carried the same two zones), load average 1.4 to 2.5:
+
+| Build | EK CPU p50/p95/p99/max ms | Kal CPU p50/p95/p99/max ms | A take, mean (most in an update) | An unload, mean (most in an update) | Peak RSS |
+|---|---|---|---|---|---|
+| Before | 3.3/5.8/9.7/22 | 3.9/6.8/11/23 | 3.0–3.2 ms (8.5–8.8) | 1.1–1.2 ms (3.6–3.9) | 7,039 MB |
+| After | 3.1/4.1/4.5/5.6 | 3.7/4.8/5.4/9.1 | **0.16 ms (0.5–0.6)** | **0.09 ms (2.0)** | **4,389 MB** |
+| Before | 3.3/5.6/9.2/22 | 4.0/7.3/12/23 | 2.9 ms (7.5–8.3) | 1.2 ms (5.8–11) | 7,038 MB |
+| After | 3.3/4.3/4.9/6.4 | 3.9/5.1/5.8/7.2 | **0.16–0.17 ms (0.6–1.1)** | **0.08–0.09 ms (2.0)** | **4,386 MB** |
+
+Each run took in 95 and 124–126 tiles and let go of 114–148. The update's p99 halves and its slowest update goes from
+22–23 ms to 6–9: the tail was the tiles, taking them in and building their collision at the first query. An unload's
+"most in an update" is the 2 ms budget, a sweep of a dozen tiles or more. The memory is a third less: rustigator's
+smaller navmesh and wvs's terrain copies gone, less the collision now built for every tile that arrives.
+
+### What is left
+
+- **One-WMO dungeons** are still read whole as their copy opens (`PathfindMap::new`), on the copy's own thread before
+  anyone is in it: 14 to 82 ms (Dire Maul), p50 25 ms.
+- **`sample_once`** would halve a chase's grounding (Stormwind's 157 µs to 91) with lines off the ground at 1–11% of
+  their looks; left off.
+- **A tile's navmesh search trees** are built at its first query on the map's thread: at most 0.2 ms a tile.
