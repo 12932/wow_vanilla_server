@@ -29,9 +29,9 @@ pub const ADT_SIZE: f32 = 533.333_3;
 const AREA_FLOOR_TOLERANCE: f32 = 0.1;
 /// How long an update spends taking in tiles read (at least one): many may
 /// arrive at once (a player logging in, a populated map). Prepared on the
-/// readers, a city's tile takes about 0.3 ms to join the rest (at most
-/// 0.5), an ordinary one 0.05, so this is about ten cities' tiles; before
-/// round two of rustigator's performance it was one, at 3.5 ms.
+/// readers, a city's tile takes about 0.4 ms to join the rest (at most 1),
+/// an ordinary one under 0.1, so this is several cities' tiles; before
+/// round two of rustigator's performance it was one, at 3.6 ms.
 const TAKE_BUDGET: Duration = Duration::from_millis(3);
 /// How far a path's line may leave the ground under it before a point on
 /// the ground is put in, and how often along it that is looked at: a path

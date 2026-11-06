@@ -588,6 +588,39 @@ peon's own decisions, logged here so they're reviewed in one place; peon's `docs
     the clear inside the VPC); narrowing CDK's bootstrap role (AdministratorAccess by default); keeping the
     endpoints between campaigns; a bucket name and how long results stay (30 days by default). 47 more of its calls
     in peon's notes.
+- **rustigator's performance round two, in wvs (2026-11-05):** `perf/rustigator-round2`, rustigator `71b06a3`
+  (docs/PERFORMANCE.md, "rustigator's performance round two"). A navmesh tile is made ready on the readers and freed
+  there: a city's tile costs the map's thread 0.4 ms to take in (was 3.6, and 23 ms, up to 77, of collision at its
+  first query) and 0.16 ms to let go (was 2.2); the cities' 99 tiles hold 920 MB, not 1,600. In the world bench (194
+  observers walking, alternated) the update's CPU p99 9.2–12 → 4.5–5.8 ms, its slowest 22–23 → 6–9, peak RSS 7.0 →
+  4.4 GB. wvs's copy of each tile's
+  terrain is gone (its height is rustigator's, to the bit). Paths are put on the ground by rustigator's
+  `put_on_ground`; heights, two-way sight and a creature's floor by its new queries. Made without you; say which to
+  change:
+  - **Collision built on the reader, as a tile arrives** (`PreparedCell::new`): about 7 MB more for each city tile
+    nothing asks about, against up to 77 ms of the map's thread at the first query over one that is.
+    `PreparedCell::without_collision` would keep it lazy, and on the map's thread. I'd keep it built ahead.
+  - **The navmesh's own search trees built at a tile's first query, on the map's thread** (rustigator's call): at most
+    0.2 ms a tile (5 to 14 ms if every tile of a city is asked about), for 1.9 GB less over both continents. I'd keep it.
+  - **A path that can't be partial searches 16,384 polygons before the fallbacks** (rustigator's, was 4,096): an
+    unreachable chase is about a tenth of its cost (Goldshire's 431 µs to 43 on average, Stormwind's 3.3 s of failing
+    chases in 1,500 to 0.85), and Stormwind's chases that need the fallbacks about 1 ms dearer each. I'd keep it.
+  - **`sample_once` off:** a path is put on the ground as wvs did, each half of a line looked at again after a point
+    is put in. On, grounding costs about half (a Stormwind chase 157 µs to 91), but a line is more than 0.15 yd off
+    the ground at 1% (Orgrimmar) to 11% (Deadmines) of its looks where wvs's are at 0–1%. I'd keep it off.
+  - **`put_on_ground` for wvs's own grounding:** of 15,000 paths at five places, 45 come out otherwise, each at a
+    tie: a look 0.15 yd off the ground by one's float and not the other's, or two looks as far off within 5e-4 yd of
+    each other. No look takes another floor (they agree within 6e-4 yd). The largest (27.7 yd by index) is a path
+    that put one point in early and so had one left for its 64th, on Stormwind's stairs, where wvs's own line
+    stayed 1.3 yd over them. I'd keep it.
+  - **The budgets kept:** taking tiles in, 3 ms an update (at least one), now several cities' tiles where it was
+    one; letting go, 2 ms, now a dozen tiles or more. Lower them and a login's tiles arrive over more updates for
+    no gain at p99. I'd keep them.
+  - **Tests' tiles, read at once, keep their collision for the first query** (as before): only the server's readers
+    build it ahead. The answers are the same either way (a test asks both).
+  - **One-WMO dungeons are still read whole as their copy opens**, on the copy's own thread before anyone is in it:
+    14 to 82 ms (Dire Maul), p50 25. Preparing their cells on the readers would let the first players in walk
+    straight for a moment. I'd leave it.
 - **Two more vmangos differences in Alterac, for you** (found with decision 103):
   - vmangos links Drek'Thar's guards as his two lieutenants and six warmasters (12121, 12122, 14772–14777); wvs links
     eight warmasters (14770–14777, decision 85), so two more join his fight. I'd match vmangos.
